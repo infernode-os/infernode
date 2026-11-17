@@ -14,7 +14,10 @@
 #      file's version being its mtime in seconds); an edit of a stale
 #      version refused to werror.html and not shown; the same edit sent
 #      twice taken once; what anyone may write kept out of the markup
-#      (a link's URL, a javascript: link, a title, </textarea>); timings.
+#      (a link's URL, a javascript: link, a title, </textarea>); numbers
+#      that are no page not found (five of them stopped the wiki), titles
+#      that can name no page and one too long refused, two edits of one
+#      version at once (one the page, the other a conflict); timings.
 #
 # Prints PASS:/FAIL: lines; exits with the number failed.
 #
@@ -154,6 +157,60 @@ again = page("round_trip")
 strip = lambda h: re.sub(r"Last modified [^<]*", "", h)
 check(strip(again) == strip(first) and "pre last#" not in again and "!  pre" in page("round_trip", "edit.html"),
       "a page saved again three times from its edit form is unchanged")
+
+# A number is a page's only if there is that page.  Any integer walked,
+# to an empty page, and each took a place in wikifs's cache of pages:
+# the fifth of one bucket (a number mod 64) never came back, and
+# neither did any request for the wiki after it.  A number past 65535
+# ran into the qid's type: /wiki/262144 was page 0's index.html.
+p0 = req("GET", "/wiki/0/index.html")[2]
+for n in (64, 128, 192, 256, 320, 5000, 65536):
+    st, hd, b = req("GET", "/wiki/%d/" % n)
+    check(st == 404, "/wiki/%d/, which is no page, is not found (%d)" % (n, st))
+for path in ("/wiki/262144", "/wiki/65536/index.html", "/wiki/99999999999999999999/", "/wiki/5000/index.html"):
+    st, hd, b = req("GET", path)
+    check(st == 404 and b != p0, "%s is not found, and not page 0 (%d)" % (path, st))
+st, hd, b = req("GET", "/wiki/0/index.html")
+check(st == 200 and b == p0 and len(p0) > 100, "page 0 by its number still is (%d)" % st)
+
+# Titles that can name no page, and one that is too long, are refused
+# with the reason: "Map", " new" and "42" made pages that a walk took
+# for wikifs's own files or a page's number, and a title had no limit
+# (the map of titles has one, past which the wiki no longer started).
+for title, why in (("Map", "reserved"), (" new", "reserved"), ("42", "digits"), ("   ", ""), ("t" * 300, "title too long")):
+    form = urllib.parse.urlencode({"title": title, "version": "0", "author": "host", "text": "x\n"})
+    st, hd, b = req("POST", "/magic/wikipost", form, {"Content-Type": "application/x-www-form-urlencoded"})
+    check(st in (400, 422) and why.encode() in b, "a page titled %r refused, saying why (%d %r)" % (title[:12], st, b[:60]))
+check(req("GET", "/wiki/1/index.html")[0] == 200, "and the wiki answers")
+
+# Two edits of one version at once: one is the page, the other a
+# conflict.  The check was made under a lock that is a file made for
+# exclusive use, which the host's file system does not have, so both
+# were told they were the page and one text silently was not.
+import threading
+post("race page", "0", "start\n")
+both = neither = 0
+ROUNDS = 12
+for i in range(ROUNDS):
+    v = version("race_page")
+    res = [None, None]
+    bar = threading.Barrier(2)
+
+    def w(k):
+        bar.wait()
+        res[k] = post("race page", v, "round %d writer %d\n" % (i, k))
+    th = [threading.Thread(target=w, args=(k,)) for k in (0, 1)]
+    [x.start() for x in th]
+    [x.join() for x in th]
+    ok = [r for r in res if r and r[0] == 303 and r[1].endswith("/index.html")]
+    lost = [r for r in res if r and r[0] == 303 and r[1].endswith("/werror.html")]
+    if len(ok) == 2:
+        both += 1
+    if len(ok) != 1 or len(lost) != 1:
+        neither += 1
+check(both == 0, "of %d pairs of edits of one version at once, both taken in %d" % (ROUNDS, both))
+check(neither == 0, "each pair: one the page, the other sent to werror.html (%d not)" % neither)
+check(page("race_page", "history.html").count("conflicting write") == ROUNDS, "and each other edit is in the history as a conflicting write")
 
 for f in ("", "create.html", "1/", "wiki_syntax/"):
     st, hd, b = req("GET", "/wiki/" + f)

@@ -43,9 +43,37 @@ static Type*	TRSApk;
 static Type*	TRSAsig;
 
 enum {
-	Maxmsg=	4096,
+	/*
+	 * The longest message getmsg and sendmsg carry, and getstring,
+	 * putstring and the byte-array forms: what holds the text of the
+	 * largest certificate of the algorithms offered.  That is an
+	 * SLH-DSA-256s one: 29792 bytes of signature are 39724 characters
+	 * of base 64, after under 300 of algorithm, hash, signer and
+	 * expiry; Maxbuf (48K), which certtostr and its fellows already
+	 * write such text into, leaves it 9K of room.  It was 4096, less
+	 * than an ML-DSA-87 certificate's 6197, and what was longer was
+	 * cut with nothing said.
+	 */
+	Maxmsg=	Maxbuf-1,
+	/*
+	 * getmsg's header is four digits and a newline, which count to
+	 * 9999; a longer message has its length in five or six
+	 */
+	Maxshorthdr=	9999,
+	/*
+	 * putstring's messages are one write on a channel that keeps a
+	 * write's bounds, a first byte saying whether data or an error;
+	 * up to this much, as ever, and a longer one in the long form
+	 */
+	Shortbuf=	4096,
+	Longhdr=	5,	/* 01, and a length of four bytes */
 	Maxdhbits=	1<<15,	/* a Diffie-Hellman modulus auth will use */
 };
+
+static char Etoolong[] = "message too long";
+
+/* keyring.m tells programs the limit */
+typedef char maxmsgcheck[Maxmsg == Keyring_Maxmsg? 1: -1];
 
 static uchar DigestStatemap[] = Keyring_DigestState_map;
 static uchar AESstatemap[] = Keyring_AESstate_map;
@@ -188,6 +216,131 @@ newthing(Type *t, int add)
 	if(add)
 		ptradd(h);
 	return H2D(void*, h);
+}
+
+/*
+ * What a builtin goes on using while the VM is let go.  Its arguments
+ * are the call's (the frame holds them, and no other Prog reaches the
+ * frame), but what they refer to is not: a key adt's numbers, and an
+ * Authinfo's keys, are fields any Prog with the adt can assign, and an
+ * assignment frees what was there, under an exponentiation that takes
+ * milliseconds or a signature that takes seconds; and the place a
+ * result goes to (*f->ret) is the caller's, so a result stored there
+ * early and written to after the VM comes back relies on the caller
+ * (compiled Limbo has results land in its frame; a module made by hand
+ * can name a variable other threads assign).  keep hangs an array on
+ * one of the call's own pointer arguments, with the argument's value in
+ * its first place and n more for what must last: the frame is a root
+ * for the collector while the call runs, and unwinds with it if
+ * something raises.  unkeep puts the argument back.
+ * (libinterp/ipint.c's hold is the same device.)
+ */
+static void**
+keep(void *slot, int n)
+{
+	void **arg, **k;
+	Array *a;
+
+	arg = slot;
+	a = H2D(Array*, heaparray(&Tptr, n+1));
+	k = (void**)a->data;
+	k[0] = *arg;
+	if(k[0] != H)
+		Setmark(D2H(k[0]));
+	*arg = a;
+	return k;
+}
+
+/* another reference to v, something of the heap's, in k[i] */
+static void*
+keepref(void **k, int i, void *v)
+{
+	Heap *h;
+
+	if(v != H && v != nil){
+		h = D2H(v);
+		h->ref++;
+		Setmark(h);
+		k[i] = v;
+	}
+	return v;
+}
+
+static void
+unkeep(void *slot)
+{
+	void **arg, **k;
+	Array *a;
+
+	arg = slot;
+	a = *arg;
+	k = (void**)a->data;
+	*arg = k[0];
+	if(k[0] != H)
+		Setmark(D2H(k[0]));
+	k[0] = H;
+	destroy(a);
+}
+
+/*
+ * v, kept until now, as it is stored where a result goes.  The collector
+ * may have looked there already this round and not yet at the array v
+ * was kept in, which is about to go: unmarked for a round, v's parts
+ * would be swept the next before v was reached again.
+ */
+static void*
+kept(void *v)
+{
+	if(v != H)
+		Setmark(D2H(v));
+	return v;
+}
+
+/*
+ * Something of C's (a key or signature libsec made) that is the
+ * collector's to free: what is made from it afterwards (the adt's
+ * cells, copies of its numbers) can raise for want of heap, and the
+ * raise left it held by nothing.  The cell is made without a raise
+ * (with no room the thing is freed first); nothing refers to it, the VM
+ * is held until it is destroyed, and if a raise goes by, the sweep
+ * frees it and what it holds.
+ */
+typedef struct Cres Cres;
+struct Cres
+{
+	void	*p;
+	void	(*free)(void*);
+};
+static Type*	TCres;
+
+static void
+freeCres(Heap *h, int swept)
+{
+	Cres *c;
+
+	c = H2D(Cres*, h);
+	if(c->p != nil)
+		(*c->free)(c->p);
+	freeheap(h, swept);
+}
+
+static Cres*
+cres(void *p, void (*fr)(void*))
+{
+	Heap *h;
+	Cres *c;
+
+	h = nheapok(sizeof(Cres));
+	if(h == nil){
+		(*fr)(p);
+		error(exHeap);
+	}
+	h->t = TCres;
+	TCres->ref++;
+	c = H2D(Cres*, h);
+	c->p = p;
+	c->free = fr;
+	return c;
 }
 
 static Keyring_IPint*
@@ -430,7 +583,7 @@ Keyring_genSK(void *fp)
 	SK *sk;
 	SigAlg *sa;
 	SigAlgVec *vec;
-	void *v, *key;
+	void *v, *key, **k;
 
 	f = fp;
 	v = *f->ret;
@@ -441,8 +594,10 @@ Keyring_genSK(void *fp)
 	if(sa == nil)
 		return;
 
+	/* the key is the call's until it is whole: see keep */
 	sk = newSK(sa, stringdup(f->owner), 0);
-	*f->ret = (Keyring_SK*)sk;
+	k = keep(&f->owner, 1);
+	k[1] = sk;
 	vec = sk->vec;
 	release();
 	key = (*vec->gensk)(f->length);
@@ -455,9 +610,12 @@ Keyring_genSK(void *fp)
 	 * later use.
 	 */
 	if(key == nil){
-		*f->ret = H;
-		destroy(sk);
+		unkeep(&f->owner);
+		return;
 	}
+	k[1] = H;
+	unkeep(&f->owner);
+	*f->ret = kept(sk);
 }
 
 void
@@ -468,7 +626,7 @@ Keyring_genSKfromPK(void *fp)
 	SigAlgVec *vec;
 	PK *pk;
 	SK *sk;
-	void *v, *key;
+	void *v, *key, **k;
 
 	f = fp;
 	v = *f->ret;
@@ -478,7 +636,8 @@ Keyring_genSKfromPK(void *fp)
 	pk = checkPK(f->pk);
 	sa = checkSigAlg(pk->x.sa);
 	sk = newSK(sa, stringdup(f->owner), 1);
-	*f->ret = (Keyring_SK*)sk;
+	k = keep(&f->pk, 1);
+	k[1] = sk;
 	vec = sk->vec;
 	release();
 	key = (*vec->genskfrompk)(pk->key);
@@ -486,9 +645,12 @@ Keyring_genSKfromPK(void *fp)
 	sk->key = key;
 	/* as genSK: nil for a key that cannot be made, not an SK with none */
 	if(key == nil){
-		*f->ret = H;
-		destroy(sk);
+		unkeep(&f->pk);
+		return;
 	}
+	k[1] = H;
+	unkeep(&f->pk);
+	*f->ret = kept(sk);
 }
 
 /* converts a sequence of newline-separated base64-encoded mpints to attr=hexval ... in f */
@@ -1002,12 +1164,18 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	int n;
 	SigAlg *sa;
 	SigAlgVec *vec;
-	DigestState *ds;
+	DigestState ds0;
 	uchar digest[SHA256dlen];
 	char *buf;
 	String *hastr;
 	void *signa;
 
+	/*
+	 * the digest's state is this function's: asked to allocate one,
+	 * the hash gave nil when it could not, and the second call then
+	 * hashed the signer's name and expiry alone, not the data
+	 */
+	memset(&ds0, 0, sizeof(ds0));
 	hastr = H;
 	sa = checkSigAlg(sk->x.sa);
 	buf = malloc(Maxbuf);
@@ -1017,20 +1185,20 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	/* add signer name and expiration time to hash */
 	n = snprint(buf, Maxbuf, "%s %lud", string2c(sk->x.owner), exp);
 	if(strcmp(ha, "sha256") == 0){
-		ds = sha256(a, len, 0, 0);
-		sha256((uchar*)buf, n, digest, ds);
+		sha256(a, len, 0, &ds0);
+		sha256((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA256dlen;
 	} else if(strcmp(ha, "sha") == 0 || strcmp(ha, "sha1") == 0){
-		ds = sha1(a, len, 0, 0);
-		sha1((uchar*)buf, n, digest, ds);
+		sha1(a, len, 0, &ds0);
+		sha1((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(ha, "md5") == 0){
-		ds = md5(a, len, 0, 0);
-		md5((uchar*)buf, n, digest, ds);
+		md5(a, len, 0, &ds0);
+		md5((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else if(strcmp(ha, "md4") == 0){
-		ds = md4(a, len, 0, 0);
-		md4((uchar*)buf, n, digest, ds);
+		md4(a, len, 0, &ds0);
+		md4((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
@@ -1038,21 +1206,42 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	}
 	free(buf);
 
-	/* turn message into a big integer */
-	b = betomp(digest, n, nil);
-	if(b == nil)
-		return nil;
+	/*
+	 * A digest is a number to the algorithms that sign numbers, and
+	 * bytes, at their full length, to those that sign bytes: see
+	 * SigAlgVec.
+	 */
+	vec = sk->vec;
+	b = nil;
+	if(vec->signb == nil){
+		b = betomp(digest, n, nil);
+		if(b == nil)
+			return nil;
+	}
 
 	/* sign */
 	retstr(ha, &hastr);
 	c = newCertificate(sa, hastr, stringdup(sk->x.owner), exp, 1);
 	certimmutable(c);		/* hide from the garbage collector */
-	vec = sk->vec;
 	release();
-	signa = (*vec->sign)(b, sk->key);
+	if(vec->signb != nil)
+		signa = (*vec->signb)(digest, n, sk->key);
+	else
+		signa = (*vec->sign)(b, sk->key);
 	acquire();
-	c->signa = signa;
 	mpfree(b);
+	/*
+	 * No signature (no memory for an SLH-DSA signature's parts, ML-DSA
+	 * at its loop's bound, an RSA key whose parts do not agree) is no
+	 * certificate: one with no signature was returned, and its first
+	 * use raised "bad certificate".
+	 */
+	if(signa == nil){
+		certmutable(c);
+		destroy(c);
+		return nil;
+	}
+	c->signa = signa;
 
 	return c;
 }
@@ -1070,7 +1259,7 @@ Keyring_sign(void *fp)
 	XDigestState *ds;
 	uchar digest[SHA512dlen];
 	char *buf;
-	void *v, *signa;
+	void *v, *signa, **k;
 
 	f = fp;
 	v = *f->ret;
@@ -1119,20 +1308,39 @@ Keyring_sign(void *fp)
 	}
 	free(buf);
 
-	/* turn message into a big integer */
-	b = betomp(digest, n, nil);
-	if(b == nil)
-		return;
-
-	/* sign */
-	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), f->exp, 1);
-	*f->ret = (Keyring_Certificate*)c;
+	/*
+	 * sign.  The certificate is the call's until it is whole (see
+	 * keep): it was put where the result goes first, and filled in
+	 * after the VM had been let go for as long as signing takes.
+	 */
 	vec = sk->vec;
+	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), f->exp, 1);
+	k = keep(&f->sk, 1);
+	k[1] = c;
+	b = nil;
+	if(vec->signb == nil){	/* see sign */
+		b = betomp(digest, n, nil);
+		if(b == nil){
+			unkeep(&f->sk);
+			return;
+		}
+	}
 	release();
-	signa = (*vec->sign)(b, sk->key);
+	if(vec->signb != nil)
+		signa = (*vec->signb)(digest, n, sk->key);
+	else
+		signa = (*vec->sign)(b, sk->key);
 	acquire();
-	c->signa = signa;
 	mpfree(b);
+	/* no signature made: no certificate (see sign) */
+	if(signa == nil){
+		unkeep(&f->sk);
+		return;
+	}
+	c->signa = signa;
+	k[1] = H;
+	unkeep(&f->sk);
+	*f->ret = kept(c);
 }
 
 void
@@ -1144,7 +1352,7 @@ Keyring_signm(void *fp)
 	SigAlg *sa;
 	SigAlgVec *vec;
 	SK *sk;
-	void *v, *signa;
+	void *v, *signa, **k;
 
 	f = fp;
 	v = *f->ret;
@@ -1158,14 +1366,26 @@ Keyring_signm(void *fp)
 		return;
 	b = checkIPint(f->m);
 
-	/* sign */
+	/*
+	 * sign the number (an algorithm that signs bytes signs the
+	 * number's, with no leading zero); m is the call's argument, and
+	 * the certificate the call's until it is whole: see Keyring_sign
+	 */
 	c = newCertificate(sa, stringdup(f->ha), stringdup(sk->x.owner), 0, 1);
-	*f->ret = (Keyring_Certificate*)c;
+	k = keep(&f->sk, 1);
+	k[1] = c;
 	vec = sk->vec;
 	release();
 	signa = (*vec->sign)(b, sk->key);
 	acquire();
+	if(signa == nil){
+		unkeep(&f->sk);
+		return;
+	}
 	c->signa = signa;
+	k[1] = H;
+	unkeep(&f->sk);
+	*f->ret = kept(c);
 }
 
 static int
@@ -1174,13 +1394,14 @@ verify(PK *pk, Certificate *c, char *a, int len)
 	mpint *b;
 	int n;
 	SigAlgVec *vec;
-	DigestState *ds;
+	DigestState ds0;
 	uchar digest[SHA512dlen];
 	char *buf;
 
 	vec = c->vec;
 	if(vec != pk->vec)
 		return 0;
+	memset(&ds0, 0, sizeof(ds0));	/* see sign */
 
 	/* add signer name and expiration time to hash */
 	buf = malloc(Maxbuf);
@@ -1188,28 +1409,28 @@ verify(PK *pk, Certificate *c, char *a, int len)
 		return 0;
 	n = snprint(buf, Maxbuf, "%s %d", string2c(c->x.signer), c->x.exp);
 	if(strcmp(string2c(c->x.ha), "sha256") == 0){
-		ds = sha256((uchar*)a, len, 0, 0);
-		sha256((uchar*)buf, n, digest, ds);
+		sha256((uchar*)a, len, 0, &ds0);
+		sha256((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA256dlen;
 	} else if(strcmp(string2c(c->x.ha), "sha384") == 0){
-		ds = sha384((uchar*)a, len, 0, 0);
-		sha384((uchar*)buf, n, digest, ds);
+		sha384((uchar*)a, len, 0, &ds0);
+		sha384((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA384dlen;
 	} else if(strcmp(string2c(c->x.ha), "sha512") == 0){
-		ds = sha512((uchar*)a, len, 0, 0);
-		sha512((uchar*)buf, n, digest, ds);
+		sha512((uchar*)a, len, 0, &ds0);
+		sha512((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA512dlen;
 	} else if(strcmp(string2c(c->x.ha), "sha") == 0 || strcmp(string2c(c->x.ha), "sha1") == 0){
-		ds = sha1((uchar*)a, len, 0, 0);
-		sha1((uchar*)buf, n, digest, ds);
+		sha1((uchar*)a, len, 0, &ds0);
+		sha1((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(string2c(c->x.ha), "md5") == 0){
-		ds = md5((uchar*)a, len, 0, 0);
-		md5((uchar*)buf, n, digest, ds);
+		md5((uchar*)a, len, 0, &ds0);
+		md5((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else if(strcmp(string2c(c->x.ha), "md4") == 0){
-		ds = md4((uchar*)a, len, 0, 0);
-		md4((uchar*)buf, n, digest, ds);
+		md4((uchar*)a, len, 0, &ds0);
+		md4((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
@@ -1217,13 +1438,18 @@ verify(PK *pk, Certificate *c, char *a, int len)
 	}
 	free(buf);
 
-	/* turn message into a big integer */
-	b = betomp(digest, n, nil);
-	if(b == nil)
-		return 0;
-	/* verify */
+	/* verify: the digest as a number or as bytes, as it was signed (see sign) */
+	b = nil;
+	if(vec->verifyb == nil){
+		b = betomp(digest, n, nil);
+		if(b == nil)
+			return 0;
+	}
 	release();
-	n = (*vec->verify)(b, c->signa, pk->key);
+	if(vec->verifyb != nil)
+		n = (*vec->verifyb)(digest, n, c->signa, pk->key);
+	else
+		n = (*vec->verify)(b, c->signa, pk->key);
 	acquire();
 
 	mpfree(b);
@@ -1285,14 +1511,18 @@ Keyring_verify(void *fp)
 	}
 	free(buf);
 
-	/* turn message into a big integer */
-	b = betomp(digest, n, nil);
-	if(b == nil)
-		return;
-
-	/* verify */
+	/* verify: see sign */
+	b = nil;
+	if(vec->verifyb == nil){
+		b = betomp(digest, n, nil);
+		if(b == nil)
+			return;
+	}
 	release();
-	n = (*vec->verify)(b, c->signa, pk->key);
+	if(vec->verifyb != nil)
+		n = (*vec->verifyb)(digest, n, c->signa, pk->key);
+	else
+		n = (*vec->verify)(b, c->signa, pk->key);
 	acquire();
 	*f->ret = n;
 
@@ -1661,7 +1891,9 @@ Keyring_dhparams(void *fp)
 {
 	F_Keyring_dhparams *f;
 	mpint *p, *alpha;
+	Cres *c;
 	void *v;
+	int ok;
 
 	f = fp;
 	v = f->ret->t0;
@@ -1674,24 +1906,53 @@ Keyring_dhparams(void *fp)
 	genbits(f->nbits, MinDHbits, Maxgenbits);
 	p = mpnew(0);
 	alpha = mpnew(0);
+	ok = 0;
 	release();
 	if(f->nbits == 1024)
 		DSAprimes(alpha, p, nil);
 	else if(!getdhparams(f->nbits, p, alpha))
-		gensafeprime(p, alpha, f->nbits, 0);
+		ok = gensafeprime(p, alpha, f->nbits, 0);
 	acquire();
+	if(ok < 0){
+		/* the search gave up: two zeros are no group */
+		mpfree(p);
+		mpfree(alpha);
+		error("dhparams: no prime found");
+	}
+	/* newIPint frees its number when it raises, but not the other one */
+	c = cres(p, (void(*)(void*))mpfree);
 	f->ret->t0 = newIPint(alpha);
+	c->p = nil;
+	destroy(c);
 	f->ret->t1 = newIPint(p);
 }
 
+/*
+ * Messages on a stream: a count in decimal and a newline, then that
+ * many bytes.  The count is four digits, zero-padded, up to 9999, as it
+ * always was; a longer message's is its five or six digits with no
+ * leading zero.  (An end that knows only the four reads a digit where
+ * it wants the newline and says "input or format error"; it could not
+ * have been sent such a message before, when the sender wrote five
+ * bytes of a six-byte header and then the data.)  One length has one
+ * form.  An error is "!ddd" and a newline, then the text.
+ */
 static int
 sendmsg(int fd, void *buf, int n)
 {
-	char num[10];
+	char num[16];
+	int hn;
 
+	if(n < 0 || n > Maxmsg){
+		kwerrstr(Etoolong);
+		return -1;
+	}
+	if(n <= Maxshorthdr)
+		hn = snprint(num, sizeof(num), "%4.4d\n", n);
+	else
+		hn = snprint(num, sizeof(num), "%d\n", n);
 	release();
-	snprint(num, sizeof(num), "%4.4d\n", n);
-	if(kwrite(fd, num, 5) != 5){
+	if(kwrite(fd, num, hn) != hn){
 		acquire();
 		return -1;
 	}
@@ -1722,11 +1983,16 @@ senderr(int fd, char *err, int addrmt)
 	char num[10];
 	int n, m;
 
-	release();
 	n = strlen(err);
 	m = 0;
 	if(addrmt)
 		m = strlen("remote: ");
+	/* three digits of count: a longer text made a header of six bytes, of which five were sent */
+	if(n+m > 999){
+		kwerrstr(Etoolong);
+		return -1;
+	}
+	release();
 	snprint(num, sizeof(num), "!%3.3d\n", n+m);
 	if(kwrite(fd, num, 5) != 5){
 		acquire();
@@ -1794,42 +2060,97 @@ getmsgerr(char *buf, int n, int r)
 	buf[n-1] = 0;
 }
 
+/*
+ * A message's header: its length, with *iserr set for an error
+ * message; or -1 with the reason in err.  Called with the VM let go.
+ *
+ * Authentication framing is exactly "dddd\n" for data up to 9999
+ * bytes, "ddddd\n" or "dddddd\n" with no leading zero for more, and
+ * "!ddd\n" for errors.  strtoul accepted signs, whitespace, and a
+ * missing newline, allowing non-canonical pre-auth frames to reach the
+ * expensive handshake state machine.
+ */
 static int
-getmsg(int fd, char *buf, int n)
+getmsghdr(int fd, int *iserr, char *err, int nerr)
 {
-	char num[6];
+	char num[8];
 	int i, len, r, start;
 
-	release();
+	*iserr = 0;
 	if((r = nreadn(fd, num, 5)) != 5){
-		getmsgerr(buf, n, r);
-		acquire();
+		getmsgerr(err, nerr, r);
 		return -1;
 	}
-	num[5] = 0;
-
-	/* Authentication framing is exactly "dddd\\n" for data and
-	 * "!ddd\\n" for errors.  strtoul accepted signs, whitespace, and a
-	 * missing newline, allowing non-canonical pre-auth frames to reach the
-	 * expensive handshake state machine. */
-	start = num[0] == '!' ? 1 : 0;
-	if(num[4] != '\n'){
-		getmsgerr(buf, n, 1);
-		acquire();
-		return -1;
+	start = 0;
+	if(num[0] == '!'){
+		*iserr = 1;
+		start = 1;
 	}
 	len = 0;
 	for(i = start; i < 4; i++){
 		if(num[i] < '0' || num[i] > '9'){
-			getmsgerr(buf, n, 1);
-			acquire();
+			getmsgerr(err, nerr, 1);
 			return -1;
 		}
 		len = len*10 + num[i]-'0';
 	}
+	if(num[4] == '\n')
+		return len;
 
-	r = -1;
-	if(len < 0 || len >= n || (r = nreadn(fd, buf, len)) != len){
+	/* the long form: one or two digits more, the first not 0 */
+	if(*iserr || num[0] == '0' || num[4] < '0' || num[4] > '9'){
+		getmsgerr(err, nerr, 1);
+		return -1;
+	}
+	len = len*10 + num[4]-'0';
+	if((r = nreadn(fd, num, 1)) != 1){
+		getmsgerr(err, nerr, r);
+		return -1;
+	}
+	if(num[0] >= '0' && num[0] <= '9'){
+		len = len*10 + num[0]-'0';
+		if((r = nreadn(fd, num, 1)) != 1){
+			getmsgerr(err, nerr, r);
+			return -1;
+		}
+	}
+	if(num[0] != '\n'){
+		getmsgerr(err, nerr, 1);
+		return -1;
+	}
+	/*
+	 * The length is the sender's: nothing is allocated or read for
+	 * one beyond what a message may be.
+	 */
+	if(len > Maxmsg){
+		strecpy(err, err+nerr, Etoolong);
+		return -1;
+	}
+	return len;
+}
+
+/*
+ * The next message into buf (n bytes), with a zero byte after it: its
+ * length, minus its length for an error message, or -1 with the reason
+ * in buf.  A message that does not fit buf is an error, not a part.
+ */
+static int
+getmsg(int fd, char *buf, int n)
+{
+	int len, r, iserr;
+
+	release();
+	len = getmsghdr(fd, &iserr, buf, n);
+	if(len < 0){
+		acquire();
+		return -1;
+	}
+	if(len >= n){
+		strecpy(buf, buf+n, Etoolong);
+		acquire();
+		return -1;
+	}
+	if((r = nreadn(fd, buf, len)) != len){
 		getmsgerr(buf, n, r);
 		acquire();
 		return -1;
@@ -1837,7 +2158,7 @@ getmsg(int fd, char *buf, int n)
 
 	buf[len] = 0;
 	acquire();
-	if(num[0] == '!')
+	if(iserr)
 		return -len;
 
 	return len;
@@ -1914,27 +2235,48 @@ void
 Keyring_getmsg(void *fp)
 {
 	F_Keyring_getmsg *f;
-	char *buf;
-	int n;
-	void *r;
+	char *buf, err[128];
+	int n, r, fd, iserr;
+	void *v;
 
 	f = fp;
-	r = *f->ret;
+	v = *f->ret;
 	*f->ret = H;
-	destroy(r);
+	destroy(v);
 	if(f->fd == H){
 		kwerrstr("nil fd");
 		return;
 	}
+	fd = f->fd->fd;
 
-	buf = malloc(Maxmsg);
-	if(buf == nil){
-		kwerrstr(exNomem);
+	/*
+	 * The message's own length is allocated, once its header has
+	 * said what that is and it is within Maxmsg (it was 4096 bytes
+	 * for every message, and a longer one was "input or format
+	 * error" with its bytes left in the stream).
+	 */
+	buf = nil;
+	release();
+	n = getmsghdr(fd, &iserr, err, sizeof(err));
+	if(n >= 0){
+		buf = malloc(n+1);
+		if(buf == nil){
+			strecpy(err, err+sizeof(err), exNomem);
+			n = -1;
+		}else if((r = nreadn(fd, buf, n)) != n){
+			getmsgerr(err, sizeof(err), r);
+			n = -1;
+		}else
+			buf[n] = 0;
+	}
+	acquire();
+	if(n < 0){
+		kwerrstr("%s", err);
+		free(buf);
 		return;
 	}
-
-	n = getmsg(f->fd->fd, buf, Maxmsg);
-	if(n < 0){
+	if(iserr){
+		/* an error message: its text is the error */
 		kwerrstr("%s", buf);
 		free(buf);
 		return;
@@ -2011,6 +2353,7 @@ Keyring_auth(void *fp)
 	Kembuf *kem;
 	uchar *myek, *mydk, *hisek, *myct, *hisct, *ss_local, *ss_remote;
 	uchar *kss_lo, *kss_hi, *ek_lo, *ek_hi;
+	void **k;
 	int cmp;
 	int cnsa = cnsamode();
 	int pklen = cnsa ? MLKEM1024_PKLEN : MLKEM768_PKLEN;
@@ -2077,14 +2420,33 @@ Keyring_auth(void *fp)
 			argerr = "bad diffie hellman mod";
 	}
 
+	/*
+	 * The keys, the certificate and the two numbers are the
+	 * Authinfo's fields, and the exchange lets the VM go at every
+	 * message and every exponentiation: each is kept for the call
+	 * (see keep), as a thread assigning a field meanwhile freed what
+	 * the exchange was signing with or sending.
+	 */
+	k = keep(&f->info, 6);
+	if(info != H && info->p != H && info->alpha != H){
+		keepref(k, 1, mysk);
+		keepref(k, 2, mypk);
+		keepref(k, 3, cert);
+		keepref(k, 4, spk);
+		keepref(k, 5, info->p);
+		keepref(k, 6, info->alpha);
+	}
+
 	buf = malloc(Maxbuf);
 	if(buf == nil){
+		unkeep(&f->info);
 		retstr(exNomem, &f->ret->t0);
 		return;
 	}
 	kem = malloc(sizeof(Kembuf));
 	if(kem == nil){
 		free(buf);
+		unkeep(&f->info);
 		retstr(exNomem, &f->ret->t0);
 		return;
 	}
@@ -2332,14 +2694,13 @@ Keyring_auth(void *fp)
 	memmove(buf+n, hisek, pklen); n += pklen;
 	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
 	/*
-	 * sign gives nil when it has no memory for its buffer, and a
-	 * certificate with no signature when the algorithm makes none:
-	 * either went on to be printed, through nil
+	 * sign gives nil when it has no memory for its buffer or the
+	 * algorithm made no signature: it went on to be printed, through
+	 * nil
 	 */
-	if(alphacert == nil || alphacert->signa == nil){
-		if(alphacert == nil)
-			alphacert = H;
-		err = exNomem;
+	if(alphacert == nil){
+		alphacert = H;
+		err = "cannot sign";
 		goto out;
 	}
 	n = certtostr(alphacert, buf, Maxbuf);
@@ -2504,6 +2865,7 @@ out:
 		mpfree(alphar0r1);
 	}
 	mpfree(pm1);
+	unkeep(&f->info);
 }
 
 static Keyring_Authinfo*
@@ -2517,28 +2879,46 @@ Keyring_writeauthinfo(void *fp)
 {
 	F_Keyring_writeauthinfo *f;
 	int n, fd;
-	char *buf;
+	char *buf, *name;
 	PK *spk;
 	SK *mysk;
 	Certificate *c;
 	mpint *p, *alpha;
+	Keyring_Authinfo *info;
+	void **k;
 
 	f = fp;
 	*f->ret = -1;
 
 	if(f->filename == H)
 		error(exNilref);
-	if(f->info == H)
+	info = f->info;
+	if(info == H)
 		error(exNilref);
-	alpha = checkIPint(f->info->alpha);
-	p = checkIPint(f->info->p);
-	spk = checkPK(f->info->spk);
-	mysk = checkSK(f->info->mysk);
-	c = checkCertificate(f->info->cert);
+	alpha = checkIPint(info->alpha);
+	p = checkIPint(info->p);
+	spk = checkPK(info->spk);
+	mysk = checkSK(info->mysk);
+	c = checkCertificate(info->cert);
+	/* the file's name, made while the VM is held: string2c may allocate */
+	name = string2c(f->filename);
+
+	/*
+	 * what is written is the Authinfo's fields, and each write lets
+	 * the VM go: kept for the call, as in auth
+	 */
+	k = keep(&f->info, 5);
+	keepref(k, 1, info->alpha);
+	keepref(k, 2, info->p);
+	keepref(k, 3, spk);
+	keepref(k, 4, mysk);
+	keepref(k, 5, c);
 
 	buf = malloc(Maxbuf);
-	if(buf == nil)
+	if(buf == nil){
+		unkeep(&f->info);
 		return;
+	}
 
 	/*
 	 *  The file may already exist or be a file2chan file so first
@@ -2547,11 +2927,11 @@ Keyring_writeauthinfo(void *fp)
 	 *  file2chan.
 	 */
 	release();
-	fd = kopen(string2c(f->filename), OTRUNC|OWRITE);
+	fd = kopen(name, OTRUNC|OWRITE);
 	if(fd < 0)
-		fd = kcreate(string2c(f->filename), OWRITE, 0600);
+		fd = kcreate(name, OWRITE, 0600);
 	if(fd < 0)
-		fd = kopen(string2c(f->filename), OWRITE);
+		fd = kopen(name, OWRITE);
 	acquire();
 	if(fd < 0)
 		goto out;
@@ -2589,6 +2969,7 @@ out:
 		kclose(fd);
 		acquire();
 	}
+	unkeep(&f->info);
 }
 
 void
@@ -2603,7 +2984,8 @@ Keyring_readauthinfo(void *fp)
 	SigAlg *sa;
 	Keyring_Authinfo *ai;
 	mpint *b;
-	void *r;
+	char *name;
+	void *r, **k;
 
 	f = fp;
 	r = *f->ret;
@@ -2615,18 +2997,24 @@ Keyring_readauthinfo(void *fp)
 	if(f->filename == H)
 		return;
 
+	/*
+	 * the Authinfo is the call's until it is whole (see keep): it
+	 * was stored where the result goes and filled in field by field,
+	 * the VM let go for each read
+	 */
+	name = string2c(f->filename);
 	ai = newAuthinfo();
-	*f->ret = ai;
+	k = keep(&f->filename, 1);
+	k[1] = ai;
 
 	buf = malloc(Maxbuf);
 	if(buf == nil){
-		*f->ret = H;
-		destroy(ai);
+		unkeep(&f->filename);
 		return;
 	}
 
 	release();
-	fd = kopen(string2c(f->filename), OREAD);
+	fd = kopen(name, OREAD);
 	acquire();
 	if(fd < 0)
 		goto out;
@@ -2685,18 +3073,19 @@ Keyring_readauthinfo(void *fp)
 	ai->p = newIPint(b);
 	ok = 1;
 out:
-	if(!ok){
-		r = *f->ret;
-		*f->ret = H;
-		destroy(r);
-	}
 	free(buf);
 	if(fd >= 0){
 		release();
 		kclose(fd);
 		acquire();
-		kwerrstr("%q: %s", string2c(f->filename), MSG);
+		if(!ok)
+			kwerrstr("%q: %s", name, MSG);
 	}
+	if(ok)
+		k[1] = H;
+	unkeep(&f->filename);
+	if(ok)
+		*f->ret = kept(ai);
 }
 
 void
@@ -2765,53 +3154,129 @@ keyringmodinit(void)
 	if((sav = slhdsa256sinit()) != nil)
 		algs[nalg++] = sav;
 
+	TCres = dtype(freeCres, sizeof(Cres), nil, 0);
+
 	fmtinstall('U', big64conv);
 	builtinmod("$Keyring", Keyringmodtab, Keyringmodlen);
 }
 
 /*
- *  IO on a delimited channel.  A message starting with 0x00 is a normal
- *  message.  One starting with 0xff is an error string.
+ *  IO on a delimited channel (one that keeps a write's bounds: ssl(3)
+ *  for up to a record, a pipe).  A message starting with 0x00 is a
+ *  normal message.  One starting with 0xff is an error string.  Either
+ *  is one write of at most Shortbuf bytes, and one read.
  *
- *  return negative number for error messages (including hangup)
+ *  A longer message, up to Maxmsg bytes, starts with 0x01 and its
+ *  length as four bytes, most significant first, and is read until
+ *  that many bytes have come, in however many reads: ssl(3) sends a
+ *  write past its record's 32K as several records.  (There was no such
+ *  form: what was longer than 4095 bytes was cut to that by the sender
+ *  with nothing said, so a certificate of ML-DSA-87, 6197 bytes of
+ *  text, arrived as its first two thirds.  An end that does not know
+ *  the long form takes its first byte for neither data nor an error,
+ *  and says "failure".)
+ *
+ *  getbuf returns the message in *bufp, to be freed, and its length;
+ *  or -1 with the reason in err, which for an error message is its
+ *  text.
  */
 static int
-getbuf(int fd, uchar *buf, int n, char *err, int nerr)
+getbuf(int fd, uchar **bufp, char *err, int nerr)
 {
-	int len;
+	uchar *buf, *big;
+	int len, m;
+	ulong need;
 
-	release();
-	len = kread(fd, buf, n);
-	acquire();
-	if(len <= 0){
-		strncpy(err, "hungup", nerr);
-		err[nerr-1] = 0;
+	*bufp = nil;
+	buf = malloc(Shortbuf);
+	if(buf == nil){
+		strecpy(err, err+nerr, exNomem);
 		return -1;
 	}
-	if(buf[0] == 0)
+	release();
+	len = kread(fd, buf, Shortbuf);
+	if(len <= 0){
+		acquire();
+		free(buf);
+		strecpy(err, err+nerr, "hungup");
+		return -1;
+	}
+	if(buf[0] == 0){
+		acquire();
+		memmove(buf, buf+1, len-1);
+		*bufp = buf;
 		return len-1;
+	}
+	if(buf[0] == 1){
+		/* the header may come alone or with the first of the data */
+		while(len < Longhdr){
+			m = kread(fd, buf+len, Longhdr-len);
+			if(m <= 0)
+				break;
+			len += m;
+		}
+		need = 0;
+		if(len >= Longhdr)
+			need = (ulong)buf[1]<<24 | buf[2]<<16 | buf[3]<<8 | buf[4];
+		/*
+		 * the length is the sender's: within what a message may be,
+		 * and more than fits the short form, which is the only way
+		 * to send what does
+		 */
+		if(len < Longhdr || need < Shortbuf || need > Maxmsg || len-Longhdr > need){
+			acquire();
+			free(buf);
+			strecpy(err, err+nerr, len < Longhdr? "hungup": need > Maxmsg? Etoolong: "failure");
+			return -1;
+		}
+		big = malloc(need+1);
+		if(big == nil){
+			acquire();
+			free(buf);
+			strecpy(err, err+nerr, exNomem);
+			return -1;
+		}
+		len -= Longhdr;
+		memmove(big, buf+Longhdr, len);
+		free(buf);
+		while(len < need){
+			m = kread(fd, big+len, need-len);
+			if(m <= 0)
+				break;
+			len += m;
+		}
+		acquire();
+		if(len < need){
+			free(big);
+			strecpy(err, err+nerr, "hungup");
+			return -1;
+		}
+		*bufp = big;
+		return len;
+	}
+	acquire();
 	if(buf[0] != 0xff){
 		/*
 		 * this happens when the client's password is wrong: both sides use a digest of the
 		 * password as a crypt key for devssl. When they don't match decryption garbles
 		 * messages
 		 */
-		strncpy(err, "failure", nerr);
-		err[nerr-1] = 0;
+		free(buf);
+		strecpy(err, err+nerr, "failure");
 		return -1;
 	}
 
-	/* error string */
+	/* error string, whole (it was cut to 63 bytes) */
 	len--;
-	if(len < 1){
-		strncpy(err, "unknown", nerr);
-		err[nerr-1] = 0;
-	} else {
+	if(len < 1)
+		strecpy(err, err+nerr, "unknown");
+	else {
 		if(len >= nerr)
 			len = nerr-1;
 		memmove(err, buf+1, len);
 		err[len] = 0;
 	}
+	free(buf);
 	return -1;
 }
 
@@ -2820,7 +3285,7 @@ Keyring_getstring(void *fp)
 {
 	F_Keyring_getstring *f;
 	uchar *buf;
-	char err[64];
+	char *err;
 	int n;
 
 	f = fp;
@@ -2832,17 +3297,17 @@ Keyring_getstring(void *fp)
 	if(f->fd == H)
 		return;
 
-	buf = malloc(Maxmsg);
-	if(buf == nil)
+	err = malloc(Shortbuf);
+	if(err == nil)
 		return;
-
-	n = getbuf(f->fd->fd, buf, Maxmsg, err, sizeof(err));
+	n = getbuf(f->fd->fd, &buf, err, Shortbuf);
 	if(n < 0)
 		retnstr(err, strlen(err), &f->ret->t1);
 	else
-		retnstr(((char*)buf)+1, n, &f->ret->t0);
+		retnstr((char*)buf, n, &f->ret->t0);
 
 	free(buf);
+	free(err);
 }
 
 void
@@ -2850,7 +3315,7 @@ Keyring_getbytearray(void *fp)
 {
 	F_Keyring_getbytearray *f;
 	uchar *buf;
-	char err[64];
+	char *err;
 	int n;
 
 	f = fp;
@@ -2862,38 +3327,57 @@ Keyring_getbytearray(void *fp)
 	if(f->fd == H)
 		return;
 
-	buf = malloc(Maxmsg);
-	if(buf == nil)
+	err = malloc(Shortbuf);
+	if(err == nil)
 		return;
-
-	n = getbuf(f->fd->fd, buf, Maxmsg, err, sizeof(err));
+	n = getbuf(f->fd->fd, &buf, err, Shortbuf);
 	if(n < 0)
 		retnstr(err, strlen(err), &f->ret->t1);
 	else
-		f->ret->t0 = mem2array(buf+1, n);
+		f->ret->t0 = mem2array(buf, n);
 
 	free(buf);
+	free(err);
 }
 
+/*
+ * n bytes of data, or -n of an error's text: the number of bytes
+ * written, or -1 (a message longer than one may be is not sent).
+ */
 static int
 putbuf(int fd, void *p, int n)
 {
-	char *buf;
+	uchar *buf;
+	int iserr, hn;
 
-	buf = malloc(Maxmsg);
+	iserr = 0;
+	if(n < 0){
+		iserr = 1;
+		n = -n;
+	}
+	if(n > Maxmsg || (iserr && n >= Shortbuf)){
+		kwerrstr(Etoolong);
+		return -1;
+	}
+	buf = malloc(n+Longhdr);
 	if(buf == nil)
 		return -1;
 
-	release();
-	buf[0] = 0;
-	if(n < 0){
-		buf[0] = 0xff;
-		n = -n;
+	if(n < Shortbuf){
+		buf[0] = iserr? 0xff: 0;
+		hn = 1;
+	}else{
+		buf[0] = 1;
+		buf[1] = n>>24;
+		buf[2] = n>>16;
+		buf[3] = n>>8;
+		buf[4] = n;
+		hn = Longhdr;
 	}
-	if(n >= Maxmsg)
-		n = Maxmsg - 1;
-	memmove(buf+1, p, n);
-	n = kwrite(fd, buf, n+1);
+	/* copied before the VM is let go: p may be a string's own bytes */
+	memmove(buf+hn, p, n);
+	release();
+	n = kwrite(fd, buf, n+hn);
 	acquire();
 
 	free(buf);
@@ -3127,7 +3611,12 @@ Keyring_aesgcmsetup(void *fp)
 	*f->ret = H;
 	destroy(r);
 
-	if(f->key == H || f->key->len <= 0)
+	/*
+	 * a key is 16, 24 or 32 bytes, as aessetup asks: any length was
+	 * taken, and one that is no key's made a state that enciphered
+	 * with no rounds (see libsec/aes.c)
+	 */
+	if(f->key == H || f->key->len != 16 && f->key->len != 24 && f->key->len != 32)
 		error(exBadKey);
 	if(f->iv == H || f->iv->len <= 0)
 		error(exBadIvec);
@@ -3168,10 +3657,13 @@ Keyring_aesgcmencrypt(void *fp)
 		error(exNomem);
 	memmove(buf, f->dat->data, ndat);
 
-	aesgcm_encrypt(buf, ndat,
+	if(aesgcm_encrypt(buf, ndat,
 		f->aad != H ? f->aad->data : nil,
 		f->aad != H ? f->aad->len : 0,
-		tag, &is->state);
+		tag, &is->state) < 0){
+		free(buf);
+		error(exBadState);
+	}
 
 	f->ret->t0 = mem2array(buf, ndat);
 	f->ret->t1 = mem2array(tag, 16);
@@ -3395,15 +3887,50 @@ exponentok(mpint *e)
 		error(exBadKey);
 }
 
+/*
+ * And their length: a key's numbers and what it is used on are IPints,
+ * which may be megabytes, and libsec's time grows as the cube of a
+ * modulus's length with nothing to end it sooner (see libinterp/ipint.c).
+ * None is longer than a key the generators here make.
+ */
+static mpint*
+keynum(void *ip)
+{
+	mpint *b;
+
+	b = checkIPint(ip);
+	if(mpsignif(b) > Maxgenbits)
+		error(exBadKey);
+	return b;
+}
+
+/*
+ * A key adt's number for libsec: the number, with its cell kept in
+ * k[i] until the call is over.  The builtins below let the VM go while
+ * libsec works on the numbers, and they are fields: assigned by
+ * another thread meanwhile, the number that was there was freed under
+ * the computation.  See keep.
+ */
+static mpint*
+keptnum(void **k, int i, void *ip)
+{
+	mpint *b;
+
+	b = keynum(ip);
+	keepref(k, i, ip);
+	return b;
+}
+
+/* the numbers of a DSA public key, kept in k[i..i+3] */
 static void
-dsapk2pub(DSApub* p, Keyring_DSApk* pk)
+dsapk2pub(DSApub* p, Keyring_DSApk* pk, void **k, int i)
 {
 	if(pk == H)
 		error(exNilref);
-	p->p = checkIPint(pk->p);
-	p->q = checkIPint(pk->q);
-	p->alpha = checkIPint(pk->alpha);
-	p->key = checkIPint(pk->key);
+	p->p = keptnum(k, i, pk->p);
+	p->q = keptnum(k, i+1, pk->q);
+	p->alpha = keptnum(k, i+2, pk->alpha);
+	p->key = keptnum(k, i+3, pk->key);
 	modulusok(p->p);
 	modulusok(p->q);
 }
@@ -3417,18 +3944,34 @@ dsapk2pub(DSApub* p, Keyring_DSApk* pk)
 static void
 dsagenok(DSApub *p)
 {
+	mpint *t;
+	int ok;
+
 	if(mpcmp(p->q, mpone) <= 0 || mpcmp(p->p, mptwo) <= 0)
+		error(exBadKey);
+	/*
+	 * q divides p-1, or they are no DSA key's (dsagen raised for it
+	 * with everything made).  That they are prime is dsagen's to ask,
+	 * with the VM let go: libsec/dsagen.c.
+	 */
+	t = mpnew(0);
+	mpsub(p->p, mpone, t);
+	mpmod(t, p->q, t);
+	ok = t->top == 0;
+	mpfree(t);
+	if(!ok)
 		error(exBadKey);
 }
 
+/* a DSA secret key's numbers, kept in k[1..5] */
 static void
-dsask2priv(DSApriv* p, Keyring_DSAsk* sk)
+dsask2priv(DSApriv* p, Keyring_DSAsk* sk, void **k)
 {
 	if(sk == H || sk->pk == H)
 		error(exNilref);
-	dsapk2pub(&p->pub, sk->pk);
+	dsapk2pub(&p->pub, sk->pk, k, 1);
 	dsagenok(&p->pub);
-	p->secret = checkIPint(sk->secret);
+	p->secret = keptnum(k, 5, sk->secret);
 }
 
 static void
@@ -3444,32 +3987,43 @@ dsapriv2sk(Keyring_DSAsk* sk, DSApriv* p)
 	sk->secret = ipcopymp(p->secret);
 }
 
+/*
+ * In each builtin below the result is made once libsec has answered,
+ * of new cells, and then stored: the cell used to be stored where the
+ * result goes before the VM was let go, and written to after.
+ */
 void
 DSAsk_gen(void *fp)
 {
 	F_DSAsk_gen *f;
 	Keyring_DSAsk *sk;
+	Keyring_DSApk *opk;
 	DSApriv *p;
 	DSApub pub, *oldpk;
-	void *v;
+	Cres *c;
+	void *v, **k;
 
 	f = fp;
-	v = *f->ret;
-	sk = newthing(TDSAsk, 0);
-	sk->pk = newthing(TDSApk, 0);
-	*f->ret = sk;
-	destroy(v);
 	oldpk = nil;
-	if(f->oldpk != H){
-		dsapk2pub(&pub, f->oldpk);
+	opk = f->oldpk;
+	k = keep(&f->oldpk, 4);
+	if(opk != H){
+		dsapk2pub(&pub, opk, k, 1);
 		dsagenok(&pub);
 		oldpk = &pub;
 	}
 	release();
 	p = dsagen(oldpk);
 	acquire();
+	unkeep(&f->oldpk);
+	c = cres(p, (void(*)(void*))dsaprivfree);
+	sk = newthing(TDSAsk, 0);
+	sk->pk = newthing(TDSApk, 0);
 	dsapriv2sk(sk, p);
-	dsaprivfree(p);
+	destroy(c);
+	v = *f->ret;
+	*f->ret = sk;
+	destroy(v);
 }
 
 void
@@ -3477,69 +4031,87 @@ DSAsk_sign(void *fp)
 {
 	F_DSAsk_sign *f;
 	Keyring_DSAsig *sig;
+	Keyring_DSAsk *sk;
 	DSApriv p;
 	mpint *m;
 	DSAsig *s;
-	void *v;
+	Cres *c;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
-	sig = newthing(TDSAsig, 0);
-	*f->ret = sig;
+	*f->ret = H;
 	destroy(v);
 
-	dsask2priv(&p, f->k);
-	m = checkIPint(f->m);
+	sk = f->k;
+	k = keep(&f->k, 5);
+	dsask2priv(&p, sk, k);
+	m = keynum(f->m);
 	release();
 	s = dsasign(&p, m);
 	acquire();
+	unkeep(&f->k);
+	if(s == nil)	/* a group that is none: dsasign makes no signature */
+		error(exBadKey);
+	c = cres(s, (void(*)(void*))dsasigfree);
+	sig = newthing(TDSAsig, 0);
 	sig->r = ipcopymp(s->r);
 	sig->s = ipcopymp(s->s);
-	dsasigfree(s);
+	destroy(c);
+	*f->ret = sig;
 }
 
 void
 DSApk_verify(void *fp)
 {
 	F_DSApk_verify *f;
+	Keyring_DSApk *pk;
 	DSApub p;
 	DSAsig sig;
 	mpint *m;
+	void **k;
+	int ok;
 
 	f = fp;
 	*f->ret = 0;
 	if(f->m == H || f->sig == H)
 		return;
-	dsapk2pub(&p, f->k);
-	sig.r = checkIPint(f->sig->r);
-	sig.s = checkIPint(f->sig->s);
-	m = checkIPint(f->m);
+	pk = f->k;
+	k = keep(&f->k, 6);
+	dsapk2pub(&p, pk, k, 1);
+	sig.r = keptnum(k, 5, f->sig->r);
+	sig.s = keptnum(k, 6, f->sig->s);
+	m = keynum(f->m);
 	release();
-	*f->ret = dsaverify(&p, &sig, m) == 0;
+	ok = dsaverify(&p, &sig, m) == 0;
 	acquire();
+	unkeep(&f->k);
+	*f->ret = ok;
 }
 
+/* the numbers of an ElGamal public key, kept in k[i..i+2] */
 static void
-egpk2pub(EGpub* p, Keyring_EGpk* pk)
+egpk2pub(EGpub* p, Keyring_EGpk* pk, void **k, int i)
 {
 	if(pk == H)
 		error(exNilref);
-	p->p = checkIPint(pk->p);
-	p->alpha = checkIPint(pk->alpha);
-	p->key = checkIPint(pk->key);
+	p->p = keptnum(k, i, pk->p);
+	p->alpha = keptnum(k, i+1, pk->alpha);
+	p->key = keptnum(k, i+2, pk->key);
 	modulusok(p->p);
 }
 
+/* an ElGamal secret key's numbers, kept in k[1..4] */
 static void
-egsk2priv(EGpriv* p, Keyring_EGsk* sk)
+egsk2priv(EGpriv* p, Keyring_EGsk* sk, void **k)
 {
 	if(sk == H || sk->pk == H)
 		error(exNilref);
-	egpk2pub(&p->pub, sk->pk);
+	egpk2pub(&p->pub, sk->pk, k, 1);
 	/* egsign looks for a k from 1 to p-2: see dsagenok */
 	if(mpcmp(p->pub.p, mptwo) <= 0)
 		error(exBadKey);
-	p->secret = checkIPint(sk->secret);
+	p->secret = keptnum(k, 4, sk->secret);
 }
 
 static void
@@ -3560,25 +4132,29 @@ EGsk_gen(void *fp)
 	F_EGsk_gen *f;
 	Keyring_EGsk *sk;
 	EGpriv *p;
+	Cres *c;
 	void *v;
 
 	f = fp;
-	v = *f->ret;
 	genbits(f->nlen, MinDHbits, Maxgenbits);
-	sk = newthing(TEGsk, 0);
-	sk->pk = newthing(TEGpk, 0);
-	*f->ret = sk;
-	destroy(v);
 	release();
 	for(;;){
 		p = eggen(f->nlen, f->nrep);
-		if(mpsignif(p->pub.p) == f->nlen)
+		if(p == nil || mpsignif(p->pub.p) == f->nlen)
 			break;
 		egprivfree(p);
 	}
 	acquire();
+	if(p == nil)	/* eggen found no group, or was told to stop */
+		error("EGsk.gen: no key made");
+	c = cres(p, (void(*)(void*))egprivfree);
+	sk = newthing(TEGsk, 0);
+	sk->pk = newthing(TEGpk, 0);
 	egpriv2sk(sk, p);
-	egprivfree(p);
+	destroy(c);
+	v = *f->ret;
+	*f->ret = sk;
+	destroy(v);
 }
 
 void
@@ -3586,74 +4162,101 @@ EGsk_sign(void *fp)
 {
 	F_EGsk_sign *f;
 	Keyring_EGsig *sig;
+	Keyring_EGsk *sk;
 	EGpriv p;
 	mpint *m;
 	EGsig *s;
-	void *v;
+	Cres *c;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
-	sig = newthing(TEGsig, 0);
-	*f->ret = sig;
+	*f->ret = H;
 	destroy(v);
 
-	egsk2priv(&p, f->k);
-	m = checkIPint(f->m);
+	sk = f->k;
+	k = keep(&f->k, 4);
+	egsk2priv(&p, sk, k);
+	m = keynum(f->m);
+	/*
+	 * a key signatures can be made for without its secret is no key
+	 * to sign with (libsec/egverify.c, which refuses to verify with
+	 * one); looked at with the VM let go, as it is two exponentiations
+	 */
 	release();
-	s = egsign(&p, m);
+	s = nil;
+	if(egpubvalid(&p.pub) == 0)
+		s = egsign(&p, m);
 	acquire();
+	unkeep(&f->k);
+	if(s == nil)
+		error(exBadKey);
+	c = cres(s, (void(*)(void*))egsigfree);
+	sig = newthing(TEGsig, 0);
 	sig->r = ipcopymp(s->r);
 	sig->s = ipcopymp(s->s);
-	egsigfree(s);
+	destroy(c);
+	*f->ret = sig;
 }
 
 void
 EGpk_verify(void *fp)
 {
 	F_EGpk_verify *f;
+	Keyring_EGpk *pk;
 	EGpub p;
 	EGsig sig;
 	mpint *m;
+	void **k;
+	int ok;
 
 	f = fp;
 	*f->ret = 0;
 	if(f->m == H || f->sig == H)
 		return;
-	egpk2pub(&p, f->k);
-	sig.r = checkIPint(f->sig->r);
-	sig.s = checkIPint(f->sig->s);
-	m = checkIPint(f->m);
-	if(sig.s->sign < 0 || m->sign < 0)
+	pk = f->k;
+	k = keep(&f->k, 5);
+	egpk2pub(&p, pk, k, 1);
+	sig.r = keptnum(k, 4, f->sig->r);
+	sig.s = keptnum(k, 5, f->sig->s);
+	m = keynum(f->m);
+	if(sig.s->sign < 0 || m->sign < 0){
+		unkeep(&f->k);
 		return;	/* exponents, to egverify: no signature */
+	}
 	release();
-	*f->ret = egverify(&p, &sig, m) == 0;
+	ok = egverify(&p, &sig, m) == 0;
 	acquire();
+	unkeep(&f->k);
+	*f->ret = ok;
 }
 
+/* the numbers of an RSA public key, kept in k[i..i+1] */
 static void
-rsapk2pub(RSApub* p, Keyring_RSApk* pk)
+rsapk2pub(RSApub* p, Keyring_RSApk* pk, void **k, int i)
 {
 	if(pk == H)
 		error(exNilref);
 	memset(p, 0, sizeof(*p));
-	p->n = checkIPint(pk->n);
-	p->ek = checkIPint(pk->ek);
+	p->n = keptnum(k, i, pk->n);
+	p->ek = keptnum(k, i+1, pk->ek);
 	modulusok(p->n);
 	exponentok(p->ek);
 }
 
+/* an RSA secret key's numbers, kept in k[1..8] */
 static void
-rsask2priv(RSApriv* p, Keyring_RSAsk* sk)
+rsask2priv(RSApriv* p, Keyring_RSAsk* sk, void **k)
 {
 	if(sk == H || sk->pk == H)
 		error(exNilref);
-	rsapk2pub(&p->pub, sk->pk);
-	p->dk = checkIPint(sk->dk);
-	p->p = checkIPint(sk->p);
-	p->q = checkIPint(sk->q);
-	p->kp = checkIPint(sk->kp);
-	p->kq = checkIPint(sk->kq);
-	p->c2 = checkIPint(sk->c2);
+	rsapk2pub(&p->pub, sk->pk, k, 1);
+	p->dk = keptnum(k, 3, sk->dk);
+	p->p = keptnum(k, 4, sk->p);
+	p->q = keptnum(k, 5, sk->q);
+	p->kp = keptnum(k, 6, sk->kp);
+	p->kq = keptnum(k, 7, sk->kq);
+	p->c2 = keptnum(k, 8, sk->c2);
 	modulusok(p->p);
 	modulusok(p->q);
 	exponentok(p->kp);
@@ -3680,21 +4283,27 @@ void
 RSApk_encrypt(void *fp)
 {
 	F_RSApk_encrypt *f;
+	Keyring_RSApk *pk;
 	RSApub p;
 	mpint *m, *o;
-	void *v;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
 	*f->ret = H;
 	destroy(v);
 
-	rsapk2pub(&p, f->k);
-	m = checkIPint(f->m);
+	pk = f->k;
+	k = keep(&f->k, 2);
+	rsapk2pub(&p, pk, k, 1);
+	m = keynum(f->m);
 	release();
 	o = rsaencrypt(&p, m, nil);
 	acquire();
-	*f->ret = newIPint(o);
+	unkeep(&f->k);
+	/* nil for an m outside 0..n-1 (RFC 8017 5.1.1) */
+	if(o != nil)
+		*f->ret = newIPint(o);
 }
 
 void
@@ -3703,16 +4312,12 @@ RSAsk_gen(void *fp)
 	F_RSAsk_gen *f;
 	Keyring_RSAsk *sk;
 	RSApriv *p;
+	Cres *c;
 	void *v;
 
 	f = fp;
-	v = *f->ret;
 	genbits(f->nlen, MinRSAbits, Maxgenbits);
 	genbits(f->elen, 1, f->nlen);
-	sk = newthing(TRSAsk, 0);
-	sk->pk = newthing(TRSApk, 0);
-	*f->ret = sk;
-	destroy(v);
 	release();
 	for(;;){
 		p = rsagen(f->nlen, f->elen, f->nrep);
@@ -3721,8 +4326,14 @@ RSAsk_gen(void *fp)
 		rsaprivfree(p);
 	}
 	acquire();
+	c = cres(p, (void(*)(void*))rsaprivfree);
+	sk = newthing(TRSAsk, 0);
+	sk->pk = newthing(TRSApk, 0);
 	rsapriv2sk(sk, p);
-	rsaprivfree(p);
+	destroy(c);
+	v = *f->ret;
+	*f->ret = sk;
+	destroy(v);
 }
 
 void
@@ -3731,46 +4342,61 @@ RSAsk_fill(void *fp)
 	F_RSAsk_fill *f;
 	Keyring_RSAsk *sk;
 	RSApriv *p;
-	void *v;
-
-	f = fp;
-	v = *f->ret;
-	sk = newthing(TRSAsk, 0);
-	sk->pk = newthing(TRSApk, 0);
-	*f->ret = sk;
-	destroy(v);
-	release();
-	p = rsafill(checkIPint(f->n), checkIPint(f->e), checkIPint(f->d),
-			checkIPint(f->p), checkIPint(f->q));
-	acquire();
-	if(p == nil) {
-		*f->ret = H;
-		destroy(sk);
-	}else{
-		rsapriv2sk(sk, p);
-		rsaprivfree(p);
-	}
-}
-
-void
-RSAsk_decrypt(void *fp)
-{
-	F_RSAsk_decrypt *f;
-	RSApriv p;
-	mpint *m, *o;
+	mpint *n, *e, *d, *pp, *q;
+	Cres *c;
 	void *v;
 
 	f = fp;
 	v = *f->ret;
 	*f->ret = H;
 	destroy(v);
+	/*
+	 * the numbers are the call's own arguments, which the frame
+	 * holds (the parts were looked at with the VM let go)
+	 */
+	n = keynum(f->n);
+	e = keynum(f->e);
+	d = keynum(f->d);
+	pp = keynum(f->p);
+	q = keynum(f->q);
+	release();
+	p = rsafill(n, e, d, pp, q);
+	acquire();
+	if(p == nil)
+		return;
+	c = cres(p, (void(*)(void*))rsaprivfree);
+	sk = newthing(TRSAsk, 0);
+	sk->pk = newthing(TRSApk, 0);
+	rsapriv2sk(sk, p);
+	destroy(c);
+	*f->ret = sk;
+}
 
-	rsask2priv(&p, f->k);
-	m = checkIPint(f->m);
+void
+RSAsk_decrypt(void *fp)
+{
+	F_RSAsk_decrypt *f;
+	Keyring_RSAsk *sk;
+	RSApriv p;
+	mpint *m, *o;
+	void *v, **k;
+
+	f = fp;
+	v = *f->ret;
+	*f->ret = H;
+	destroy(v);
+
+	sk = f->k;
+	k = keep(&f->k, 8);
+	rsask2priv(&p, sk, k);
+	m = keynum(f->m);
 	release();
 	o = rsadecrypt(&p, m, nil);
 	acquire();
-	*f->ret = newIPint(o);
+	unkeep(&f->k);
+	/* nil for an m outside 0..n-1, or a key whose parts do not agree */
+	if(o != nil)
+		*f->ret = newIPint(o);
 }
 
 void
@@ -3778,43 +4404,63 @@ RSAsk_sign(void *fp)
 {
 	F_RSAsk_sign *f;
 	Keyring_RSAsig *sig;
+	Keyring_RSAsk *sk;
 	RSApriv p;
 	mpint *m, *s;
-	void *v;
+	Cres *c;
+	void *v, **k;
 
 	f = fp;
 	v = *f->ret;
-	sig = newthing(TRSAsig, 0);
-	*f->ret = sig;
+	*f->ret = H;
 	destroy(v);
 
-	rsask2priv(&p, f->k);
-	m = checkIPint(f->m);
+	sk = f->k;
+	k = keep(&f->k, 8);
+	rsask2priv(&p, sk, k);
+	m = keynum(f->m);
 	release();
 	s = rsadecrypt(&p, m, nil);
 	acquire();
+	unkeep(&f->k);
+	/* see RSAsk_decrypt: no signature */
+	if(s == nil)
+		return;
+	c = cres(s, (void(*)(void*))mpfree);
+	sig = newthing(TRSAsig, 0);
+	c->p = nil;	/* newIPint frees the number if it raises */
+	destroy(c);
 	sig->n = newIPint(s);
+	*f->ret = sig;
 }
 
 void
 RSApk_verify(void *fp)
 {
 	F_RSApk_verify *f;
+	Keyring_RSApk *pk;
 	RSApub p;
 	mpint *sig, *m, *t;
+	void **k;
+	int ok;
 
 	f = fp;
 	*f->ret = 0;
 	if(f->m == H || f->sig == H)
 		return;
-	rsapk2pub(&p, f->k);
-	sig = checkIPint(f->sig->n);
-	m = checkIPint(f->m);
+	pk = f->k;
+	k = keep(&f->k, 3);
+	rsapk2pub(&p, pk, k, 1);
+	sig = keptnum(k, 3, f->sig->n);
+	m = keynum(f->m);
 	release();
 	t = rsaencrypt(&p, sig, nil);
-	*f->ret = mpcmp(t, m) == 0;
+	/* nil for a signature outside 0..n-1 (RFC 8017 5.2.2): none */
+	ok = t != nil && mpcmp(t, m) == 0;
 	mpfree(t);
 	acquire();
+	unkeep(&f->k);
+	*f->ret = ok;
 }
 
 void
@@ -3862,12 +4508,12 @@ Keyring_x25519(void *fp)
 	for(i = 0; i < nelem(out); i++)
 		nz |= out[i];
 	if(nz == 0){
-		memset(out, 0, sizeof(out));
+		secureZero(out, sizeof(out));
 		return;
 	}
 
 	*f->ret = mem2array(out, 32);
-	memset(out, 0, sizeof(out));
+	secureZero(out, sizeof(out));	/* (a memset here is one compilers drop) */
 }
 
 void

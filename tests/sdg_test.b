@@ -796,6 +796,48 @@ testHandshakeKeyLengths(t: ref T)
 	t.assert(!exists(good.ctrfile + ".a"), "no counter spent on them");
 }
 
+# With no random numbers there is no ephemeral key, and no handshake:
+# refused at once, and no counter spent.  The ephemeral key came from
+# random(2)'s randombuf, which gives zeros when its device cannot be
+# read: the handshake went ahead with a key of zeros.
+norandom(k: ref Sdg->Keys, c: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	if(sys->bind("/dev/null", "/dev/notquiterandom", Sys->MREPL) < 0){
+		c <-= sys->sprint("skip: bind: %r");
+		return;
+	}
+	e := sdg->relay("udp!127.0.0.1!9", k, nil);
+	if(e == nil)
+		e = "connected";
+	c <-= e;
+}
+
+testHandshakeNoRandom(t: ref T)
+{
+	p := pair(t);
+	k := keys(p);
+	c := chan[1] of string;
+	spawn norandom(k, c);
+	tick := chan[1] of int;
+	spawn timeout(tick, 3000);
+	alt {
+	e := <-c =>
+		if(len e > 5 && e[0:5] == "skip:")
+			t.skip(e);
+		t.assert(contains(e, "random"), "refused for want of random numbers: " + e);
+	<-tick =>
+		t.error("a handshake was begun with no random numbers");
+	}
+	t.assert(!exists(k.ctrfile + ".a"), "no counter spent on it");
+}
+
+timeout(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
 # A counter that cannot be committed: nothing sent.
 testHandshakeCounterRefused(t: ref T)
 {
@@ -944,6 +986,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("HandshakeLowOrderEphemeral", testHandshakeLowOrderEphemeral);
 	run("HandshakeLowOrderStatic", testHandshakeLowOrderStatic);
 	run("HandshakeKeyLengths", testHandshakeKeyLengths);
+	run("HandshakeNoRandom", testHandshakeNoRandom);
 	run("HandshakeCounterRefused", testHandshakeCounterRefused);
 	run("ReplyFrameValid", testReplyFrameValid);
 	run("ReplyFramesMalformed", testReplyFramesMalformed);

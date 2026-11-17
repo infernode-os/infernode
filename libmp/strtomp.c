@@ -3,14 +3,15 @@
 #include <libsec.h>
 #include "dat.h"
 
-static struct {
-	int	inited;
-
+typedef struct Tab Tab;
+struct Tab {
 	uchar	t64[256];
 	uchar	t32[256];
 	uchar	t16[256];
 	uchar	t10[256];
-} tab;
+};
+static Tab tab;
+static int tabinited;
 
 enum {
 	INVAL=	255
@@ -21,26 +22,42 @@ static char set32[] = "23456789abcdefghijkmnpqrstuvwxyz";
 static char set16[] = "0123456789ABCDEF0123456789abcdef";
 static char set10[] = "0123456789";
 
+// The tables are made once, at the first conversion, with no lock:
+// two processes can both be first (two Dis VMs of the native kernel).
+// They were filled in place, starting with every entry "no digit", so
+// a reader that came once the other maker had finished read a table
+// the second was still filling, and took digits for the end of a
+// number.  They are made aside and copied whole: a second copy writes
+// the bytes that are there.
 static void
 init(void)
 {
+	Tab t;
 	char *p;
 
-	memset(tab.t64, INVAL, sizeof(tab.t64));
-	memset(tab.t32, INVAL, sizeof(tab.t32));
-	memset(tab.t16, INVAL, sizeof(tab.t16));
-	memset(tab.t10, INVAL, sizeof(tab.t10));
-
+	memset(&t, INVAL, sizeof t);
 	for(p = set64; *p; p++)
-		tab.t64[*p] = p-set64;
+		t.t64[(uchar)*p] = p-set64;
 	for(p = set32; *p; p++)
-		tab.t32[*p] = p-set32;
+		t.t32[(uchar)*p] = p-set32;
 	for(p = set16; *p; p++)
-		tab.t16[*p] = (p-set16)%16;
+		t.t16[(uchar)*p] = (p-set16)%16;
 	for(p = set10; *p; p++)
-		tab.t10[*p] = (p-set10);
+		t.t10[(uchar)*p] = (p-set10);
+	tab = t;
+	tabinited = 1;
+}
 
-	tab.inited = 1;
+// Room in b for a number of bits, or -1: there is no memory, or no
+// number is that long.  The converters below return nil for it, and
+// strtomp raises once it has freed the number it made: mpbits raised
+// from inside them, and that number was lost with the raise.
+static int
+room(mpint *b, vlong bits)
+{
+	if(bits > MAXBITS || mpreservetry(b, bits) < 0)
+		return -1;
+	return 0;
 }
 
 static char*
@@ -54,6 +71,9 @@ from16(char *a, mpint *b)
 	for(p = a; *p; p++)
 		if(tab.t16[*(uchar*)p] == INVAL)
 			break;
+	// the digits' bits were an int: see dat.h
+	if(room(b, (vlong)(p-a)*4) < 0)
+		return nil;
 	mpbits(b, (p-a)*4);
 	b->top = 0;
 	next = p;
@@ -62,7 +82,7 @@ from16(char *a, mpint *b)
 		for(i = 0; i < Dbits; i += 4){
 			if(p <= a)
 				break;
-			x |= tab.t16[*(uchar*)--p]<<i;
+			x |= (mpdigit)tab.t16[*(uchar*)--p]<<i;
 		}
 		b->p[b->top++] = x;
 	}
@@ -73,15 +93,45 @@ static ulong mppow10[] = {
 	1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000
 };
 
+// b = b*m + a, in place; b has room for a digit more
+static void
+muladd(mpint *b, ulong m, ulong a)
+{
+	uvlong x;
+	int i;
+
+	x = a;
+	for(i = 0; i < b->top; i++){
+		x += (uvlong)b->p[i]*m;
+		b->p[i] = x;
+		x >>= Dbits;
+	}
+	if(x != 0)
+		b->p[b->top++] = x;
+}
+
 static char*
 from10(char *a, mpint *b)
 {
 	ulong x, y;
 	mpint *pow, *r;
+	char *p;
 	int i;
 
-	pow = mpnew(0);
-	r = mpnew(0);
+	// room for all of it first: four bits a digit is more than enough
+	// (and the count of them an int's worth: see dat.h)
+	for(p = a; tab.t10[*(uchar*)p] != INVAL; p++)
+		;
+	if(room(b, (vlong)(p-a)*4 + Dbits) < 0)
+		return nil;
+	mpbits(b, (p-a)*4 + Dbits);
+
+	pow = nil;
+	r = nil;
+	if(Dbits > 32){
+		pow = mpnew(0);
+		r = mpnew(0);
+	}
 
 	b->top = 0;
 	for(;;){
@@ -98,11 +148,15 @@ from10(char *a, mpint *b)
 		if(i == 0)
 			break;
 
-		// accumulate into mpint
-		uitomp(mppow10[i], pow);
-		uitomp(x, r);
-		mpmul(b, pow, b);
-		mpadd(b, r, b);
+		// accumulate into mpint.  (mpmul and mpadd did it, with a
+		// copy of the number made and freed for every nine digits)
+		if(Dbits > 32){
+			uitomp(mppow10[i], pow);
+			uitomp(x, r);
+			mpmul(b, pow, b);
+			mpadd(b, r, b);
+		}else
+			muladd(b, mppow10[i], x);
 		if(i != 9)
 			break;
 	}
@@ -120,13 +174,20 @@ from64(char *a, mpint *b)
 
 	for(; tab.t64[*(uchar*)a] != INVAL; a++)
 		;
+	if(room(b, (vlong)(a-buf)*6) < 0)
+		return nil;
 	n = a-buf;
-	mpbits(b, n*6);
 	p = malloc(n);
 	if(p == nil)
-		return a;
+		return buf;	// no number read: it was "a number", of whatever b held
 	m = dec64(p, n, buf, n);
+	if(m < 0){
+		mpwipe(p, n);
+		free(p);
+		return buf;
+	}
 	betomp(p, m, b);
+	mpwipe(p, n);	// the number's bytes: see dat.h
 	free(p);
 	return a;
 }
@@ -138,15 +199,25 @@ from32(char *a, mpint *b)
 	uchar *p;
 	int n, m;
 
-	for(; tab.t64[*(uchar*)a] != INVAL; a++)
+	// base 32's own digits (base 64's were looked for, and the ones
+	// that are not base 32's read as zeros)
+	for(; tab.t32[*(uchar*)a] != INVAL; a++)
 		;
+	if(room(b, (vlong)(a-buf)*5) < 0)
+		return nil;
 	n = a-buf;
-	mpbits(b, n*5);
 	p = malloc(n);
 	if(p == nil)
-		return a;
+		return buf;	// see from64
 	m = dec32(p, n, buf, n);
+	if(m < 0){
+		// not a length base 32 has (1, 3 or 6 digits past a multiple
+		// of 8): dec32's -1 went to betomp as a count of bytes
+		free(p);
+		return buf;
+	}
 	betomp(p, m, b);
+	mpwipe(p, n);	// the number's bytes: see dat.h
 	free(p);
 	return a;
 }
@@ -163,7 +234,7 @@ strtomp(char *a, char **pp, int base, mpint *b)
 		alloced = 1;
 	}
 
-	if(tab.inited == 0)
+	if(tabinited == 0)
 		init();
 
 	while(*a==' ' || *a=='\t')
@@ -195,6 +266,13 @@ strtomp(char *a, char **pp, int base, mpint *b)
 		break;
 	}
 
+	// no room for it: said as libmp says it, with nothing left behind
+	if(e == nil){
+		if(alloced)
+			mpfree(b);
+		sysfatal("strtomp: number too large");
+	}
+
 	// if no characters parsed, there wasn't a number to convert
 	// (and the number made here for it is not the caller's to free:
 	// each string that was no number cost one)
@@ -204,8 +282,11 @@ strtomp(char *a, char **pp, int base, mpint *b)
 		return nil;
 	}
 
+	// zero has no sign: "-0" was a zero that equalled no zero and
+	// printed as it was read
 	mpnorm(b);
-	b->sign = sign;
+	if(b->top != 0)
+		b->sign = sign;
 	if(pp != nil)
 		*pp = e;
 

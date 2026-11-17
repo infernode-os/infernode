@@ -25,9 +25,6 @@ writes string
 to
 .IR fd.
 It returns the number of bytes written, or -1 if an error occurred.
-Messages written by
-.B putstring
-are truncated to 4096 bytes.
 .PP
 .B Getstring
 reads a string as written by
@@ -45,9 +42,6 @@ writes the array of bytes
 to
 .IR fd .
 It returns the number of bytes written, or -1 if an error occurred.
-Messages written by
-.B putbytearray
-are truncated to 4096 bytes.
 .PP
 .B Getbytearray
 reads an array of bytes as written by
@@ -74,10 +68,31 @@ or
 to fail
 (in the receiving process),
 forcing them to return the error string
-.IR s .
-It may not be longer than
-.BR Sys->ERRMAX
-bytes.
+.IR s ,
+whole.
+It may not be longer than 4095 bytes.
+.PP
+A message of up to 4095 bytes is one write: a byte of zero
+(of 255 for an error) and the data, and it is read by one read.
+A longer one, of up to
+.B Keyring->Maxmsg
+(49151) bytes, is a byte of 1, its length as four bytes, most significant first,
+and the data, and is read until that many bytes have arrived:
+.IR ssl (3)
+sends a write of more than 32K as several records.
+The limit holds the text of the largest certificate
+.RI ( keyring-certtostr (2))
+of the signature algorithms offered, with room.
+A message longer than that is not sent
+.RB ( -1 ,
+and the system error string is
+.RB `` "message too long" '');
+a receiver given a length beyond it returns that error and allocates nothing.
+Nothing is cut.
+(Messages used to be cut to 4095 bytes without a word, and an error's text to 63:
+a certificate of ML-DSA-87, 6197 bytes of text, arrived as its first two thirds.
+A receiver from before the longer form answers one with the error
+.RB `` failure ''.)
 .SH SOURCE
 .B /libinterp/keyring.c
 .SH DIAGNOSTICS

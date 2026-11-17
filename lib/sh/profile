@@ -261,6 +261,14 @@ auth/secstored >[2] /dev/null &
 # with secstore backing so all keys are loaded automatically.
 # GUI: factotum starts empty; wm/logon unlocks secstore interactively.
 if {! ftest -f /mnt/factotum/proto}{
+	# No factotum yet: a boot is beginning, and nothing is unlocked.
+	# The mark wm/logon leaves when it unlocks the secstore is in
+	# /tmp, which outlives a boot, and a boot that skips the login
+	# screen (skiplogon=1) never came to remove it: Keyring and
+	# Settings then said "unlocked" of a boot that had unlocked
+	# nothing.  (What cannot go stale is factotum's own word:
+	# /mnt/factotum/secstore.)
+	rm -f /tmp/.secstore-unlocked >[2] /dev/null
 	if {~ $emuhost Nt} {
 		# Windows: secstore password not yet supported via env var
 		# (os cmd in backticks hangs). Use GUI login or setup script.

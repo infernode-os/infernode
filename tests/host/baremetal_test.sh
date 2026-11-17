@@ -963,7 +963,7 @@ SBEOF
         case "$(basename "$f")" in
         comp-arm64.c) ;;			# the one we want
         comp-*.c) continue;;			# every other code generator
-        gpu.c|crypt.c) continue;;
+        gpu.c) continue;;
         # ipint.c stays: keyring's public-key paths stand on IPint_*.
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
@@ -981,9 +981,6 @@ SBEOF
     for f in "$ROOT"/libmp/*.c "$ROOT"/libsec/*.c "$ROOT"/libkeyring/*.c; do
         [[ -e "$f" ]] || continue
         case "$(basename "$f")" in
-        # standalone test programs and demo mains, not library members
-        bigtest.c|crttest.c|mtest.c|test.c|egtest.c|hmactest.c|md4test.c|p384ecdhtest.c|rsatest.c|primetest.c) continue;;
-        decodepem.c) continue;;		# wants Plan 9 libc.h; PEM is not a kernel concern
         prng.c) continue;;		# host entropy (getentropy/urandom); the kernel's own random.c stands in
         esac
         o="$BUILD/crypto-$(basename "$f").o"

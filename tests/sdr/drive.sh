@@ -95,6 +95,17 @@ cat $s/ctl > $d/ctl.localhost
 echo stop > $s/ctl
 cat $s/status > $d/status.stop
 
+# a server that is not posted ends whole with its mount: its stream's
+# reader, its connection to rtl_tcp and its timers with it
+ps | grep Sdrfs | wc -l > $d/procs.before
+sdrfs -S -m $d/m2
+sh -c 'echo source 127.0.0.1!'^$2^' > '^$d^'/m2/ctl' >[2] $d/err.unposted
+read 4096 < $d/m2/iq > /dev/null
+ps | grep Sdrfs | wc -l > $d/procs.during
+unmount $d/m2
+sleep 2
+ps | grep Sdrfs | wc -l > $d/procs.after
+
 sdrfs >[2] $d/again
 echo R done
 echo halt > '#c/sysctl'

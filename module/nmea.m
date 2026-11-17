@@ -108,7 +108,7 @@ Nmea: module
 		usedepoch:	int;
 		gstseen:	int;	# GST errors are preferred to PGRME's
 		targets:	list of ref Target;
-		aispend:	list of (string, array of string, int);	# AIS fragments: key, parts, fill
+		aispend:	list of (string, array of string, int, int);	# AIS fragments: key, parts, fill, when heard
 		# the last position given out, against which a jump is suspect
 		hasgood:	int;
 		goodlat, goodlon:	real;

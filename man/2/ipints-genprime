@@ -40,8 +40,9 @@ returns false (zero),
 is certainly not prime.
 .PP
 .I Genprime
-returns a random prime of length
-.IR nbits .
+returns a random prime of exactly
+.I nbits
+bits.
 Since it uses the Miller-Rabin test,
 .I nrep
 is the repetition count passed to
@@ -62,9 +63,11 @@ there is a prime \fIq\fR such that \fIp-1=2*q\fR.
 .I Genstrongprime
 returns a prime
 .I p
+of exactly
+.I nbits
+bits (64 if fewer are asked for), made by Gordon's algorithm,
 with the following properties:
 .IP \-
-(\fIp\fR-1)/2 is prime.  Therefore
 .IR p -1
 has a large prime factor,
 .IR p '.
@@ -91,6 +94,18 @@ The random
 .I seed
 used is also returned, so that sceptics
 can later confirm the computation.
+.PP
+A search for a prime can take minutes at the larger sizes.
+It runs without holding up other threads, and a thread killed in
+.IR genprime ,
+.I gensafeprime
+or
+.I genstrongprime
+stops searching.
+.I Gensafeprime
+raises an exception if it has found no safe prime after
+.RI 64* nbits +1000
+candidates, many times what a search is expected to take.
 .SH SOURCE
 .B /libinterp/ipint.c
 .br
@@ -105,8 +120,7 @@ can later confirm the computation.
 .B /libsec/port/genstrongprime.c
 .br
 .SH SEE ALSO
-.IR crypt-intro (2),
-.IR crypt-crypt (2),
-.IR crypt-dsagen (2),
-.IR crypt-gensk (2),
+.IR keyring-intro (2),
+.IR keyring-gensk (2),
+.IR keyring-rsa (2),
 .IR ipints (2)

@@ -27,6 +27,20 @@ implement Authproto;
 # The certificate can exceed AuthRpcMax (mldsa87 ~6KB), so it is sent in
 # <=CHUNK pieces; the caller concatenates until the read returns done.
 #
+# The service is named, and the op is absent or "pubkey": with no service
+# the first signing key there was signed, and any other op signed too.
+#
+# A certificate made here is a signature over what the caller wrote and
+# nothing else, but in bytes it is a Keyring certificate, which is also
+# what vouches for a public key in Inferno's authentication (the content
+# then being the key's text). So that one made here is never one of
+# those, it is given an expiry time of Signexp, a moment in 1970: the
+# time is under the signature (keyring-auth(2): the signer's name and
+# the expiry time are hashed after the content), and everything that
+# takes a certificate as a credential refuses an expired one. A verifier
+# of signatures (auditverify) does not look at the time, so certificates
+# made with expiry 0 before this and those made now verify alike.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -36,9 +50,13 @@ include "draw.m";
 include "keyring.m";
 	kr: Keyring;
 
+include "security.m";
+
 include "../authio.m";
 	authio:	Authio;
 	Attr, IO, Key: import authio;
+
+Signexp: con 1;	# expiry time of every certificate made here
 
 # Must stay under AuthRpcMax (4096) minus the 3-byte framing margin that
 # IO.write reserves; 4000 leaves comfortable headroom.
@@ -91,6 +109,11 @@ keyattrs(attrs: list of ref Attr): list of ref Attr
 
 interaction(attrs: list of ref Attr, io: ref IO): string
 {
+	op := authio->lookattrval(attrs, "op");
+	if(op != nil && op != "pubkey")
+		return "sign: unknown op "+op;
+	if(authio->lookattrval(attrs, "service") == nil)
+		return "sign: no service named";
 	(key, err) := io.findkey(keyattrs(attrs), "!sk?");
 	if(key == nil)
 		return err;
@@ -104,11 +127,17 @@ interaction(attrs: list of ref Attr, io: ref IO): string
 	# op=pubkey returns the public key (not a secret); the default op
 	# signs caller-supplied content. The private key is used either way
 	# but never leaves factotum.
-	if(authio->lookattrval(attrs, "op") == "pubkey"){
+	if(op == "pubkey"){
 		send(io, array of byte kr->pktostr(kr->sktopk(sk)));
 		io.done(nil);
 		return nil;
 	}
+
+	# In CNSA mode (/env/cnsamode) a signature is ML-DSA-87's or is
+	# not made: a key of another algorithm, stored before the mode was
+	# set, signed all the same.
+	if((cerr := cnsarefuses(sk.sa.name)) != nil)
+		return "sign: " + cerr;
 
 	# the caller writes the bytes to sign
 	content := io.read();
@@ -116,7 +145,7 @@ interaction(attrs: list of ref Attr, io: ref IO): string
 		return "no content to sign";
 
 	state := certdigest(sk, content);
-	cert := kr->sign(sk, 0, state, certhash(sk));
+	cert := kr->sign(sk, Signexp, state, certhash(sk));
 	if(cert == nil)
 		return "sign failed";
 	send(io, array of byte kr->certtostr(cert));
@@ -136,9 +165,26 @@ send(io: ref IO, b: array of byte)
 	}
 }
 
-keycheck(nil: ref Key): string
+# A signing key names its service (a query must) and holds a secret
+# key that reads as one.
+keycheck(k: ref Key): string
 {
+	if(authio->lookattrval(k.attrs, "service") == nil)
+		return "a sign key needs service=";
+	skenc := authio->lookattrval(k.secrets, "!sk");
+	if(skenc == nil)
+		return "a sign key needs !sk=";
+	if(kr->strtosk(decode(skenc)) == nil)
+		return "a sign key's !sk does not read as a secret key";
 	return nil;
+}
+
+cnsarefuses(alg: string): string
+{
+	login := load Login Login->PATH;
+	if(login == nil || !login->cnsamode())
+		return nil;
+	return login->cnsaalg(alg);
 }
 
 # decode reverses mkauditkey's single-line encoding of sktostr: '@' back

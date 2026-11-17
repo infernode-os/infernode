@@ -27,6 +27,7 @@
 #endif
 
 void aesarm64use(int);
+int aesarm64ok(void);
 void ghasharm64use(int);
 
 static int fails;
@@ -255,6 +256,57 @@ ct(void)
 	printf("%02x\n", y[0]);
 }
 
+/*
+ * A state made of a key that is no key (not 16, 24 or 32 bytes) or of an
+ * IV of no bytes (SP 800-38D 5.2.1.1) seals and opens nothing.  It was a
+ * state with no rounds, or with J0 all zeros and H for the tag of an
+ * empty message.
+ */
+static void
+refusals(void)
+{
+	static int bad[] = { 0, 1, 5, 15, 17, 20, 31, 33, 100 };
+	AESGCMstate s;
+	uchar key[128], iv[12], dat[40], tag[16], zero[40];
+	int i, j, c;
+
+	memset(zero, 0, sizeof zero);
+	for(j = 0; j < sizeof key; j++)
+		key[j] = 0x40 + j;
+	memset(iv, 7, sizeof iv);
+	for(c = 0; c < Nconf; c++){
+		if(!setconf(c))
+			continue;
+		for(i = 0; i < nelem(bad); i++){
+			setupAESGCMstate(&s, key, bad[i], iv, sizeof iv);
+			memset(dat, 0x61, sizeof dat);
+			memset(tag, 0xee, sizeof tag);
+			if(aesgcm_encrypt(dat, sizeof dat, nil, 0, tag, &s) != -1
+			|| memcmp(dat, zero, sizeof dat) != 0 || memcmp(tag, zero, 16) != 0){
+				printf("FAIL: %s: a key of %d bytes seals\n", confname[c], bad[i]);
+				fails++;
+			}
+			memset(dat, 0x61, sizeof dat);
+			if(aesgcm_decrypt(dat, sizeof dat, nil, 0, tag, &s) != -1 || dat[0] != 0x61){
+				printf("FAIL: %s: a key of %d bytes opens\n", confname[c], bad[i]);
+				fails++;
+			}
+		}
+		setupAESGCMstate(&s, key, 32, iv, 0);
+		memset(dat, 0x61, sizeof dat);
+		if(aesgcm_encrypt(dat, 0, nil, 0, tag, &s) != -1 || aesgcm_encrypt(dat, sizeof dat, nil, 0, tag, &s) != -1){
+			printf("FAIL: %s: an IV of no bytes seals\n", confname[c]);
+			fails++;
+		}
+		setupAESGCMstate(&s, key, 32, iv, sizeof iv);
+		memset(dat, 0x61, sizeof dat);
+		if(aesgcm_encrypt(dat, sizeof dat, nil, 0, tag, &s) != 0 || aesgcm_decrypt(dat, sizeof dat, nil, 0, tag, &s) != 0 || dat[0] != 0x61){
+			printf("FAIL: %s: a key of 32 bytes and an IV of 12 do not seal and open\n", confname[c]);
+			fails++;
+		}
+	}
+}
+
 int
 main(int argc, char **argv)
 {
@@ -267,6 +319,7 @@ main(int argc, char **argv)
 		return 2;
 	}
 	vectors(argv[1]);
+	refusals();
 	random_cases();
 	speeds();
 	setconf(Pmullaes);

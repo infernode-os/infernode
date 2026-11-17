@@ -1396,23 +1396,26 @@ mountmux(Mnt *m, Mntrpc *r)
 		l = &q->list;
 	}
 	unlock(&m->l);
+	/*
+	 * the first few, then one in a thousand: a server sends these as
+	 * fast as it likes, and each was a line on the console.
+	 * An Rerror's string lies in the reply's Block: it is printed
+	 * before the Block is freed (after, it was whatever message
+	 * had the Block next).
+	 */
+	n = ++nunexpected;
+	if(n <= 8 || n%1000 == 0){
+		if(r->reply.type == Rerror)
+			print("unexpected reply tag %ud; type %d (error %q)\n", r->reply.tag, r->reply.type, r->reply.ename);
+		else
+			print("unexpected reply tag %ud; type %d\n", r->reply.tag, r->reply.type);
+		if(n == 8)
+			print("unexpected reply tags: one in a thousand reported from here\n");
+	}
 	if(r->b != nil){
 		freeblist(r->b);
 		r->b = nil;
 	}
-	/*
-	 * the first few, then one in a thousand: a server sends these as
-	 * fast as it likes, and each was a line on the console
-	 */
-	n = ++nunexpected;
-	if(n > 8 && n%1000 != 0)
-		return;
-	if(r->reply.type == Rerror)
-		print("unexpected reply tag %ud; type %d (error %q)\n", r->reply.tag, r->reply.type, r->reply.ename);
-	else
-		print("unexpected reply tag %ud; type %d\n", r->reply.tag, r->reply.type);
-	if(n == 8)
-		print("unexpected reply tags: one in a thousand reported from here\n");
 }
 
 /*

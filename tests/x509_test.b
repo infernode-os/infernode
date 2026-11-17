@@ -419,7 +419,8 @@ testExtBasicConstraints(t: ref T)
 		pick e := ec {
 		BasicConstraints =>
 			found = 1;
-			t.log(sys->sprint("BasicConstraints: depth=%d", e.depth));
+			t.log(sys->sprint("BasicConstraints: ca=%d pathlen=%d", e.ca, e.pathlen));
+			t.asserteq(e.ca, 1, "a root is a CA");
 		}
 	}
 	t.asserteq(found, 1, "should find and decode BasicConstraints extension");
@@ -502,7 +503,7 @@ testSigVerifyECC(t: ref T)
 		return;
 	}
 
-	ok := s.verify(pk, 0);
+	ok := s.verify(pk);
 	t.asserteq(ok, 1, "self-signed ECC root should verify (P-384/SHA-384)");
 }
 
@@ -524,7 +525,7 @@ testSigVerifyRSA(t: ref T)
 		return;
 	}
 
-	ok := s.verify(pk, 0);
+	ok := s.verify(pk);
 	t.asserteq(ok, 1, "self-signed RSA root should verify (RSA/SHA-256)");
 }
 
@@ -540,7 +541,7 @@ testChainSingleRoot(t: ref T)
 		return;
 	}
 
-	(ok, err) := x509->verify_certchain(der :: nil);
+	(ok, err) := x509->verify_certchain(der :: nil, X509->Usage_Any);
 	t.asserteq(ok, 1, "single self-signed root should verify");
 	if(err != nil)
 		t.log("chain error: " + err);
@@ -558,7 +559,7 @@ testChainMismatch(t: ref T)
 		return;
 	}
 
-	(ok, err) := x509->verify_certchain(der1 :: der2 :: nil);
+	(ok, err) := x509->verify_certchain(der1 :: der2 :: nil, X509->Usage_Any);
 	t.asserteq(ok, 0, "chain without a path to a trusted root should fail");
 	t.assert(err != nil && len err > 0, "should return error message");
 	t.log("expected error: " + err);

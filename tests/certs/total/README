@@ -1,0 +1,21 @@
+Certificates and a CRL for tests/x509_total_test.b, which decodes them,
+verifies them, and then does both again to some thousands of changed
+copies.  Made by tests/host/x509_chain/gen.py -f tests/certs/total
+(python3 with the cryptography package); kept here because the test
+runs where there is no python.  Valid from 2026 to 2049; the test
+verifies at a time of its own.  The keys were thrown away: none of
+these is a trust anchor anywhere but inside that test.
+
+  root      CA (P-256) with nameConstraints: permitted dNSName and
+            directoryName subtrees, excluded iPAddress (v4 and v6),
+            dNSName and directoryName subtrees
+  inter     CA under root: pathlen 0, critical certificatePolicies with
+            a qualifier, policyMappings, policyConstraints,
+            inhibitAnyPolicy, authority and subject key identifiers
+  leaf      under inter: a subjectAltName with one name of each form
+            (dNSName, a wildcard, iPAddress v4 and v6, rfc822Name, URI,
+            an otherName, a directoryName), extendedKeyUsage, keyUsage,
+            an authorityKeyIdentifier in its long form, a CRL
+            distribution point and an extension nobody knows
+  crl       root's, two entries with reason codes, cRLNumber
+  rsaroot   CA (RSA 2048, sha256WithRSAEncryption); rsaleaf under it

@@ -123,6 +123,63 @@ testCorrupt(t: ref T)
 	t.assertnotnil(err, "longer than the size given");
 }
 
+# A stream may decode to as much as its caller says, and no more.
+# The size argument means "exactly"; a stream of no stated length (a
+# web server's Content-Encoding: br) had no bound: each meta-block may
+# be 16MB of output from a dozen bytes of input.  zeros-1m.br and
+# zeros-96m.br are such streams (mkzeros.py, written from RFC 7932):
+# 13 bytes for a megabyte of zeros, 77 for 96MB.
+allzero(a: array of byte): int
+{
+	for(i := 0; i < len a; i++)
+		if(a[i] != byte 0)
+			return 0;
+	return 1;
+}
+
+testCeiling(t: ref T)
+{
+	small := readfile(DIR + "zeros-1m.br");
+	bomb := readfile(DIR + "zeros-96m.br");
+	if(small == nil || bomb == nil)
+		t.fatal("no " + DIR + "zeros-1m.br or zeros-96m.br");
+	t.asserteq(len small, 13, "thirteen bytes");
+	(got, err) := brotli->decompress(small, -1);
+	t.assertnil(err, "a megabyte of zeros: no error");
+	t.assert(len got == 1000000 && allzero(got), sys->sprint("a megabyte of zeros: %d bytes", len got));
+	(got, err) = brotli->decompressmax(small, 1000000);
+	t.assert(err == nil && len got == 1000000, "at most a megabyte: all of it: " + err);
+	(got, err) = brotli->decompressmax(small, 2000000);
+	t.assert(err == nil && len got == 1000000, "at most two: all of it: " + err);
+	(got, err) = brotli->decompressmax(small, 999999);
+	t.assert(got == nil, "at most one byte less: nothing");
+	t.assertseq(err, Brotli->Ebig, "and the error says too large");
+	(got, err) = brotli->decompressmax(small, 4096);
+	t.assert(got == nil && err == Brotli->Ebig, "at most 4096: " + err);
+	(got, err) = brotli->decompressmax(small, 0);
+	t.assert(got == nil && err == Brotli->Ebig, "at most nothing: " + err);
+	(got, err) = brotli->decompressmax(readfile(DIR + "hello.br"), 0);
+	t.assert(got == nil && err == Brotli->Ebig, "hello at most nothing: " + err);
+	(got, err) = brotli->decompressmax(readfile(DIR + "empty.br"), 0);
+	t.assert(err == nil && len got == 0, "nothing at most nothing: " + err);
+	for(i := 0; i < len names; i++) {
+		want := readfile(DIR + names[i] + ".out");
+		(got, err) = brotli->decompressmax(readfile(DIR + names[i] + ".br"), len want);
+		t.assert(err == nil && same(got, want) == len want, names[i] + ": at most its own size: " + err);
+	}
+	# 96MB from 77 bytes, held to four: refused before the first
+	# meta-block's 16MB is made
+	t0 := sys->millisec();
+	(got, err) = brotli->decompressmax(bomb, 4*1024*1024);
+	t.assert(got == nil && err == Brotli->Ebig, "96MB of zeros held to 4MB: " + err);
+	t.assert(sys->millisec() - t0 < 2000, sys->sprint("and at once: %dms", sys->millisec() - t0));
+	# a length written in more nibbles than it needs is not Brotli
+	# (RFC 7932 9.2; the reference decoder's "exuberant nibble")
+	(got, err) = brotli->decompress(array[] of {byte 16rf8, byte 16r23, byte 16rf4, byte 0, byte 0, byte 4, byte 16r40,
+		byte 16r3c, byte 16r16, byte 16r50, byte 16r7e, byte 16rce, byte 16r83, byte 1}, -1);
+	t.assert(got == nil && err != nil, "a meta-block length with a nibble too many is refused (it was taken)");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -138,6 +195,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	run("Vectors", testVectors);
 	run("Sized", testSized);
+	run("Ceiling", testCeiling);
 	run("Corrupt", testCorrupt);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

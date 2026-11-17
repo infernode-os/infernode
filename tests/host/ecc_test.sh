@@ -44,10 +44,13 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 INC="-I$ROOT/$EMUHOST/$OBJTYPE/include -I$ROOT/include -I$ROOT/libmp"
 # the flags emu's libsec is built with (mkfiles/mkfile-*): -O, not -O2
 CFLAGS="-g -O -fno-strict-aliasing -w"
+# what ecc.c needs of libsec: the nonce's generator and its HMACs
+S="$ROOT/libsec"
+SRCS="$S/securezero.c $S/nonce.c $S/hmac.c $S/sha2.c $S/sha256block.c $S/sha256arm64.c $S/sha512block.c $S/sha1.c $S/sha1block.c $S/md5.c $S/md5block.c"
 
 fails=0
 
-if ! $CC $CFLAGS $INC -o "$TMP/ecctest" "$D/ecctest.c" 2>"$TMP/cc.log"; then
+if ! $CC $CFLAGS $INC -o "$TMP/ecctest" "$D/ecctest.c" $SRCS 2>"$TMP/cc.log"; then
 	cat "$TMP/cc.log"
 	echo "FAIL: ecctest does not compile"
 	exit 1
@@ -74,12 +77,12 @@ else
 	ccs="$CC"
 	command -v clang >/dev/null 2>&1 && [ "$CC" != clang ] && ccs="$ccs clang"
 	for cc in $ccs; do
-		$cc $CFLAGS -DCTGRIND $INC -o "$TMP/ecctest-ct" "$D/ecctest.c" || { echo "FAIL: ecctest -DCTGRIND does not compile with $cc"; exit 1; }
+		$cc $CFLAGS -DCTGRIND $INC -o "$TMP/ecctest-ct" "$D/ecctest.c" $SRCS || { echo "FAIL: ecctest -DCTGRIND does not compile with $cc"; exit 1; }
 		for what in ptmul256 ptmul384 ecdh256 ecdh384 keygen256 keygen384 sign256; do
 			valgrind --error-limit=no --read-inline-info=yes --log-file="$TMP/vg.$what" "$TMP/ecctest-ct" ct "$what" >/dev/null 2>&1
 			# the function each report is in
 			awk '/depends on uninitialised|Use of uninitialised/ { getline; sub(/.*: /, ""); sub(/ \(.*/, ""); print }' "$TMP/vg.$what" | sort | uniq -c >"$TMP/fns.$what"
-			bad=$(awk '{print $2}' "$TMP/fns.$what" | grep -v -x 'randscalar\|ptaffine\|ptload\|ecdsasign\|ecdh')
+			bad=$(awk '{print $2}' "$TMP/fns.$what" | grep -v -x 'randscalar\|ptaffine\|ptload\|ecdsasign\|ecdsasignrnd\|ecdh')
 			case $what in ptmul*) bad=$(awk '{print $2}' "$TMP/fns.$what") ;; esac
 			if [ -n "$bad" ]; then
 				echo "FAIL: $cc: $what: branches or addresses depend on the secret in:"

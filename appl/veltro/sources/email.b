@@ -181,7 +181,8 @@ watch(updates: chan of ref Notification, stop: chan of int): string
 
 	for(;;) {
 		# Ensure connected
-		if(!imapconnected) {
+		if(!imapconnected || !imap->isup()) {
+			imapconnected = 0;
 			err := reconnect();
 			if(err != nil) {
 				updates <-= ref Notification("error", nil, "reconnect: " + err);
@@ -208,8 +209,10 @@ watch(updates: chan of ref Notification, stop: chan of int): string
 		timer := chan of int;
 		spawn idletimer(timer, IDLE_TIMEOUT);
 
-		# Start IDLE in background
-		idledone := chan of string;
+		# Start IDLE in background.  Its result waits in the channel:
+		# idle returns by itself when the connection fails, with
+		# nobody yet asking how it went.
+		idledone := chan[1] of string;
 		spawn idlewrapper(imapupdates, imapstop, idledone);
 
 		# Multiplex: IMAP updates, timer, stop
@@ -750,10 +753,13 @@ setflag(id: string, flag, add: int): string
 
 # --- Helpers ---
 
+# imap(2) closes its connection when the server stops answering, hangs
+# up or sends more than is taken: it is asked, and connected to again.
 ensureconnected(): string
 {
-	if(imapconnected)
+	if(imapconnected && imap->isup())
 		return nil;
+	imapconnected = 0;
 	return reconnect();
 }
 

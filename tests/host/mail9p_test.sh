@@ -148,7 +148,7 @@ else
 fi
 
 expect 03 "connect with no credentials refused" 'connect: no credentials.*factotum'
-expect 04 "connect to a server not there refused with the dial's error" 'connect: tls.*dial tcp!127.0.0.1!993'
+expect 04 "connect to a server not there refused with the dial's error" 'connect: .*dial tcp!127.0.0.1!993'
 
 out=$(slice 05)
 if [[ -z "$out" ]]; then

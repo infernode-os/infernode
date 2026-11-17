@@ -13,6 +13,9 @@ timesync \- set the clock from a GPS receiver
 .B -t
 .I ms
 ] [
+.B -m
+.I seconds
+] [
 .B -p
 .I seconds
 ] [
@@ -41,12 +44,36 @@ delay that varies; so of
 fixes (5, each one second's), the one whose offset is largest was the
 least delayed, and its offset is taken, as Plan 9's
 .I timesync
-does.
+does: the largest of those within two seconds of the samples' median,
+which must be more than half of them, so that one sample that is not
+the receiver's does not carry the clock.
 Only fixes marked
 .B sync=yes
 count: never a recording's, a feed's, or one whose time this host
 stamped (a receiver giving none, as GDL 90 and Garmin's Aviation
-output do).
+output do), nor a network source's unless
+.IR gpsfs 's
+.B source
+command said
+.BR sync .
+.PP
+A time is not taken on one say-so, since the clock decides which
+certificates are in date.
+A GPS time before this system was built (the later of the day
+.I timesync
+was written and the kernel's build date) is no time, and is refused.
+A clock that has been set, one already past that date as a host's or
+an RTC's is, is stepped by no more than
+.B -m
+.I seconds
+(86400, a day: such a clock is off by its drift or by a time zone, and
+more than that is another date);
+.B "-m 0"
+allows any step.
+A clock never set, as a board's with no RTC is when it starts, is
+stepped by whatever brings it to the time.
+A record is used once: none that is not later, by the receiver's time,
+than the last a result was made from.
 .PP
 What is left is the receiver's own delay between the second and the
 sentence giving it, tens to hundreds of milliseconds by receiver;
@@ -60,7 +87,8 @@ milliseconds (200) it is stepped, through
 .B /dev/time
 .RI ( cons (3)).
 .I Timesync
-says by how much, and whether it set the clock or left it.
+says by how much, and whether it set the clock or left it; a time it
+refuses is an error, saying why, and the clock is left.
 With
 .B -p
 it samples every
@@ -72,6 +100,14 @@ On a Raspberry Pi with a receiver on its serial port and no network:
 .EX
 gpsfs source '#t/eia0' 9600
 timesync -p 600 &
+.EE
+.PP
+From a marine gateway that sends NMEA to UDP port 10110, on a network
+whose every host is trusted with the clock:
+.IP
+.EX
+gpsfs source 'udp!*!10110' sync
+timesync
 .EE
 .SH SOURCE
 .B /appl/cmd/timesync.b
@@ -85,3 +121,8 @@ A receiver's pulse per second, which would give it to microseconds, is
 not read.
 .PP
 The clock is stepped, not slewed.
+.PP
+GPS time is not authenticated: a receiver believes the strongest
+signal, and a network source whoever speaks.
+The bounds above limit what a false time can do to a clock already
+set; they do not make the time true.

@@ -27,7 +27,6 @@ lib
 	memlayer
 	memdraw
 	keyring
-	crypt
 	9
 
 link

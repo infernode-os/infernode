@@ -103,6 +103,12 @@ If the connection server cannot be found,
 the
 .I addr
 is used as-is.
+What the connection server answers is taken as a translation and no more:
+the clone file of a protocol in the network directory that was asked
+.RB ( \fIdir\fP/\fIproto\fP/clone )
+and an address of one word.
+An answer naming any other file, or with more than the address after it,
+is not used; at most 64 answers are tried.
 .PP
 If a connection attempt is successful, the
 .B dir

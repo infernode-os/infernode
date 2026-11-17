@@ -2,7 +2,9 @@ implement MdhtmlTest;
 
 #
 # mdhtml(2): Markdown to HTML as Markdown.pl writes it, case by case;
-# odd and large inputs answered without an exception or a hang.
+# odd and large inputs answered without an exception or a hang, and
+# the shapes that cost more than their length (nesting, marks that
+# look ahead) held to it.
 #
 
 include "sys.m";
@@ -162,6 +164,136 @@ testNoHarm(t: ref T)
 	t.assert(len h > len s, "it was all written");
 }
 
+rep(s: string, n: int): string
+{
+	b := array of byte s;
+	a := array[n * len b] of byte;
+	for(i := 0; i < n; i++)
+		a[i*len b:] = b;
+	return string a;
+}
+
+count(s, sub: string): int
+{
+	n := 0;
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub){
+			n++;
+			i += len sub - 1;
+		}
+	return n;
+}
+
+# Text that is anyone's who can write a page.  Each level of a quote, a
+# list or a link's text kept a copy of what was left of the line, so
+# 40K of "> " was "out of memory" at 512MB; and a mark that looks
+# ahead for its pair (a star, a bracket, a quote, a comment) looked to
+# the end of the text from each one.  Each of these is answered, in a
+# time that goes with its length.
+testHostile(t: ref T)
+{
+	N: con 20000;
+	shapes := array[] of {
+		("quotes nested 20000 deep", rep("> ", N) + "x\n"),
+		("lists nested 20000 deep", rep("- ", N) + "x\n"),
+		("ordered lists nested 20000 deep", rep("1. ", N) + "x\n"),
+		("quotes and lists nested in turn", rep("> - ", N) + "x\n"),
+		("links nested 20000 deep", rep("[", N) + "x" + rep("](u)", N)),
+		("images nested 20000 deep", rep("![", N) + "x" + rep("](u)", N)),
+		("20000 brackets opened", rep("[", N)),
+		("20000 brackets opened and closed, a reference defined", "[r]: /u\n\n" + rep("[", N) + rep("]", N)),
+		("20000 links with no end to their destination", rep("[a](", N)),
+		("20000 links with no end to their title", rep("[a](u \"t ", N)),
+		("20000 links to a reference that is not there", "[r]: /u\n\n" + rep("[a][b] ", N)),
+		("20000 stars that open and never close", rep("*a ", N)),
+		("20000 double stars", rep("**a ", N)),
+		("20000 underscores", rep("_a ", N)),
+		("a line of 60000 stars", rep("*", 3*N)),
+		("emphasis nested 20000 deep", rep("*a **b ", N/2) + rep("c** c* ", N/2)),
+		("20000 strike-throughs never closed", rep("~~a ", N)),
+		("20000 comments never closed", rep("<!-- ", N)),
+		("20000 tags never closed", rep("<a ", N)),
+		("backticks in runs that never pair", rep("`a ``b ```c ", N/2) + "````"),
+		("20000 hard breaks", rep("a  \n", N)),
+		("20000 entities that are none", rep("&a ", N)),
+	};
+	total := 0;
+	for(i := 0; i < len shapes; i++){
+		(what, text) := shapes[i];
+		t0 := sys->millisec();
+		h := "";
+		{
+			h = mdhtml->html(text);
+		} exception e {
+		"*" =>
+			t.error(what + ": " + e);
+			continue;
+		}
+		ms := sys->millisec() - t0;
+		total += ms;
+		t.log(sys->sprint("%s: %d bytes in %d ms, %d of HTML", what, len text, ms, len h));
+		t.assert(ms < 5000, sys->sprint("%s: %d bytes within 5 s (%d ms)", what, len text, ms));
+		t.assert(len h > 0, what + ": answered");
+	}
+	t.log(sys->sprint("all: %d ms", total));
+
+	# what is nested deeper than 32 is the text it is
+	h := mdhtml->html(rep("> ", 100) + "x <b> y\n");
+	t.asserteq(count(h, "<blockquote>"), 32, "quotes nested 100 deep: 32 of them");
+	t.asserteq(count(h, "</blockquote>"), 32, "each closed");
+	t.assert(count(h, "&gt; &gt; ") > 0 && count(h, "x &lt;b&gt; y") == 1, "and the rest the text it is, escaped");
+	h = mdhtml->html(rep("- ", 100) + "x\n");
+	t.asserteq(count(h, "<ul>"), 32, "lists nested 100 deep: 32 of them");
+	h = mdhtml->html(rep("[", 100) + "x <b>" + rep("](u)", 100));
+	t.asserteq(count(h, "<a href"), 32, "links nested 100 deep: 32 of them");
+	t.assert(count(h, "&lt;b&gt;") == 1 && count(h, "[[[") > 0, "and the rest the text it is, escaped");
+	h = mdhtml->html(rep("> ", 31) + "*x*\n");
+	t.asserteq(count(h, "<blockquote>") * 10 + count(h, "<p><em>x</em></p>"), 311, "quotes nested 31 deep are all quotes");
+	h = mdhtml->html(rep("[", 30) + "*x*" + rep("](u)", 30));
+	t.asserteq(count(h, "<a href") * 10 + count(h, "<em>x</em>"), 301, "links nested 30 deep are all links");
+}
+
+# What is looked for and not found is not looked for again from
+# further on: only where it could not have been found there either.
+testLookahead(t: ref T)
+{
+	cases(t, array[] of {
+	("*a *b* c", "<p><em>a *b</em> c</p>\n"),
+	("*a b *c d* e", "<p><em>a b *c d</em> e</p>\n"),
+	("*a b **c d** e", "<p>*a b <strong>c d</strong> e</p>\n"),
+	("**a *b* **c d** e", "<p><strong>a <em>b</em> **c d</strong> e</p>\n"),
+	("**a *b* c** d **e", "<p><strong>a <em>b</em> c</strong> d **e</p>\n"),
+	("_a _b_ c *d* _e", "<p><em>a _b</em> c <em>d</em> _e</p>\n"),
+	("~~a ~~b~~ c", "<p><del>a ~~b</del> c</p>\n"),
+	("[a [b](u) c", "<p>[a <a href=\"u\">b</a> c</p>\n"),
+	("[a](u \"t [b](v \"w\") c", "<p><a href=\"u\" title=\"t [b](v &quot;w\">a</a> c</p>\n"),
+	("[a](u \"t [b](v 'w') c", "<p>[a](u \"t <a href=\"v\" title=\"w\">b</a> c</p>\n"),
+	("x <!-- a <!-- b --> c", "<p>x <!-- a <!-- b --> c</p>\n"),
+	("x <!-- a <!-- b <i>c</i>", "<p>x &lt;!-- a &lt;!-- b <i>c</i></p>\n"),
+	("` a `` b ` c `` d ```", "<p><code>a `` b</code> c `` d ```</p>\n"),
+	# a star's pair looked for across a code span that a tag's quotes
+	# hide from the text: looked for afresh from inside it
+	("*x <a href='`'> *y* `z", "<p>*x <a href='`'> <em>y</em> `z</p>\n"),
+	("a  \nb          \nc", "<p>a<br />\nb<br />\nc</p>\n"),
+	});
+}
+
+# A definition is not taken out of what is not Markdown: a block of
+# raw HTML, the code of a fence that opens a list's item.
+testRefsNotInCode(t: ref T)
+{
+	cases(t, array[] of {
+	("<pre>\n[x]: http://a\n</pre>\n\n[y][x]\n",
+		"<pre>\n[x]: http://a\n</pre>\n<p>[y][x]</p>\n"),
+	("- ```\n  [x]: http://b\n  ```\n\n[y][x]\n",
+		"<ul>\n<li><pre><code>[x]: http://b\n</code></pre></li>\n</ul>\n<p>[y][x]</p>\n"),
+	("> ```\n> [x]: http://c\n> ```\n\n[y][x]\n\n[z]: http://d\n\n[w][z]\n",
+		"<blockquote>\n<pre><code>[x]: http://c\n</code></pre>\n</blockquote>\n<p>[y][x]</p>\n<p><a href=\"http://d\">w</a></p>\n"),
+	("<div>\ntext\n</div>\n\n[x]: http://e\n\n[y][x]\n",
+		"<div>\ntext\n</div>\n<p><a href=\"http://e\">y</a></p>\n"),
+	});
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -183,6 +315,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("HTML", testHTML);
 	run("Escape", testEscape);
 	run("NoHarm", testNoHarm);
+	run("Hostile", testHostile);
+	run("Lookahead", testLookahead);
+	run("RefsNotInCode", testRefsNotInCode);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

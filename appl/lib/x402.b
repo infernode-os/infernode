@@ -126,26 +126,19 @@ selectoption(pr: ref PaymentRequired, chain: string): ref PaymentReq
 	if(pr == nil)
 		return nil;
 
+	# The option for the network asked for, or none. It went on to any
+	# EVM network and then to the first option of any kind, so what was
+	# paid for was on a network the server chose and the caller had not
+	# named (wallet9p refuses a network that is not its own; the choice
+	# is not left to that).
 	network := chaintonetwork(chain);
-
-	# First pass: exact network match
+	if(network == nil)
+		return nil;
 	for(l := pr.accepts; l != nil; l = tl l) {
 		req := hd l;
 		if(req.network == network)
 			return req;
 	}
-
-	# Second pass: any EVM network
-	for(l = pr.accepts; l != nil; l = tl l) {
-		req := hd l;
-		if(len req.network > 7 && req.network[0:7] == "eip155:")
-			return req;
-	}
-
-	# Fallback: first option
-	if(pr.accepts != nil)
-		return hd pr.accepts;
-
 	return nil;
 }
 
@@ -357,7 +350,9 @@ chaintonetwork(chain: string): string
 		return "eip155:42161";
 	if(chain == "optimism")
 		return "eip155:10";
-	return "eip155:1";	# default to mainnet
+	# a name that is none is no network (it was mainnet: see
+	# networktochainid below, which was the same)
+	return nil;
 }
 
 #
@@ -452,6 +447,8 @@ eip712domainhash(name: string, version: string, chainid: int, contract: string):
 	# verifyingContract as address (20 bytes, left-padded to 32)
 	contractaddr := ethcrypto->strtoaddr(contract);
 	contractpadded := pad32addr(contractaddr);
+	if(contractpadded == nil)
+		return nil;
 
 	# Concatenate: typeHash || nameHash || versionHash || chainId || contract
 	encoded := array[5 * 32] of byte;
@@ -484,8 +481,15 @@ eip712structhash(sender: string, recipient: string, value: string,
 
 	# nonce is bytes32 (already 32 bytes as hex)
 	noncebytes := ethcrypto->hexdecode(nonce);
-	if(noncebytes == nil || len noncebytes != 32)
-		noncebytes = array[32] of byte;
+
+	# A field that is not what its type says makes no hash. Each was
+	# encoded as zero instead (an address not of 20 bytes as the zero
+	# address), so a digest was made, and signed, for a transfer other
+	# than the one asked for.
+	if(fromaddr == nil || toaddr == nil || valuebytes == nil ||
+	   afterbytes == nil || beforebytes == nil ||
+	   noncebytes == nil || len noncebytes != 32)
+		return nil;
 
 	# Concatenate
 	encoded := array[7 * 32] of byte;
@@ -502,35 +506,35 @@ eip712structhash(sender: string, recipient: string, value: string,
 	return result;
 }
 
-# Pad bytes to 32 bytes (left-padded with zeros for uint256)
+# Pad an unsigned number to 32 bytes (left-padded with zeros for
+# uint256); nil for one that is none or does not fit
 pad32(b: array of byte): array of byte
 {
+	if(b == nil || len b > 32)
+		return nil;
 	r := array[32] of byte;
 	for(i := 0; i < 32; i++)
 		r[i] = byte 0;
-	if(b != nil) {
-		off := 32 - len b;
-		if(off < 0) off = 0;
-		n := len b;
-		if(n > 32) n = 32;
-		r[off:] = b[0:n];
-	}
+	if(len b > 0)
+		r[32 - len b:] = b;
 	return r;
 }
 
-# Pad a 20-byte address to 32 bytes (left-padded)
+# Pad a 20-byte address to 32 bytes (left-padded); nil for anything
+# that is not 20 bytes (it was the zero address)
 pad32addr(addr: array of byte): array of byte
 {
+	if(addr == nil || len addr != 20)
+		return nil;
 	r := array[32] of byte;
 	for(i := 0; i < 32; i++)
 		r[i] = byte 0;
-	if(addr != nil && len addr == 20)
-		r[12:] = addr;
+	r[12:] = addr;
 	return r;
 }
 
 # Convert decimal string to big-endian bytes (strict; garbage -> nil,
-# which pad32 turns into an all-zero word — callers validate first)
+# which pad32 refuses)
 strtobigbytes(s: string): array of byte
 {
 	return ethcrypto->dectobe(s);

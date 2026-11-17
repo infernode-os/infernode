@@ -19,6 +19,12 @@ fn srv.styx {
 
 fn srv.auth {
 	listen -A tcp!*!inflogin auth/logind
+}
+
+# signer(8)'s operator-approved enrolment, for a realm that wants it:
+# not started by srv.auth (no client here uses it, and its
+# certificates never expire)
+fn srv.signer {
 	listen -A tcp!*!infsigner auth/signer
-	# listen -A tcp!*!infcsigner auth/countersigner
+	listen -A tcp!*!infcsigner auth/countersigner
 }

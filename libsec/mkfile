@@ -2,8 +2,7 @@
 
 LIB=libsec.a
 
-CFILES = des.c desmodes.c desECB.c desCBC.c des3ECB.c des3CBC.c\
-	aes.c aesarm64.c aesctr.c aesgcm.c ghasharm64.c blowfish.c \
+CFILES = aes.c aesarm64.c aesgcm.c ghasharm64.c blowfish.c \
 	chacha.c poly1305.c ccpoly.c \
 	x25519.c ecc.c \
 	idea.c \
@@ -11,12 +10,11 @@ CFILES = des.c desmodes.c desECB.c desCBC.c des3ECB.c des3CBC.c\
 	sha2.c sha256block.c sha256arm64.c sha512block.c\
 	sha3.c keccak256.c\
 	secp256k1.c\
-	sha1pickle.c md5pickle.c\
 	rc4.c\
-	genrandom.c prng.c fastrand.c nfastrand.c securezero.c\
+	genrandom.c prng.c fastrand.c securezero.c nonce.c mpnonce.c\
 	probably_prime.c smallprimetest.c genprime.c dsaprimes.c gensafeprime.c genstrongprime.c dhparams.c\
 	rsagen.c rsafill.c rsaencrypt.c rsadecrypt.c rsaalloc.c rsaprivtopub.c \
-	eggen.c egencrypt.c egdecrypt.c egalloc.c egprivtopub.c egsign.c egverify.c \
+	eggen.c egalloc.c egprivtopub.c egsign.c egverify.c \
 	dsagen.c dsaalloc.c dsaprivtopub.c dsasign.c dsaverify.c \
 	mlkem.c mlkem_ntt.c mlkem_poly.c \
 	mldsa.c mldsa_ntt.c mldsa_poly.c \

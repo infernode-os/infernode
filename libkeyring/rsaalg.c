@@ -218,7 +218,10 @@ rsa_verify(mpint* m, void *sig, void *key)
 	mpint *t;
 	int r;
 
+	/* nil for a signature outside 0..n-1 (RFC 8017 5.2.2): none */
 	t = rsaencrypt((RSApub*)key, (mpint*)sig, nil);
+	if(t == nil)
+		return 0;
 	r = mpcmp(t, m) == 0;
 	mpfree(t);
 	return r;
@@ -271,6 +274,9 @@ rsainit(void)
 	vec->genskfrompk = rsa_genfrompk;
 	vec->sign = rsa_sign;
 	vec->verify = rsa_verify;
+	/* signs a number: a digest's leading zero bytes are not part of it */
+	vec->signb = nil;
+	vec->verifyb = nil;
 
 	vec->skfree = rsa_freepriv;
 	vec->pkfree = rsa_freepub;

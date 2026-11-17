@@ -56,7 +56,7 @@ run(name: string, testfn: ref fn(t: ref T))
 testHextowei(t: ref T)
 {
 	t.assertseq(ethrpc->hextowei("0x0"), "0", "0x0 -> 0");
-	t.assertseq(ethrpc->hextowei("0x"), "0", "0x -> 0");
+	t.assertnil(ethrpc->hextowei("0x"), "0x is no number");
 	t.assertseq(ethrpc->hextowei("0xde0b6b3a7640000"), "1000000000000000000",
 		"1 ETH in wei");
 	# 10 ETH in wei = 1e19 > 2^63: must not wrap

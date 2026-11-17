@@ -7,13 +7,7 @@ implement Vid9p;
 # produced by the host `vdec` decode core (tools/vdec) as a synthetic
 # filesystem:
 #
-#   /mnt/video/0/ctl      write "open <file.y4m>"  load a static .y4m file
-#                         write "replay <file.y4m>" serve it as a live
-#                               feed, paced at its rate and looped (no
-#                               host decoder: runs on bare metal too)
-#                         write "play <cmd> [arg..]" spawn a host decoder
-#                               (via os) and stream its y4m stdout live
-#                         write "play" / "pause" / "stop" /
+#   /mnt/video/0/ctl      write "play" / "pause" / "stop" /
 #                               "seek <ms>|+<ms>|-<ms>" / "live"
 #                               drive the SERVER-side playhead (transport)
 #   /mnt/video/0/fmt      read  "<w> <h> i420 <fps>"
@@ -41,15 +35,27 @@ implement Vid9p;
 # 0 = unlimited) as its DVR buffer; the window slides and reads below
 # first= error.  Static sources are always fully retained.
 #
-# Two source modes share one server:
-#   - static  (`open`): the whole .y4m is read into the frame buffer and
+# THE SOURCE is the command line's, and only the command line's: what a
+# server plays is the business of whoever starts it.  ctl once took
+# "open <file>", "replay <file>" and "play <cmd> [arg...]" too, the last
+# of which ran a host command: but ctl is the file every viewer of the
+# feed writes to drive the playhead, and the feed is exported to other
+# machines (videnc(1)), so a 9P client given a picture ran commands on
+# the host as the emulator's user and read any file the server could
+# name.  ctl takes the transport verbs and nothing that names a command
+# or a path; a source verb is refused, saying so.
+#
+# Three source modes share one server:
+#   - static  (a file): the whole .y4m is read into the frame buffer and
 #     served with random access; reads never block (this is the original,
 #     canned path).
-#   - live    (`play`): a host decoder is spawned through the `os` command
+#   - live    (-c): a host decoder is spawned through the `os` command
 #     and its y4m stdout is parsed incrementally; frames are appended as
 #     they decode and blocked readers are woken. This is the INFR-266
 #     "swap the y4m-file source for a live vdec spawn" step; the decode core
 #     stays protocol-agnostic (see docs/H264-9P-BRIDGE.md).
+#   - replay  (-r): a .y4m file served as a live feed, paced at its rate
+#     and looped (no host decoder: runs on bare metal too).
 #
 # Usage (in the Inferno shell):
 #   mount {vid9p clip.y4m}                        /mnt/video   # static
@@ -79,6 +85,9 @@ Command: module {
 };
 
 Qroot, Qstream, Qctl, Qfmt, Qframe, Qstatus, Qlayer: con iota;
+
+Maxdim: con 8192;	# a frame's width or height: 100 MB a frame
+Maxline: con 4096;	# a y4m header or FRAME line
 
 tc: chan of ref Tmsg;
 srv: ref Styxserver;
@@ -187,10 +196,14 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->fprint(stderr, "vid9p: %s\n", e);
 	}
 
+	# The files are the server's user's.  They were "inferno"'s whoever
+	# ran the server, and ctl was 666 to make up for it.
+	if((u := readuser()) != nil)
+		user = u;
 	(tree, treeop) := nametree->start();
 	tree.create(big Qroot,   dir(".",      Sys->DMDIR|8r555, Qroot));
 	tree.create(big Qroot,   dir("0",      Sys->DMDIR|8r555, Qstream));
-	tree.create(big Qstream, dir("ctl",    8r666, Qctl));
+	tree.create(big Qstream, dir("ctl",    8r664, Qctl));
 	tree.create(big Qstream, dir("fmt",    8r444, Qfmt));
 	tree.create(big Qstream, dir("frame",  8r444, Qframe));
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
@@ -258,7 +271,22 @@ shutdown(tree: ref Tree)
 		sys->fprint(fd, "killgrp");
 }
 
+# The serve loop, and what ends with it.  An exception in the loop (the
+# heap run out by a frame, a fault a request finds) left the ticker, the
+# feeder and a host decoder behind with the frames they held and nobody
+# to read them; it ends the server as the channel's end does.
 serve(tree: ref Tree)
+{
+	{
+		serve1();
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "vid9p: %s\n", e);
+	}
+	shutdown(tree);
+}
+
+serve1()
 {
 	for(;;) alt {
 	tmsg := <-tc =>
@@ -267,20 +295,20 @@ serve(tree: ref Tree)
 		# on for ever (and under listen -A, which then ran a
 		# connection's command in the listener, no second client was
 		# ever served).
-		if(tmsg == nil){
-			shutdown(tree);
+		if(tmsg == nil)
 			return;
-		}
 		pick tm := tmsg {
 		Readerror =>
-			shutdown(tree);
 			return;
 		Open =>
 			srv.open(tm);
 		Read =>
-			c := srv.getfid(tm.fid);
-			if(c == nil || !c.isopen){
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
+			# canread holds the count to a message's: a client that is
+			# not a mount (listen -A {vid9p ...}) sent a count of
+			# ff ff ff ff, and the frame's slice raised.
+			(c, err) := srv.canread(tm);
+			if(c == nil){
+				srv.reply(ref Rmsg.Error(tm.tag, err));
 			} else {
 				case int c.path {
 				Qroot or Qstream or Qlayer =>
@@ -298,13 +326,16 @@ serve(tree: ref Tree)
 				}
 			}
 		Write =>
-			c := srv.getfid(tm.fid);
-			if(c == nil || !c.isopen){
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
+			(c, err) := srv.canwrite(tm);
+			if(c == nil){
+				srv.reply(ref Rmsg.Error(tm.tag, err));
 			} else if(int c.path != Qctl){
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
+			} else if((e := doctl(string tm.data)) != nil){
+				# every write was answered as done, the reason for
+				# one that was not going to vid9p's standard error
+				srv.reply(ref Rmsg.Error(tm.tag, "vid9p: " + e));
 			} else {
-				doctl(string tm.data);
 				srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 			}
 		* =>
@@ -330,7 +361,6 @@ serve(tree: ref Tree)
 	<-tickc =>
 		advance();
 	}
-	tree.quit();
 }
 
 # Append one frame's I420 payload to the served buffer.  The backing
@@ -481,39 +511,41 @@ statusstr(): string
 
 ctlhelp(): string
 {
-	return "open <file.y4m>\nreplay <file.y4m>\nplay [<cmd> arg...]\npause\nstop\nseek <ms>|+<ms>|-<ms>\nlive\n";
+	return "play\npause\nstop\nseek <ms>|+<ms>|-<ms>\nlive\n";
 }
 
-doctl(s: string)
+# A whole number of at most nine digits: a seek's milliseconds.
+isms(a: string): int
 {
-	(nil, toks) := sys->tokenize(s, " \t\r\n");
+	if(len a == 0 || len a > 9)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] < '0' || a[i] > '9')
+			return 0;
+	return 1;
+}
+
+# One ctl write: a transport verb, or the reason it is refused.
+doctl(s: string): string
+{
+	(n, toks) := sys->tokenize(s, " \t\r\n");
 	if(toks == nil)
-		return;
+		return "empty command";
 	case hd toks {
-	"open" =>
-		if(tl toks != nil){
-			e := loadvideo(hd tl toks);
-			if(e != nil)
-				sys->fprint(stderr, "vid9p: open: %s\n", e);
-			else
-				wakeparked();	# static reload satisfies waiters
-		}
-	"replay" =>
-		if(tl toks != nil){
-			e := startreplay(hd tl toks);
-			if(e != nil)
-				sys->fprint(stderr, "vid9p: replay: %s\n", e);
-		}
+	"open" or "replay" =>
+		return "the source is set when vid9p starts";
 	"play" =>
-		if(tl toks != nil)
-			startstream(tl toks);
-		else {
-			tplaying = 1;
-			lastadv = 0;
-		}
+		if(n != 1)
+			return "the source is set when vid9p starts: play takes no argument";
+		tplaying = 1;
+		lastadv = 0;
 	"pause" =>
+		if(n != 1)
+			return "pause takes no argument";
 		tplaying = 0;
 	"stop" =>
+		if(n != 1)
+			return "stop takes no argument";
 		if(streaming){
 			# a live feed "stops" back to the live edge
 			follow = 1;
@@ -524,41 +556,51 @@ doctl(s: string)
 		}
 		lastadv = 0;
 	"live" =>
+		if(n != 1)
+			return "live takes no argument";
 		follow = 1;
 		tplaying = 1;
 		lastadv = 0;
 	"seek" =>
-		if(tl toks != nil){
-			a := hd tl toks;
-			rel := 0;
-			sign := 1;
-			if(len a > 0 && a[0] == '+'){
-				rel = 1;
-				a = a[1:];
-			} else if(len a > 0 && a[0] == '-'){
-				rel = 1;
-				sign = -1;
-				a = a[1:];
-			}
-			f := fps;
-			if(f <= 0 || f > 120)
-				f = 25;
-			d := sign * (int a) * f / 1000;
-			if(rel)
-				pos += d;
-			else
-				pos = d;
-			if(pos < fbase)
-				pos = fbase;
-			follow = 0;
-			if(nframes > 0 && pos >= nframes-1){
-				pos = nframes - 1;
-				if(streaming)
-					follow = 1;
-			}
-			lastadv = 0;
+		if(n != 2)
+			return "seek <ms>|+<ms>|-<ms>";
+		a := hd tl toks;
+		rel := 0;
+		sign := big 1;
+		if(len a > 0 && a[0] == '+'){
+			rel = 1;
+			a = a[1:];
+		} else if(len a > 0 && a[0] == '-'){
+			rel = 1;
+			sign = big -1;
+			a = a[1:];
 		}
+		if(!isms(a))
+			return "seek <ms>|+<ms>|-<ms>";
+		f := fps;
+		if(f <= 0 || f > 120)
+			f = 25;
+		# in 64 bits and held to the frames there are: the product
+		# wrapped an int for a seek past 2^31/fps ms
+		d := sign * big a * big f / big 1000;
+		if(rel)
+			d += big pos;
+		if(d < big fbase)
+			d = big fbase;
+		if(d > big nframes)
+			d = big nframes;
+		pos = int d;
+		follow = 0;
+		if(nframes > 0 && pos >= nframes-1){
+			pos = nframes - 1;
+			if(streaming)
+				follow = 1;
+		}
+		lastadv = 0;
+	* =>
+		return "unknown command: " + hd toks;
 	}
+	return nil;
 }
 
 # ── live stream ─────────────────────────────────────────────
@@ -725,22 +767,34 @@ hostrun(wfd: ref Sys->FD, cmd: list of string)
 
 # Parse a YUV4MPEG2 stream from fd incrementally: header once (emit geometry
 # on geoc), then one FRAME payload at a time onto framec; eofc at end.
+# Whatever ends it, the server is told: an exception here (no room for a
+# frame) left startstream waiting for a geometry, or the readers parked
+# at the live edge waiting for a frame, for ever.
 feeder(fd: ref Sys->FD)
+{
+	told := array[1] of {0};
+	{
+		feed(fd, told);
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "vid9p: source: %s\n", e);
+	}
+	if(!told[0])
+		geoc <-= (0, 0, 0);
+	eofc <-= 1;
+}
+
+feed(fd: ref Sys->FD, told: array of int)
 {
 	buf := array[0] of byte;
 	# read the header line
 	(hdr, rest) := readline(fd, buf);
-	if(hdr == nil){
-		geoc <-= (0, 0, 0);
-		eofc <-= 1;
+	if(hdr == nil)
 		return;
-	}
 	(w, h, f) := parsehdr(hdr);
-	if(w <= 0 || h <= 0){
-		geoc <-= (0, 0, 0);
-		eofc <-= 1;
+	if(w <= 0 || h <= 0)
 		return;
-	}
+	told[0] = 1;
 	geoc <-= (w, h, f);
 	fsz := w*h + 2*(w/2)*(h/2);
 	buf = rest;
@@ -756,7 +810,6 @@ feeder(fd: ref Sys->FD)
 		buf = r2;
 		framec <-= payload;
 	}
-	eofc <-= 1;
 }
 
 # Read up to and including the next '\n' from buf+fd; return (line-without-nl,
@@ -767,6 +820,10 @@ readline(fd: ref Sys->FD, buf: array of byte): (array of byte, array of byte)
 		nl := findnl(buf, 0);
 		if(nl < len buf)
 			return (buf[0:nl], buf[nl+1:]);
+		# a header or FRAME line is tens of bytes: a source with no
+		# newline in it was gathered whole, copied again at each read
+		if(len buf > Maxline)
+			return (nil, nil);
 		more := readmore(fd);
 		if(more == nil){
 			if(len buf > 0)
@@ -825,12 +882,30 @@ parsehdr(hdr: array of byte): (int, int, int)
 		if(len t < 2)
 			continue;
 		case t[0] {
-		'W' => w = int t[1:];
-		'H' => h = int t[1:];
-		'F' => f = int t[1:];	# "25:1" -> 25
+		'W' => w = dim(t[1:]);
+		'H' => h = dim(t[1:]);
+		'F' => f = dim(t[1:]);	# "25:1" -> 25
 		}
 	}
+	# A size is the source's word (a decoder passes on what its media
+	# says).  65536 by 65536 made a frame size of -2^31: a negative
+	# index in the static loader, a negative slice in the feeder.
+	if(w > Maxdim || h > Maxdim)
+		return (0, 0, 0);
 	return (w, h, f);
+}
+
+# The digits a header field begins with, as a number; 0 if there are
+# none or more than a size or rate has.
+dim(s: string): int
+{
+	n := 0;
+	for(i := 0; i < len s && s[i] >= '0' && s[i] <= '9'; i++){
+		if(i >= 6)
+			return 0;
+		n = n*10 + (s[i] - '0');
+	}
+	return n;
 }
 
 # ── static source ───────────────────────────────────────────
@@ -916,6 +991,18 @@ readall(fd: ref Sys->FD): array of byte
 		n += r;
 	}
 	return buf[0:n];
+}
+
+readuser(): string
+{
+	fd := sys->open("/dev/user", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
 }
 
 findnl(d: array of byte, p: int): int

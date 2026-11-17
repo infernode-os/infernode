@@ -21,6 +21,12 @@ implement WalletPolicyTest;
 # payee, the amount and the network on lines of their own, where it was
 # cut at 76 characters (six digits of an x402 payee, no network).
 #
+# An address is exactly an address ("0x" and forty hex digits, twenty
+# bytes), and the approver is shown the one that will be paid, in one
+# form (EIP-55): "0x0x" and 38 digits was taken (19 bytes), listed as
+# written, and on approval a token transfer went to those 19 bytes and
+# a zero, an x402 authorization to the zero address.
+#
 # The controller is told the truth: an unknown network and a default
 # that is no account are refused (the writes succeeded and did nothing),
 # an account's chain cannot be written, an account cannot be named after
@@ -166,6 +172,18 @@ authreq(network, amount: string): string
 		"network " + network + "\n" +
 		"asset " + ASSET + "\n" +
 		"payto " + PAYTO + "\n" +
+		"amount " + amount + "\n" +
+		"timeout 60\n" +
+		"name USDC\n" +
+		"version 2\n";
+}
+
+authreqto(asset, payto, amount: string): string
+{
+	return "scheme exact\n" +
+		"network eip155:11155111\n" +
+		"asset " + asset + "\n" +
+		"payto " + payto + "\n" +
 		"amount " + amount + "\n" +
 		"timeout 60\n" +
 		"name USDC\n" +
@@ -635,6 +653,61 @@ testPerAccountCap(t: ref T)
 		wr(W + "/ctl", "deny " + hd ids);
 }
 
+#
+# An address is exactly an address, and is listed in its one form.
+#
+testAddressExact(t: ref T)
+{
+	# the prefix twice and 38 digits: 42 characters, 19 bytes
+	bad19 := "0x0x11223344556677889900aabbccddeeff112233";
+	lower := "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf";
+	upper := "0x7E5F4552091A69125D5DFCB7B8C2659029395BDF";
+	# PAYTO with one letter's case changed: mixed case, checksum wrong
+	bad55 := "0x7E5F4552091A69125d5DfCb7b8C2659029395BdF";
+
+	t.assert(wr(W + "/filler/pay", "usdc 1 " + bad19) <= 0,
+		"a token transfer to an address with the prefix twice refused");
+	t.assert(wr(W + "/filler/pay", "1000 " + bad19) <= 0, "a payment to it refused");
+	(r1, e1) := roundtrip(W + "/policy/authorize", authreqto(ASSET, bad19, "5"));
+	t.assert(e1 != nil, "an authorization to it refused: " + r1);
+	(r2, e2) := roundtrip(W + "/policy/authorize", authreqto(bad19, PAYTO, "5"));
+	t.assert(e2 != nil, "an authorization for such an asset refused: " + r2);
+	t.assert(wr(W + "/filler/pay", "1000 " + bad55) <= 0,
+		"a mixed-case address whose EIP-55 checksum is wrong refused");
+	t.assert(wr(W + "/filler/pay", "1000 " + PAYTO[2:]) <= 0, "an address with no prefix refused");
+	t.assert(wr(W + "/filler/pay", "1000 0X" + PAYTO[2:]) <= 0, "an address with another prefix refused");
+	t.assert(wr(W + "/filler/pay", "1000 " + PAYTO + "00") <= 0, "an address of 21 bytes refused");
+	for(ids := fillerids(); ids != nil; ids = tl ids)
+		wr(W + "/ctl", "deny " + hd ids);
+
+	# all lower case and all upper case carry no checksum: taken, and
+	# listed as the address they are
+	(res, err) := roundtrip(W + "/filler/pay", "usdc 1 " + lower);
+	t.assert(err == nil && hasprefix(res, "pending:"), "a lower-case address taken: " + err);
+	if(err == nil && hasprefix(res, "pending:")) {
+		line := pendingline(res[8:]);
+		t.assert(contains(line, " " + PAYTO + " "), "and listed in EIP-55 form: " + line);
+		t.assert(!contains(line, lower), "not as the requester wrote it");
+		wr(W + "/ctl", "deny " + res[8:]);
+	}
+	(res, err) = roundtrip(W + "/filler/pay", "1000 " + upper);
+	t.assert(err == nil && hasprefix(res, "pending:"), "an upper-case address taken: " + err);
+	if(err == nil && hasprefix(res, "pending:")) {
+		line := pendingline(res[8:]);
+		t.assert(contains(line, " " + PAYTO + " "), "and listed in EIP-55 form: " + line);
+		wr(W + "/ctl", "deny " + res[8:]);
+	}
+	(res, err) = roundtrip(W + "/policy/authorize",
+		authreqto("0x1c7d4b196cb0c7b01d743fbc6116a902379c7238", lower, "6"));
+	t.assert(err == nil && hasprefix(res, "pending:"), "an authorization in lower case taken: " + err);
+	if(err == nil && hasprefix(res, "pending:")) {
+		line := pendingline(res[8:]);
+		t.assert(contains(line, " " + PAYTO + " ") && contains(line, " " + ASSET + " "),
+			"its payee and asset listed in EIP-55 form: " + line);
+		wr(W + "/ctl", "deny " + res[8:]);
+	}
+}
+
 fillerids(): list of string
 {
 	ids: list of string;
@@ -856,6 +929,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Ctl/Truthful", testCtlTruthful);
 	run("Account/ReservedNames", testReservedNames);
 	run("Queue/PerAccountCap", testPerAccountCap);
+	run("Address/Exact", testAddressExact);
 	run("Queue/OutcomeKept", testOutcomeKept);
 	run("Approval/ShownWhole", testApprovalShownWhole);
 	run("Tool/Truthful", testToolTruthful);

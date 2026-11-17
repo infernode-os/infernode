@@ -1185,6 +1185,13 @@ checkdigestb(Dstate *s, Block *inb)
 
 	w = &s->in;
 
+	/*
+	 * what the record's MAC is compared with, never what the stack
+	 * held: the MAC was not written when the hash had no memory for
+	 * its last step (it allocates nothing there now)
+	 */
+	memset(digest, 0, sizeof(digest));
+
 	/* hash secret */
 	macbegin(s, w, &ss);
 

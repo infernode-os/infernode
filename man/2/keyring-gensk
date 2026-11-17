@@ -35,6 +35,29 @@ generates a private key that has the same system parameters as the public key
 .IR pk .
 It is used to generate new keys that are of the same complexity as old keys.
 .PP
+An
+.B elgamal
+key's modulus is a prime
+.I p
+for which
+.RI ( p \-1)/2
+is prime too, and its generator is a random element of the subgroup of that order.
+A key is refused (when it is read from text, when a key is made from its parameters,
+and when it is used to sign or verify) unless its generator and public value
+lie in that subgroup and the generator does not divide
+.IR p \-1:
+under any other key a signature on any message can be made from the public key alone.
+That refuses every ElGamal key made by earlier versions,
+whose generator was 2 at 2048 bits and a generator of the whole group at other sizes:
+a key file whose first line is
+.B elgamal
+and whose fourth line (the generator, in base 64) is
+.B Ag==
+or was written by such a version no longer loads
+.RB ( readauthinfo
+returns nil),
+and the signer's key and every key certified by it must be made again.
+.PP
 .B Sktopk
 extracts the public part of private key.
 .PP

@@ -95,8 +95,8 @@ init(nil: ref Draw->Context, args: list of string)
 	if(plain){
 		while((s := in.gets('\n')) != nil){
 			p := hostpath(s);
-			if(p != nil)
-				send(local(ref Msg("hostopen", nil, "/", "text", nil, array of byte p), root));
+			if(p != nil && (m := local(ref Msg("hostopen", nil, "/", "text", nil, array of byte p), root)) != nil)
+				send(m);
 		}
 		return;
 	}
@@ -110,7 +110,8 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 			r = "/n/" + host;
 		}
-		send(local(m, r));
+		if((lm := local(m, r)) != nil)
+			send(lm);
 	}
 }
 
@@ -149,6 +150,13 @@ hostpath(s: string): string
 		sys->fprint(stderr, "hostplumb: %s is not an absolute path\n", s);
 		return nil;
 	}
+	# a whole line is a path here, colons and all
+	(nil, el) := sys->tokenize(s, "/");
+	for(; el != nil; el = tl el)
+		if(hd el == ".."){
+			sys->fprint(stderr, "hostplumb: %s goes through ..\n", s);
+			return nil;
+		}
 	return s;
 }
 
@@ -179,6 +187,24 @@ validhost(h: string): int
 	return 1;
 }
 
+# whether a path has a ".." element; its address (after a colon) is
+# not part of the path
+dotdot(p: string): int
+{
+	st := 0;
+	for(i := 0; i <= len p; i++)
+		if(i == len p || p[i] == '/' || p[i] == ':'){
+			if(p[st:i] == "..")
+				return 1;
+			if(i < len p && p[i] == ':')
+				return 0;
+			st = i + 1;
+		}
+	return 0;
+}
+
+Maxdata: con 1024*1024;	# a message's data
+
 # one message: six header lines, then the data
 readmsg(in: ref Iobuf): ref Msg
 {
@@ -192,7 +218,7 @@ readmsg(in: ref Iobuf): ref Msg
 		h[i] = s;
 	}
 	n := int h[5];
-	if(n < 0)
+	if(n < 0 || n > Maxdata)
 		return nil;
 	data := array[n] of byte;
 	for(i = 0; i < n; ){
@@ -206,14 +232,25 @@ readmsg(in: ref Iobuf): ref Msg
 
 # host paths to paths under root; the host's rules may already have
 # made the data absolute and moved its address into an addr attribute
+# (nil for a message that names no place under root: a path through
+# "..", which left the root for this machine's own files, or one that
+# is not absolute and has no absolute directory to make it so, which
+# was passed on as it came and read here as a name of this name space)
 local(m: ref Msg, root: string): ref Msg
 {
 	data := string m.data;
+	if(m.dir != nil && (m.dir[0] != '/' || dotdot(m.dir))){
+		sys->fprint(stderr, "hostplumb: %q is not a directory of the host's: message dropped\n", m.dir);
+		return nil;
+	}
 	if(m.kind == "text" && data != nil){
 		if(data[0] != '/' && m.dir != nil)
 			data = m.dir + "/" + data;
-		if(data[0] == '/')
-			data = root + data;
+		if(data[0] != '/' || dotdot(data)){
+			sys->fprint(stderr, "hostplumb: %q is not a path of the host's: message dropped\n", data);
+			return nil;
+		}
+		data = root + data;
 		(ok, addr) := attr(m.attr, "addr");
 		if(ok && addr != nil)
 			data += ":" + addr;

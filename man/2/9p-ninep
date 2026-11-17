@@ -182,9 +182,16 @@ messages.
 Return an array of bytes containing the value of
 .I t
 in the machine-independent format described in Section 5.
-It can return nil only if the message
+It returns nil if the message
 .I t
-is itself nil or has an invalid type.
+is itself nil or has an invalid type, or cannot be a message:
+a string longer than its 16-bit count can say (65535 bytes), or a
+walk of more than
+.B MAXWELEM
+elements.
+(Only the text of an
+.B Rmsg.Error
+is cut to fit instead, so that a server can always refuse.)
 .TP
 .BI unpack( a )
 The array
@@ -217,6 +224,20 @@ is -1
 and
 .I v
 is nil.
+A message is invalid, as it is to the kernel, if its fields do not end
+exactly where its size says it does, if a string in it holds a zero
+byte, or if a walk has more than
+.B MAXWELEM
+elements (names in a
+.BR Tmsg.Walk ,
+qids in an
+.BR Rmsg.Walk );
+nothing is printed about it.
+An
+.B Rmsg.Error
+with no text is given the text
+.BR "unknown error" ,
+since an empty string is nil.
 .TP
 .IB t .packedsize()
 Return the number of bytes required for the value of
@@ -327,7 +348,18 @@ returns true if the contents of array
 looks like a packed representation of a T-message,
 judging only by its
 .I type
-byte.
+byte (false if
+.I f
+is too short to have one).
+.B Readmsg
+returns
+.B "9P message truncated"
+as its error when the file ends in the middle of a message.
+The
+.B text
+functions write each string in quotes, with a quote, a backslash and
+any control character in it written as Limbo writes them, so that a
+message is one line.
 .PP
 When generating the
 .B version

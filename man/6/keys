@@ -14,7 +14,8 @@ The password is the secret shared between the user
 and signer (authentication server),
 allowing the signer to sign a certificate to authenticate a
 user's public key to others, using the secret to check the user's identity.
-The actual secret is not stored, but rather its SHA-1 hash.
+The actual secret is not stored, but rather its SHA-256 hash,
+which is all that a login needs: an entry is as good as the password it was made from.
 .PP
 The file is encrypted with a secret provided by the signer's administrator;
 normally that secret is entered once when
@@ -23,13 +24,19 @@ authentication services are started by
 on the host acting as signer
 (see
 .IR svc (8)).
+Its format is described in
+.IR keyfs (4):
+AES-256-GCM under a key derived from the administrator's secret
+and a salt by PBKDF2.
 The file should also be readable and writable only by the user identity
 that runs the signing service
 (ie,
 mode
 .BR 600 ,
 see
-.IR chmod (1)).
+.IR chmod (1));
+.IR keyfs (4)
+writes it so, and sets that mode on a file it finds open to others.
 Entries are usually accessed only through
 the name space provided by
 .IR keyfs (4),

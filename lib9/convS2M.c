@@ -34,22 +34,35 @@ pqid(uchar *p, Qid *q)
 	return p;
 }
 
+/*
+ * a string's count is 16 bits: one of 65536 bytes or more went out
+ * with its length mod 65536 in front of all of it, a message that is
+ * not the one meant.  It has no size, and sizeS2M's answer is then 0.
+ */
 static
 uint
-stringsz(char *s)
+stringsz(char *s, int *toolong)
 {
+	ulong n;
+
 	if(s == nil)
 		return BIT16SZ;
 
-	return BIT16SZ+strlen(s);
+	n = strlen(s);
+	if(n > 0xFFFF){
+		*toolong = 1;
+		return BIT16SZ;
+	}
+	return BIT16SZ+n;
 }
 
 uint
 sizeS2M(Fcall *f)
 {
 	uint n;
-	int i;
+	int i, toolong;
 
+	toolong = 0;
 	n = 0;
 	n += BIT32SZ;	/* size */
 	n += BIT8SZ;	/* type */
@@ -62,7 +75,7 @@ sizeS2M(Fcall *f)
 
 	case Tversion:
 		n += BIT32SZ;
-		n += stringsz(f->version);
+		n += stringsz(f->version, &toolong);
 		break;
 
 	case Tflush:
@@ -71,23 +84,25 @@ sizeS2M(Fcall *f)
 
 	case Tauth:
 		n += BIT32SZ;
-		n += stringsz(f->uname);
-		n += stringsz(f->aname);
+		n += stringsz(f->uname, &toolong);
+		n += stringsz(f->aname, &toolong);
 		break;
 
 	case Tattach:
 		n += BIT32SZ;
 		n += BIT32SZ;
-		n += stringsz(f->uname);
-		n += stringsz(f->aname);
+		n += stringsz(f->uname, &toolong);
+		n += stringsz(f->aname, &toolong);
 		break;
 
 	case Twalk:
 		n += BIT32SZ;
 		n += BIT32SZ;
 		n += BIT16SZ;
+		if(f->nwname > MAXWELEM)
+			return 0;
 		for(i=0; i<f->nwname; i++)
-			n += stringsz(f->wname[i]);
+			n += stringsz(f->wname[i], &toolong);
 		break;
 
 	case Topen:
@@ -97,7 +112,7 @@ sizeS2M(Fcall *f)
 
 	case Tcreate:
 		n += BIT32SZ;
-		n += stringsz(f->name);
+		n += stringsz(f->name, &toolong);
 		n += BIT32SZ;
 		n += BIT8SZ;
 		break;
@@ -112,6 +127,8 @@ sizeS2M(Fcall *f)
 		n += BIT32SZ;
 		n += BIT64SZ;
 		n += BIT32SZ;
+		if(f->count > ~(uint)0 - n)
+			return 0;	/* the sum would wrap to a size that fits */
 		n += f->count;
 		break;
 
@@ -134,11 +151,11 @@ sizeS2M(Fcall *f)
 
 	case Rversion:
 		n += BIT32SZ;
-		n += stringsz(f->version);
+		n += stringsz(f->version, &toolong);
 		break;
 
 	case Rerror:
-		n += stringsz(f->ename);
+		n += stringsz(f->ename, &toolong);
 		break;
 
 	case Rflush:
@@ -154,6 +171,8 @@ sizeS2M(Fcall *f)
 
 	case Rwalk:
 		n += BIT16SZ;
+		if(f->nwqid > MAXWELEM)
+			return 0;
 		n += f->nwqid*QIDSZ;
 		break;
 
@@ -165,6 +184,8 @@ sizeS2M(Fcall *f)
 
 	case Rread:
 		n += BIT32SZ;
+		if(f->count > ~(uint)0 - n)
+			return 0;	/* the sum would wrap to a size that fits */
 		n += f->count;
 		break;
 
@@ -186,6 +207,8 @@ sizeS2M(Fcall *f)
 	case Rwstat:
 		break;
 	}
+	if(toolong)
+		return 0;
 	return n;
 }
 

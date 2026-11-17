@@ -661,8 +661,12 @@ hashbytes(a: array of byte, alg: string): array of byte
 # trim mpint and add leading zero byte if needed to ensure value is unsigned
 pre0(a: array of byte): array of byte
 {
+	# leading zero bytes go, but for one before a byte with its top bit
+	# set. The test began "a[i] != a[i+1] &&", so a leading byte equal
+	# to the next went too, whatever it was: c3 c3 01 became 00 c3 01,
+	# another number
 	for(i:=0; i<len a-1; i++)
-		if(a[i] != a[i+1] && (a[i] != byte 0 || (int a[i+1] & 16r80) != 0))
+		if(a[i] != byte 0 || (int a[i+1] & 16r80) != 0)
 			break;
 	if(i > 0)
 		a = a[i:];

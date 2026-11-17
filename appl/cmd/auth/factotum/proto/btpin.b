@@ -32,9 +32,31 @@ init(f: Authio): string
 
 interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 {
-	(key, err) := io.findkey(attrs, "!pin?");
-	if(key == nil)
-		return err;
+	# every key that matches, to choose among; with none, the key is
+	# asked for (findkeys only looks)
+	(keys, err) := io.findkeys(attrs, "!pin?");
+	if(keys == nil){
+		k: ref Authio->Key;
+		(k, err) = io.needkey(attrs, "!pin?");
+		if(k == nil)
+			return err;
+		keys = k :: nil;
+	}
+	key := hd keys;
+	if(authio->lookattrval(attrs, "addr") == nil){
+		# the PIN for anything not named is the key with no addr.
+		# A query with no addr matches every key, and the first was
+		# given: a board holding only PINs for named peers answered
+		# a stranger's pairing with one of them, and a default stored
+		# after a named key was never the one given
+		for(key = nil; keys != nil; keys = tl keys)
+			if(authio->lookattrval((hd keys).attrs, "addr") == nil){
+				key = hd keys;
+				break;
+			}
+		if(key == nil)
+			return "no pin for a peer not named";
+	}
 	pin := authio->lookattrval(key.secrets, "!pin");
 	if(pin == nil)
 		return "no pin";
@@ -43,7 +65,13 @@ interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 	return nil;
 }
 
-keycheck(nil: ref Authio->Key): string
+# A PIN is 1 to 16 bytes (Bluetooth Core, vol 2 part H 3.2.2).
+keycheck(k: ref Authio->Key): string
 {
+	pin := authio->lookattrval(k.secrets, "!pin");
+	if(pin == nil)
+		return "a btpin key needs !pin=";
+	if(len array of byte pin > 16)
+		return "a Bluetooth PIN is at most 16 bytes";
 	return nil;
 }

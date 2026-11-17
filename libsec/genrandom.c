@@ -9,8 +9,9 @@
  *
  * Instantiated from Seedbytes of entropy input and Noncebytes of nonce,
  * with a personalization string naming this generator; reseeded every
- * Reseedbytes or Reseedgens requests, and when the process is not the
- * one that seeded it (a fork).  The host's generator is a conditioned,
+ * Reseedbytes or Reseedgens requests (asked before each Generate, so a
+ * long request is reseeded within itself), and when the process is not
+ * the one that seeded it (a fork).  The host's generator is a conditioned,
  * full-entropy source, so its bytes are not put through SP 800-90B's
  * health tests here as a board's raw ones are.  hmacdrbgcheck runs
  * NIST's CAVP vectors before the first output.
@@ -55,7 +56,7 @@ seed(void)
 
 	n = d.seeded ? Seedbytes : Seedbytes+Noncebytes;	/* a nonce at instantiation only */
 	if(prngtry(s, n) < 0){
-		memset(s, 0, sizeof s);
+		secureZero(s, sizeof s);	/* what the host did give: not a memset a compiler may drop */
 		return -1;
 	}
 	if(!d.seeded)
@@ -75,6 +76,7 @@ int
 genrandomtry(uchar *p, int n)
 {
 	int m;
+	uchar *start;
 
 	if(n <= 0)
 		return 0;
@@ -87,12 +89,22 @@ genrandomtry(uchar *p, int n)
 		}
 		d.checked = 1;
 	}
-	if(!d.seeded || d.pid != getpid() || d.since >= Reseedbytes || d.gens >= Reseedgens)
-		if(seed() < 0){
-			_genrandomqunlock();
-			return -1;
-		}
+	/*
+	 * The reseed interval is looked at before every Generate, not
+	 * once a call: one request for many megabytes (a read of
+	 * #c/notquiterandom is one) came from one seed however long it
+	 * was.  A request refused part way has given nothing: what was
+	 * made of it is cleared.
+	 */
+	start = p;
 	while(n > 0){
+		if(!d.seeded || d.pid != getpid() || d.since >= Reseedbytes || d.gens >= Reseedgens)
+			if(seed() < 0){
+				_genrandomqunlock();
+				if(p > start)
+					secureZero(start, p - start);
+				return -1;
+			}
 		m = n;
 		if(m > HMACDRBGmax)
 			m = HMACDRBGmax;

@@ -1105,6 +1105,12 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			return;
 		}
 
+		# What the approver is shown is the address that will be paid, in
+		# its one form (EIP-55), made from the bytes: the string as the
+		# requester wrote it was kept, shown and parsed again at approval.
+		if(as.acct.accttype == Wallet->ACCT_ETH)
+			payrecip = ethcrypto->addrtostr(ethcrypto->strtoaddr(payrecip));
+
 		(pp, qerr) := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
 		if(qerr != nil) {
 			srv.reply(ref Rmsg.Error(m.tag, "pay: " + qerr));
@@ -1134,6 +1140,9 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + aerr));
 			return;
 		}
+		# the payee and the asset in their one form, as for pay
+		areq.payto = ethcrypto->addrtostr(ethcrypto->strtoaddr(areq.payto));
+		areq.asset = ethcrypto->addrtostr(ethcrypto->strtoaddr(areq.asset));
 		(pp, qerr) := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
 		if(qerr != nil) {
 			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + qerr));
@@ -1807,7 +1816,7 @@ executepayment(as: ref AcctState, amount: string, recipient: string): (string, s
 		return (nil, "invalid amount (must be integer wei): " + amount);
 
 	dstaddr := ethcrypto->strtoaddr(recipient);
-	if(dstaddr == nil)
+	if(dstaddr == nil || len dstaddr != 20)
 		return (nil, "invalid recipient address: " + recipient);
 
 	# Budget is enforced on every execution path, including approvals
@@ -1907,8 +1916,10 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 
 	net := getnetwork();
 
+	# 20 bytes or no transfer: the calldata below has a word for the
+	# address, and one of 19 bytes was written into it with a zero after
 	recipaddr := ethcrypto->strtoaddr(recipient);
-	if(recipaddr == nil)
+	if(recipaddr == nil || len recipaddr != 20)
 		return (nil, "invalid recipient: " + recipient);
 
 	# Amount is in token base units (USDC = 6 decimals, so 1 USDC = 1000000)
@@ -1962,7 +1973,7 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 
 	# Transaction goes TO the token contract, with 0 ETH value
 	tokenaddr := ethcrypto->strtoaddr(net.usdc);
-	if(tokenaddr == nil)
+	if(tokenaddr == nil || len tokenaddr != 20)
 		return (nil, "invalid token contract address");
 
 	tx := ref Ethcrypto->EthTx(

@@ -361,63 +361,68 @@ ed25519_genfrompk(void *vpub)
 }
 
 /*
- * Sign a message hash
- * Note: Ed25519 normally signs the full message, but Inferno's interface
- * passes a hash. We sign the hash bytes directly.
+ * Sign bytes.  Ed25519 signs a message; Keyring's interface gives it a
+ * digest, which is signed as the message, at its full length.
  */
 static void*
-ed25519_sign_hash(mpint *mp, void *key)
+ed25519_signb(uchar *m, int n, void *key)
 {
 	Ed25519priv *sk = (Ed25519priv*)key;
 	Ed25519sig *sig;
-	uchar hash[SHA512dlen];
 	uchar fullsk[Ed25519SecretKeyLen];
-	int n;
 
 	sig = ed25519sigalloc();
 	if(sig == nil)
 		return nil;
 
-	/* Convert mpint to bytes (the hash to sign) */
-	n = mptobe(mp, hash, sizeof(hash), nil);
-	if(n < 0){
-		ed25519sigfree(sig);
-		return nil;
-	}
-
 	/* Create full secret key: seed || public key */
 	memmove(fullsk, sk->seed, Ed25519SeedLen);
 	memmove(fullsk + Ed25519SeedLen, sk->pk, Ed25519PublicKeyLen);
 
-	/* Sign the hash */
-	ed25519_sign(sig->sig, hash, n, fullsk);
+	ed25519_sign(sig->sig, m, n, fullsk);
 
-	/* Clear sensitive data */
 	secureZero(fullsk, sizeof(fullsk));
-	secureZero(hash, sizeof(hash));
-
 	return sig;
 }
 
-/*
- * Verify a signature
- */
 static int
-ed25519_verify_hash(mpint *mp, void *vsig, void *vkey)
+ed25519_verifyb(uchar *m, int n, void *vsig, void *vkey)
 {
 	Ed25519pub *pk = (Ed25519pub*)vkey;
 	Ed25519sig *sig = (Ed25519sig*)vsig;
+
+	return ed25519_verify(sig->sig, m, n, pk->key);
+}
+
+/*
+ * Sign a number (Keyring's signm): its bytes, most significant first,
+ * with no leading zero.
+ */
+static void*
+ed25519_sign_hash(mpint *mp, void *key)
+{
+	uchar hash[SHA512dlen];
+	void *sig;
+	int n;
+
+	n = mptobe(mp, hash, sizeof(hash), nil);
+	if(n < 0)
+		return nil;
+	sig = ed25519_signb(hash, n, key);
+	secureZero(hash, sizeof(hash));
+	return sig;
+}
+
+static int
+ed25519_verify_hash(mpint *mp, void *vsig, void *vkey)
+{
 	uchar hash[SHA512dlen];
 	int n, ok;
 
-	/* Convert mpint to bytes */
 	n = mptobe(mp, hash, sizeof(hash), nil);
 	if(n < 0)
 		return 0;
-
-	/* Verify */
-	ok = ed25519_verify(sig->sig, hash, n, pk->key);
-
+	ok = ed25519_verifyb(hash, n, vsig, vkey);
 	secureZero(hash, sizeof(hash));
 	return ok;
 }
@@ -501,6 +506,8 @@ ed25519init(void)
 	vec->genskfrompk = ed25519_genfrompk;
 	vec->sign = ed25519_sign_hash;
 	vec->verify = ed25519_verify_hash;
+	vec->signb = ed25519_signb;
+	vec->verifyb = ed25519_verifyb;
 
 	vec->skfree = ed25519_freepriv;
 	vec->pkfree = ed25519_freepub;

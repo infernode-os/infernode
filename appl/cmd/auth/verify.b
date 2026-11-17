@@ -8,6 +8,9 @@ include "keyring.m";
 
 include "draw.m";
 
+include "security.m";
+	login: Login;
+
 Verify: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -43,7 +46,17 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:no keydb";
 	}
 
+	# the id is one name, as signer(8) took it: it names a file here
 	boxid := hd args;
+	login = load Login Login->PATH;
+	if(login == nil){
+		sys->fprint(stderr, "verify: can't load %s: %r\n", Login->PATH);
+		raise "fail:load";
+	}
+	if((e := login->okname(boxid)) != nil){
+		sys->fprint(stderr, "verify: bad id: %s\n", e);
+		raise "fail:bad id";
+	}
 	file := "signed/"+boxid;
 	fd := sys->open(file, Sys->OREAD);
 	if(fd == nil){
@@ -58,7 +71,9 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	s: string;
-	for(i := 0; i < len digest; i++){
+	# sixteen bytes of it are read out, two words a byte: 128 bits of
+	# a SHA-256 (the record once held an MD5, which was all of it)
+	for(i := 0; i < len digest && i < 16; i++){
 		s = s + (string (2*i)) + ": " + pro[((int digest[i])>>4)%len pro] + "\t";
 		s = s + (string (2*i+1)) + ": " + pro[(int digest[i])%len pro] + "\n";
 	}
@@ -66,7 +81,12 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("%s\naccept (y or n)? ", s);
 	buf := array[5] of byte;
 	n := sys->read(stdin, buf, len buf);
+	# A request answered is gone from signed/, either way: one that
+	# was rejected stayed, and while it stayed signer(8) took no other
+	# for that name.
 	if(n < 1 || buf[0] != byte 'y'){
+		fd = nil;
+		sys->remove(file);
 		sys->print("\nrejected\n");
 		raise "fail:rejected";
 	}
@@ -80,6 +100,8 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	if(kr->sendmsg(fd, certbuf, len certbuf) < 0){
 		sys->fprint(stderr, "signer: can't write %s: %r\n", nfile);
+		sys->remove(nfile);
 		raise "fail:write";
 	}
+	sys->remove(file);
 }

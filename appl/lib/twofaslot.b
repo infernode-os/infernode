@@ -378,57 +378,127 @@ writeslots(user: string, rootkey, DK: array of byte, keys: list of (string, stri
 enroll(user, pass, recoverypass: string, keys: list of (string, string, string), pin: string): string
 {
 	rootkey := secstore->mkfilekey3(user, pass);
-	filekey := secstore->mkfilekey2(pass);
-	legacykey := secstore->mkfilekey(pass);
 	pwhash := secstore->mkseckey(pass);
 	pwhash2 := secstore->mkseckey2(pass);
+	pwhash4 := secstore->mkseckey4(rootkey);
 
-	(conn, nil, diag) := secstore->connect2(Addr, user, pwhash, pwhash2);
+	(conn, nil, diag) := secstore->connect4(Addr, user, pwhash, pwhash2, pwhash4);
 	if(conn == nil){
 		if(diag != nil)
 			return "secstore connect: " + diag;
 		return sys->sprint("secstore connect: %r");
 	}
-
-	file := secstore->getfile(conn, "factotum", 0);
+	# The account's keys as they are: none yet (the server says it has
+	# no such file), or a file that decrypts.  A file that could not
+	# be read was taken for none, and the account's new vault was then
+	# an empty one, stored over the file that had not been read.
+	(file, absent, ferr) := secstore->fetch(conn, "factotum", 0);
 	plaintext: array of byte;
-	if(file != nil){
-		plaintext = secstore->decrypt3(file, rootkey, filekey, legacykey);
+	if(absent)
+		plaintext = array[0] of byte;
+	else if(ferr != nil || len file == 0){
+		secstore->bye(conn);
+		if(ferr == nil)
+			ferr = "the file is empty (damaged)";
+		return "cannot read the current factotum: " + ferr;
+	}else{
+		plaintext = secstore->decrypt3(file, rootkey, nil, nil);
 		if(plaintext == nil){
 			secstore->bye(conn);
+			if(!secstore->iscurrent(file))
+				return "the current factotum is in an old format: move it with auth/secstore m factotum";
 			return "wrong password (cannot decrypt current factotum)";
 		}
-	}else
-		plaintext = array[0] of byte;
+	}
 
-	# Fresh data key; re-encrypt the blob under it and verify it round-trips.
-	DK := random->randombuf(Random->ReallyRandom, 32);
+	DK: array of byte;
+	{
+		DK = random->randombuf(Random->ReallyRandom, 32);
+	} exception e {
+	"random:*" =>
+		secstore->bye(conn);
+		return "cannot generate data key: " + e;
+	}
 	if(DK == nil || len DK != 32){
 		secstore->bye(conn);
 		return "cannot generate data key";
 	}
+
+	# Verify the new blob decrypts under DK before touching anything.
 	newfile := secstore->encrypt3(plaintext, DK);
 	if(newfile == nil || !eq(secstore->decrypt3(newfile, DK, nil, nil), plaintext)){
 		secstore->bye(conn);
 		return "re-encrypt verification failed";
 	}
 
-	# Write + verify all slots BEFORE replacing the blob (touch per key slot).
+	# Write slots first (verify-before-commit inside); only then swap the blob.
 	err := writeslots(user, rootkey, DK, keys, recoverypass, pin);
 	if(err != nil){
 		secstore->bye(conn);
 		return "writeslots: " + err;
 	}
-
-	# Commit: swap the factotum blob for the DK-encrypted version.
 	if(secstore->putfile(conn, "factotum", newfile) < 0){
+		e := sys->sprint("%r");
 		removeslots(user);		# rollback: blob unchanged, just drop slots
 		secstore->bye(conn);
-		return sys->sprint("putfile factotum failed (rolled back): %r");
+		return "putfile factotum failed (rolled back): " + e;
 	}
+	# The vault is under the data key: from here the server changes
+	# the account's files only for a session that shows the vault key,
+	# and this machine takes no file that is not under the data key.
+	err = secstore->enrolvault(conn, secstore->vaultkey(DK));
 	secstore->bye(conn);
+	if(err != nil)
+		return "the vault is stored, but the server did not lock it to the second factor: " + err;
+	return markenrolled(user);
+}
+
+#
+# The states of an account's second factor, on this machine:
+#	none		no slots: the password alone
+#	enrolling	slots, and no mark yet: the vault may still be under
+#			the password (an enrolment that stopped before its
+#			last step, or one made before the mark was kept)
+#	enrolled	slots and the mark: the vault is under the data key,
+#			and a file under the password is not the vault
+#	disabling	a disable has begun: the vault may be back under
+#			the password, with the slots still there
+# Only in the two between is a file under the password alone taken at
+# a login (wm/logon).  It was taken whenever it decrypted, so whoever
+# had the password could put a vault of their own making in the store
+# and have it loaded with no second factor; the server now refuses
+# such a store too, once enrolled (secstored(8)).
+#
+state(user: string): string
+{
+	if(!is2fa(user))
+		return "none";
+	(ok, nil) := sys->stat(slotdir(user) + "/.disabling");
+	if(ok >= 0)
+		return "disabling";
+	(ok, nil) = sys->stat(slotdir(user) + "/.enrolled");
+	if(ok >= 0)
+		return "enrolled";
+	return "enrolling";
+}
+
+markenrolled(user: string): string
+{
+	return mark(user, ".enrolled");
+}
+
+mark(user, name: string): string
+{
+	path := slotdir(user) + "/" + name;
+	(ok, nil) := sys->stat(path);
+	if(ok >= 0)
+		return nil;
+	fd := sys->create(path, Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return sys->sprint("can't mark %s: %r", path);
 	return nil;
 }
+
 
 addkey(user, pass, recoverypass: string, cred, salthex, newpin: string): string
 {
@@ -480,33 +550,59 @@ disable(user, pass, recoverypass, pin: string): string
 
 	pwhash := secstore->mkseckey(pass);
 	pwhash2 := secstore->mkseckey2(pass);
-	(conn, nil, diag) := secstore->connect2(Addr, user, pwhash, pwhash2);
+	pwhash4 := secstore->mkseckey4(rootkey);
+	(conn, nil, diag) := secstore->connect4(Addr, user, pwhash, pwhash2, pwhash4);
 	if(conn == nil){
 		if(diag != nil)
 			return "secstore connect: " + diag;
 		return sys->sprint("secstore connect: %r");
 	}
-	file := secstore->getfile(conn, "factotum", 0);
-	if(file == nil){
+	# the second factor, shown to the server: it stores nothing for an
+	# enrolled account otherwise
+	(nil, verr) := secstore->showvault(conn, secstore->vaultkey(DK));
+	if(verr != nil){
 		secstore->bye(conn);
-		return "no factotum blob to revert";
+		return "the server did not take the vault key: " + verr;
 	}
-	plaintext := secstore->decrypt3(file, DK, nil, nil);
-	if(plaintext == nil){
+	# from here until the slots are gone, a vault under the password
+	# is what a login may find
+	if((merr := mark(user, ".disabling")) != nil){
 		secstore->bye(conn);
-		return "decrypt factotum with data key failed";
+		return merr;
 	}
-	newfile := secstore->encrypt3(plaintext, rootkey);	# back under password
-	if(newfile == nil || !eq(secstore->decrypt3(newfile, rootkey, nil, nil), plaintext)){
-		secstore->bye(conn);
-		return "re-encrypt to password failed";
+	# A file that could not be read is an error: it was "no factotum
+	# blob to revert", as an account with none is.  With none there is
+	# nothing to put back under the password.
+	(file, absent, ferr) := secstore->fetch(conn, "factotum", 0);
+	if(!absent){
+		if(ferr != nil || len file == 0){
+			secstore->bye(conn);
+			if(ferr == nil)
+				ferr = "the file is empty (damaged)";
+			return "cannot read the factotum to revert: " + ferr;
+		}
+		plaintext := secstore->decrypt3(file, DK, nil, nil);
+		if(plaintext == nil)
+			# a disable that stopped after its store: already under the password
+			plaintext = secstore->decrypt3(file, rootkey, nil, nil);
+		if(plaintext == nil){
+			secstore->bye(conn);
+			return "decrypt factotum with data key failed";
+		}
+		newfile := secstore->encrypt3(plaintext, rootkey);	# back under password
+		if(newfile == nil || !eq(secstore->decrypt3(newfile, rootkey, nil, nil), plaintext)){
+			secstore->bye(conn);
+			return "re-encrypt to password failed";
+		}
+		if(secstore->putfile(conn, "factotum", newfile) < 0){
+			e = sys->sprint("%r");
+			secstore->bye(conn);
+			return "putfile factotum failed: " + e;
+		}
 	}
-	# Commit password blob first; logon's cross-fallback covers the brief window
-	# where slots still exist but the blob is already password-encrypted.
-	if(secstore->putfile(conn, "factotum", newfile) < 0){
-		secstore->bye(conn);
-		return sys->sprint("putfile factotum failed: %r");
-	}
+	verr = secstore->unenrolvault(conn);
 	secstore->bye(conn);
+	if(verr != nil)
+		return "the vault is under the password again, but the server still asks for the second factor: " + verr;
 	return removeslots(user);
 }

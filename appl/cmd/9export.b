@@ -61,6 +61,14 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	args = arg->argv();
 	arg = nil;
+	# -e naming an algorithm is never done, and is said before the
+	# caller is spoken to.  With -A it was not said at all: the tree
+	# was exported in clear to a command line that asked for a cipher.
+	if(cryptalg != nil){
+		if(noauth)
+			fail("9export", "-e with -A: there is no key to encrypt with when the caller is not authenticated");
+		fail("9export", "Plan 9's p9sk1 gives a 56-bit key, too weak for ssl(3)'s aes_256_gcm and hmac_sha384; leave out -e for clear text, on a network you trust");
+	}
 
 	sys->pctl(Sys->FORKFD|Sys->FORKNS, nil);
 
@@ -101,8 +109,6 @@ init(nil: ref Draw->Context, args: list of string)
 			break;
 	if(n < 4 || string impo[0:4] != "impo")
 		fail("impo", "wasn't impo: possibly old import/cpu");
-	if(noauth == 0 && cryptalg != nil)
-		fail("9export", "Plan 9's p9sk1 gives a 56-bit key, too weak for ssl(3)'s aes_256_gcm and hmac_sha384; leave out -e for clear text, on a network you trust");
 	if(sys->export(fd, ".", xflag) < 0)
 		fail("export", sys->sprint("can't export %s: %r", tree));
 }

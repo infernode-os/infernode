@@ -141,8 +141,8 @@ testZeroExponent(t: ref T)
 	zero := IPint.inttoip(0);
 	one := IPint.inttoip(1);
 	t.assert(IPint.inttoip(7).expmod(zero, IPint.inttoip(13)).eq(one), "7^0 mod 13");
-	# as mpexp always has: 1, not 1 mod m
-	t.assert(IPint.inttoip(7).expmod(zero, one).eq(one), "7^0 mod 1");
+	# 1 mod 1: mpexp returned the 1 unreduced, the one case it did
+	t.assert(IPint.inttoip(7).expmod(zero, one).eq(zero), "7^0 mod 1");
 	t.assert(IPint.inttoip(3).expmod(IPint.inttoip(5), nil).eq(IPint.inttoip(243)), "3^5, no modulus");
 }
 

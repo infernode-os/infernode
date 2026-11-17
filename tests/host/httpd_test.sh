@@ -77,6 +77,7 @@ printf 'euro\n' > "$S/€.txt"
 mkdir -p "$S/events"
 : > "$S/events/fast"
 : > "$S/events/slow"
+: > "$S/events/burst"
 printf 'body { color: #123; }\n%.0s' $(seq 1 200) > "$S/style.css"
 gzip -9 -n -c "$S/style.css" > "$S/style.css.gz"
 ln -s /etc/hostname "$S/link.txt"
@@ -96,8 +97,12 @@ load std
 load file2chan
 mount {wikifs -d $T/store} $T/site/wiki
 bind /dev/sysname $T/site/sysname
-file2chan /chan/httpdblock {} {}
+# a file whose reads are never answered ({} answered each at once,
+# with an error: nothing waited, and no deadline was ever reached)
+file2chan /chan/httpdblock {rblock} {}
 bind /chan/httpdblock $T/site/block
+file2chan /chan/httpdburst {rread tick} {}
+bind /chan/httpdburst $T/site/events/burst
 file2chan /chan/httpdfast {sleep 1; rread 'line one
 line two'} {}
 bind /chan/httpdfast $T/site/events/fast
@@ -108,12 +113,12 @@ svc/httpd/httpd -v -c $T/cert.pem -k $T/key.pem -S 600 -C 600 -a tcp!127.0.0.1!$
 svc/httpd/httpd -r $P2 -a tcp!127.0.0.1!$P3 $T/site &
 svc/httpd/httpd -v -n 6 -s 3 -a tcp!127.0.0.1!$P4 $T/site &
 sleep 3
-ls /prog > $T/procs0
-while {! ftest -e $T/step} {sleep 1}
+ps > $T/procs0
+# (ps.now: the Progs as they are, each second, for attack.py)
+while {! ftest -e $T/step} {ps > $T/ps.new; mv $T/ps.new $T/ps.now; sleep 1}
 cat $T/step > /dev/time
 echo stepped > $T/stepped
-while {! ftest -e $T/count} {sleep 1}
-ls /prog > $T/procs1
+while {! ftest -e $T/count} {ps > $T/ps.new; mv $T/ps.new $T/ps.now; sleep 1}
 INFERNO
 "$EMU" $EMUFLAGS -r"$ROOT" sh "$T/run.sh" </dev/null >"$W/emu.log" 2>&1 &
 emupid=$!
@@ -137,15 +142,23 @@ fi
 with_timeout 900 python3 -I "$ROOT/tests/host/httpd/attack.py" $P1 $P2 $P3 $P4 "$W/cert.pem" "$S" "$W/emu.log"
 fails=$(( $? + cfails ))
 
-# no process left over from all that: the Progs now no more than at start
-sleep 3
+# no process left over from all that: each of the four servers is its
+# listener, watchdog, ticker and logger again, and nothing more, once
+# the connections kept open have had their idle time.  (All the Progs
+# were counted, against those at the start: the ones of the start that
+# had gone by the end hid two readers of streams left for good.)
+n0=$(grep -c Httpd "$W/procs0")
+n1=9999
+for _ in $(seq 1 25); do
+	n1=$(grep -c Httpd "$W/ps.now" 2>/dev/null || echo 9999)
+	[ "$n1" -le 16 ] && break
+	sleep 1
+done
 touch "$W/count"
-for _ in $(seq 1 50); do [ -s "$W/procs1" ] && break; sleep 0.2; done
-n0=$(wc -l < "$W/procs0"); n1=$(wc -l < "$W/procs1" 2>/dev/null || echo 9999)
-if [ "$n1" -le "$n0" ]; then
-	echo "PASS: no process left over ($n0 Progs at start, $n1 at the end)"
+if [ "$n1" -eq 16 ]; then
+	echo "PASS: no process of httpd's left over (16: four to a server; $n0 as they started)"
 else
-	echo "FAIL: processes left over: $n0 Progs at start, $n1 at the end"; fails=$((fails+1))
+	echo "FAIL: processes of httpd's left over: $n1, not four to a server"; grep Httpd "$W/ps.now" | awk '{print $5, $7}' | sort | uniq -c; fails=$((fails+1))
 fi
 
 # the access log: Common Log Format, rotated at 16K keeping two old

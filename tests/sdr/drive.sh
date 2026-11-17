@@ -30,26 +30,38 @@ cat $s/status > $d/status.idle
 cat $s/ctl > $d/ctl.source
 cat $s/gains > $d/gains
 
-# a reader within -l takes the held connection; reads give whole samples
-{read 16384 > $d/iq.1; read 16384 > $d/iq.2; read 16384 > $d/iq.3} < $s/iq
+# a reader within -l takes the held connection: the header first, by
+# itself, then reads give whole samples
+{read 64 > $d/iq.hdr; read 16384 > $d/iq.1; read 16384 > $d/iq.2; read 16384 > $d/iq.3} < $s/iq
 sleep 1
 cat $s/status > $d/status.closed1
 # -l after the last reader: hung up
 sleep 3
 cat $s/status > $d/status.hungup
 
-# two readers; a setting written while they read is sent at once
-cat $s/iq > /dev/null &
+# two readers; a setting written while they read is sent at once.  One
+# the header does not say ends nothing; a retune ends both streams, and
+# opened again they have the new header, with no dial
+cat $s/iq > $d/iq.r1 &
 p1=$apid
 cat $s/iq > /dev/null &
 p2=$apid
 sleep 1
 cat $s/status > $d/status.two
+echo ppm -2 > $s/ctl
+sleep 1
+cat $s/status > $d/status.ppm
 echo freq 162.025M > $s/ctl
+sleep 1
+cat $s/status > $d/status.retuned
+cat $s/iq > $d/iq.r2 &
+p1=$apid
+cat $s/iq > /dev/null &
+p2=$apid
 echo biastee on > $s/ctl
 echo direct off > $s/ctl
 sleep 1
-kill $p1 $p2 > /dev/null
+kill $p1 $p2 >[2] /dev/null
 sleep 1
 cat $s/status > $d/status.gone
 sleep 3
@@ -57,7 +69,7 @@ cat $s/status > $d/status.gone2
 
 # a reader that does not read falls behind and loses the oldest
 echo rate 2.4M > $s/ctl
-{sleep 6; read 16384 > $d/iq.late} < $s/iq
+{sleep 6; read 64 > /dev/null; read 16384 > $d/iq.late} < $s/iq
 cat $s/status > $d/status.dropped
 
 # refusals
@@ -69,6 +81,8 @@ sh -c 'echo freq 0 > '^$s^'/ctl' >[2] $d/err.freq
 sh -c 'echo rate 500000 > '^$s^'/ctl' >[2] $d/err.rate
 sh -c 'echo gain loud > '^$s^'/ctl' >[2] $d/err.gain
 sh -c 'echo direct x > '^$s^'/ctl' >[2] $d/err.direct
+sh -c 'echo enc s16 > '^$s^'/ctl' >[2] $d/err.enc
+echo enc cu8 > $s/ctl
 sh -c 'echo bogus 1 > '^$s^'/ctl' >[2] $d/err.bogus
 sh -c 'echo ''freq 98M
 rate 1'' > '^$s^'/ctl' >[2] $d/err.half

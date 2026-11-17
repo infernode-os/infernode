@@ -59,6 +59,29 @@ All notable changes to InferNode are documented in this file.
     (x86-64 as built, the Pi 3 and 4, RISC-V); an RSA private operation
     is blinded.
 
+### Changed
+
+- **sdrfs(4)'s `iq` says its own format, so nothing is told the rate
+  twice (#1094).** Each open starts with a header in audio(6)'s form
+  (`rate`, `enc cu8`, `freq`, each a command `ctl` takes, padded to 4
+  bytes), true for the whole stream: a write to `ctl` changing the rate
+  or frequency ends every open stream after what it has queued, and a
+  reopen on the held connection gets the new header. `sdr/fm` and
+  `sdr/am` take their rate from it (`-r` is gone) and write audio(6)
+  sound that `auplay` sets `audioctl` from (`-R` for raw).
+  `sdr/rawiq -r rate [-f freq]` gives a headerless capture a header;
+  `sdr/iqhdr < rec > /mnt/sdr/ctl` retunes the radio to a recording's.
+  `ctl` takes `enc cu8`.
+
+### Fixed
+
+- **The login profile with no `HOME` (#737).** A hosted emu started with
+  no `HOME` (a launchd or systemd service, `env -i`) stopped the profile
+  at "null list in concatenation": no `~/.infernode` overlay, factotum or
+  services. The home is now `$HOME` or the passwd entry's, kept as one
+  name when it has a blank, and with neither the profile says so and
+  goes on with `/usr/$user`.
+
 ## [0.10.1] - 2026-11-11
 
 ### Added

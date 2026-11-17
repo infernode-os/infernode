@@ -112,6 +112,14 @@ are taken
 samples a second: 225001 to 300000, or 900001 to 3200000, as librtlsdr
 takes; 2.4M is the most a dongle gives reliably.
 .TP
+.B enc cu8
+the encoding: 8-bit unsigned I then Q, the only one an RTL-SDR has.
+It is taken so that every line of
+.BR iq 's
+header is a command
+.B ctl
+takes; any other is refused.
+.TP
 .BR gain " auto | \fIdB\fP"
 automatic gain, or the tuner's gain nearest
 .IR dB ,
@@ -165,8 +173,33 @@ for the last that failed.
 the tuner's gains, dB, one a line.
 .TP
 .B iq
-the samples, from the open on: 8-bit unsigned I then Q, two bytes a
-sample, 4.8 MB a second at 2.4M.
+each open: a header, then the samples, from the open on: 8-bit unsigned
+I then Q, two bytes a sample, 4.8 MB a second at 2.4M.
+The header says what the samples are, in
+.IR audio (6)'s
+form: lines that are each a command
+.B ctl
+takes, an empty line, padded with a line of blanks to a multiple of 4
+bytes; the first read is given it alone.
+.IP
+.EX
+rate 2400000
+enc cu8
+freq 99500000
+.EE
+.IP
+The header is true for the whole stream: a write to
+.B ctl
+that changes the
+.B rate
+or the
+.B freq
+ends every open's stream once what it has queued is read, with end of
+file, and a reader that wants to go on opens
+.B iq
+again and is given the new header.
+The connection is held, so that costs no dial.
+The other settings change nothing the header says, and end nothing.
 Each read waits for more and gives as much as is queued, up to its
 count, a whole number of samples when it can.
 The first open dials
@@ -181,7 +214,9 @@ milliseconds each, so
 .I sdrfs
 reckons 150 each: samples arriving before the last should be done, and
 .B -t
-milliseconds (300) more, were tuned before it took, and are dropped.
+milliseconds (300) more, were tuned before it took, and are dropped,
+so a stream opened after a retune starts with samples tuned as its
+header says.
 A hang-up waits for them too.
 Every open has its own queue; one that falls more than 8 MB behind
 loses the oldest, whole samples, counted in
@@ -229,14 +264,21 @@ link=open source=tcp!127.0.0.1!1234 tuner=R828D gains=29 readers=0 bytes=0 dropp
 ; echo 'freq 1090M
 rate 2M
 gain 49.6' > /mnt/sdr/ctl
-; read 16384 < /mnt/sdr/iq > /tmp/adsb.cu8
+; cat /mnt/sdr/iq > /tmp/adsb.iq
 .EE
+.PP
+The recording keeps its header, so it says what it is:
+.IR sdr (1)'s
+demodulators read the rate from it, and
+.B sdr/iqhdr < /tmp/adsb.iq > /mnt/sdr/ctl
+tunes the radio back to it.
 .SH SOURCE
 .B /appl/cmd/sdrfs.b
 .SH SEE ALSO
 .IR sdr (1),
 .IR gpsfs (4),
-.IR audio (3)
+.IR audio (3),
+.IR audio (6)
 .br
 .B /docs/SDR.md
 .SH BUGS

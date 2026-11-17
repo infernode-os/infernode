@@ -29,18 +29,31 @@ ndb/cs
 # /n/local is the user-visible root of the host filesystem on every
 # platform. Wiring to get there differs (POSIX has a single root;
 # Windows has drive letters), but Inferno-side paths are identical.
-if {~ $emuhost MacOSX Linux Nt}{
-	if {~ $emuhost Nt} {
-		# Windows: mount C:\ at /n/local. Profiles live at C:\Users\<name>,
-		# so /n/local/Users/$user matches macOS's /n/local/Users/$user.
-		trfs '#UC:/' /n/local >[2] /dev/null
-		ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
-		ghome=/n/local/Users/^$user
+ghome=()
+if {~ $emuhost Nt} {
+	# Windows: mount C:\ at /n/local. Profiles live at C:\Users\<name>,
+	# so /n/local/Users/$user matches macOS's /n/local/Users/$user.
+	trfs '#UC:/' /n/local >[2] /dev/null
+	ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
+	ghome=/n/local/Users/^$user
+}
+if {~ $emuhost MacOSX Linux} {
+	trfs '#U*' /n/local >[2] /dev/null
+	ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
+	# The host's home: $HOME, else the passwd entry's (a launchd or
+	# systemd service, env -i, some CI runners have no HOME). Read as
+	# one word, so a home with a blank in it is one name. With no home
+	# at all, `/n/local/^` of nothing raised "null list in
+	# concatenation" and the rest of the profile was never run (#737):
+	# now it says so and goes on as a machine with no host home does.
+	_hh="{os sh -c 'h=$HOME; [ -n "$h" ] || h=$(eval echo ~$(id -un) 2>/dev/null); case $h in /*) printf %s "$h";; esac' >[2] /dev/null}
+	if {~ $_hh '/*'} {
+		ghome=/n/local^$_hh
 	}{
-		trfs '#U*' /n/local >[2] /dev/null
-		ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
-		ghome=/n/local/^`{echo 'echo $HOME' | os sh}
+		echo 'profile: the host gives no home directory (no HOME, none in passwd): ~/.infernode is not used, and nothing under /usr will persist' >[1=2]
 	}
+}
+if {! ~ $#ghome 0}{
 	home=$ghome
 
 	# ── Writable overlay from ~/.infernode ──────────────────
@@ -174,7 +187,7 @@ if {~ $emuhost MacOSX Linux Nt}{
 		snapd >[2] /dev/null &
 	}
 }{
-	# Non-desktop platforms (native hardware, embedded)
+	# Native hardware and embedded, or a hosted emu with no host home
 	home=/usr/^$user
 	if {! ftest -d $home} { mkdir -p $home }
 }

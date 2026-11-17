@@ -123,7 +123,7 @@ want="cmd rate 250000|cmd freq 1090000000|cmd ppm -3|cmd biastee 0|cmd agc 0|cmd
 # (the fifth is the unposted server's, at the end)
 [ "$(grep -c '^connect' "$D/rtl.log")" = 5 ] &&
 	pass "the reader took the held connection: one dial a phase" || fail "connects: $(grep '^connect' "$D/rtl.log" | tr '\n' ' ')"
-[ "$(hdr iq.hdr)" = "rate 250000|enc cu8|freq 1090000000" ] && [ "$(wc -c < "$D/iq.hdr")" = 40 ] &&
+[ "$(hdr iq.hdr)" = "rate 250000|enc cu8|freq 1090000000" ] && [ "$(wc -c < "$D/iq.hdr" | tr -d ' ')" = 40 ] &&
 	pass "iq starts with its header, alone in the first read" || fail "iq.hdr: $(hdr iq.hdr)"
 for i in 1 2 3; do
 	[ "$(samples iq.$i)" = ok ] || fail "iq.$i: $(samples iq.$i)"

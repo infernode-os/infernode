@@ -7,7 +7,9 @@ or {ftest -f /keydb/keys} {echo 'auth: need to create /keydb/keys' >[1=2]; exit 
 and {auth/keyfs} {
 	listen -v -t -A 'tcp!*!inflogin' {auth/logind&}
 	listen -v -t -A 'tcp!*!infkey' {auth/keysrv&}
-	listen -v -t -A 'tcp!*!infsigner' {auth/signer&}
-	listen -v -t -A 'tcp!*!infcsigner' {auth/countersigner&}
 }
+# signer(8) and countersigner are not started here: nothing in this
+# system is their client, they take requests from anybody, and the
+# certificates they issue never expire.  A realm that wants the
+# operator-approved enrolment starts them itself; signer(8) says how.
 # run svc/registry separately if desired

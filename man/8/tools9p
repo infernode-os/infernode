@@ -36,6 +36,18 @@ Only named tools exist. Each invocation receives a namespace constructed by
 .PP
 The effective paths file uses records of the form
 .IR "path ro|rw|cow" .
+The word is what the name space does: a file tree granted
+.B ro
+is bound read-only, under
+.B /tmp/veltro
+too.
+A service under
+.B /mnt
+is not (its files are its protocol, and a request is a write), so a
+grant there is listed
+.B rw
+whatever word it was given; the message service and the wallet, whose
+views the name space narrows itself, are listed as granted.
 Activity scratch is always
 .B /tmp/veltro/scratch cow
 and is constructed specially. Passing that path with
@@ -88,6 +100,39 @@ shows the agent's world as a tool call sees it.
 It is read-only (a create, remove, wstat, write or open for writing is
 refused), and it goes when the file is closed; a new mount shows changes
 made since.
+.PP
+A call runs in a process with a name space, an environment and
+descriptors of its own: its input is
+.BR /dev/null ,
+and it has no file another call or the server has open.
+Its answer is sent by the server, and not at all once its caller has
+flushed it.
+.PP
+The
+.B spawn
+tool's call is the parent of the subagents it starts.
+It leads a process group of its own, below which each subagent has
+one, and its
+.B /prog
+is whole, so that it can end a subagent, and all that one started, by
+its
+.B ctl
+file: when it has answered, at its timeout, or, for one scheduled with
+.B at=
+or
+.BR every= ,
+when this server has gone.
+The directories the call's name space was built on are kept until the
+last process of its group has gone.
+.B /tool/meta/audit
+says whether the install requires auditing
+.RB ( required
+or
+.BR off ):
+the spawn tool asks it, having no
+.B /usr
+to look in, and where the audit sink is mounted it is bound into the
+call for the subagents' records.
 .SH OPTIONS
 .TP
 .B -D

@@ -1,9 +1,19 @@
 implement Smtp;
- 
+
+#
+# SMTP client: mail handed to a server in clear on port 25 (open), or
+# authenticated over TLS (authopen: from the start on 465, or after
+# STARTTLS on 587).
+#
+# The connection is mailconn(2)'s: every reply has a deadline and a
+# bound, and a connection that fails is closed.  A reply is judged by
+# its code, the one the command wants.  No error says what was sent as
+# a credential.
+#
+
 include "sys.m";
 	sys : Sys;
 include "bufio.m";
-	bufio : Bufio;
 include "smtp.m";
 include "encoding.m";
 include "attrdb.m";
@@ -13,103 +23,90 @@ include "ip.m";
 	ip: IP;
 include "ipattr.m";
 	ipattr: IPattr;
-include "webclient.m";
-	webclient: Webclient;
+include "keyring.m";
+include "tls.m";
+include "mailconn.m";
+	mailconn: Mailconn;
+	Link: import mailconn;
 
-usessl:= 0;
+MAXLINE: con 8192;	# a reply's line
+MAXLINES: con 100;	# and how many one reply has
+CHUNK: con 16*1024;	# of a message's text, a write
 
-FD, Connection: import sys;
-Iobuf : import bufio;
-
-ibuf : ref Bufio->Iobuf;
-sfd : ref Sys->FD;	# connection fd; writes go here directly (like imap.b)
-conn : int = 0;
-init : int = 0;
- 
-rpid : int = -1;
-cread : chan of (int, string);
+usessl := 0;
+c: ref Link;
+conn := 0;
+iotime := 30*1000;
 base64: Encoding;
 db: ref Db;
 dbfile := "/lib/ndb/local";
 
-DEBUG : con 0;
+init(): string
+{
+	if(sys == nil)
+		sys = load Sys Sys->PATH;
+	if(mailconn == nil){
+		m := load Mailconn Mailconn->PATH;
+		if(m == nil)
+			return "cannot load Mailconn";
+		err := m->init();
+		if(err != nil)
+			return err;
+		mailconn = m;
+	}
+	return nil;
+}
+
+timeout(ms: int)
+{
+	if(ms > 0)
+		iotime = ms;
+}
 
 open(server : string): (int, string)
 {
-	s : string;
- 
-	if (!init) {
-		sys = load Sys Sys->PATH;
-		bufio = load Bufio Bufio->PATH;
-		init = 1;
-	}
+	ierr := init();
+	if(ierr != nil)
+		return (-1, ierr);
 	if (conn)
 		return (-1, "connection is already open");
 	if (server == nil)
 		server = "$smtp";
-	(ok, c) := sys->dial ("tcp!" + server + "!25", nil);
-	if (ok < 0)
-		return (-1, "dialup failed");
- 
-	sfd = c.dfd;
-	ibuf = bufio->fopen(c.dfd, Bufio->OREAD);
-	if (ibuf == nil)
-		return (-1, "failed to open bufio");
-	cread = chan of (int, string);
-	spawn mreader(cread);
-	(rpid, nil) = <- cread;
-
- 	(ok, s) = mread();
+	(nc, derr) := Link.dial("tcp!" + server + "!25", server, Mailconn->CLEAR, nil, iotime);
+	if(derr != nil)
+		return (-1, "dialup failed: " + derr);
+	c = nc;
+	usessl = 0;
+	(ok, s) := expect("greeting", 220);
 	if (ok < 0)
 		return (-1, s);
 	conn = 1;
 	return (1, nil);
 }
- 
+
 authopen(user, password, server : string, mode: int): (int, string)
 {
-	s : string;
-	ok: int;
-
-	if (!init) {
-		sys = load Sys Sys->PATH;
-		bufio = load Bufio Bufio->PATH;
-		init = 1;
-	}
+	ierr := init();
+	if(ierr != nil)
+		return (-1, ierr);
 	if (base64 == nil) {
 		base64 = load Encoding Encoding->BASE64PATH;
-		attrdb = load Attrdb Attrdb->PATH;
-		if(attrdb == nil)
-			return (-1, "cannot load Attrdb");
-		attrdb->init();
-		ip = load IP IP->PATH;
-		if(ip == nil)
-			return (-1, "cannot load IP");
-		ip->init();
-		ipattr = load IPattr IPattr->PATH;
-		if(ipattr == nil)
-			return (-1, "cannot load IPattr");
-		ipattr->init(attrdb, ip);
-		db = Db.open(dbfile);
-	}
-	if (webclient == nil) {
-		webclient = load Webclient Webclient->PATH;
-		if(webclient == nil)
-			return (-1, "cannot load Webclient");
-		werr := webclient->init();
-		if(werr != nil)
-			return (-1, "webclient init: " + werr);
+		if(base64 == nil)
+			return (-1, "cannot load base64");
 	}
 	if (conn)
 		return (-1, "connection is already open");
 
 	# The password goes in AUTH PLAIN: never in clear.
 	port: string;
+	how: int;
 	case mode {
 	IMPLICIT_TLS =>
 		port = "465";
+		how = Mailconn->IMPLICIT;
 	STARTTLS =>
 		port = "587";
+		how = Mailconn->SMTPSTARTTLS;
 	PLAIN =>
 		return (-1, "authopen: credentials are not sent in clear: use IMPLICIT_TLS or STARTTLS");
 	* =>
@@ -124,45 +121,40 @@ authopen(user, password, server : string, mode: int): (int, string)
 	addr := "tcp!" + host + "!" + port;
 	domain := heloname();
 
-	fd: ref Sys->FD;
-	if(mode == IMPLICIT_TLS){
-		(tlsfd, terr) := webclient->tlsdial(addr, host);
-		if(terr != nil)
-			return (-1, "tlsdial: " + terr);
-		fd = tlsfd;
-	}else{
-		(tlsfd, serr) := starttls(addr, host, domain);
-		if(serr != nil)
-			return (-1, serr);
-		fd = tlsfd;
+	(nc, derr) := Link.dial(addr, host, how, domain, iotime);
+	if(derr != nil){
+		if(derr == "timed out")
+			derr = "connecting to " + host + " timed out";
+		return (-1, derr);
 	}
+	c = nc;
 	usessl = 1;
-	sfd = fd;
-	ibuf = bufio->fopen(fd, Bufio->OREAD);
-	if(ibuf == nil)
-		return (-1, "failed to open bufio");
-	cread = chan of (int, string);
-	spawn mreader(cread);
-	(rpid, nil) = <- cread;
 
+	ok: int;
+	s: string;
 	if(mode == IMPLICIT_TLS){
 		# the greeting; after STARTTLS there is none
-		(ok, s) = mread();
+		(ok, s) = expect("greeting", 220);
 		if (ok < 0)
-			return (-1, s);
+			return (-1, teardown(s));
 	}
 	# EHLO, not HELO: AUTH is an extension (and after STARTTLS the
 	# client starts again with EHLO, RFC 3207 4.2)
-	(ok, s) = mcmd("EHLO "+domain);
+	(ok, s) = cmd("EHLO "+domain, "EHLO", 250);
 	if(ok < 0)
-		return (-1, s);
-	(ok, s) = mcmd("AUTH PLAIN");
+		return (-1, teardown(s));
+	(ok, s) = cmd("AUTH PLAIN", "AUTH", 334);
 	if(ok < 0)
-		return (-1, s);
-	auths := user + "\0" + user + "\0" + password;
-	(ok, s) = mcmd(base64->enc(array of byte auths));
+		return (-1, teardown(s));
+	# The credential is named, not shown: the error of a refused or
+	# unanswered AUTH used to begin with this line, the base64 of the
+	# user and the password, and went to whoever had asked for mail to
+	# be sent.  A server's own words are kept, less the credential if
+	# it says it back.
+	cred := base64->enc(array of byte (user + "\0" + user + "\0" + password));
+	(ok, s) = cmd(cred, "AUTH credentials", 235);
 	if (ok < 0)
-		return (-1, s);
+		return (-1, teardown(redact(redact(s, cred), password)));
 
 	conn = 1;
 	return (1, nil);
@@ -172,126 +164,69 @@ authopen(user, password, server : string, mode: int): (int, string)
 heloname(): string
 {
 	hostname := readfile("/dev/sysname");
+	if(hostname == nil)
+		hostname = "localhost";
+	if(attrdb == nil){
+		attrdb = load Attrdb Attrdb->PATH;
+		ip = load IP IP->PATH;
+		ipattr = load IPattr IPattr->PATH;
+		if(attrdb == nil || ip == nil || ipattr == nil){
+			attrdb = nil;
+			return hostname;
+		}
+		attrdb->init();
+		ip->init();
+		ipattr->init(attrdb, ip);
+		db = Db.open(dbfile);
+	}
+	if(db == nil)
+		return hostname;
 	(domain, err) := ipattr->findnetattr(db, "sys", hostname, "dom");
-	if(err != nil || domain == nil)
+	if(err != nil || domain == nil || !okaddr(domain))
 		return hostname;
 	return domain;
 }
 
-# RFC 3207 in clear: the greeting, EHLO, STARTTLS offered and taken,
-# read a byte at a time so that nothing of the TLS handshake after
-# STARTTLS's 220 is taken; then TLS on the same connection.  A server
-# not offering it, or refusing it, is refused: nothing is sent in clear
-# but EHLO and STARTTLS.
-starttls(addr, host, domain: string): (ref Sys->FD, string)
+okaddr(addr: string): int
 {
-	(ok, c) := sys->dial(addr, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("dial %s: %r", addr));
-	(code, lines, err) := reply(c.dfd);
-	if(err != nil)
-		return (nil, "greeting: " + err);
-	if(code != 220)
-		return (nil, "greeting: " + hd lines);
-	if(rawwrite(c.dfd, "EHLO " + domain) < 0)
-		return (nil, sys->sprint("EHLO: %r"));
-	(code, lines, err) = reply(c.dfd);
-	if(err != nil)
-		return (nil, "EHLO: " + err);
-	if(code != 250)
-		return (nil, "EHLO: " + hd lines);
-	offered := 0;
-	for(l := lines; l != nil; l = tl l)
-		if(len hd l >= 12 && tolower((hd l)[4:12]) == "starttls")
-			offered = 1;
-	if(!offered)
-		return (nil, "STARTTLS not offered by " + host);
-	if(rawwrite(c.dfd, "STARTTLS") < 0)
-		return (nil, sys->sprint("STARTTLS: %r"));
-	(code, lines, err) = reply(c.dfd);
-	if(err != nil)
-		return (nil, "STARTTLS: " + err);
-	if(code != 220)
-		return (nil, "STARTTLS refused: " + hd lines);
-	(tlsfd, terr) := webclient->tlsclient(c.dfd, host);
-	if(terr != nil)
-		return (nil, "STARTTLS: " + terr);
-	return (tlsfd, nil);
-}
-
-# A reply, its lines "250-..." to the last "250 ...": its code and lines
-reply(fd: ref Sys->FD): (int, list of string, string)
-{
-	lines: list of string;
-	for(;;) {
-		(line, err) := rawline(fd);
-		if(err != nil)
-			return (0, nil, err);
-		if(len line < 3)
-			return (0, nil, "short reply: " + line);
-		lines = line :: lines;
-		if(len line == 3 || line[3] != '-')
-			return (int line[0:3], reverse(lines), nil);
+	if(len addr == 0 || len addr > 998)
+		return 0;
+	for(i := 0; i < len addr; i++){
+		ch := addr[i];
+		if(ch <= ' ' || ch == 16r7F || ch == '<' || ch == '>')
+			return 0;
 	}
+	return 1;
 }
 
-# A line read a byte at a time, so that nothing after it is taken
-rawline(fd: ref Sys->FD): (string, string)
+okheader(value: string): int
 {
-	line := "";
-	b := array[1] of byte;
-	for(;;) {
-		if(sys->read(fd, b, 1) != 1)
-			return (nil, "connection closed");
-		if(b[0] == byte '\n')
-			break;
-		if(len line >= 4096)
-			return (nil, "line too long");
-		line[len line] = int b[0];
-	}
-	if(len line > 0 && line[len line - 1] == '\r')
-		line = line[0:len line - 1];
-	if(DEBUG)
-		sys->print("smtp: S: %s\n", line);
-	return (line, nil);
-}
-
-rawwrite(fd: ref Sys->FD, s: string): int
-{
-	if(DEBUG)
-		sys->print("smtp: C: %s\n", s);
-	b := array of byte (s + "\r\n");
-	if(sys->write(fd, b, len b) != len b)
-		return -1;
-	return 0;
-}
-
-reverse(l: list of string): list of string
-{
-	r: list of string;
-	for(; l != nil; l = tl l)
-		r = hd l :: r;
-	return r;
-}
-
-tolower(s: string): string
-{
-	for(i := 0; i < len s; i++)
-		if(s[i] >= 'A' && s[i] <= 'Z')
-			s[i] += 'a' - 'A';
-	return s;
+	for(i := 0; i < len value; i++)
+		if(value[i] == '\r' || value[i] == '\n' || value[i] == 0)
+			return 0;
+	return 1;
 }
 
 sendmail (fromwho : string, towho : list of string, cc : list of string, mlist: list of string): (int, string)
 {
 	ok : int;
-	s, t, line : string;
+	s : string;
 
+	# An address goes between < and > on a command's line: with a line
+	# break in it, it was the commands after it too (a second RCPT TO,
+	# whatever else), and callers pass addresses taken from mail.  All
+	# are looked at before anything is sent.
+	if(fromwho != nil && !okaddr(fromwho))
+		return (-1, "the 'from' address is not an address");
+	all := concat(towho, cc);
+	for(l := all; l != nil; l = tl l)
+		if(!okaddr(hd l))
+			return (-1, "a recipient is not an address");
+	(data, derr) := wiretext(mlist);
+	if(derr != nil)
+		return (-1, derr);
 	if (!conn)
 		return (-1, "connection is not open");
-	(ok, s) = mcmd("RSET");
-	if (ok < 0)
-		return (-1, s);
 	(user, dom) := split(fromwho, '@');
 	if (fromwho == nil || user == nil)
 		return (-1, "no 'from' name");
@@ -299,150 +234,207 @@ sendmail (fromwho : string, towho : list of string, cc : list of string, mlist: 
 		return (-1, "no 'to' name");
 	if (dom == nil)
 		return (-1, "no domain name");
+
+	(ok, s) = cmd("RSET", "RSET", 250);
+	if (ok < 0)
+		return (-1, s);
 	if(!usessl){
-		(ok, s) = mcmd("HELO " + dom);
+		(ok, s) = cmd("HELO " + heloname(), "HELO", 250);
 		if (ok < 0)
 			return (-1, s);
 	}
-	(ok, s) = mcmd("MAIL FROM:<" + fromwho + ">");
+	(ok, s) = cmd("MAIL FROM:<" + fromwho + ">", "MAIL FROM", 250);
 	if (ok < 0)
 		return (-1, s);
-	all := concat(towho, cc);
-	t = nil;
+	t := "";
 	for ( ; all != nil; all = tl all) {
-		(ok, s) = mcmd("RCPT TO:<" + hd all + ">");
-		if (ok < 0)
+		(ok, s) = cmd("RCPT TO:<" + hd all + ">", "RCPT TO:<" + hd all + ">", 250);
+		if (ok < 0){
+			if(c == nil)
+				return (-1, s);
 			t += " " + s;
-	}
-	if (t != nil)
-		return (-1, t);
-	(ok, s) = mcmd("DATA");
-	if (ok < 0)
-		return (-1, s);
-	for ( ; mlist != nil; mlist = tl mlist) {
-		for (msg := hd mlist; msg != nil; ) {
-			(line, msg) = split(msg, '\n');	# BUG: too much copying for larger messages
-			if (putline(line) < 0)
-				return (-1, sys->sprint("write to server failed: %r"));
 		}
 	}
-#	obuf.flush();
-	(ok, s) = mcmd(".");      
+	if (t != nil){
+		cmd("RSET", "RSET", 250);
+		return (-1, t[1:]);
+	}
+	# Only 354 asks for the message.  Any reply not an error used to
+	# count: after a 250 the text was sent all the same, and read by
+	# the server as commands.
+	(ok, s) = cmd("DATA", "DATA", 354);
+	if (ok < 0)
+		return (-1, s);
+	c.deadline(iotime, 0);
+	for(o := 0; o < len data; o += CHUNK){
+		e := o + CHUNK;
+		if(e > len data)
+			e = len data;
+		werr := c.write(data[o:e]);
+		if(werr != nil)
+			return (-1, teardown("write to server failed: " + werr));
+	}
+	(ok, s) = cmd(".", "end of message", 250);
 	if (ok < 0)  
 		return (-1, s);  
 	return (1, nil);
 }
 
-putline(line: string): int
+# The message as it goes after DATA: each line ended CR LF, a line that
+# begins with a dot given another (RFC 5321 4.5.2).  A carriage return
+# that is not a line's end is one all the same to some receivers, for
+# whom "a CR . CR b" then held the dot that ends the message and the
+# commands after it: inside a body line it ends the line here, so the
+# dot is doubled like any other; inside a header line, where a new line
+# is a new header, the message is refused.  So is a NUL anywhere.
+wiretext(mlist: list of string): (array of byte, string)
 {
-	ln := len line;
-	if (ln > 0 && line[ln-1] == '\r')
-		line = line[0:ln-1];
-	if (line != nil && line[0] == '.'){
-		line = "." + line;
+	out := "";
+	parts: list of array of byte;
+	n := 0;
+	inhdr := 1;
+	for ( ; mlist != nil; mlist = tl mlist) {
+		msg := hd mlist;
+		i := 0;
+		do {
+			j := i;
+			while(j < len msg && msg[j] != '\n' && msg[j] != '\r'){
+				if(msg[j] == 0)
+					return (nil, "the message holds a NUL");
+				j++;
+			}
+			line := msg[i:j];
+			if(j < len msg && msg[j] == '\r'){
+				if(j+1 < len msg && msg[j+1] == '\n')
+					j++;
+				else if(j+1 < len msg && inhdr)
+					return (nil, "a header line of the message holds a carriage return");
+			}
+			if(len line == 0)
+				inhdr = 0;
+			else if(line[0] == '.')
+				line = "." + line;
+			out += line + "\r\n";
+			if(len out >= CHUNK){
+				b := array of byte out;
+				parts = b :: parts;
+				n += len b;
+				out = "";
+			}
+			i = j + 1;
+		} while(i < len msg);
 	}
-	return mwrite(line);
+	b := array of byte out;
+	parts = b :: parts;
+	n += len b;
+	data := array[n] of byte;
+	for(; parts != nil; parts = tl parts){
+		p := hd parts;
+		n -= len p;
+		data[n:] = p;
+	}
+	return (data, nil);
 }
 
 close(): (int, string)
 {
-	ok : int;
- 
 	if (!conn)
 		return (-1, "connection is not open");
-	ok = mwrite("QUIT");
-	kill(rpid);
-	if(!usessl)
-		ibuf.close();
-	conn = 0;
+	# QUIT's answer is not waited for long: the mail has gone
+	t := iotime;
+	if(iotime > 5000)
+		iotime = 5000;
+	(ok, nil) := cmd("QUIT", "QUIT", 221);
+	iotime = t;
+	teardown(nil);
 	if (ok < 0)
 		return (-1, "failed to close connection");
 	return (1, nil);
 }
- 
-SLPTIME : con 100;
-MAXSLPTIME : con 10000;
 
-mread() : (int, string)
+# The session is over, whatever state it was in: the connection closed
+# and its processes gone.  A failed authopen used to leave them all, and
+# a timeout left the session to be written to again.
+teardown(why: string): string
 {
-	t := 0;
-	while (t < MAXSLPTIME) {
-		alt {
-			(ok, s) := <- cread =>
-				return (ok, s);
-			* =>
-				t += SLPTIME;
-				sys->sleep(SLPTIME);
-		}
-	}
-	kill(rpid);
-	return (-1, "smtp timed out\n");		
+	if(c != nil)
+		c.close();
+	c = nil;
+	conn = 0;
+	usessl = 0;
+	return why;
 }
 
-mreader(c : chan of (int, string))
+# Send a command and take its reply, which must have the code want
+# (RCPT's 251 is 250).  name is what an error calls the command: never
+# the line sent, which may be a credential.
+cmd(s, name: string, want: int) : (int, string)
 {
-	c <- = (sys->pctl(0, nil), nil);
-	for (;;) {
-		line := ibuf.gets('\n');
-		if (DEBUG)
-			sys->print("mread : %s", line);
-		if (line == nil) {
-			c <- = (-1, "could not read response from server");
-			continue;
+	if(c == nil)
+		return (-1, name + ": connection is not open");
+	c.deadline(iotime, 4*iotime);
+	werr := c.write(array of byte (s + "\r\n"));
+	if(werr != nil)
+		return (-1, teardown(name + " send failed: " + werr));
+	return expect(name, want);
+}
+
+expect(name: string, want: int): (int, string)
+{
+	if(c == nil)
+		return (-1, name + ": connection is not open");
+	c.deadline(iotime, 4*iotime);
+	(code, text, err) := reply();
+	if(err != nil)
+		return (-1, teardown(name + " receive failed (" + err + ")"));
+	if(code == want || want == 250 && code == 251)
+		return (1, nil);
+	return (-1, name + " refused: " + text);
+}
+
+# A reply: its code and its last line.  Each line is three digits, then
+# "-" on all but the last (RFC 5321 4.2); anything else is not SMTP and
+# ends the session (a line of no characters used to end the reader).
+reply(): (int, string, string)
+{
+	for(n := 0; n < MAXLINES; n++){
+		(line, err) := c.getline(MAXLINE);
+		if(err != nil){
+			if(err == "timed out")
+				err = "smtp timed out";
+			return (0, nil, err);
 		}
-		l := len line;
-		if (line[l-1] == '\n')
-			l--;
-		if (line[l-1] == '\r')
-			l--;
-		if (l < 3) {
-			c <- = (-1, "short response from server");
-			continue;
-		}
-		if (l > 3 && line[3] == '-')
+		if(len line < 3 || !isdigit(line[0]) || !isdigit(line[1]) || !isdigit(line[2]))
+			return (0, nil, "not an SMTP reply");
+		if(len line > 3 && line[3] == '-')
 			continue;	# a reply's line before its last (EHLO's)
-		if (l > 0 && (line[0] == '1' || line[0] == '2' || line[0] == '3')) {
-			c <- = (1, nil);
-			continue;
-		}
-		c <- = (-1, line[3:l]);
+		return (int line[0:3], line, nil);
 	}
-}
- 
-mwrite(s : string): int
-{
-	s += "\r\n";
-	if (DEBUG)
-		sys->print("mwrite : %s", s);
-	b := array of byte s;
-	l := len b;
-	nb: int;
-	# Write straight to the connection fd (TLS is transparent via tlsdial),
-	# mirroring imap.b — a second OWRITE bufio on the same fd breaks reads.
-	nb = sys->write(sfd, b, len b);
-	if (nb != l)
-		return -1;
-	return 1;
-}
- 
-mcmd(s : string) : (int, string)
-{
-	ok : int;
-	r : string;
-
-	ok = mwrite(s);
-	if (ok < 0)
-		return (-1, err(s) + " send failed");
-	(ok, r) = mread();
-	if (ok < 0)
-		return (-1, err(s) + " receive failed (" + r + ")");
-	return (1, nil);
+	return (0, nil, "a reply of too many lines");
 }
 
-split(s : string, c : int) : (string, string)
+# s without secret, where a server's words are put in an error.
+redact(s, secret: string): string
+{
+	if(len secret == 0)
+		return s;
+	for(i := 0; i + len secret <= len s; i++)
+		if(s[i:i+len secret] == secret){
+			s = s[0:i] + "[...]" + s[i+len secret:];
+			i += 4;
+		}
+	return s;
+}
+
+isdigit(ch: int): int
+{
+	return ch >= '0' && ch <= '9';
+}
+
+split(s : string, ch : int) : (string, string)
 {
 	for (i := 0; i < len s; i++)
-		if (s[i] == c)
+		if (s[i] == ch)
 			return (s[0:i], s[i+1:]);
 	return (s, nil);
 }
@@ -459,24 +451,6 @@ concat(l1, l2 : list of string) : list of string
 	return ls;
 }
 
-err(s : string) : string
-{
-	for (i := 0; i < len s; i++)
-		if (s[i] == ' ' || s[i] == ':')
-			return s[0:i];
-	return s;
-}
-
-kill(pid : int) : int
-{
-	if (pid < 0)
-		return 0;
-	fd := sys->open("#p/" + string pid + "/ctl", sys->OWRITE);
-	if (fd == nil || sys->fprint(fd, "kill") < 0)
-		return -1;
-	return 0;
-}
-
 readfile(f : string) : string
 {
 	fd := sys->open(f, sys->OREAD);
@@ -484,7 +458,7 @@ readfile(f : string) : string
 		return nil;
 	buf := array[128] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n < 0)
+	if(n <= 0)
 		return nil;
 	return string buf[0:n];	
 }

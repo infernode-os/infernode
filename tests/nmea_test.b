@@ -6,6 +6,22 @@ implement NmeaTest;
 # satellites in view and used, error estimates, sentences that are
 # short or garbled taken without harm.
 #
+# And sentences written to do harm (Hostile, Tables, Names, Fuzz).  A
+# sentence is a wire's bytes, from anyone where gpsfs listens to UDP,
+# and gpsfs's one server proc runs this parser:
+#   - an AIS sentence saying it was part 1 of 200000000 sized the array
+#     its parts are kept in: 1.6GB asked of the heap, and the exception
+#     ended the server;
+#   - an angle was brought into 0..360 by taking 360 off until it
+#     fitted: a heading of 1e13 or more (HDT, HDG, HDM, FLARM's track,
+#     an RMC course with a variation) never returned;
+#   - 9999 degrees north was a fix;
+#   - the satellites used grew by twelve with every GSA when no position
+#     sentence came, a GSV report whose first sentence never came grew
+#     without end, the eight oldest AIS messages in parts shut out the
+#     newest, a thousand ships took every aircraft off the list;
+#   - a target's name with a newline in it was two lines of traffic.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -18,7 +34,7 @@ include "testing.m";
 
 include "nmea.m";
 	nmea: Nmea;
-	Fix, Parser: import nmea;
+	Fix, Parser, Target: import nmea;
 
 NmeaTest: module
 {
@@ -526,6 +542,497 @@ testGlitch(t: ref T)
 	t.asserteq(len fl, 2, "a step across the date line is believed");
 }
 
+#
+# Sentences written to do harm
+#
+
+zeros(n: int): string
+{
+	s := "";
+	for(i := 0; i < n; i++)
+		s += "0";
+	return s;
+}
+
+GOOD: con "$GPRMC,120000,A,4047.0400,N,07425.0000,W,0.0,0.0,311026,003.1,W,A";
+
+# pre then s parsed in a proc of its own; what the fix then says, or
+# "raised ..."
+hostileproc(pre: list of string, s: string, done: chan of string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	{
+		p := Parser.new();
+		for(; pre != nil; pre = tl pre)
+			p.sentence(hd pre);
+		p.sentence(s);
+		r := p.cur.text() + " | " + nmea->sentences(p.cur) + " | " + p.traffic(sys->millisec());
+		if(p.aispend != nil)
+			r += " | parts kept";
+		done <-= r;
+	} exception e {
+	"*" =>
+		done <-= "raised " + e;
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+killproc(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+# the result, or "hung" if it has not come in three seconds
+hostile(pre: list of string, s: string): string
+{
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn hostileproc(pre, s, done, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, 3000);
+	alt {
+	r := <-done =>
+		return r;
+	<-tc =>
+		killproc(pid);
+		return "hung";
+	}
+}
+
+testHostile(t: ref T)
+{
+	# a count that sizes an array
+	r := hostile(nil, "!AIVDM,200000000,1,0,A,0,0");
+	t.assert(!contains(r, "raised") && r != "hung", "an AIS part 1 of 200000000: " + r);
+	t.assert(!contains(r, "parts kept"), "and nothing is kept for it");
+	r = hostile(nil, "!AIVDM,99999999999999999999,1,0,A,0,0");
+	t.assert(!contains(r, "raised") && r != "hung", "an AIS part 1 of 1e20: " + r);
+
+	# angles
+	h := array[] of {
+		("HDT 1e20", "$GPHDT,1" + zeros(20) + ",T"),
+		("HDT 1e13", "$GPHDT,1" + zeros(13) + ",T"),
+		("HDT -1e20", "$GPHDT,-1" + zeros(20) + ",T"),
+		("HDT 1e8", "$GPHDT,1" + zeros(8) + ",T"),
+		("HDG 1e20", "$HCHDG,1" + zeros(20) + ",,,,"),
+		("HDM 1e20", "$HCHDM,1" + zeros(20) + ",M"),
+		("FLARM's track 1e20", "$PFLAA,0,100,100,10,2,DD8F12,1" + zeros(20) + ",,30,-1.4,1"),
+		("an RMC course of 1e20", "$GPRMC,120001,A,4047.0400,N,07425.0000,W,0.0,1" + zeros(20) + ",311026,003.1,W,A"),
+		("an RMC variation of 1e20", "$GPRMC,120001,A,4047.0400,N,07425.0000,W,0.0,90.0,311026,1" + zeros(20) + ",W,A"),
+	};
+	for(i := 0; i < len h; i++) {
+		(name, sent) := h[i];
+		r = hostile(GOOD :: nil, sent);
+		t.assert(r != "hung", name + " returns");
+		t.assert(!contains(r, "raised"), name + ": " + r);
+		t.assert(!contains(r, "heading=") && !contains(r, "course=1") && !contains(r, "magvar=1"),
+			name + " is no heading, course or variation: " + r);
+	}
+
+	r = hostile(GOOD :: nil, "$HCHDG,10.0,1" + zeros(20) + ",E,,");
+	t.assert(contains(r, " heading=6.9 "), "a deviation of 1e20 is none, and the heading is read without it: " + r);
+
+	# numbers past what an int or a field holds
+	n := array[] of {
+		"$GPGGA,120001,4047.0400,N,07425.0000,W,1,9" + zeros(30) + ",1.0,10,M,,M,,",
+		"$GPGGA,120001,4047.0400,N,07425.0000,W,1,09,1.0,1" + zeros(309) + ",M,,M,,",
+		"$PGRMZ,1" + zeros(309) + ",f,3",
+		"$PGRMZ,999999999,m,3",
+		"$GPVTG,1" + zeros(309) + ",T,,M,1" + zeros(309) + ",N,1" + zeros(309) + ",K,A",
+		"$GPZDA,120000,1" + zeros(309) + ",10,2026,00,00",
+		"$GPGSV,1,1,01,1" + zeros(309) + ",10,100,30",
+		"$GPGSV,999999999,1,01,01,10,100,30",
+		"$GPGSA,A,3,999999999,,,,,,,,,,,,1" + zeros(40) + ",1.0,1.0",
+		"$GPGST,120001,,,,,1" + zeros(200) + ",1" + zeros(200) + ",1" + zeros(200),
+		"$PGRME,1" + zeros(200) + ",M,1" + zeros(200) + ",M,,M",
+		"$PFLAA,0,1" + zeros(60) + ",1" + zeros(60) + ",1" + zeros(60) + ",2,DD8F12,90,,1" + zeros(60) + ",1" + zeros(60) + ",1",
+		"!AIVDM,1,1,,A,13aEOK?P00PD2wVMdLDRhgvL289?,99999",
+	};
+	for(i = 0; i < len n; i++) {
+		r = hostile(GOOD :: nil, n[i]);
+		t.assert(r != "hung" && !contains(r, "raised"), sys->sprint("%.40s...: %.80s", n[i], r));
+		t.assert(!contains(r, "nfinity") && !contains(r, "NaN") && !contains(r, "e+"),
+			sys->sprint("%.40s... leaves no number that is none: %.200s", n[i], r));
+	}
+
+	# a position that is nowhere
+	p := Parser.new();
+	fl := feed(p, cs("GPRMC,120001,A,999959.0000,N,07425.0000,W,,,311026,,,A") :: nil);
+	t.assert(fl == nil || (hd fl).position() == nil, "9999 degrees north is no position");
+	p = Parser.new();
+	fl = feed(p, cs("GPGGA,120001,4047.0400,N,18100.0000,E,1,09,1.0,10.0,M,,M,,") :: nil);
+	t.assert(fl == nil || (hd fl).position() == nil, "181 degrees east is no position");
+	p = Parser.new();
+	fl = feed(p, cs("GPRMC,120001,A,9000.0000,S,18000.0000,W,,,311026,,,A") :: nil);
+	t.assert(fl != nil && (hd fl).position() == "-90.000000 -180.000000", "the pole and the date line are");
+	p = Parser.new();
+	feed(p, GOOD :: cs("PFLAA,0,20000000,0,10,2,DD8F12,90,,30,1.0,1") :: nil);
+	t.asserteq(len traffic(p), 0, "an aircraft 20000 km north of 40 north is nowhere");
+
+	# what is in range is still read, and turned
+	p = Parser.new();
+	feed(p, cs("GPRMC,120001,A,4047.0400,N,07425.0000,W,5.0,360.0,311026,010.0,W,A") :: cs("GPHDT,359.5,T") :: nil);
+	t.assert(p.cur.hascourse && near(p.cur.course, 0.0), "a course of 360 is 0");
+	t.assert(p.cur.hasheading && near(p.cur.heading, 359.5), "a heading of 359.5");
+	t.assert(contains(p.cur.text(), "mcourse=10.0") && contains(p.cur.text(), "mheading=9.5"),
+		"magnetic from true, across north: " + p.cur.text());
+	p = Parser.new();
+	feed(p, cs("HCHDG,355.0,10.0,E,10.0,E") :: nil);
+	t.assert(p.cur.hasheading && near(p.cur.heading, 15.0), "355 and 10 and 10 east is 15");
+}
+
+listlen(l: list of (string, int)): int
+{
+	n := 0;
+	for(; l != nil; l = tl l)
+		n++;
+	return n;
+}
+
+# an AIS position report (message 1) for an mmsi, at 1 north 1 east
+aispayload(mmsi: int): string
+{
+	bits := array[168] of {* => 0};
+	put(bits, 0, 6, 1);
+	put(bits, 8, 30, mmsi);
+	put(bits, 61, 28, 600000);
+	put(bits, 89, 27, 600000);
+	s := "";
+	for(i := 0; i < 168; i += 6) {
+		v := 0;
+		for(j := 0; j < 6; j++)
+			v = v<<1 | bits[i+j];
+		c := v + 48;
+		if(c > 87)
+			c += 8;
+		s[len s] = c;
+	}
+	return s;
+}
+
+put(b: array of int, start, n, v: int)
+{
+	for(i := 0; i < n; i++)
+		b[start+i] = (v >> (n-1-i)) & 1;
+}
+
+testTables(t: ref T)
+{
+	# satellites used, with no position sentence to begin a new time
+	p := Parser.new();
+	for(i := 0; i < 5000; i++)
+		p.sentence("$GPGSA,A,3,01,02,03,04,05,06,07,08,09,10,11,12,1.0,1.0,1.0");
+	t.assert(listlen(p.used) <= 256, sys->sprint("5000 GSA with no position: %d satellites used kept", listlen(p.used)));
+
+	# a GSV report whose first sentence never comes
+	for(i = 0; i < 5000; i++)
+		p.sentence("$GPGSV,9,2,36,01,10,100,30,02,10,100,30,03,10,100,30,04,10,100,30");
+	n := 0;
+	for(i = 0; i < len p.pending; i++)
+		n += len p.pending[i];
+	t.assert(n <= 36, sys->sprint("5000 second sentences of a GSV report: %d satellites pending", n));
+	(nil, err) := p.sentence("$GPGSV,10,1,40,01,10,100,30");
+	t.assertnil(err, "a GSV report of ten sentences is a sentence");
+	t.assertseq(p.satellites(), "", "and no report: none in view");
+
+	# the newest AIS messages in parts are the ones kept
+	part1 := "55?MbV02;H;s<HtKR20EHE:0@T4@Dn2222222216L961O5Gf0NSQEp6ClRp8";
+	p = Parser.new();
+	for(i = 0; i < 8; i++)
+		p.sentence(sys->sprint("!AIVDM,2,1,%d,A,%s,0", i, part1));
+	p.sentence("!AIVDM,2,1,8,A," + part1 + ",0");
+	p.sentence("!AIVDM,2,1,9,B," + part1 + ",0");
+	p.sentence("!AIVDM,2,2,8,A,88888888880,2");
+	t.asserteq(len p.targets, 1, "a message in two parts behind eight whose second never came, and one between");
+	t.assert(len p.aispend <= 8, sys->sprint("%d messages kept in parts", len p.aispend));
+	for(i = 0; i < 200; i++)
+		p.sentence(sys->sprint("!AIVDM,9,1,%d,%c,%s,0", i%10, 'A' + i%26, part1));
+	t.assert(len p.aispend <= 8, sys->sprint("%d messages kept in parts after 200 first parts", len p.aispend));
+	(nil, err) = p.sentence("!AIVDM,2,1,333,ABC," + part1 + ",0");
+	t.assertnil(err, "a sequence number of three digits is a sentence");
+	for(l := p.aispend; l != nil; l = tl l)
+		t.assert(!contains((hd l).t0, "333"), "and no message");
+
+	# a thousand ships do not take the aircraft off the list
+	p = Parser.new();
+	feed(p, cs("GPRMC,120000,A,0100.0000,N,00100.0000,E,0.0,0.0,311026,,,A") ::
+		cs("PFLAA,0,100,100,10,2,DD8F12,180,,30,-1.4,1") :: nil);
+	t0 := sys->millisec();
+	for(i = 1; i <= 1300; i++)
+		p.sentence("!AIVDM,1,1,,A," + aispayload(200000000 + i) + ",0");
+	ms := sys->millisec() - t0;
+	nais := 0;
+	nflarm := 0;
+	newest := 0;
+	for(tl0 := p.targets; tl0 != nil; tl0 = tl tl0) {
+		if((hd tl0).kind == "flarm")
+			nflarm++;
+		else
+			nais++;
+		if((hd tl0).id == "200001300")
+			newest = 1;
+	}
+	t.asserteq(nflarm, 1, "the aircraft is still heard after 1300 ships");
+	t.asserteq(nais, 1000, "a thousand ships are kept");
+	t.assert(newest, "the last heard among them");
+	t.log(sys->sprint("1300 ships: %d ms", ms));
+}
+
+testNames(t: ref T)
+{
+	p := Parser.new();
+	x := Target.new("adsb", "abcdef");
+	x.name = "A\nkind=x";
+	p.target(x);
+	x = Target.new("adsb", "abc\ndef");
+	p.target(x);
+	x = Target.new("adsb", "123456");
+	x.name = "N825V";
+	x.callsign = "\u007f";
+	x.category = "light\r";
+	p.target(x);
+	x = Target.new("adsb", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+	p.target(x);
+	p.target(nil);
+	l := traffic(p);
+	t.asserteq(len l, 2, "two craft are two lines: " + p.traffic(sys->millisec()));
+	for(; l != nil; l = tl l)
+		t.assert(hd l == "kind=adsb id=abcdef" || hd l == "kind=adsb id=123456 name=N825V", "a line: " + hd l);
+
+	# FLARM's id is the sentence's: blanks and quotes are quoted
+	p = Parser.new();
+	feed(p, cs("GPRMC,120000,A,4600.0000,N,00800.0000,E,,,311026,,,A") ::
+		cs("PFLAA,0,1113,-773,150,2,DD 12'34,90,,30,1.5,1") :: nil);
+	l = traffic(p);
+	t.assert(len l == 1 && contains(hd l, "id='DD 12''34' "), "an id with a blank and a quote: " + p.traffic(sys->millisec()));
+	(n, toks) := sys->tokenize(hd l, " ");
+	t.assert(n > 3, "tokenized");
+	toks = nil;
+}
+
+#
+# Mutated sentences of every kind, as many as there is time for.  None
+# may raise or go on for ever, and what the parser keeps stays within
+# its bounds.
+#
+seeds := array[] of {
+	"GPRMC,120000,A,4047.0400,N,07425.0000,W,5.5,84.4,311026,003.1,W,A",
+	"GPGGA,120000,4047.0400,N,07425.0000,W,1,08,0.9,545.4,M,46.9,M,,",
+	"GPGLL,4047.0400,N,07425.0000,W,120000,A,A",
+	"GPGSA,A,3,04,05,,09,12,,,24,,,,,2.5,1.3,2.1",
+	"GNGSA,A,3,65,66,67,,,,,,,,,,2.5,1.3,2.1,2",
+	"GPGSV,2,1,08,01,40,083,46,02,17,308,41,12,07,344,39,14,22,228,45",
+	"GPGSV,2,2,08,15,12,111,30,17,60,200,44,19,05,010,,24,33,150,40",
+	"GPGST,120000,0.006,0.023,0.020,273.6,0.023,0.020,0.031",
+	"GPVTG,84.4,T,87.5,M,5.5,N,10.2,K,A",
+	"GPZDA,120000,31,10,2026,00,00",
+	"GPHDT,274.07,T",
+	"HCHDG,98.3,0.0,E,12.6,W",
+	"HCHDM,238.5,M",
+	"PGRMZ,2062,f,3",
+	"PGRME,15.0,M,22.5,M,27.0,M",
+	"PFLAA,0,-1234,1234,220,2,DD8F12,180,,30,-1.4,1",
+	"AIVDM,1,1,,A,13aEOK?P00PD2wVMdLDRhgvL289?,0",
+	"AIVDM,2,1,3,A,539Lg000Bm`L@48<000mJ0EP4m0hD0000000001600000000000000000000,0",
+	"AIVDM,2,2,3,A,00000000000,2",
+	"AIVDM,1,1,,A,B52MJh00=nc@lJ5lQE1hQIP00000,0",
+	"AIVDM,1,1,,A,H52MJh1<D6098DE`D00000000000,0",
+	"AIVDM,1,1,,A,C52ulL@0AVcCF85lWb0p@eP0@2T4NU0`b>0000000000J0000000,0",
+};
+
+# what a field is replaced with
+poison: array of string;
+
+rstate := 20261116;
+rnd(n: int): int
+{
+	rstate = rstate * 1103515245 + 12345;
+	return ((rstate >> 8) & 16r7fffff) % n;
+}
+
+mkpoison()
+{
+	poison = array[] of {
+		"", "0", "1", "-1", "9", "10", "360", "360.01", "-0.1", "1e9", "1.5e300",
+		"255", "256", "32768", "65536", "2147483647", "2147483648", "-2147483648",
+		"4294967295", "4294967296", "999999999", "9999999999", "200000000",
+		"1" + zeros(13), "1" + zeros(17), "1" + zeros(20), "-1" + zeros(20), "1" + zeros(40),
+		"1" + zeros(310), "0." + zeros(300) + "1", "9999.99", "99999.9999", "18000.0000", "9000.0000",
+		".", "-", "+", "..", "1.2.3", "--1", "A", "V", "N", "S", "E", "W", "T", "M", "f", "K",
+		"*", "*00", "$", "!", ",", ",,,,,,,,,,,,,,,,,,,,", " ", "'", "=", "\t", "\n", "\u0000", "\u00e9", "\u20ac",
+		"250000", "126060.999", "320026", "000000", "311026", "@@@@@@@@", "~~~~~~~~", "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+	};
+}
+
+mutate(s: string): string
+{
+	nf := 1;
+	for(i := 0; i < len s; i++)
+		if(s[i] == ',')
+			nf++;
+	f := array[nf] of string;
+	k := 0;
+	st := 0;
+	for(i = 0; i <= len s; i++)
+		if(i == len s || s[i] == ',') {
+			f[k++] = s[st:i];
+			st = i+1;
+		}
+	for(times := 1 + rnd(3); times > 0; times--)
+		case rnd(9) {
+		0 or 1 or 2 or 3 =>
+			f[rnd(nf)] = poison[rnd(len poison)];
+		4 =>
+			# a character changed
+			j := rnd(nf);
+			if(len f[j] > 0)
+				f[j][rnd(len f[j])] = ' ' + rnd(95);
+		5 =>
+			# a field gone, the rest moved up
+			j := rnd(nf);
+			for(; j+1 < nf; j++)
+				f[j] = f[j+1];
+			f[nf-1] = "";
+		6 =>
+			# two fields changed places
+			a := rnd(nf);
+			b := rnd(nf);
+			(f[a], f[b]) = (f[b], f[a]);
+		7 =>
+			# a field's digits made many
+			j := rnd(nf);
+			f[j] += f[j] + f[j];
+		8 =>
+			# cut short
+			nf = 1 + rnd(nf);
+		}
+	r := f[0];
+	for(i = 1; i < nf; i++)
+		r += "," + f[i];
+	return r;
+}
+
+# the parser's own bounds, or what is past them
+bounds(p: ref Parser): string
+{
+	if(listlen(p.used) > 256)
+		return sys->sprint("%d satellites used", listlen(p.used));
+	for(i := 0; i < len p.pending; i++)
+		if(len p.pending[i] > 36 || len p.inview[i] > 36)
+			return sys->sprint("%d satellites pending, %d in view", len p.pending[i], len p.inview[i]);
+	if(len p.aispend > 8)
+		return sys->sprint("%d AIS messages in parts", len p.aispend);
+	for(q := p.aispend; q != nil; q = tl q)
+		if(len (hd q).t1 > 9)
+			return sys->sprint("an AIS message of %d parts", len (hd q).t1);
+	if(len p.targets > 2000)
+		return sys->sprint("%d targets", len p.targets);
+	for(l := p.cur :: p.last :: nil; l != nil; l = tl l) {
+		f := hd l;
+		if(f == nil)
+			continue;
+		if(f.haspos && !(f.lat >= -90.0 && f.lat <= 90.0 && f.lon >= -180.0 && f.lon <= 180.0))
+			return sys->sprint("a position of %g %g", f.lat, f.lon);
+		if(f.hascourse && !(f.course >= 0.0 && f.course < 360.0))
+			return sys->sprint("a course of %g", f.course);
+		if(f.hasheading && !(f.heading >= 0.0 && f.heading < 360.0))
+			return sys->sprint("a heading of %g", f.heading);
+		if(f.hasmagvar && !(f.magvar >= -180.0 && f.magvar <= 180.0))
+			return sys->sprint("a variation of %g", f.magvar);
+	}
+	return nil;
+}
+
+Fuzzn: con 300000;
+Fuzzms: con 20000;	# the interpreter does fewer in its time
+
+fuzzproc(done: chan of string, pidc: chan of int, count: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	last := "";
+	n := 0;
+	{
+		p := Parser.new();
+		t0 := sys->millisec();
+		for(n = 0; n < Fuzzn; n++) {
+			last = mutate(seeds[rnd(len seeds)]);
+			if(last != nil && last[0] == 'A')
+				last = "!" + last;
+			else
+				last = "$" + last;
+			p.sentence(last);
+			if(n % 64 == 0) {
+				if((e := bounds(p)) != nil) {
+					done <-= sys->sprint("%s after the %dth: %s", e, n, last);
+					return;
+				}
+				nmea->timeof(last);
+				p.cur.text();
+				if(p.last != nil) {
+					p.last.text();
+					nmea->sentences(p.last);
+				}
+				nmea->sentences(p.cur);
+				tr := p.traffic(sys->millisec());
+				(ntr, nil) := sys->tokenize(tr, "\n");
+				if(ntr != len p.targets) {
+					done <-= sys->sprint("%d targets are %d lines after %s", len p.targets, ntr, last);
+					return;
+				}
+				p.satellites();
+				count <-= n;
+				if(sys->millisec() - t0 > Fuzzms)
+					break;
+			}
+			if(n % 4096 == 4095)
+				p.forget();
+		}
+		count <-= n;
+		done <-= nil;
+	} exception e {
+	"*" =>
+		done <-= sys->sprint("raised %s at the %dth: %s", e, n, last);
+	}
+}
+
+testFuzz(t: ref T)
+{
+	mkpoison();
+	done := chan[1] of string;
+	pidc := chan of int;
+	count := chan[4] of int;
+	spawn fuzzproc(done, pidc, count);
+	pid := <-pidc;
+	n := 0;
+	seen := -1;
+	tc := chan[1] of int;
+	spawn timer(tc, 5000);
+	for(;;) alt {
+	n = <-count =>
+		;
+	r := <-done =>
+		t.assertnil(r, "mutated sentences");
+		t.assert(n >= 20000, sys->sprint("%d sentences tried", n));
+		t.log(sys->sprint("%d mutated sentences", n));
+		return;
+	<-tc =>
+		if(n == seen) {
+			killproc(pid);
+			t.fatal(sys->sprint("a sentence after the %dth never returned", n));
+		}
+		seen = n;
+		spawn timer(tc, 5000);
+	}
+}
+
 contains(s, sub: string): int
 {
 	for(i := 0; i + len sub <= len s; i++)
@@ -567,6 +1074,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Flarm", testFlarm);
 	run("Sentences", testSentences);
 	run("Glitch", testGlitch);
+	run("Hostile", testHostile);
+	run("Tables", testTables);
+	run("Names", testNames);
+	run("Fuzz", testFuzz);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

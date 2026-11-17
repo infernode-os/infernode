@@ -13,6 +13,10 @@ set -e
 
 ROOT="${ROOT:-.}"
 . "$(dirname "$0")/common.sh"
+
+# a port of this test's own for its secstored (it used 5356, and killed
+# whatever held it)
+PORT=$(freeport)
 PASS="testpass123"
 
 if [ ! -x "$EMU" ]; then
@@ -21,7 +25,6 @@ if [ ! -x "$EMU" ]; then
 fi
 
 # Kill stale secstored
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # Clean secstore state for reproducible test
@@ -63,11 +66,11 @@ echo "=== secstore/logon/wallet regression tests ==="
 echo ""
 echo "--- test 1: secstored starts ---"
 mkdir -p "$ROOT/tmp"
-cat > "$ROOT/tmp/test_secstored.sh" << 'EOF'
+cat > "$ROOT/tmp/test_secstored.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
 echo 'secstored running'
 EOF
@@ -75,7 +78,6 @@ OUTPUT=$(run_emu 15 /tmp/test_secstored.sh)
 check "secstored starts" "$OUTPUT" "listening on tcp"
 
 # Kill for next test
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 2: secstore account creation ─────────────────────
@@ -85,7 +87,7 @@ cat > "$ROOT/tmp/test_secstore_setup.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
 auth/secstore-setup -u testuser-seclogon -k $PASS
 echo 'setup done'
@@ -97,8 +99,8 @@ check "secstore-setup creates account" "$OUTPUT" "setup complete"
 if [ -f "$ROOT/usr/inferno/secstore/testuser-seclogon/PAK" ]; then
     pass "PAK verifier file exists"
     PAKHDR=$(LC_ALL=C awk '{print $1}' "$ROOT/usr/inferno/secstore/testuser-seclogon/PAK" 2>/dev/null || true)
-    if [ "$PAKHDR" = "secstore3" ]; then
-        pass "PAK verifier uses secstore3 format"
+    if [ "$PAKHDR" = "secstore4" ]; then
+        pass "PAK verifier uses secstore4 format"
     else
         fail "PAK verifier format mismatch (got '$PAKHDR')"
     fi
@@ -106,7 +108,6 @@ else
     fail "PAK verifier file missing"
 fi
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 3: factotum stores key, syncs to secstore ───────
@@ -116,9 +117,9 @@ cat > "$ROOT/tmp/test_key_persist.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
-auth/factotum -S tcp!localhost!5356 -u testuser-seclogon -P $PASS
+auth/factotum -S tcp!127.0.0.1!$PORT -u testuser-seclogon -P $PASS
 sleep 1
 echo 'key proto=pass service=test-regression user=testuser !password=secret123' > /mnt/factotum/ctl
 echo sync > /mnt/factotum/ctl
@@ -143,7 +144,6 @@ else
     fail "secstore factotum file missing (keys not persisted)"
 fi
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 4: keys survive factotum restart ─────────────────
@@ -153,9 +153,9 @@ cat > "$ROOT/tmp/test_key_reload.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
-auth/factotum -S tcp!localhost!5356 -u testuser-seclogon -P $PASS
+auth/factotum -S tcp!127.0.0.1!$PORT -u testuser-seclogon -P $PASS
 sleep 2
 echo '--- keys after reload ---'
 cat /mnt/factotum/ctl
@@ -164,7 +164,6 @@ EOF
 OUTPUT=$(run_emu 25 /tmp/test_key_reload.sh)
 check "key survives restart" "$OUTPUT" "service=test-regression"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 5: wallet account persists via factotum/secstore ─
@@ -174,9 +173,9 @@ cat > "$ROOT/tmp/test_wallet_persist.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
-auth/factotum -S tcp!localhost!5356 -u testuser-seclogon -P $PASS
+auth/factotum -S tcp!127.0.0.1!$PORT -u testuser-seclogon -P $PASS
 sleep 5
 /dis/veltro/wallet9p.dis &
 sleep 5
@@ -195,7 +194,6 @@ OUTPUT=$(run_emu 60 /tmp/test_wallet_persist.sh)
 check "wallet account created" "$OUTPUT" "0x"
 check "wallet key in factotum" "$OUTPUT" "service=wallet-eth-persist-test"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 6: wallet account restored after restart ─────────
@@ -205,9 +203,9 @@ cat > "$ROOT/tmp/test_wallet_restore.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
-auth/factotum -S tcp!localhost!5356 -u testuser-seclogon -P $PASS
+auth/factotum -S tcp!127.0.0.1!$PORT -u testuser-seclogon -P $PASS
 sleep 5
 /dis/veltro/wallet9p.dis &
 sleep 5
@@ -221,7 +219,6 @@ OUTPUT=$(run_emu 60 /tmp/test_wallet_restore.sh)
 check "wallet account restored" "$OUTPUT" "persist-test"
 check "wallet address restored" "$OUTPUT" "0x"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Summary ───────────────────────────────────────────────

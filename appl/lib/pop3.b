@@ -1,144 +1,95 @@
 implement Pop3;
- 
+
+#
+# POP3 client (RFC 1939), in clear on port 110 or over TLS on port 995.
+#
+# The connection is mailconn(2)'s.  TLS is the tree's client (tls(2)):
+# the server's chain is verified against the system's roots and its name
+# against the certificate.  It was the SSL 3.0 client, which a server
+# with no key or certificate could finish a handshake with, and to which
+# USER and PASS were then sent.  Every reply has a deadline and a bound;
+# a connection that fails is closed.
+#
+
 include "sys.m";
 	sys : Sys;
 include "draw.m";
-include "bufio.m";
-	bufio : Bufio;
-include "timers.m";
-	timers: Timers;
-	Timer: import timers;
 include "pop3.m";
 include "keyring.m";
-include "asn1.m";
-include "pkcs.m";
-include "sslsession.m";
-include "ssl3.m";
-	ssl3: SSL3;
-	Context: import ssl3;
-# Inferno supported cipher suites: RSA_EXPORT_RC4_40_MD5
-ssl_suites := array [] of {
-	byte 0, byte 16r03,	# RSA_EXPORT_WITH_RC4_40_MD5
-	byte 0, byte 16r04,	# RSA_WITH_RC4_128_MD5
-	byte 0, byte 16r05,	# RSA_WITH_RC4_128_SHA
-	byte 0, byte 16r06,	# RSA_EXPORT_WITH_RC2_CBC_40_MD5
-	byte 0, byte 16r07,	# RSA_WITH_IDEA_CBC_SHA
-	byte 0, byte 16r08,	# RSA_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r09,	# RSA_WITH_DES_CBC_SHA
-	byte 0, byte 16r0A,	# RSA_WITH_3DES_EDE_CBC_SHA
-	
-	byte 0, byte 16r0B,	# DH_DSS_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r0C,	# DH_DSS_WITH_DES_CBC_SHA
-	byte 0, byte 16r0D,	# DH_DSS_WITH_3DES_EDE_CBC_SHA
-	byte 0, byte 16r0E,	# DH_RSA_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r0F,	# DH_RSA_WITH_DES_CBC_SHA
-	byte 0, byte 16r10,	# DH_RSA_WITH_3DES_EDE_CBC_SHA
-	byte 0, byte 16r11,	# DHE_DSS_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r12,	# DHE_DSS_WITH_DES_CBC_SHA
-	byte 0, byte 16r13,	# DHE_DSS_WITH_3DES_EDE_CBC_SHA
-	byte 0, byte 16r14,	# DHE_RSA_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r15,	# DHE_RSA_WITH_DES_CBC_SHA
-	byte 0, byte 16r16,	# DHE_RSA_WITH_3DES_EDE_CBC_SHA
-	
-	byte 0, byte 16r17,	# DH_anon_EXPORT_WITH_RC4_40_MD5
-	byte 0, byte 16r18,	# DH_anon_WITH_RC4_128_MD5
-	byte 0, byte 16r19,	# DH_anon_EXPORT_WITH_DES40_CBC_SHA
-	byte 0, byte 16r1A,	# DH_anon_WITH_DES_CBC_SHA
-	byte 0, byte 16r1B,	# DH_anon_WITH_3DES_EDE_CBC_SHA
-	
-	byte 0, byte 16r1C,	# FORTEZZA_KEA_WITH_NULL_SHA
-	byte 0, byte 16r1D,	# FORTEZZA_KEA_WITH_FORTEZZA_CBC_SHA
-	byte 0, byte 16r1E,	# FORTEZZA_KEA_WITH_RC4_128_SHA
-};
-ssl_comprs := array [] of {byte 0};
+include "tls.m";
+include "mailconn.m";
+	mailconn: Mailconn;
+	Link: import mailconn;
 
-FD, Connection: import sys;
-Iobuf : import bufio;
+MAXLINE: con 64*1024;			# a reply's or a message's line
+MAXMSG: con 64*1024*1024;		# a message
+MAXLIST: con 1000000;			# entries of a listing
 
-ibuf, obuf : ref Bufio->Iobuf;
+c: ref Link;
 conn : int = 0;
-inited : int = 0;
- 
-rpid : int = -1;
-cread : chan of (int, string);
+iotime := 30*1000;
 
-DEBUG : con 0;
-usessl:= 0;
-sslx : ref Context;
-
-
-open(user, password, server : string, usesslarg: int): (int, string)
+timeout(ms: int)
 {
-	s : string;
- 	usessl = usesslarg;
-	if (!inited) {
+	if(ms > 0)
+		iotime = ms;
+}
+
+open(user, password, server : string, usessl: int): (int, string)
+{
+	if(sys == nil)
 		sys = load Sys Sys->PATH;
-		bufio = load Bufio Bufio->PATH;
-		timers = load Timers Timers->PATH;
-		timers->init(100);
-		inited = 1;
+	if(mailconn == nil){
+		m := load Mailconn Mailconn->PATH;
+		if(m == nil)
+			return (-1, "cannot load Mailconn");
+		ierr := m->init();
+		if(ierr != nil)
+			return (-1, ierr);
+		mailconn = m;
 	}
 	if (conn)
 		return (-1, "connection is already open");
-	if (server == nil) {
-		server = defaultserver();
-		if (server == nil)
-			return (-1, "no default mail server");
-	}
-	addr: string;
-	if(usessl)
-		addr = "tcp!" + server + "!995";
-	else
-		addr = "tcp!" + server + "!110";
-	(ok, c) := sys->dial (addr, nil);
-	if (ok < 0)
-		return (-1, "dialup failed");
+	if(badarg(user) || badarg(password))
+		return (-1, "a line break or NUL in the user name or password");
+	# server is a host, or host!port for a port of its own
+	port := "110";
+	how := Mailconn->CLEAR;
 	if(usessl){
-		# read server greeting, send STLS, initiate TLS, continue as normal
-#		buf := array[512] of byte;
-#		nb := sys->read(c.dfd, buf, len buf);
-#		if(DEBUG)
-#			sys->print("%s\n", string buf[:nb]);
-#		stls := "STLS\r\n";
-#		b := array of byte stls;
-#		sys->write(c.dfd, b, len b);
-#		nb = sys->read(c.dfd, buf, len buf);
-#		if(DEBUG)
-#			sys->print("%s\n", string buf[:nb]);
-		ssl3 = load SSL3 SSL3->PATH;
-		ssl3->init();
-		sslx = ssl3->Context.new();
-#		sslx.use_devssl();
-		vers := 3;
-		e: string;
-		info := ref SSL3->Authinfo(ssl_suites, ssl_comprs, nil, 0, nil, nil, nil);
-		(e, vers) = sslx.client(c.dfd, addr, vers, info);
-		if(e != "") {
-			return (-1, s);
+		# the certificate is checked against the server's name, which
+		# a name for the connection server to look up ($pop3) is not
+		if (server == nil || server[0] == '$')
+			return (-1, "TLS needs the server's name");
+		port = "995";
+		how = Mailconn->IMPLICIT;
+	}else if (server == nil)
+		server = defaultserver();
+	for(i := 0; i < len server; i++)
+		if(server[i] == '!'){
+			port = server[i+1:];
+			server = server[0:i];
+			break;
 		}
-		if(DEBUG)
-			sys->print("SSL HANDSHAKE completed\n");
-		cread = chan of (int, string);
-		spawn tlsreader(cread);
-		(rpid, nil) = <- cread;
-	}else{
-		ibuf = bufio->fopen(c.dfd, Bufio->OREAD);
-		obuf = bufio->fopen(c.dfd, Bufio->OWRITE);
-		if (ibuf == nil || obuf == nil)
-			return (-1, "failed to open bufio");
-		cread = chan of (int, string);
-		spawn mreader(cread);
-		(rpid, nil) = <- cread;
+	addr := "tcp!" + server + "!" + port;
+	(nc, derr) := Link.dial(addr, server, how, nil, iotime);
+	if(derr != nil){
+		if(derr == "timed out")
+			derr = "connecting to " + server + " timed out";
+		return (-1, derr);
 	}
- 	(ok, s) = mread();
+	c = nc;
+	(ok, s) := mread();
+	if (ok >= 0 && !isok(s))
+		(ok, s) = (-1, "greeting: " + s);
 	if (ok < 0)
-		return (-1, s);
+		return (-1, teardown(s));
 	(ok, s) = mcmd("USER " + user);
 	if (ok < 0)
-		return (-1, s);
+		return (-1, teardown(s));
 	(ok, s) = mcmd("PASS " + password);
 	if (ok < 0)
-		return (-1, s);
+		# a server may say back what it was sent
+		return (-1, teardown(redact(s, password)));
 	conn = 1;
 	return (1, nil);
 }
@@ -151,7 +102,7 @@ stat() : (int, string, int, int)
 	if (ok < 0)
 		return (-1, s, 0, 0);
 	(n, ls) := sys->tokenize(s, " ");
-	if (n == 3)
+	if (n >= 3)
 		return (1, nil, int hd tl ls, int hd tl tl ls);
 	return (-1, "stat failed", 0, 0);
 }
@@ -169,94 +120,79 @@ uidl(m: int) : (int, string)
 	return (-1, s);
 }
 
-	
-msglist() : (int, string, list of (int, int))
+# The lines of a listing after its +OK, to the "." that ends it: each
+# two fields.
+listing(cmd: string): (int, string, list of (string, string))
 {
-	ls : list of (int, int);
+	ls : list of (string, string);
 
 	if (!conn)
 		return (-1, "not connected", nil);
-	(ok, s) := mcmd("LIST");
+	(ok, s) := mcmd(cmd);
 	if (ok < 0)
 		return (-1, s, nil);
-	for (;;) {
+	for (n := 0; ; n++) {
 		(ok, s) = mread();
 		if (ok < 0)
 			return (-1, s, nil);
-		if (len s < 3) {
-			if (len s > 0 && s[0] == '.')
-				return (1, nil, rev2(ls));
-			else
-				return (-1, s, nil);
-		}
-		else {
-			(n, sl) := sys->tokenize(s, " ");
-			if (n == 2)
-				ls = (int hd sl, int hd tl sl) :: ls;
-			else
-				return (-1, "bad list format", nil);
-		}
+		if (s == ".")
+			break;
+		if (n >= MAXLIST)
+			return (-1, teardown("the server's list is longer than is taken"), nil);
+		(nf, sl) := sys->tokenize(s, " ");
+		if (nf != 2)
+			return (-1, teardown("bad list format"), nil);
+		ls = (hd sl, hd tl sl) :: ls;
 	}
+	rl : list of (string, string);
+	for ( ; ls != nil; ls = tl ls)
+		rl = hd ls :: rl;
+	return (1, nil, rl);
+}
+	
+msglist() : (int, string, list of (int, int))
+{
+	(ok, s, l) := listing("LIST");
+	if (ok < 0)
+		return (-1, s, nil);
+	ls, rl : list of (int, int);
+	for ( ; l != nil; l = tl l) {
+		(a, b) := hd l;
+		ls = (int a, int b) :: ls;
+	}
+	for ( ; ls != nil; ls = tl ls)
+		rl = hd ls :: rl;
+	return (1, nil, rl);
 }
 
 uidllist() : (int, string, list of (int, string))
 {
-	ls : list of (int, string);
-
-	if (!conn)
-		return (-1, "not connected", nil);
-	(ok, s) := mcmd("UIDL");
+	(ok, s, l) := listing("UIDL");
 	if (ok < 0)
 		return (-1, s, nil);
-	for (;;) {
-		(ok, s) = mread();
-		if (ok < 0)
-			return (-1, s, nil);
-		if (len s < 3) {
-			if (len s > 0 && s[0] == '.')
-				return (1, nil, ls);
-			else
-				return (-1, s, nil);
-		}
-		else {
-			(n, sl) := sys->tokenize(s, " ");
-			if (n == 2)
-				ls = (int hd sl, hd tl sl) :: ls;
-			else
-				return (-1, "bad list format", nil);
-		}
+	ls, rl : list of (int, string);
+	for ( ; l != nil; l = tl l) {
+		(a, b) := hd l;
+		ls = (int a, b) :: ls;
 	}
+	for ( ; ls != nil; ls = tl ls)
+		rl = hd ls :: rl;
+	return (1, nil, rl);
 }
 
 msgnolist() : (int, string, list of int)
 {
-	ls : list of int;
-
-	if (!conn)
-		return (-1, "not connected", nil);
-	(ok, s) := mcmd("LIST");
+	(ok, s, l) := listing("LIST");
 	if (ok < 0)
 		return (-1, s, nil);
-	for (;;) {
-		(ok, s) = mread();
-		if (ok < 0)
-			return (-1, s, nil);
-		if (len s < 3) {
-			if (len s > 0 && s[0] == '.' && ls != nil)
-				return (1, nil, rev1(ls));
-			else if(len s > 0 && s[0] == '.')
-				return (1, nil, nil);
-			else
-				return (-1, s, nil);
-		}
-		else {
-			(n, sl) := sys->tokenize(s, " ");
-			if (n == 2)
-				ls = int hd sl :: ls;
-			else
-				return (-1, "bad list format", nil);
-		}
+	ls, rl : list of int;
+	for ( ; l != nil; l = tl l) {
+		(a, nil) := hd l;
+		ls = int a :: ls;
 	}
+	for ( ; ls != nil; ls = tl ls)
+		rl = hd ls :: rl;
+	return (1, nil, rl);
 }
 
 top(m : int) : (int, string, string)
@@ -278,10 +214,15 @@ get(m : int) : (int, string, string)
 		return (-1, s, nil);
 	return getbdy();
 }
-	
+
+# A message's lines after +OK, to the "." that ends them, their dots
+# unstuffed.  They are gathered in pieces, not one string added to a
+# line at a time.
 getbdy() : (int, string, string)
 {
-	b : string;
+	parts : list of array of byte;
+	b := "";
+	n := 0;
 
 	for (;;) {
 		(ok, s) := mread();
@@ -291,40 +232,64 @@ getbdy() : (int, string, string)
 			break;
 		if (len s > 1 && s[0] == '.' && s[1] == '.')
 			s = s[1:];
-		b = b + s + "\n";
+		b += s + "\n";
+		if (len b > 64*1024) {
+			a := array of byte b;
+			n += len a;
+			if (n > MAXMSG)
+				return (-1, teardown("the message is longer than is taken"), nil);
+			parts = a :: parts;
+			b = "";
+		}
 	}
-	return (1, nil, b);
+	a := array of byte b;
+	n += len a;
+	whole := array[n] of byte;
+	whole[n - len a:] = a;
+	n -= len a;
+	for ( ; parts != nil; parts = tl parts) {
+		p := hd parts;
+		n -= len p;
+		whole[n:] = p;
+	}
+	return (1, nil, string whole);
 }
 
 fetch(dir: string, m: int): (int, string)
 {
 	if (!conn)
 		return (-1, "not connected");
+	# The file is named by the server's unique id only if that is a
+	# file's name: with a slash in it, it was a path to anywhere.
 	f := dir + "/" + string m;
 	(ok, s) := uidl(m);
-	if(ok == 1)
+	if(ok == 1 && safename(s))
 		f = dir + "/" + s;
 	
-	(ok, s) = mcmd("RETR " + string m);
+	msg : string;
+	(ok, s, msg) = get(m);
 	if (ok < 0)
 		return (-1, s);
-	fd := sys->create(f, Sys->OWRITE, 0);
+	fd := sys->create(f, Sys->OWRITE, 8r600);
 	if (fd == nil) 
-		return (-1, sys->sprint("could not create '%s'", f));
-	for (;;) {
-		(ok, s) = mread();
-		if (ok < 0)
-			return (-1, s);
-		if (s == ".")
-			break;
-		if (len s > 1 && s[0] == '.' && s[1] == '.')
-			s = s[1:];
-		if(sys->fprint(fd, "%s\n", s) < 0) {
-			sys->remove(f);
-			return (-1, sys->sprint("could not write '%s': %r", f));
-		}
+		return (-1, sys->sprint("could not create '%s': %r", f));
+	b := array of byte msg;
+	if(sys->write(fd, b, len b) != len b) {
+		e := sys->sprint("could not write '%s': %r", f);
+		sys->remove(f);
+		return (-1, e);
 	}
-	return (0, nil);
+	return (1, nil);
+}
+
+safename(s: string): int
+{
+	if(s == nil || s == "." || s == ".." || len s > 255)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == '/' || s[i] == 16r7F)
+			return 0;
+	return 1;
 }
 	
 delete(m : int) : (int, string)
@@ -333,93 +298,91 @@ delete(m : int) : (int, string)
 		return (-1, "not connected");
 	return mcmd("DELE " + string m);
 }
-			
+
+# QUIT is what makes the server remove deleted messages (RFC 1939 6):
+# its answer is read, and the close fails without it.
 close(): (int, string)
 {
 	if (!conn)
 		return (-1, "connection not open");
-	ok := mwrite("QUIT");
-	kill(rpid);
-	if(!usessl){
-		ibuf.close();
-		obuf.close();
-	}
-	conn = 0;
+	t := iotime;
+	if(iotime > 10000)
+		iotime = 10000;
+	(ok, s) := mcmd("QUIT");
+	iotime = t;
+	teardown(nil);
 	if (ok < 0)
-		return (-1, "failed to close connection");
+		return (-1, "failed to close connection: " + s);
 	return (1, nil);
 }
- 
-SLPTIME : con 100;
-MAXSLPTIME : con 10000;
 
+# The session is over: the connection closed and its processes gone.  A
+# failed open and a timeout used to leave them, and a session that had
+# timed out was written to again.
+teardown(why: string): string
+{
+	if(c != nil)
+		c.close();
+	c = nil;
+	conn = 0;
+	return why;
+}
+
+# A line from the server, within the deadline.
 mread() : (int, string)
 {
-	timer := Timer.start(MAXSLPTIME);
-	alt {
-		(ok, s) := <- cread =>
-			timer.stop();
-			return (ok, s);
-		<-timer.timeout =>
-			sys->print("pop3 timer fired\n");
+	if(c == nil)
+		return (-1, "not connected");
+	c.deadline(iotime, 0);
+	(line, err) := c.getline(MAXLINE);
+	if(err != nil){
+		if(err == "timed out")
+			err = "pop3 timed out";
+		return (-1, teardown(err));
 	}
-	kill(rpid);
-	return (-1, "smtp timed out\n");	
-}
-
-mreader(c : chan of (int, string))
-{
-	c <- = (sys->pctl(0, nil), nil);
-	for (;;) {
-		line := ibuf.gets('\n');
-		if (DEBUG)
-			sys->print("mread : %s", line);
-		if (line == nil) {
-			c <- = (-1, "could not read response from server");
-			continue;
-		}
-		l := len line;
-		if (line[l-1] == '\n')
-			l--;
-		if (line[l-1] == '\r')
-			l--;
-		c <- = (1, line[0:l]);
-	}
-}
- 
-mwrite(s : string): int
-{
-	s += "\r\n";
-	if (DEBUG)
-		sys->print("mwrite : %s", s);
-	b := array of byte s;
-	l := len b;
-	nb: int;
-	if(!usessl){
-		nb = obuf.write(b, l);
-		obuf.flush();
-	}else{
-		nb = sslx.write(b,l);
-	}
-	if (nb != l)
-		return -1;
-	return 1;
+	return (1, line);
 }
  
 mcmd(s : string) : (int, string)
 {
-	ok : int;
-	r : string;
-
-	ok = mwrite(s);
-	if (ok < 0)
-		return (-1, err(s) + " send failed");
-	(ok, r) = mread();
+	if(c == nil)
+		return (-1, "not connected");
+	c.deadline(iotime, 0);
+	werr := c.write(array of byte (s + "\r\n"));
+	if (werr != nil)
+		return (-1, teardown(err(s) + " send failed: " + werr));
+	(ok, r) := mread();
 	if (ok < 0)
 		return (-1, err(s) + " receive failed (" + r + ")");
-	if (len r > 1 && r[0] == '+')
+	if (isok(r))
 		return (1, r);
 	return (-1, r);
+}
+
+# A positive reply is "+OK" (RFC 1939 3), not any line beginning "+".
+isok(r: string): int
+{
+	return len r >= 3 && r[0:3] == "+OK";
+}
+
+badarg(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\r' || s[i] == '\n' || s[i] == 0)
+			return 1;
+	return 0;
+}
+
+redact(s, secret: string): string
+{
+	if(len secret == 0)
+		return s;
+	for(i := 0; i + len secret <= len s; i++)
+		if(s[i:i+len secret] == secret){
+			s = s[0:i] + "[...]" + s[i+len secret:];
+			i += 4;
+		}
+	return s;
 }
 
 defaultserver() : string
@@ -427,64 +390,12 @@ defaultserver() : string
 	return "$pop3";
 }
 
-rev1(l1 : list of int) : list of int
-{
-	l2 : list of int;
-
-	for ( ; l1 != nil; l1 = tl l1)
-		l2 = hd l1 :: l2;
-	return l2;
-}
-
-rev2(l1 : list of (int, int)) : list of (int, int)
-{
-	l2 : list of (int, int);
-
-	for ( ; l1 != nil; l1 = tl l1)
-		l2 = hd l1 :: l2;
-	return l2;
-}
-
+# The command's name, for an error: never what follows it (PASS's
+# password).
 err(s : string) : string
 {
 	for (i := 0; i < len s; i++)
 		if (s[i] == ' ' || s[i] == ':')
 			return s[0:i];
 	return s;
-}
-
-kill(pid : int) : int
-{
-	if (pid < 0)
-		return 0;
-	fd := sys->open("#p/" + string pid + "/ctl", sys->OWRITE);
-	if (fd == nil || sys->fprint(fd, "kill") < 0)
-		return -1;
-	return 0;
-}
-
-tlsreader(c : chan of (int, string))
-{
-	buf := array[1] of byte;
-	lin := array[1024] of byte;
-	c <- = (sys->pctl(0, nil), nil);
-	k := 0;
-	for (;;) {
-		n := sslx.read(buf, len buf);
-		if(n < 0){
-			c <- = (-1, "could not read response from server");
-			continue;
-		}
-		lin[k++] = buf[0];
-		if(int buf[0] == '\n'){
-			line := string lin[0:k];
-			if (DEBUG)
-				sys->print("tlsreader : %s", line);
-			l := len line - 1;
-			if (line[l-1] == '\r')
-				l--;
-			c <- = (1, line[0:l]);
-			k = 0;
-		}
-	}
 }

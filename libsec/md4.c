@@ -151,8 +151,13 @@ md4(uchar *p, ulong len, uchar *digest, MD4state *s)
 	uchar buf[128];
 	int i;
 	uchar *e;
+	DigestState own;
 
-	if(s == nil){
+	/* see sha1.c: the one-call form allocates nothing */
+	if(s == nil && digest != nil){
+		s = &own;
+		memset(s, 0, sizeof(*s));
+	}else if(s == nil){
 		s = malloc(sizeof(*s));
 		if(s == nil)
 			return nil;
@@ -174,7 +179,8 @@ md4(uchar *p, ulong len, uchar *digest, MD4state *s)
 		i = 64 - s->blen;
 		if(len < i)
 			i = len;
-		memmove(s->buf + s->blen, p, i);
+		if(i != 0)
+			memmove(s->buf + s->blen, p, i);
 		len -= i;
 		s->blen += i;
 		p += i;
@@ -209,7 +215,8 @@ md4(uchar *p, ulong len, uchar *digest, MD4state *s)
 		p = s->buf;
 		len = s->blen;
 	} else {
-		memmove(buf, p, len);
+		if(len != 0)	/* (p may be nil then) */
+			memmove(buf, p, len);
 		p = buf;
 	}
 	s->len += len;
@@ -232,8 +239,13 @@ md4(uchar *p, ulong len, uchar *digest, MD4state *s)
 
 	/* return result and free state */
 	encode(digest, s->state, MD4dlen);
-	if(s->malloced == 1)
+	/* the state is what was hashed (an HMAC's key, at its start): cleared */
+	if(s->malloced == 1){
+		secureZero(s, sizeof(*s));
 		free(s);
+	}else if(s == &own)
+		secureZero(s, sizeof(*s));
+	secureZero(buf, sizeof(buf));
 	return nil;
 }
 
@@ -267,5 +279,5 @@ decode(u32int *output, uchar *input, ulong len)
 
 	for(e = input+len; input < e; input += 4)
 		*output++ = input[0] | (input[1] << 8) |
-			(input[2] << 16) | (input[3] << 24);
+			(input[2] << 16) | ((u32int)input[3] << 24);
 }

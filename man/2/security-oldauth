@@ -241,6 +241,6 @@ to a file. It returns -1 if the write operation fails, 0 otherwise.
 .SH SOURCE
 .B /appl/lib/oldauth.b
 .SH SEE ALSO
-.IR crypt-intro (2),
+.IR keyring-intro (2),
 .IR ipints (2),
 .IR security-intro (2)

@@ -120,6 +120,33 @@ is an empty or
 .B nil
 string or an explanation of the problem.
 .PP
+A client whose
+.B read
+or
+.B write
+is interrupted before the server has replied
+(it is killed, or its 9P request is flushed)
+stops waiting.
+A reply the server sends afterwards is not an error and does not block,
+and reaches nobody; it is never given to a later request,
+since each has a reply channel of its own.
+A server that must know (one that hands out a stream,
+where a piece given to a client that has gone is lost)
+can find out by receiving from the reply channel without waiting:
+once the request has been given up the channel holds
+.B "(nil, \[dq]interrupted\[dq])"
+(for a write,
+.BR "(0, \[dq]interrupted\[dq])" ).
+.IP
+.EX
+alt{
+<-rc =>
+	;	# the reader has gone: keep the data for the next
+* =>
+	rc <-= (data, nil);
+}
+.EE
+.PP
 The
 .I fid
 received by the server can be used to manage the multiplexing of multiple

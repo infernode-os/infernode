@@ -1,0 +1,162 @@
+.TH KEYRING-RSA 2
+.SH NAME
+keyring: RSApk, RSAsk, RSAsig, DSApk, DSAsk, DSAsig, EGpk, EGsk, EGsig \- specific public key systems
+.SH SYNOPSIS
+.EX
+include "keyring.m";
+keyring := load Keyring Keyring->PATH;
+IPint: import keyring;
+
+RSApk: adt {
+    n:  ref IPint;    # modulus
+    ek: ref IPint;    # exponent (encryption key)
+
+    encrypt: fn(k: self ref RSApk, m: ref IPint): ref IPint;
+    verify:  fn(k: self ref RSApk, sig: ref RSAsig, m: ref IPint): int;
+};
+
+RSAsk: adt {
+    pk: ref RSApk;
+    dk: ref IPint;    # exponent (decryption key)
+    p:  ref IPint;
+    q:  ref IPint;
+    kp: ref IPint;    # dk mod p-1
+    kq: ref IPint;    # dk mod q-1
+    c2: ref IPint;    # 1/p mod q
+
+    gen:     fn(nlen: int, elen: int, nrep: int): ref RSAsk;
+    fill:    fn(n: ref IPint, e: ref IPint, d: ref IPint,
+                p: ref IPint, q: ref IPint): ref RSAsk;
+    decrypt: fn(k: self ref RSAsk, m: ref IPint): ref IPint;
+    sign:    fn(k: self ref RSAsk, m: ref IPint): ref RSAsig;
+};
+
+DSAsk: adt {
+    pk:     ref DSApk;    # p, q, alpha, key
+    secret: ref IPint;
+
+    gen:  fn(oldpk: ref DSApk): ref DSAsk;
+    sign: fn(k: self ref DSAsk, m: ref IPint): ref DSAsig;
+};
+
+EGsk: adt {
+    pk:     ref EGpk;     # p, alpha, key
+    secret: ref IPint;
+
+    gen:  fn(nlen: int, nrep: int): ref EGsk;
+    sign: fn(k: self ref EGsk, m: ref IPint): ref EGsig;
+};
+.EE
+.SH DESCRIPTION
+.IR Keyring-gensk (2)
+describes functions that generate public/private key pairs given an algorithm name
+and a key length, and
+.IR keyring-sha1 (2)
+the signing of a digest with such a key.
+These adts give the three older public key systems as numbers
+.RB ( IPint s):
+.BR DSApk ,
+.B EGpk
+and the three signature adts
+.RB ( RSAsig
+is one number,
+.BR n ;
+the others are
+.B r
+and
+.BR s )
+are declared in
+.BR keyring.m .
+.PP
+.B RSAsk.gen
+generates an RSA key.
+.I Nlen
+gives the length of the key modulus in bits;
+.I elen
+gives the public exponent's length in bits (it is odd and has that many bits:
+FIPS 186-5 wants it above 2\u\s-216\s0\d, which 17 gives); and
+.I nrep
+is the number of repetitions of the Miller-Rabin primality test (0 gives the default, currently 18).
+.PP
+The RSA private key includes some extra values to speed computation.
+.B Gen
+provides those values but keys imported from other systems might not.
+Given the essential numbers of an RSA private key,
+.B RSAsk.fill
+returns a key with the extra values.
+It returns nil when
+.I p
+and
+.I q
+are equal or not prime,
+.I n
+is not their product, a value is negative,
+.I e
+times
+.I d
+is not 1 modulo the least common multiple of
+.IR p \-1
+and
+.IR q \-1
+(RFC 8017),
+or
+.I e
+is 1 modulo it (such a key changes nothing).
+A key's numbers may be at most 65536 bits long.
+.PP
+.B RSApk.encrypt
+raises a message
+.I m
+to the public exponent, and
+.B RSAsk.decrypt
+and
+.B RSAsk.sign
+to the private one.
+A message, ciphertext or signature must be a number from 0 to one less
+than the key's modulus (RFC 8017): for any other the operations have no
+result (nil), and a signature does not verify.
+The private operation checks its result against the public key before returning it,
+and has none when the private key's parts do not agree.
+It is done in constant time for the key
+(no step's time or address follows the primes, the exponents or the number operated on),
+and on a number blinded with a random one drawn for each call.
+.PP
+.B DSAsk.gen
+generates a DSA key.
+If
+.I oldpk
+is not nil it takes the new key's modulus and group order from that key;
+otherwise it generates a new pair of primes.
+.B EGsk.gen
+generates an ElGamal key with a modulus of
+.I nlen
+bits.
+.PP
+A DSA, ElGamal or ECDSA signature's nonce is made as RFC 6979 makes it,
+from the private key, the number signed and 32 random bytes drawn for the signature
+(the RFC's section 3.6):
+a random number generator that repeats does not make two signatures with one nonce.
+DSA and ECDSA sign in constant time for the key and the nonce;
+ElGamal's arithmetic modulo
+.IR p \-1
+is general, on blinded numbers.
+The
+.B sign
+functions have no result (nil) when the key's group is not one.
+.SH SOURCE
+.B /libinterp/keyring.c
+.br
+.B /libsec/rsa*.c
+.br
+.B /libsec/dsa*.c
+.br
+.B /libsec/eg*.c
+.br
+.B /libsec/nonce.c
+.br
+.B /libmp/mpexp.c
+.SH SEE ALSO
+.IR keyring-intro (2),
+.IR keyring-gensk (2),
+.IR keyring-sha1 (2),
+.IR ipints (2)

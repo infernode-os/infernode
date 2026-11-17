@@ -6,7 +6,7 @@
 void
 mpleft(mpint *b, int shift, mpint *res)
 {
-	int d, l, r, i, otop;
+	int d, l, r, i, otop, bits;
 	mpdigit this, last;
 
 	res->sign = b->sign;
@@ -27,14 +27,14 @@ mpleft(mpint *b, int shift, mpint *res)
 	// b and res may be the same so remember the old top
 	otop = b->top;
 
-	// the sum below is an int: wrapped, no room was made for the
-	// digits and they were stored anyway
-	if(shift > (int)(~0U>>1) - otop*Dbits)
-		sysfatal("mpleft: shift of %d bits is too large", shift);
+	// the sum below was an int: wrapped, no room was made for the
+	// digits and they were stored anyway (and a guard that let the sum
+	// reach the largest int left DIGITS to wrap it)
+	bits = mpsizebits(otop, shift, "mpleft");
 
 	// shift
-	mpbits(res, otop*Dbits + shift);	// overkill
-	res->top = DIGITS(otop*Dbits + shift);
+	mpbits(res, bits);	// overkill
+	res->top = DIGITS(bits);
 	d = shift/Dbits;
 	l = shift - d*Dbits;
 	r = Dbits - l;

@@ -22,6 +22,35 @@ init()
 	sys = load Sys Sys->PATH;
 }
 
+# The encoding is Auditchain->value's, kept here so that an emitter needs
+# only this module.
+value(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(!blank(c) && c != '=' && c != '%')
+			r[len r] = c;
+		else if(c < 16r100)
+			r += sys->sprint("%%%.2X", c);
+		else
+			r += sys->sprint("%%u%.4X", c);
+	}
+	return r;
+}
+
+blank(c: int): int
+{
+	if(c <= ' ' || (c >= 16r7F && c <= 16rA0))
+		return 1;
+	if(c < 16r1680)
+		return 0;
+	return c == 16r1680 || (c >= 16r2000 && c <= 16r200B) ||
+		c == 16r200E || c == 16r200F ||
+		(c >= 16r2028 && c <= 16r202F) || c == 16r205F ||
+		(c >= 16r2066 && c <= 16r2069) || c == 16r3000 || c == 16rFEFF;
+}
+
 log(source, event, msg: string): int
 {
 	fd := sys->open(LOGFILE, Sys->OWRITE);

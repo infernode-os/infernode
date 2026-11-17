@@ -5,7 +5,10 @@ implement SdrdspTest;
 # 8-bit samples summed and scaled; a filter's impulse response, its gain
 # where it passes and where it stops, and its state carried from one
 # call to the next; a rate changed by averaging; sound as 16-bit
-# little-endian, the level taken out, clipped; rates as sdrfs writes them.
+# little-endian, the level taken out, clipped; rates as sdrfs writes them;
+# headers as sdrfs's iq and the demodulators' sound carry them (audio(6)'s
+# form): made padded to 4 bytes at every length, read back whole, waited
+# for while cut short, refused when they are none.
 #
 
 include "sys.m";
@@ -232,6 +235,112 @@ testRate(t: ref T)
 	t.asserteq(dsp->rate("-5"), 0, "negative");
 }
 
+# a header's lines, each its words joined by blanks, joined by |
+hjoin(h: list of list of string): string
+{
+	s := "";
+	for(; h != nil; h = tl h) {
+		l := "";
+		for(w := hd h; w != nil; w = tl w) {
+			if(l != "")
+				l += " ";
+			l += hd w;
+		}
+		if(s != "")
+			s += "|";
+		s += l;
+	}
+	return s;
+}
+
+testHeader(t: ref T)
+{
+	# every length of a last line: padded to 4, read back as made
+	v := "1";
+	for(k := 1; k < 10; k++) {
+		lines := "rate 2400000" :: "enc cu8" :: "freq " + v :: nil;
+		b := dsp->mkheader(lines);
+		t.asserteq(len b % 4, 0, "mkheader pads to a multiple of 4, freq of " + string k + " digits");
+		(hl, h, e) := dsp->header(b, len b);
+		t.assertnil(e, "its own header read");
+		t.asserteq(hl, len b, "the whole of it");
+		t.assertseq(hjoin(h), "rate 2400000|enc cu8|freq " + v, "its lines, the blank one left out");
+		# with samples after it, the same length
+		c := array[len b + 3] of byte;
+		c[0:] = b;
+		c[len b:] = array[] of {byte '\n', byte 0, byte 255};
+		(hl, nil, e) = dsp->header(c, len c);
+		t.asserteq(hl, len b, "the header ends where it ends, samples after it");
+		# cut short anywhere: wait for more
+		for(i := 0; i < len b; i++) {
+			(hl, nil, e) = dsp->header(b, i);
+			if(hl != 0 || e != nil) {
+				t.error(sys->sprint("cut at %d of %d: %d %q", i, len b, hl, e));
+				break;
+			}
+		}
+		v += string (k + 1);
+	}
+	b := dsp->mkheader("rate 2400000" :: "enc cu8" :: "freq 99500000" :: nil);
+	(nil, h, nil) := dsp->header(b, len b);
+	t.assertseq(dsp->hdrval(h, "freq"), "99500000", "hdrval");
+	t.assertnil(dsp->hdrval(h, "chans"), "hdrval of a verb not there");
+	(r, f, e) := dsp->iqformat(h);
+	t.assertnil(e, "iqformat");
+	t.asserteq(r, 2400000, "iqformat's rate");
+	t.assert(f == big 99500000, "iqformat's freq");
+	(nil, f, nil) = dsp->iqformat(hd h :: hd tl h :: nil);	# rate, enc: no freq
+	t.assert(f == big -1, "no freq: -1");
+}
+
+testHeaderRefused(t: ref T)
+{
+	no := array[] of {
+		("raw samples", ""),
+		("not rate first", "chans 2\n\n"),
+		("a control character", "rate 8000\n\u0001\n\n"),
+		("not padded", "rate 8000\n\n"),
+	};
+	for(i := 0; i < len no; i++) {
+		(what, s) := no[i];
+		b := array of byte s;
+		if(what == "raw samples")
+			b = array[] of {byte 16r80, byte 16r7f, byte 16r81, byte 16r7e};
+		(hl, nil, e) := dsp->header(b, len b);
+		t.assert(hl == 0 && e != nil, what + " refused: " + e);
+	}
+	# no empty line in Maxheader bytes
+	b := array[Sdrdsp->Maxheader] of {* => byte 'x'};
+	b[0:] = array of byte "rate ";
+	(hl, nil, e) := dsp->header(b, len b);
+	t.assert(hl == 0 && e != nil, "no end in Maxheader bytes refused");
+	(hl, nil, e) = dsp->header(b, len b - 1);
+	t.assert(hl == 0 && e == nil, "one byte short of Maxheader: waited for");
+
+	bad := array[] of {
+		("rate fast" :: "enc cu8" :: nil, "bad rate"),
+		("rate 2400000" :: nil, "no enc"),
+		("rate 2400000" :: "enc s16" :: nil, "not cu8"),
+		("rate 2400000" :: "enc cu8" :: "freq 99.5M" :: nil, "bad freq"),
+	};
+	for(i = 0; i < len bad; i++) {
+		(lines, want) := bad[i];
+		hb := dsp->mkheader(lines);
+		(nil, h, nil) := dsp->header(hb, len hb);
+		(nil, nil, fe) := dsp->iqformat(h);
+		if(fe == nil || !contains(fe, want))
+			t.error(sys->sprint("iqformat %q: %q, want %q", hjoin(h), fe, want));
+	}
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -254,6 +363,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Resamp", testResamp);
 	run("Pcm", testPcm);
 	run("Rate", testRate);
+	run("Header", testHeader);
+	run("HeaderRefused", testHeaderRefused);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

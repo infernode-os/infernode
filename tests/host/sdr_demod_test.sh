@@ -5,17 +5,23 @@
 # them, through tests/sdr/demod.sh: a tone sent by wide FM, narrow FM and
 # AM comes out as that tone, clean (its SINAD), at the rate and in the
 # channels asked for, with noise 40 dB down and a second carrier as
-# strong 400 kHz up that must not be heard; bad rates and bandwidths
-# refused; and the same through sdrfs(4) from a fake rtl_tcp
-# (tests/host/sdr/fake_rtl_tcp.py) in real time, nothing dropped.  Run
-# under the JIT and the interpreter.
+# strong 400 kHz up that must not be heard.  The rate in is the
+# samples' header's (#1094): sdr/rawiq gives a capture one, a header
+# split across reads is read whole, the sound starts with audio(6)'s
+# header (rate, chans, bits, enc) or with -R not, auplay takes that
+# header for audioctl through a pipe, and sdr/iqhdr gives a recording's
+# header as ctl commands.  Refused: input with no header, an enc not
+# cu8, -r (gone), bad rates and bandwidths.  Then through sdrfs(4) from
+# a fake rtl_tcp (tests/host/sdr/fake_rtl_tcp.py) in real time, nothing
+# dropped, and sdr/iqhdr retuning it.  Run under the JIT and the
+# interpreter.
 #
 set -e
 . "$(dirname "$0")/common.sh"
 set -u
 
 [ -x "$EMU" ] || { echo "SKIP: emulator not found at $EMU"; exit 77; }
-for f in dis/sdr/fm.dis dis/sdr/am.dis dis/lib/sdrdsp.dis dis/sdrfs.dis; do
+for f in dis/sdr/fm.dis dis/sdr/am.dis dis/sdr/rawiq.dis dis/sdr/iqhdr.dis dis/lib/sdrdsp.dis dis/sdrfs.dis; do
 	[ -f "$ROOT/$f" ] || { echo "SKIP: $f not built"; exit 77; }
 done
 command -v python3 >/dev/null || { echo "SKIP: python3 not found"; exit 77; }
@@ -70,10 +76,27 @@ size() {	# what file rate chans secs
 	fi
 }
 
+# a sound's audio(6) header is want (lines joined by |), padded to a
+# multiple of 4 bytes; the sound after it into file.pcm
+auhdr() {	# file want
+	python3 -I - "$D/$1" "$2" <<'EOF'
+import sys
+b = open(sys.argv[1], "rb").read()
+i = b.find(b"\n\n")
+if i < 0:
+    print("no header"); sys.exit(1)
+h = b[:i + 2]
+lines = [l.strip() for l in h.decode().split("\n") if l.strip()]
+open(sys.argv[1][:-3] + ".pcm", "wb").write(b[i + 2:])
+if "|".join(lines) != sys.argv[2] or len(h) % 4:
+    print("header %r (%d bytes)" % (h, len(h))); sys.exit(1)
+EOF
+}
+
 cd "$ROOT"
 for c in 1 0; do
 	echo "-c$c"
-	rm -f "$D"/*.pcm "$D"/err.* "$D"/status.*
+	rm -rf "$D"/*.pcm "$D"/*.au "$D"/*.iq "$D"/err.* "$D"/status.* "$D"/dev "$D"/iqhdr.out "$D"/ctl.*
 	with_timeout 120 "$EMU" -c$c -r"$ROOT" /dis/sh.dis /tests/sdr/demod.sh "/$T" "$PR" \
 		</dev/null >"$D/log" 2>&1 || true
 	grep -q '^R done' "$D/log" || { fail "the driver did not finish"; tail -20 "$D/log"; continue; }
@@ -88,13 +111,37 @@ for c in 1 0; do
 	check "AM, one channel" am.pcm 22050 1 800 40
 	size "AM: 2 seconds of 22050 mono" am.pcm 22050 1 2
 
+	m=$(auhdr wfm.au 'rate 48000|chans 2|bits 16|enc pcm') &&
+		pass "wide FM: the sound's header says its format" || fail "wfm.au: $m"
+	check "wide FM, after its header" wfm.pcm 48000 2 1000 50
+	m=$(auhdr am.au 'rate 22050|chans 1|bits 16|enc pcm') &&
+		pass "AM: the sound's header, one channel" || fail "am.au: $m"
+	check "AM, after its header" am.pcm 22050 1 800 40
+	check "AM, its header read a byte at a time" amsplit.pcm 22050 1 800 40
+	size "AM: the split header's 2 seconds" amsplit.pcm 22050 1 2
+	[ "$(f iqhdr.out | tr '\n' '|')" = "rate 2400000|enc cu8|freq 99500000|" ] &&
+		pass "sdr/iqhdr: the header as commands" || fail "iqhdr: $(f iqhdr.out | tr '\n' '|')"
+	[ "$(f dev/audioctl | tr -s ' \n' '  ')" = "rate 44100 chans 2 bits 16 enc pcm " ] &&
+		[ "$(wc -c < "$D/dev/audio")" -gt 300000 ] &&
+		pass "auplay through a pipe: the header to audioctl, the sound to audio" ||
+		fail "auplay: audioctl '$(f dev/audioctl)', audio $(wc -c < "$D/dev/audio" 2>/dev/null) bytes"
+
 	has err.low "rate in 10000 too low" && pass "a rate in too low refused" || fail "low: '$(f err.low)'"
+	has err.nohdr "no header: it does not start with rate" && pass "samples with no header refused" || fail "nohdr: '$(f err.nohdr)'"
+	has err.empty "no header: no input" && pass "no input refused" || fail "empty: '$(f err.empty)'"
+	has err.enc "enc s16, not cu8" && pass "an enc not cu8 refused" || fail "enc: '$(f err.enc)'"
+	has err.r "usage" && pass "-r is gone: the rate is the header's" || fail "-r: '$(f err.r)'"
 	has err.rate "usage" && pass "a bad rate refused" || fail "rate: '$(f err.rate)'"
 	has err.bw "usage" && pass "a bad bandwidth refused" || fail "bw: '$(f err.bw)'"
+	has err.iqhdr "no header" && pass "sdr/iqhdr: no header refused" || fail "iqhdr: '$(f err.iqhdr)'"
 
+	m=$(auhdr live.au 'rate 48000|chans 2|bits 16|enc pcm') &&
+		pass "through sdrfs: the rate taken from iq's header" || fail "live.au: $m"
 	check "through sdrfs, in real time" live.pcm 48000 2 1000 45
 	has status.live "dropped=0 " && has status.live "readers=1 " &&
 		pass "through sdrfs: nothing dropped" || fail "status: $(f status.live)"
+	has ctl.iqhdr "^rate 2400000$" && has ctl.iqhdr "^freq 99500000$" &&
+		pass "sdr/iqhdr retunes sdrfs to a recording's" || fail "ctl: $(f ctl.iqhdr | tr '\n' '|')"
 done
 
 [ $failed = 0 ] && echo "sdr_demod_test: PASS"

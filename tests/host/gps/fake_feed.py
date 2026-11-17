@@ -21,6 +21,12 @@
                                  GDL 90 heartbeat, own-ship and a traffic
                                  report, the specification's N825V
   fake_feed.py garmin PATH       write Garmin Aviation output, two groups
+  fake_feed.py udphostile PORT   send to PORT what anyone on the network
+                                 can: a fix, then sentences written to end
+                                 or stop a parser (an AIS part 1 of
+                                 200000000, headings and courses of 1e20,
+                                 numbers past any field), a bad checksum,
+                                 bytes that are no sentence, then the fix
 """
 import socket
 import sys
@@ -155,6 +161,30 @@ def nmeadatagrams():
     ]]
 
 
+def hostiledatagrams():
+    now = time.time()
+    t = time.strftime("%H%M%S", time.gmtime(now)) + ".%02d" % int((now % 1) * 100)
+    d = time.strftime("%d%m%y", time.gmtime(now))
+    big = "1" + "0" * 20
+    fix = cs("GPRMC,%s,A,5332.5920,N,00959.2560,E,6.0,90.0,%s,2.0,E,A" % (t, d)).encode()
+    return [fix] + [x.encode() if isinstance(x, str) else x for x in [
+        "!AIVDM,200000000,1,0,A,0,0\r\n",
+        "!AIVDM,99999999999999999999,1,0,A,0,0\r\n",
+        "$GPHDT,%s,T\r\n" % big,
+        "$GPHDT,-%s,T\r\n" % big,
+        "$HCHDG,%s,,,,\r\n" % big,
+        "$HCHDM,%s,M\r\n" % big,
+        "$PFLAA,0,100,100,10,2,DD8F12,%s,,30,-1.4,1\r\n" % big,
+        "$GPVTG,%s,T,,M,%s,N,%s,K,A\r\n" % (big, big, big),
+        "$GPGGA,%s,5332.5920,N,00959.2560,E,1,9%s,0.8,1%s,M,45.0,M,,\r\n" % (t, "0" * 30, "0" * 300),
+        "$GPGSV,999999999,1,01,%s,10,100,30\r\n" % big,
+        "$GPRMC,120000,A,4047.0400,N,07425.0000,W,5.0,90.0,311026,,,A*00\r\n",
+        bytes(range(256)),
+        b"$" + b"A" * 3000,
+        b"",
+    ]] + [fix]
+
+
 def gdldatagrams():
     hb = gdlframe(bytes([0x00, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00]))
     own = gdlframe(report(10, 0xA1B2C3, 40.0, -74.0, 3000, 100, 0, 90.0, 9, 1, "N123AB"))
@@ -194,5 +224,7 @@ if __name__ == "__main__":
         udpsend(int(sys.argv[2]), nmeadatagrams)
     elif mode == "udpgdl90":
         udpsend(int(sys.argv[2]), gdldatagrams)
+    elif mode == "udphostile":
+        udpsend(int(sys.argv[2]), hostiledatagrams)
     else:
         serve(mode, sys.argv[2])

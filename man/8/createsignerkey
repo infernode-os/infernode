@@ -1,10 +1,12 @@
 .TH CREATESIGNERKEY 8
 .SH NAME
-createsignerkey \- create signer key on authentication server
+createsignerkey, mkauthinfo \- create signer key on authentication server, and keys signed by it
 .SH SYNOPSIS
 .B auth/createsignerkey
 [
 .BI -a " alg"
+] [
+.B -c
 ] [
 .BI -f " keyfile"
 ] [
@@ -13,6 +15,17 @@ createsignerkey \- create signer key on authentication server
 .BI -b " bitsize"
 ]
 .I name
+.PP
+.B auth/mkauthinfo
+[
+.BI -k " keyspec"
+] [
+.BI -e " expiry"
+]
+.I user
+[
+.I keyfile
+]
 .SH DESCRIPTION
 .I Createsignerkey
 creates public and private keys that are used by a server acting as `signer' to generate certificates for users.
@@ -27,11 +40,17 @@ is converted to seconds since the epoch
 .IR daytime (2))
 and stored in the
 .IR keyfile ;
-by default the server's certificate never expires.
+the certificate is good until the last second of that day, local time.
+A date that is not one (month 00, 31 February), one already past,
+and a year from 2038 on, which an expiry time cannot hold, are refused.
+By default the server's certificate never expires.
 .PP
-The key will be
+For the algorithms that take a size, the key will be
 .I bitsize
-long (default: 512 bits) with a minimum of 32 bits and a maximum of 4096 bits.
+long (default: 2048 bits) with a minimum of 2048 bits and a maximum of 4096 bits;
+.B -b
+with an algorithm whose keys have one size is refused.
+(The minimum was once 32 bits, and a 32-bit signer's own certificate did not verify.)
 .I Keyfile
 is the file in which the server stores its keys;
 the default is
@@ -41,25 +60,86 @@ and many authentication programs such as
 by default expect to find their server key there.
 Creating a signer's default key afresh typically invalidates all certificates previously issued by that signer,
 because their signatures will not verify.
-The mode of the
+The
 .I keyfile
-should be set to be readable only by the user running
-those programs.
+holds the signer's secret key and
+should be readable only by the user running
+those programs:
+a new file is made mode 600, and a file that is already there
+has the permissions of other users taken from it before the key is written
+(if they cannot be,
+.I createsignerkey
+writes nothing).
 .PP
 The
 .B -a
-option specifies the signature algorithm.
-Currently
-.I alg
-can be either
+option specifies the signature algorithm, one of
+.BR ed25519
+(the default),
+.BR mldsa65 ,
+.BR mldsa87 ,
+.BR slhdsa192s ,
+.BR slhdsa256s ,
+.BR rsa ,
 .B elgamal
 or
-.BR rsa .
-RSA keys are now used by default.
+.BR dsa .
+.PP
+The
+.B -c
+option, or the environment variable
+.B cnsamode
+set, is CNSA 2.0 mode, and the mode is a rule for the key made, not a default:
+the key is
+.BR mldsa87 ,
+its certificate is hashed with SHA-384, and the Diffie-Hellman modulus written
+with it is RFC 3526's 3072-bit group (2048 bits otherwise).
+In the mode an
+.B -a
+naming any other algorithm, before or after
+.BR -c ,
+and any
+.BR -b ,
+are refused, saying why, and nothing is written.
+(The mode once only chose the algorithm when none was given:
+.B "-a rsa -b 512"
+made a 512-bit RSA signer in it.)
+.PP
+.I Mkauthinfo
+makes a key for
+.I user
+like the signer's and a certificate for it signed by the key
+.I keyspec
+names (default
+.BR key=default ,
+see
+.IR security-auth (2)),
+good until the end of the day
+.I expiry
+or without limit, and writes both to
+.I keyfile
+(default: standard output) in the form of
+.IR keytext (6),
+mode 600.
+In CNSA mode
+.I mkauthinfo
+signs only with a key file that is CNSA's whole
+(ML-DSA-87 keys, a certificate under SHA-384 or SHA-512, a modulus of 3072 bits or more)
+and says what is wrong with one that is not.
+.PP
+An
+.B elgamal
+signer key made by an earlier version is no longer accepted
+(a certificate could be forged from its public half: see
+.IR keyring-gensk (2)),
+and neither are the keys users were given under it:
+make the signer's key again and have the users enrol again.
 .SH FILES
 .B /keydb/signerkey
 .SH SOURCE
 .B /appl/cmd/auth/createsignerkey.b
+.br
+.B /appl/cmd/auth/mkauthinfo.b
 .SH SEE ALSO
 .IR security-auth (2),
 .IR keyring-gensk (2),

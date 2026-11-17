@@ -24,15 +24,21 @@ implement ToolSpawn;
 # Tool modules are shared (read-only after init — no mutable global state).
 #
 # Child isolation steps (same as v3):
-#   1. pctl(NEWPGRP)   - Empty srv registry
+#   0. (parent) open the child's model session and its files
+#   1. pctl(NEWPGRP)   - Its own process group; the parent takes its ctl file
 #   2. pctl(FORKNS)    - Fork parent's restricted namespace
 #   3. pctl(NEWENV)    - Empty environment
-#   4. Open LLM FDs    - While /mnt/llm still accessible
-#   5. restrictns()    - Further bind-replace restrictions
+#   5. restrictchildns() - Further bind-replace restrictions; no tool
+#                        server, no model service
 #   6. verifysafefds() - Verify FDs 0-2 are safe
 #   7. pctl(NEWFD)     - Prune all other FDs
 #   8. pctl(NODEVS)    - Block #U/#p/#c
 #   9. samod->runloop() - Execute task using dedicated SubAgent instance
+#
+# A subagent's life is its parent's to end, and it is ended: when it has
+# answered, at its timeout, or (one scheduled with at= or every=) when the
+# tool server that started it has gone.  Ending it kills its process
+# group and every group made below it, and closes its model session.
 #
 
 include "sys.m";
@@ -63,8 +69,9 @@ include "../subagent.m";
 include "agentlib.m";
 	agentlib: AgentLib;
 
+include "audit.m";
+
 include "auditprov.m";
-	ap: AuditProv;
 
 ToolSpawn: module {
 	init: fn(): string;
@@ -100,7 +107,6 @@ PreloadedTool: adt {
 	name: string;
 	mod:  Tool;
 };
-preloadedtools: list of ref PreloadedTool;
 
 # Result from a collector goroutine
 ResultMsg: adt {
@@ -117,10 +123,14 @@ UI_MOUNT:           con "/mnt/ui";
 # before FORKNS and passes the fd into subagent->runloop. /usr/inferno/...
 # is unreachable from inside the restricted namespace; opening before
 # restriction is the only way to give subagents an observable record.
-# Under /tmp/veltro — the ONLY tmp subtree nsconstruct keeps writable after the
-# restriction (it allows just "veltro/" under /tmp and pre-creates it). The old
-# /usr/inferno path isn't creatable post-restriction, so logs were silently lost.
-SUBAGENT_LOG_BASE:  con "/tmp/veltro/subagents";
+# In the activity's scratch, the one part of the tool call's /tmp that is
+# kept: /tmp/veltro itself is, for a tool call, a directory made for the
+# call and removed after it, and a log made there went with it.
+SUBAGENT_LOG_BASE:  con "/tmp/veltro/scratch/subagents";
+
+# Where the provenance store is (auditventi), read where the tool server
+# starts: a tool call's environment has only the session's name in it.
+storeaddr := "";
 
 inited := 0;
 
@@ -159,51 +169,29 @@ init(): string
 	agentlib = load AgentLib AgentLib->PATH;
 	if(agentlib != nil)
 		agentlib->init();
-	# Provenance emitter (INFR-355). Loaded in the parent namespace like
-	# agentlib; optional — an install without auditing leaves ap nil and
-	# spawn behaves exactly as before.
-	ap = load AuditProv AuditProv->PATH;
-	if(ap != nil && ap->init() != nil)
-		ap = nil;
+	sa := readfile("/env/auditventi");
+	if(sa != nil) {
+		while(len sa > 0 && (sa[len sa - 1] == '\n' || sa[len sa - 1] == 0))
+			sa = sa[0:len sa - 1];
+		storeaddr = sa;
+	}
+	schedlock = chan[1] of int;
 	inited = 1;
 	return nil;
 }
 
 # ---- Provenance (INFR-355) ----
 
-provinited := 0;
-provrequired := 0;
-
-# Seal one parent-side provenance record. Lazy-attaches the content
-# store on first use. Optional auditing may degrade to content=unstored;
-# required auditing treats either store or sink failure as fatal.
-provemit(event, msg: string, payload: array of byte)
+# Seal one parent-side provenance record, with the call's own emitter.
+# Optional auditing may degrade to content=unstored; required auditing
+# treats either store or sink failure as fatal: -1.
+provemit(prov: AuditProv, required: int, event, msg: string, payload: array of byte): int
 {
-	if(ap == nil)
-		if(provrequired)
-			raise "fail:audit";
-		else
-			return;
-	if(!provinited) {
-		provinited = 1;
-		aerr := ap->attach(nil);
-		if(aerr != nil && provrequired)
-			raise "fail:audit";
-	}
-	if(ap->log("veltro", event, msg, payload) != 0 && provrequired)
-		raise "fail:audit";
-}
-
-# Dial a content-store connection for one child. The fd is handed to
-# runchild, kept across NEWFD, and handshaken inside the restricted
-# namespace (subagent setprov/attachfd). nil is accepted only when auditing
-# is optional; a required child refuses to start without the store.
-provdial(): ref Sys->FD
-{
-	if(ap == nil)
-		return nil;
-	(fd, nil) := ap->dialraw(nil);
-	return fd;
+	if(prov == nil)
+		return -required;
+	if(prov->log("veltro", event, msg, payload) != 0 && required)
+		return -1;
+	return 0;
 }
 
 # Serialize what a child was granted, for the subcaps record payload.
@@ -245,7 +233,7 @@ doc(): string
 		"Each -- section defines one subagent (max " + string MAX_SUBAGENTS + ").\n" +
 		"The :: separator between spec and task is REQUIRED in every section.\n\n" +
 		"Global options (before the first --):\n" +
-		"  timeout=N     Seconds before each subagent is killed (default: 300)\n\n" +
+		"  timeout=N     Seconds before each subagent is stopped (default: 300)\n\n" +
 		"Per-subagent options (in each -- section, before ::):\n" +
 		"  tools=        Comma-separated tools to grant (REQUIRED)\n" +
 		"  paths=        Comma-separated paths to expose\n" +
@@ -256,8 +244,9 @@ doc(): string
 		"  system=       System prompt string (overrides agenttype)\n" +
 		"  at=           Sleep until RFC3339 instant (e.g. 2026-05-10T09:00:00Z)\n" +
 		"                then run a single iteration (returns 'scheduled' immediately)\n" +
-		"  every=        Sleep <int><s|m|h|d> between iterations, looping forever\n" +
-		"                until killed (echo kill > /prog/<pid>/ctl)\n\n" +
+		"  every=        Sleep <int><s|m|h|d> between iterations, looping until\n" +
+		"                the agent's tool server ends or its group is killed\n" +
+		"                (the result names it); at most " + string MAXSCHED + " scheduled at once\n\n" +
 		"Examples:\n" +
 		"  Spawn -- tools=read,list paths=/appl :: List all .b files\n" +
 		"  Spawn -- tools=read,list agenttype=explore paths=/appl :: Find handlers\n" +
@@ -269,6 +258,9 @@ doc(): string
 		"  Multiple: === Subagent N: <task> === blocks, one per agent.\n\n" +
 		"Security:\n" +
 		"  Each subagent gets its own tools, paths, and LLM session.\n" +
+		"  A path is granted only inside one this agent holds (/tool/paths).\n" +
+		"  sms, dial and task are not given to a subagent: what they do needs\n" +
+		"  the user's approval, which only this agent's own call asks for.\n" +
 		"  Each parallel child gets a fresh SubAgent instance (no data races).\n" +
 		"  Environment is empty. Capability attenuation: child can only narrow.\n" +
 		"  Task text must not contain ' -- ' (section separator).";
@@ -297,6 +289,21 @@ schema(): string
 		"}" +
 	"}";
 }
+
+# One subagent of a call, as its parent holds it.
+Child: adt {
+	idx:	int;
+	pid:	int;			# its process group's leader
+	kfd:	ref Sys->FD;		# /prog/pid/ctl: killtree ends it and all it started
+	sess:	string;			# its model session, closed with it
+	rfd:	ref Sys->FD;		# its result; end of file when it has gone
+	marker:	string;			# scheduled: what names it in the Activity panel
+};
+
+# Subagents scheduled (at=, every=) by this tool server and still there.
+MAXSCHED: con 8;
+nsched := 0;
+schedlock: chan of int;
 
 exec(args: string): string
 {
@@ -327,16 +334,62 @@ exec(args: string): string
 		return "error: " + perr;
 	if(specs == nil)
 		return "error: no subagent specs provided";
-	nameerr := validatespecnames(specs);
+	# Everything that can refuse the call is asked before any subagent is
+	# started: a later section's refusal used to come after the earlier
+	# sections' subagents were running, and they were left.
+	nameerr := validatespecs(specs);
 	if(nameerr != "")
 		return "error: " + nameerr;
 
 	# Count specs
 	N := 0;
+	nsch := 0;
 	{
 		cntlist := specs;
-		for(; cntlist != nil; cntlist = tl cntlist)
+		for(; cntlist != nil; cntlist = tl cntlist) {
 			N++;
+			if((hd cntlist).at_ms > 0 || (hd cntlist).every_ms > 0)
+				nsch++;
+		}
+	}
+
+	# Provenance (INFR-355).  Whether the install requires auditing is
+	# the tool server's word (it can see the switch; this name space has
+	# no /usr), and the sink is the append file the server bound here.
+	# Required, with no sink or no content store, nothing is started.
+	(provrequired, swerr) := auditswitch();
+	if(swerr != nil)
+		return "error: " + swerr;
+	auditing := sys->stat(Audit->LOGFILE).t0 >= 0;
+	if(provrequired && !auditing)
+		return "error: auditing is required but /mnt/audit/log is unavailable";
+	prov: AuditProv;
+	if(auditing) {
+		# An emitter of this call's own: its connection to the store is
+		# a descriptor of this call.
+		prov = load AuditProv AuditProv->PATH;
+		if(prov != nil && prov->init() != nil)
+			prov = nil;
+		aerr := "cannot load the provenance module";
+		if(prov != nil)
+			aerr = prov->attach(storeaddr);
+		if(aerr != nil && provrequired)
+			return "error: auditing is required but the provenance store cannot be reached: " + aerr;
+	}
+
+	if(nsch > 0) {
+		# A scheduled subagent ends with the tool server that started
+		# it; with none to watch, nothing would ever end it.
+		if(sys->stat("/tool/activity").t0 < 0)
+			return "error: at= and every= need the agent's tool server, which a scheduled subagent ends with";
+		schedlock <-= 1;
+		if(nsched + nsch > MAXSCHED) {
+			n := nsched;
+			<-schedlock;
+			return sys->sprint("error: too many scheduled subagents: %d are running and at most %d may", n, MAXSCHED);
+		}
+		nsched += nsch;
+		<-schedlock;
 	}
 
 	# Pre-load one fresh SubAgent instance per spec, BEFORE any namespace
@@ -350,11 +403,15 @@ exec(args: string): string
 		sscnt := specs;
 		for(; sscnt != nil; sscnt = tl sscnt) {
 			sa := load SubAgent SubAgent->PATH;
+			saerr: string;
 			if(sa == nil)
-				return sys->sprint("error: cannot load subagent: %r");
-			saerr := sa->init();
-			if(saerr != nil)
-				return "error: cannot init subagent: " + saerr;
+				saerr = sys->sprint("cannot load subagent: %r");
+			else if((saerr = sa->init()) != nil)
+				saerr = "cannot init subagent: " + saerr;
+			if(saerr != nil) {
+				unsched(nsch);
+				return "error: " + saerr;
+			}
 			samods = ref SubAgentSlot(sa) :: samods;
 		}
 	}
@@ -362,9 +419,13 @@ exec(args: string): string
 
 	# Pre-load tool modules (union of all specs' tool sets), BEFORE namespace
 	# restriction.  Tools are stateless after init() — sharing is safe.
-	toolerr := preloadmulti(specs);
-	if(toolerr != "")
+	# The list is this call's: kept in the module, a second call emptied
+	# it under the first call's children.
+	(tools, toolerr) := preloadmulti(specs);
+	if(toolerr != "") {
+		unsched(nsch);
 		return "error: " + toolerr;
+	}
 
 	# Register sub-agents as background tasks in the Activity section.
 	actid := currentactid();
@@ -388,36 +449,29 @@ exec(args: string): string
 	idx := 0;
 	speclist := specs;
 	salist := samods;
-	while(speclist != nil) {
+	scheduled := array[N] of {* => 0};
+	started: list of ref Child;
+	fatal := "";
+	while(speclist != nil && fatal == "") {
 		spec := hd speclist;
 		slot := hd salist;
 		speclist = tl speclist;
 		salist = tl salist;
+		sched := spec.at_ms > 0 || spec.every_ms > 0;
+		scheduled[idx] = sched;
 
 		# Filter out memory tool — parent agent owns memory exclusively.
 		# Subagents return results via pipe; parent persists what matters.
 		childtools := dropitem("memory", spec.tools);
-		if(spec.paths != nil && (inlist("exec", childtools) || spec.shellcmds != nil)) {
-			return "error: exec/shell subagents cannot receive path grants; use read/list/find/grep for read-only inspection or write/edit with explicit staged write grants";
-		}
 
 		# Provenance (INFR-355): when this install audits, every child gets
 		# the append-only audit sink bound into its namespace. Install
-		# policy, not a model-granted capability — added after the
-		# exec/path ban above deliberately: /mnt/audit/log is a write-only
-		# sink (auditcontrolpath keeps chain/ctl/root ungrantable), not an
-		# inspection surface.
+		# policy, not a model-granted capability: /mnt/audit/log is a
+		# write-only sink (auditcontrolpath keeps chain/ctl/root
+		# ungrantable), not an inspection surface.
 		childpaths := spec.paths;
-		auditing := 0;
-		(reqok, nil) := sys->stat("/usr/inferno/audit/on");
-		provrequired = reqok >= 0;
-		(aok, nil) := sys->stat("/mnt/audit/log");
-		if(aok >= 0) {
-			auditing = 1;
-			childpaths = "/mnt/audit/log" :: childpaths;
-		}
-		if(provrequired && !auditing)
-			return "error: auditing is required but /mnt/audit/log is unavailable";
+		if(auditing)
+			childpaths = Audit->LOGFILE :: childpaths;
 
 		caps := ref NsConstruct->Capabilities(
 			childtools,
@@ -440,47 +494,126 @@ exec(args: string): string
 
 		# Provenance (INFR-355): name the child, seal what it was asked
 		# and what it was granted, and dial it a content-store
-		# connection to carry into the restricted namespace.
+		# connection to carry into the restricted namespace.  Required
+		# and not sealed, the call stops here.
 		childid := "";
 		provfd: ref Sys->FD;
 		if(auditing) {
 			childid = sys->sprint("sub-%d-%d", batchms, idx);
-			provemit("spawn", "child=" + childid, array of byte spec.task);
-			provemit("subcaps", "child=" + childid,
-				array of byte capsmanifest(caps, spec.at_ms, spec.every_ms, timeout_ms));
-			provfd = provdial();
+			if(provemit(prov, provrequired, "spawn", "child=" + childid, array of byte spec.task) < 0 ||
+			   provemit(prov, provrequired, "subcaps", "child=" + childid,
+				array of byte capsmanifest(caps, spec.at_ms, spec.every_ms, timeout_ms)) < 0) {
+				fatal = "auditing is required and the subagent's record could not be written";
+				break;
+			}
+			if(prov != nil)
+				(provfd, nil) = prov->dialraw(storeaddr);
+			if(provfd == nil && provrequired) {
+				fatal = "auditing is required but the provenance store cannot be reached";
+				break;
+			}
 		}
 
-		# Scheduled (at= or every=): fire-and-forget. The child becomes a
-		# real, killable process visible in /prog; result collection
-		# would block well past any sane timeout (at= may be hours away;
-		# every= never returns), so we report "scheduled" immediately and
-		# do not spawn a collector. Cancellation: echo kill > /prog/$pid/ctl.
-		if(spec.at_ms > 0 || spec.every_ms > 0) {
-			# Pass nil pipe — runchild detects this and writes nothing back.
-			spawn runchild(nil, logfd, caps, spec.task, slot.mod, childid, provfd, spec.at_ms, spec.every_ms);
-			schedmsg: string;
-			if(spec.at_ms > 0)
-				schedmsg = sys->sprint("scheduled: single run in %d ms", spec.at_ms);
-			else
-				schedmsg = sys->sprint("scheduled: every %d ms (kill via /prog/<pid>/ctl)", spec.every_ms);
-			resultchan <-= ref ResultMsg(idx, schedmsg);
+		# What the child's restriction would refuse of its grants is
+		# refused before a session is opened for it, in the words the
+		# child would have used.
+		capserr := nsconstruct->checkchildcaps(caps);
+		if(capserr != nil) {
+			resultchan <-= ref ResultMsg(idx, "ERROR:namespace restriction failed: " + capserr);
+			if(sched)
+				unsched(1);
+			scheduled[idx] = 0;
+			idx++;
+			continue;
+		}
+
+		# The child's model session, opened here: its parent closes it
+		# when the child ends, however it ends.  (The child opened it,
+		# and closed it by a name its own name space no longer had:
+		# every child left one behind.)
+		(sess, askfd, toolsfd, serr) := newsession(caps.llmconfig);
+		if(serr != nil) {
+			resultchan <-= ref ResultMsg(idx, "ERROR:" + serr);
+			if(sched)
+				unsched(1);
+			scheduled[idx] = 0;
 			idx++;
 			continue;
 		}
 
 		pipefds := array[2] of ref Sys->FD;
 		if(sys->pipe(pipefds) < 0) {
-			# Send error directly — channel is buffered, won't block
+			closesession(sess);
 			resultchan <-= ref ResultMsg(idx, "ERROR:cannot create pipe");
+			if(sched)
+				unsched(1);
+			scheduled[idx] = 0;
 			idx++;
 			continue;
 		}
 
-		spawn runchild(pipefds[1], logfd, caps, spec.task, slot.mod, childid, provfd, 0, 0);
+		# The child says who it is, and waits to be told to go on: it is
+		# started only once this proc holds the file that ends it.
+		pidc := chan of int;
+		goc := chan of int;
+		spawn runchild(pidc, goc, pipefds[1], logfd, caps, spec.task, slot.mod, childid, provfd,
+			provrequired, spec.at_ms, spec.every_ms, askfd, toolsfd, tools);
 		pipefds[1] = nil;
-		spawn collectorwithTimeout(pipefds[0], resultchan, timeout_ms, idx);
+		askfd = nil;
+		toolsfd = nil;
+		cpid := <-pidc;
+		kfd: ref Sys->FD;
+		if(cpid > 0)
+			kfd = sys->open(sys->sprint("/prog/%d/ctl", cpid), Sys->OWRITE);
+		if(kfd == nil) {
+			why := sys->sprint("%r");
+			if(cpid > 0)
+				goc <-= 0;
+			closesession(sess);
+			resultchan <-= ref ResultMsg(idx, "ERROR:cannot supervise a subagent here (" + why + "): not started");
+			if(sched)
+				unsched(1);
+			scheduled[idx] = 0;
+			idx++;
+			continue;
+		}
+		child := ref Child(idx, cpid, kfd, sess, pipefds[0], "");
+		started = child :: started;
+		goc <-= 1;
+
+		# Scheduled (at= or every=): the call does not wait for it.  A
+		# keeper proc of this call does: it ends the subagent when its
+		# work is done or the tool server has gone, and until then keeps
+		# the call's process group, and so the name space the subagent
+		# runs in, from being reclaimed.
+		if(sched) {
+			child.marker = sys->sprint("(pid %d)", cpid);
+			schedmsg: string;
+			if(spec.at_ms > 0)
+				schedmsg = sys->sprint("scheduled: single run in %d ms", spec.at_ms);
+			else
+				schedmsg = sys->sprint("scheduled: every %d ms", spec.every_ms);
+			schedmsg += sys->sprint(", as process group %d; it ends with this agent's tool server, or when its group is killed (echo killtree > /prog/%d/ctl)", cpid, cpid);
+			if(actid >= 0 && bgbase >= 0)
+				bgrelabel(actid, bgbase + idx, tasksummary(spec.task) + " " + child.marker);
+			spawn schedkeeper(child, actid);
+			resultchan <-= ref ResultMsg(idx, schedmsg);
+			idx++;
+			continue;
+		}
+
+		spawn collector(child, resultchan, timeout_ms);
 		idx++;
+	}
+	if(fatal != "") {
+		# nothing of a refused call is left running
+		for(; started != nil; started = tl started)
+			stopchild(hd started);
+		unsched(nsch);
+		if(actid >= 0 && bgbase >= 0)
+			for(ri := N - 1; ri >= 0; ri--)
+				bgremove(actid, bgbase + ri);
+		return "error: " + fatal;
 	}
 
 	# Collect all results (order via idx field, not arrival order)
@@ -488,8 +621,9 @@ exec(args: string): string
 	for(i := 0; i < N; i++) {
 		msg := <-resultchan;
 		results[msg.idx] = msg.result;
-		# Update background task status as each result arrives
-		if(actid >= 0 && bgbase >= 0) {
+		# Update background task status as each result arrives; a
+		# scheduled subagent's stays live while it does.
+		if(actid >= 0 && bgbase >= 0 && !scheduled[msg.idx]) {
 			status := "done";
 			if(hasprefix(msg.result, "ERROR:"))
 				status = "error";
@@ -503,7 +637,8 @@ exec(args: string): string
 	if(actid >= 0 && bgbase >= 0) {
 		sys->sleep(2000);
 		for(ri := N - 1; ri >= 0; ri--)
-			bgremove(actid, bgbase + ri);
+			if(!scheduled[ri])
+				bgremove(actid, bgbase + ri);
 	}
 
 	# Format output
@@ -527,6 +662,115 @@ exec(args: string): string
 		idx++;
 	}
 	return out;
+}
+
+unsched(n: int)
+{
+	if(n <= 0)
+		return;
+	schedlock <-= 1;
+	nsched -= n;
+	if(nsched < 0)
+		nsched = 0;
+	<-schedlock;
+}
+
+# Whether this install requires auditing.  The tool server says
+# (/tool/meta/audit): it sees the install's switch, which a tool call's
+# name space does not.  With no tool server the switch is looked for; and
+# where neither can be seen it is taken as required: a subagent that may
+# not run unrecorded is not started on a guess.
+auditswitch(): (int, string)
+{
+	s := readfile("/tool/meta/audit");
+	if(s != nil)
+		return (strip(s) == "required", nil);
+	if(sys->stat(Audit->ONFILE).t0 >= 0)
+		return (1, nil);
+	if(sys->stat("/usr").t0 >= 0)
+		return (0, nil);
+	if(sys->stat(Audit->LOGFILE).t0 >= 0)
+		return (1, nil);
+	return (0, nil);
+}
+
+# Open a model session for a child: its id, its ask file and its tools
+# file.  The model, when one is named, thinking and the system prompt are
+# set as before.
+newsession(cfg: ref NsConstruct->LLMConfig): (string, ref Sys->FD, ref Sys->FD, string)
+{
+	newfd := sys->open("/mnt/llm/new", Sys->OREAD);
+	if(newfd == nil)
+		return (nil, nil, nil, sys->sprint("cannot open a model session: %r"));
+	buf := array[64] of byte;
+	n := sys->read(newfd, buf, len buf);
+	newfd = nil;
+	if(n <= 0)
+		return (nil, nil, nil, sys->sprint("cannot open a model session: %r"));
+	sess := strip(string buf[0:n]);
+	# the id is a name in /mnt/llm
+	if(sess == "" || !validcapname(sess))
+		return (nil, nil, nil, "cannot open a model session: the service gave no session");
+	dir := "/mnt/llm/" + sess;
+	if(cfg != nil) {
+		# Configure model — only if one was specified. An empty model
+		# leaves the session at the llmsrv default (what the backend
+		# actually serves), avoiding a 404 on backends that don't have
+		# the legacy "haiku" default.
+		if(cfg.model != "")
+			writefile(dir + "/model", cfg.model);
+		# Thinking: honor an explicit budget; leave the DEFAULT (0) at
+		# the backend default rather than forcing "off". Forcing off
+		# makes a reasoning backend (e.g. gpt-oss/harmony) emit an empty
+		# final channel — the child then returns nothing. The parent
+		# agent's session never disables thinking, and works; match that.
+		if(cfg.thinking < 0)
+			writefile(dir + "/thinking", "on");
+		else if(cfg.thinking > 0)
+			writefile(dir + "/thinking", string cfg.thinking);
+		if(cfg.system != "")
+			writefile(dir + "/system", cfg.system);
+	}
+	askfd := sys->open(dir + "/ask", Sys->ORDWR);
+	if(askfd == nil) {
+		e := sys->sprint("cannot open a model session: %r");
+		closesession(sess);
+		return (nil, nil, nil, e);
+	}
+	# the tool definitions', written once the child's tools are known:
+	# after the restriction there is no /mnt/llm to open
+	toolsfd := sys->open(dir + "/tools", Sys->OWRITE);
+	return (sess, askfd, toolsfd, nil);
+}
+
+# Release a model session. The ctl "close" decrements the self-reference
+# (refs 1→0), allowing the server to free the session immediately rather
+# than waiting for a server restart.
+closesession(sess: string)
+{
+	if(sess != "")
+		writefile("/mnt/llm/" + sess + "/ctl", "close");
+}
+
+# End a subagent: its whole process group tree (all it started, and what
+# those started), then its model session.  Once only.
+stopchild(c: ref Child)
+{
+	if(c.kfd != nil) {
+		b := array of byte "killtree";
+		sys->write(c.kfd, b, len b);
+		c.kfd = nil;
+	}
+	if(c.sess != "") {
+		closesession(c.sess);
+		c.sess = "";
+	}
+}
+
+killproc(pid: int)
+{
+	if(pid > 0)
+		writefile(sys->sprint("/prog/%d/ctl", pid), "kill");
 }
 
 # Write a child's tool definitions to its model session: the schema each
@@ -560,7 +804,7 @@ installchildtools(tfd: ref Sys->FD, mods: list of Tool, names: list of string, m
 
 # Pre-load tool modules for the union of all specs' tool sets.
 # Returns "" on success, error string on failure.
-preloadmulti(specs: list of ref SubSpec): string
+preloadmulti(specs: list of ref SubSpec): (list of ref PreloadedTool, string)
 {
 	# Collect union of tool names (deduplicated)
 	seen: list of string;
@@ -573,7 +817,7 @@ preloadmulti(specs: list of ref SubSpec): string
 		}
 	}
 
-	preloadedtools = nil;
+	preloadedtools: list of ref PreloadedTool;
 	for(s := seen; s != nil; s = tl s) {
 		nm := hd s;
 		path := "/dis/veltro/tools/" + nm + ".dis";
@@ -583,30 +827,97 @@ preloadmulti(specs: list of ref SubSpec): string
 			# to load: "file does not exist" said nothing of why.
 			(ok, nil) := sys->stat(path);
 			if(ok < 0)
-				return sys->sprint("tool %s may not be given to a child: it is not in the delegation budget (see GRANTABLE TO CHILD TASKS)", nm);
-			return sys->sprint("cannot load tool %s: %r", nm);
+				return (nil, sys->sprint("tool %s may not be given to a child: it is not in the delegation budget (see GRANTABLE TO CHILD TASKS)", nm));
+			return (nil, sys->sprint("cannot load tool %s: %r", nm));
 		}
 		merr := mod->init();
 		if(merr != nil)
-			return sys->sprint("cannot init tool %s: %s", nm, merr);
+			return (nil, sys->sprint("cannot init tool %s: %s", nm, merr));
 		preloadedtools = ref PreloadedTool(nm, mod) :: preloadedtools;
 	}
 
-	return "";
+	return (preloadedtools, "");
 }
 
-validatespecnames(specs: list of ref SubSpec): string
+validatespecs(specs: list of ref SubSpec): string
 {
+	(held, known) := heldpaths();
 	for(; specs != nil; specs = tl specs) {
 		spec := hd specs;
-		for(t := spec.tools; t != nil; t = tl t)
+		for(t := spec.tools; t != nil; t = tl t) {
 			if(!validcapname(hd t))
 				return "invalid tool name: " + hd t;
+			# A subagent's tool calls are not seen by the
+			# coordinator, which asks the user before a call of
+			# these runs: a subagent is not given them, whatever
+			# the delegation budget holds.
+			if(nsconstruct->gatedtool(hd t))
+				return sys->sprint("tool %s may not be given to a subagent: what it does needs the user's approval, which only the agent's own call of it asks for", hd t);
+		}
 		for(c := spec.shellcmds; c != nil; c = tl c)
 			if(!validcapname(hd c))
 				return "invalid shell command name: " + hd c;
+		if(spec.paths != nil && (inlist("exec", spec.tools) || spec.shellcmds != nil))
+			return "exec/shell subagents cannot receive path grants; use read/list/find/grep for read-only inspection or write/edit with explicit staged write grants";
+		for(p := spec.paths; p != nil; p = tl p) {
+			e := childpatherr(hd p, held, known);
+			if(e != nil)
+				return e;
+		}
 	}
 	return "";
+}
+
+# The agent's own path grants, as its tool server lists them
+# (/tool/paths, "path perm" a line), and whether there is a list.
+heldpaths(): (list of string, int)
+{
+	s := readfile("/tool/paths");
+	if(s == nil)
+		return (nil, 0);
+	held: list of string;
+	(nil, lines) := sys->tokenize(s, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(nil, f) := sys->tokenize(hd lines, " \t");
+		if(f != nil)
+			held = hd f :: held;
+	}
+	return (held, 1);
+}
+
+# A path a subagent asks for is the model's request.  It is granted only
+# inside what the agent itself was granted to read: the tool call this
+# runs in also holds what the tools of the delegation budget need (the
+# model service, for one), and the name space alone would have let a
+# subagent be given those.  The agent's own services are refused
+# whatever the grants say.
+childpatherr(path: string, held: list of string, known: int): string
+{
+	lp := str->tolower(path);
+	own := array[] of {"/mnt/llm", "/mnt/audit", "/mnt/ui", "/mnt/veltro", "/mnt/toolctl", "/tool"};
+	for(i := 0; i < len own; i++)
+		if(lp == own[i] || hasprefix(lp, own[i] + "/") || hasprefix(lp, own[i] + "."))
+			return sys->sprint("path %s is one of the agent's own services: a subagent is not granted it", path);
+	if(!known)
+		return nil;	# no tool server to ask: the name space is the bound
+	# what every subagent has without asking
+	base := array[] of {"/lib/veltro", "/lib/certs", "/dis/veltro", "/tmp/veltro/scratch"};
+	for(i = 0; i < len base; i++)
+		if(pathwithin(base[i], path))
+			return nil;
+	for(; held != nil; held = tl held) {
+		g := hd held;
+		if(g == path || (pathwithin(g, path) && !nsconstruct->policyroot(g)))
+			return nil;
+	}
+	return sys->sprint("path %s is outside this agent's grants (see /tool/paths): a subagent may be given only what the agent holds", path);
+}
+
+pathwithin(grant, want: string): int
+{
+	if(grant == want)
+		return 1;
+	return len want > len grant && want[0:len grant] == grant && want[len grant] == '/';
 }
 
 validcapname(n: string): int
@@ -677,9 +988,11 @@ jfirststr(o: ref JValue, keys: list of string): string
 	return "";
 }
 
-# A JValue that is an array of strings OR a comma-separated string -> lowercased,
-# stripped list. nil if absent.
-jvstrlist(v: ref JValue): list of string
+# A JValue that is an array of strings OR a comma-separated string -> stripped
+# list, in lower case when lower is set (tool and command names; a path
+# is taken as written: lowered, /usr/x/Proj named a file that is not
+# there, and the grant was dropped without a word). nil if absent.
+jvstrlist(v: ref JValue, lower: int): list of string
 {
 	r: list of string;
 	if(v == nil)
@@ -688,14 +1001,20 @@ jvstrlist(v: ref JValue): list of string
 	Array =>
 		for(i := 0; i < len x.a; i++) {
 			e := strip(jvstr(x.a[i]));
+			if(e != "" && lower)
+				e = str->tolower(e);
 			if(e != "")
-				r = str->tolower(e) :: r;
+				r = e :: r;
 		}
 		return reverse(r);
 	String =>
 		(nil, toks) := sys->tokenize(x.s, ",");
-		for(; toks != nil; toks = tl toks)
-			r = str->tolower(strip(hd toks)) :: r;
+		for(; toks != nil; toks = tl toks) {
+			e := strip(hd toks);
+			if(lower)
+				e = str->tolower(e);
+			r = e :: r;
+		}
 		return reverse(r);
 	}
 	return nil;
@@ -748,11 +1067,11 @@ buildagent(o: ref JValue): (ref SubSpec, string)
 	if(spec.task == "")
 		return (nil, "each subagent needs a task (task/prompt/instruction)");
 
-	spec.tools = jvstrlist(o.get("tools"));
+	spec.tools = jvstrlist(o.get("tools"), 1);
 	if(spec.tools == nil)
 		spec.tools = "plan" :: nil;   # a reasoning child still needs a grant; plan is safe
-	spec.paths = jvstrlist(o.get("paths"));
-	spec.shellcmds = jvstrlist(o.get("shellcmds"));
+	spec.paths = jvstrlist(o.get("paths"), 0);
+	spec.shellcmds = jvstrlist(o.get("shellcmds"), 1);
 
 	# Scheduling (optional) — same primitives as the DSL at=/every=. Track via
 	# locals (default 0) and assign explicitly, so an absent field is always 0
@@ -854,7 +1173,9 @@ parsejsonspecs(s: string): (list of ref SubSpec, int, string)
 
 	timeout_ms := DEFAULT_TIMEOUT_MS;
 	tosecs := jvreal(jv.get("timeout"), 0.0);
-	if(tosecs > 0.0)
+	if(tosecs > real (MAXMS / 1000))
+		return (nil, 0, sys->sprint("timeout too long: at most %d seconds", MAXMS / 1000));
+	if(tosecs >= 1.0)
 		timeout_ms = (int tosecs) * 1000;
 
 	# {"spec": "<dsl>"} — the schema's documented contract; reuse the DSL parser.
@@ -923,9 +1244,16 @@ parsespecs(s: string): (list of ref SubSpec, int, string)
 		for(; gtoks != nil; gtoks = tl gtoks) {
 			tok := hd gtoks;
 			if(hasprefix(tok, "timeout=")) {
-				t := int tok[8:];
-				if(t > 0)
-					timeout_ms = t * 1000;
+				# in big: seconds times 1000 wrapped an int, and
+				# timeout=3000000 was a timeout already past
+				digits := tok[8:];
+				for(di := 0; di < len digits; di++)
+					if(digits[di] < '0' || digits[di] > '9')
+						return (nil, 0, "timeout must be a number of seconds");
+				if(len digits > 12 || big digits * big 1000 > big MAXMS)
+					return (nil, 0, sys->sprint("timeout too long: at most %d seconds", MAXMS / 1000));
+				if(int digits > 0)
+					timeout_ms = int digits * 1000;
 			}
 		}
 	}
@@ -1114,27 +1442,131 @@ parserfc3339delta(s: string): (int, string)
 	return (int ms, "");
 }
 
+# The most a subagent's result may be.  It is one reply of its model's,
+# but the pipe is read until its end, whatever is written to it.
+MAXRESULT: con 1024*1024;
+
 # Collector goroutine: reads result from pipe with a per-subagent timeout.
 # Sends a ResultMsg to resultchan when done (result or timeout error).
-collectorwithTimeout(readfd: ref Sys->FD, resultchan: chan of ref ResultMsg, timeout_ms, idx: int)
+# Either way the subagent is then ended: its process group and all below
+# it are killed and its model session closed.  A timeout used only to stop
+# waiting: the subagent went on asking its model, and its parent, the
+# model and the Activity panel had been told it was over.
+collector(c: ref Child, resultchan: chan of ref ResultMsg, timeout_ms: int)
 {
 	# Buffered capacity 1: goroutines can complete their send and exit even
 	# after the alt has moved on, preventing them from blocking indefinitely.
-	innerc := chan[1] of string;
-	spawn pipereader(readfd, innerc);
+	innerc := chan[1] of (string, int);
+	spawn pipereader(c.rfd, innerc);
 	timeoutc := chan[1] of int;
-	spawn timer(timeoutc, timeout_ms);
+	tpidc := chan[1] of int;
+	spawn timer(timeoutc, tpidc, timeout_ms);
+	tpid := <-tpidc;
 	result: string;
 	alt {
-	result = <-innerc =>
-		;
+	(r, ended) := <-innerc =>
+		result = r;
+		# A subagent that goes without finishing its result (killed,
+		# or broken) did not succeed: what it had written was returned
+		# as its answer, an empty one included.
+		if(!ended) {
+			result = "ERROR:subagent ended without finishing its result";
+			if(r != "")
+				result += "; it had written:\n" + r;
+		}
+		killproc(tpid);
 	<-timeoutc =>
-		result = sys->sprint("ERROR:subagent timed out after %ds", timeout_ms / 1000);
-		# Close the read end so pipereader's sys->read() returns an error,
-		# allowing it to break its loop, send to innerc (buffered), and exit.
-		readfd = nil;
+		result = sys->sprint("ERROR:subagent timed out after %ds and was stopped", timeout_ms / 1000);
 	}
-	resultchan <-= ref ResultMsg(idx, result);
+	stopchild(c);
+	c.rfd = nil;
+	resultchan <-= ref ResultMsg(c.idx, result);
+}
+
+# A scheduled subagent's keeper.  It stays, a process of the call's own
+# group, for as long as the subagent does, and ends it (as stopchild
+# does) when its run is over, when it has gone, or when the tool server
+# that started it has: asked every few seconds, since a server that is
+# killed says nothing.  A scheduled subagent had no one: it outlived the
+# call, the tool server and the session, asking its model for ever.
+SCHEDPOLL: con 2000;
+
+schedkeeper(c: ref Child, actid: int)
+{
+	donec := chan[1] of (string, int);
+	spawn pipereader(c.rfd, donec);
+	tickc := chan of int;
+	tpidc := chan[1] of int;
+	spawn ticker(tickc, tpidc, SCHEDPOLL);
+	tpid := <-tpidc;
+	# The server is asked in a proc of its own: one that has gone may
+	# not answer at all (its end of the mount can be held open by
+	# another), and a question three polls old is taken as no.
+	probec := chan[2] of (int, int);
+	probing := 0;
+	late := 0;
+	probepid := 0;
+	status := "done";
+Wait:
+	for(;;) alt {
+	(nil, ended) := <-donec =>
+		if(!ended)
+			status = "error";
+		break Wait;
+	(pid, ok) := <-probec =>
+		if(pid != 0 && ok < 0) {
+			# the proc says who it is, then what it found
+			probepid = pid;
+			continue;
+		}
+		probing = 0;
+		late = 0;
+		if(!ok) {
+			status = "stopped";
+			break Wait;
+		}
+	<-tickc =>
+		if(!probing) {
+			probing = 1;
+			late = 0;
+			spawn serverprobe(probec);
+		} else if(++late >= 3) {
+			status = "stopped";
+			break Wait;
+		}
+	}
+	stopchild(c);
+	c.rfd = nil;
+	killproc(tpid);
+	if(probing)
+		killproc(probepid);
+	unsched(1);
+	if(actid >= 0)
+		bgfinish(actid, c.marker, status);
+}
+
+# Is the tool server there?  (pid, -1) first, then (0, yes).
+serverprobe(c: chan of (int, int))
+{
+	c <-= (sys->pctl(0, nil), -1);
+	c <-= (0, sys->stat("/tool/activity").t0 >= 0);
+}
+
+ticker(c: chan of int, pidc: chan of int, ms: int)
+{
+	pidc <-= sys->pctl(0, nil);
+	for(;;) {
+		sys->sleep(ms);
+		c <-= 1;
+	}
+}
+
+# Wait to be ended.  A subagent's process does not go by itself: its
+# parent ends it with everything it started, which it can do only while
+# the group's leader is there to name.
+park()
+{
+	<-chan of int;
 }
 
 # Run one child agent with FORKNS + bind-replace namespace isolation.
@@ -1142,106 +1574,47 @@ collectorwithTimeout(readfd: ref Sys->FD, resultchan: chan of ref ResultMsg, tim
 #
 # Scheduling caps (INFR-14):
 #   at_ms > 0    -> sleep that many ms once, then run a single iteration
-#   every_ms > 0 -> loop {sleep that many ms; run iteration} until killed
+#   every_ms > 0 -> loop {sleep that many ms; run iteration} until ended
 #   both 0       -> single iteration immediately (existing behaviour)
-# When scheduled, pipefd is nil: parent has already reported "scheduled"
-# and is not waiting. Cancellation: echo kill > /prog/$pid/ctl.
-runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
+runchild(pidc, goc: chan of int, pipefd: ref Sys->FD, logfd: ref Sys->FD,
          caps: ref NsConstruct->Capabilities, task: string,
-         samod: SubAgent, childid: string, provfd: ref Sys->FD,
-         at_ms: int, every_ms: int)
+         samod: SubAgent, childid: string, provfd: ref Sys->FD, provrequired: int,
+         at_ms: int, every_ms: int, llmaskfd, llmtoolsfd: ref Sys->FD,
+         tools: list of ref PreloadedTool)
 {
-	# Step 1: Fresh process group (empty service registry)
+	# Step 1: Fresh process group (empty service registry).  Its leader is
+	# this process, by whose ctl file the parent ends the whole of it.
 	if(sys->pctl(Sys->NEWPGRP, nil) < 0) {
-		writeresult(pipefd, "ERROR:cannot create process group");
+		pidc <-= -1;
 		return;
 	}
+	pidc <-= sys->pctl(0, nil);
+	if(<-goc == 0)
+		return;
 
 	# Step 2: Fork namespace (inherits already-restricted parent namespace)
 	if(sys->pctl(Sys->FORKNS, nil) < 0) {
 		writeresult(pipefd, "ERROR:cannot fork namespace");
-		return;
+		park();
 	}
 
 	# Step 3: Empty environment (no inherited secrets)
 	if(sys->pctl(Sys->NEWENV, nil) < 0) {
 		writeresult(pipefd, "ERROR:cannot clear environment");
-		return;
+		park();
 	}
 
-	# Step 4: Create LLM session using /mnt/llm/new clone pattern.
-	# Each child gets its own session — fully isolated from parent and siblings.
-	llmaskfd, llmtoolsfd: ref Sys->FD;
-	sessionid := "";  # hoisted so we can close the session after runloop
-	if(caps.llmconfig != nil) {
-		newfd := sys->open("/mnt/llm/new", Sys->OREAD);
-		if(newfd != nil) {
-			buf := array[32] of byte;
-			n := sys->read(newfd, buf, len buf);
-			newfd = nil;
-			if(n > 0) {
-				sessionid = string buf[0:n];
-				if(len sessionid > 0 && sessionid[len sessionid - 1] == '\n')
-					sessionid = sessionid[0:len sessionid - 1];
-				if(sessionid != "") {
-					# Configure model — only if one was specified. An empty model
-					# leaves the session at the llmsrv default (what the backend
-					# actually serves), avoiding a 404 on backends that don't have
-					# the legacy "haiku" default.
-					if(caps.llmconfig.model != "") {
-						modelfd := sys->open("/mnt/llm/" + sessionid + "/model", Sys->OWRITE);
-						if(modelfd != nil) {
-							modeldata := array of byte caps.llmconfig.model;
-							sys->write(modelfd, modeldata, len modeldata);
-							modelfd = nil;
-						}
-					}
+	# Step 4: The LLM session is the parent's to open (newsession) and to
+	# close; the child has its ask and tools files, open.
 
-					# Thinking: honor an explicit budget; leave the DEFAULT (0) at
-					# the backend default rather than forcing "off". Forcing off
-					# makes a reasoning backend (e.g. gpt-oss/harmony) emit an empty
-					# final channel — the child then returns nothing. The parent
-					# agent's session never disables thinking, and works; match that.
-					tval := "";
-					if(caps.llmconfig.thinking < 0)
-						tval = "on";
-					else if(caps.llmconfig.thinking > 0)
-						tval = string caps.llmconfig.thinking;
-					if(tval != "") {
-						thinkfd := sys->open("/mnt/llm/" + sessionid + "/thinking", Sys->OWRITE);
-						if(thinkfd != nil) {
-							tdata := array of byte tval;
-							sys->write(thinkfd, tdata, len tdata);
-							thinkfd = nil;
-						}
-					}
-
-					# Configure system prompt
-					if(caps.llmconfig.system != "") {
-						sysfd := sys->open("/mnt/llm/" + sessionid + "/system", Sys->OWRITE);
-						if(sysfd != nil) {
-							sysdata := array of byte caps.llmconfig.system;
-							sys->write(sysfd, sysdata, len sysdata);
-							sysfd = nil;
-						}
-					}
-
-					# Open ask fd (used by runloop)
-					llmaskfd = sys->open("/mnt/llm/" + sessionid + "/ask", Sys->ORDWR);
-					# and the tool definitions', written once the
-					# child's tools are known (Step 5c): after the
-					# restriction there is no /mnt/llm to open.
-					llmtoolsfd = sys->open("/mnt/llm/" + sessionid + "/tools", Sys->OWRITE);
-				}
-			}
-		}
-	}
-
-	# Step 5: Apply namespace restrictions (FORKNS + bind-replace)
-	err := nsconstruct->restrictns(caps);
+	# Step 5: Apply namespace restrictions (FORKNS + bind-replace): a
+	# child's, which holds nothing of the parent's tool server or of the
+	# model service, and under required auditing is refused if its
+	# restriction cannot be recorded.
+	err := nsconstruct->restrictchildns(caps, provrequired);
 	if(err != nil) {
 		writeresult(pipefd, "ERROR:namespace restriction failed: " + err);
-		return;
+		park();
 	}
 
 	# Step 5b: Bridge MCP tools into the child (INFR-247). restrictns has just
@@ -1252,7 +1625,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	# Bounded by the same per-mount/byte caps the agent runtime uses. Best-effort: any failure
 	# just leaves the child without MCP tools, never breaks the run.
 	mcpdefs := "";	# installed with the native tools' (Step 9)
-	if(agentlib != nil && sessionid != "") {
+	if(agentlib != nil) {
 		mcppaths := filtermcp(caps.paths);
 		if(mcppaths != nil) {
 			(mcpmounts, mcptools) := agentlib->mcpdiscover(mcppaths);
@@ -1267,15 +1640,16 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	# native tool's own schema, and the MCP tools granted.  Given only as
 	# prose in its prompt, a child had nothing it could call, and answered
 	# with what it would have done.
+	toolmods: list of Tool;
+	toolnames: list of string;
+	for(pt := tools; pt != nil; pt = tl pt) {
+		if(inlist((hd pt).name, caps.tools)) {
+			toolmods = (hd pt).mod :: toolmods;
+			toolnames = (hd pt).name :: toolnames;
+		}
+	}
 	if(llmtoolsfd != nil) {
-		cmods: list of Tool;
-		cnames: list of string;
-		for(cp := preloadedtools; cp != nil; cp = tl cp)
-			if(inlist((hd cp).name, caps.tools)) {
-				cmods = (hd cp).mod :: cmods;
-				cnames = (hd cp).name :: cnames;
-			}
-		installchildtools(llmtoolsfd, cmods, cnames, mcpdefs);
+		installchildtools(llmtoolsfd, toolmods, toolnames, mcpdefs);
 		llmtoolsfd = nil;
 	}
 
@@ -1283,9 +1657,7 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	verifysafefds();
 
 	# Step 7: Prune FDs — keep stdin, stdout, stderr; pipe (if present);
-	# the LLM ask fd; and the trajectory log fd (if present). pipefd and
-	# logfd may both be nil (logfd: log creation failed; pipefd:
-	# fire-and-forget scheduled run).
+	# the LLM ask fd; and the trajectory log fd (if present).
 	keepfds := 0 :: 1 :: 2 :: nil;
 	if(pipefd != nil)
 		keepfds = pipefd.fd :: keepfds;
@@ -1297,23 +1669,13 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 		keepfds = provfd.fd :: keepfds;
 	if(sys->pctl(Sys->NEWFD, keepfds) < 0) {
 		writeresult(pipefd, "ERROR:cannot restrict file descriptors");
-		return;
+		park();
 	}
 
 	# Step 8: Block device naming (after all bind operations)
 	if(sys->pctl(Sys->NODEVS, nil) < 0) {
 		writeresult(pipefd, "ERROR:cannot disable device attachment");
-		return;
-	}
-
-	# Step 9: Build tool list for this child (filter preloadedtools to this spec)
-	toolmods: list of Tool;
-	toolnames: list of string;
-	for(pt := preloadedtools; pt != nil; pt = tl pt) {
-		if(inlist((hd pt).name, caps.tools)) {
-			toolmods = (hd pt).mod :: toolmods;
-			toolnames = (hd pt).name :: toolnames;
-		}
+		park();
 	}
 
 	systemprompt := "";
@@ -1326,45 +1688,39 @@ runchild(pipefd: ref Sys->FD, logfd: ref Sys->FD,
 	if(childid != "")
 		samod->setprov(childid, provfd, provrequired);
 
-	# at= scheduling: sleep once before the (single) iteration. Caps are
-	# already attenuated above — the sleeping process holds the same
-	# restricted namespace it will run in. Cancellation works as expected
-	# (echo kill > /prog/$pid/ctl) because we are a real Limbo process.
-	if(at_ms > 0)
-		sys->sleep(at_ms);
+	# A record the child must write and cannot ends it (fail:audit, from
+	# the subagent's loop): said, where the parent had read nothing and
+	# taken the child for one that finished.
+	result := "";
+	{
+		# at= scheduling: sleep once before the (single) iteration. Caps are
+		# already attenuated above — the sleeping process holds the same
+		# restricted namespace it will run in.
+		if(at_ms > 0)
+			sys->sleep(at_ms);
 
-	# every= scheduling: loop forever. Each iteration reuses the LLM
-	# session opened in Step 4, so conversation history accumulates across
-	# runs (the SubAgent is essentially having one long conversation,
-	# punctuated by sleeps). For tasks where this matters, opening a
-	# fresh session per iteration is a follow-up; for "list new emails
-	# every hour"-style polling against tools that read a freshly-mounted
-	# 9P fs, history reuse is fine.
-	if(every_ms > 0) {
-		for(;;) {
-			sys->sleep(every_ms);
-			samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, logfd, 50);
-		}
-		# unreachable
+		# every= scheduling: loop until ended. Each iteration reuses the LLM
+		# session, so conversation history accumulates across runs (the
+		# SubAgent is essentially having one long conversation, punctuated
+		# by sleeps).
+		if(every_ms > 0)
+			for(;;) {
+				sys->sleep(every_ms);
+				samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, logfd, 50);
+			}
+
+		# Run the agent loop using the dedicated (non-shared) SubAgent instance
+		result = samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, logfd, 50);
+	} exception e {
+	"fail:audit" =>
+		result = "ERROR:auditing is required and a record of the subagent's work could not be written: it was stopped";
+	"*" =>
+		result = "ERROR:subagent failed: " + e;
 	}
-
-	# Run the agent loop using the dedicated (non-shared) SubAgent instance
-	result := samod->runloop(task, toolmods, toolnames, systemprompt, llmaskfd, logfd, 50);
 
 	writeresult(pipefd, result);
 	pipefd = nil;
-
-	# Release the LLM session. The ctl "close" decrements the self-reference
-	# (refs 1→0), allowing the server to free the session immediately rather
-	# than waiting for a server restart.
-	if(sessionid != "") {
-		ctlfd := sys->open("/mnt/llm/" + sessionid + "/ctl", Sys->OWRITE);
-		if(ctlfd != nil) {
-			data := array of byte "close";
-			sys->write(ctlfd, data, len data);
-			ctlfd = nil;
-		}
-	}
+	park();
 }
 
 # ---- Helper functions ----
@@ -1401,10 +1757,12 @@ writeresult(fd: ref Sys->FD, result: string)
 	sys->write(fd, data, len data);
 }
 
-# Read from pipe until sentinel or EOF; send complete result to resultch.
-pipereader(fd: ref Sys->FD, resultch: chan of string)
+# Read from pipe until sentinel or EOF; send what was read to resultch,
+# and whether the sentinel ended it.
+pipereader(fd: ref Sys->FD, resultch: chan of (string, int))
 {
 	result := "";
+	ended := 0;
 	buf := array[8192] of byte;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
@@ -1415,16 +1773,23 @@ pipereader(fd: ref Sys->FD, resultch: chan of string)
 			endpos := len result - len RESULT_END;
 			if(result[endpos:] == RESULT_END) {
 				result = result[0:endpos];
+				ended = 1;
 				break;
 			}
 		}
+		if(len result > MAXRESULT) {
+			result = result[0:MAXRESULT] + sys->sprint("\n... (result cut at %d characters)", MAXRESULT);
+			ended = 1;
+			break;
+		}
 	}
-	resultch <-= result;
+	resultch <-= (result, ended);
 }
 
-# Timer goroutine: send on ch after ms milliseconds.
-timer(ch: chan of int, ms: int)
+# Timer goroutine: says who it is, then sends on ch after ms milliseconds.
+timer(ch: chan of int, pidc: chan of int, ms: int)
 {
+	pidc <-= sys->pctl(0, nil);
 	sys->sleep(ms);
 	ch <-= 1;
 }
@@ -1594,11 +1959,18 @@ safeattrtext(s: string): string
 # Get the current activity ID from luciuisrv.
 currentactid(): int
 {
-	s := readfile(UI_MOUNT + "/activity/current");
+	# the agent's own activity, as its tool server has it; with no
+	# tool server, the one on show
+	s := readfile("/tool/activity");
+	if(s == nil)
+		s = readfile(UI_MOUNT + "/activity/current");
 	if(s == nil)
 		return -1;
 	s = strip(s);
 	(n, nil) := str->toint(s, 10);
+	# with no UI serving it there is nothing to register in
+	if(sys->stat(sys->sprint("%s/activity/%d", UI_MOUNT, n)).t0 < 0)
+		return -1;
 	return n;
 }
 
@@ -1628,6 +2000,30 @@ bgupdatestatus(actid, idx: int, status: string)
 	ctxctl := sys->sprint("%s/activity/%d/context/ctl", UI_MOUNT, actid);
 	cmd := sys->sprint("bg update %d status=%s progress=100", idx, status);
 	writefile(ctxctl, cmd);
+}
+
+# Name a background task for what it now is.
+bgrelabel(actid, idx: int, label: string)
+{
+	ctxctl := sys->sprint("%s/activity/%d/context/ctl", UI_MOUNT, actid);
+	writefile(ctxctl, sys->sprint("bg update %d label=%s", idx, safeattrtext(label)));
+}
+
+# A scheduled subagent's entry, found by its marker (entries are numbered
+# by position, and others come and go while it runs): said to be over.
+bgfinish(actid: int, marker, status: string)
+{
+	base := sys->sprint("%s/activity/%d/context/background", UI_MOUNT, actid);
+	for(i := 0; i < 256; i++) {
+		s := readfile(sys->sprint("%s/%d", base, i));
+		if(s == nil)
+			return;
+		for(j := 0; j + len marker <= len s; j++)
+			if(s[j:j+len marker] == marker) {
+				bgupdatestatus(actid, i, status);
+				return;
+			}
+	}
 }
 
 # Remove a background task from the activity display.
@@ -1678,7 +2074,6 @@ stripquotes(s: string): string
 # into runchild before FORKNS; subagent.b writes step entries to it.
 opensubagentlog(batchms, idx: int): ref Sys->FD
 {
-	ensuredir("/tmp/veltro");
 	ensuredir(SUBAGENT_LOG_BASE);
 
 	path := sys->sprint("%s/%d.%d.log", SUBAGENT_LOG_BASE, batchms, idx);

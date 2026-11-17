@@ -28,6 +28,21 @@ implement StyxPackTest;
 # is not one (negative, or past U+10FFFF) is U+FFFD's three bytes, and
 # was counted as one.
 #
+# What is not a message is refused, in Styx as in the kernel's convM2S:
+# bytes after a message's last field (they were passed over, and the
+# count returned was short of the message), an Rwalk of more qids than
+# a walk has names, a string with a zero byte in it (kept as a
+# character: a\0b was a three-character name); an Rerror with no text
+# has one (an empty string is nil, which reads as no error); a string
+# longer than its 16-bit count can say is not packed (it was, with the
+# count cut and all its bytes after it), an error's text being cut to
+# fit; text() is one line whatever is in a name; nothing is printed on
+# standard output for a bad type or a bad stat count; a message the
+# connection ends in the middle of is "truncated", not the process's
+# last error string or a clean end; istmsg of less than a header is
+# false.
+#
+#
 
 include "sys.m";
 	sys: Sys;
@@ -359,6 +374,282 @@ testVenti(t: ref T)
 	}
 }
 
+# ---- what is not a message, or cannot be one ----
+
+Tclunk: con 120;
+Tcreate: con 114;
+Twalk: con 110;
+Tattach: con 104;
+Tversion: con 100;
+Rerror: con 107;
+Rwalk: con 111;
+Rclunk: con 121;
+
+le16(v: int): array of byte
+{
+	return array[] of {byte v, byte (v>>8)};
+}
+
+# a string as a message carries it
+str16(s: string): array of byte
+{
+	b := array of byte s;
+	return cat(le16(len b) :: b :: nil);
+}
+
+# a message of this type whose size is its length
+msg(mtype: int, rest: array of byte): array of byte
+{
+	return rawmsg(7 + len rest, mtype, rest);
+}
+
+# A message's fields end where its size says the message does.  A byte
+# after them was passed over, and the count returned was the fields': a
+# caller with several messages in hand then took the padding for the
+# next message's start.
+testTrailingBytes(t: ref T)
+{
+	Twrite: con 118;
+	Rread: con 117;
+	pad := array[] of {byte 16rAA};
+	fid := le32(7);
+	off := array[8] of {* => byte 0};
+
+	t.asserteq(tunpack(msg(Tclunk, fid)), 11, "a Tclunk");
+	t.asserteq(tunpack(msg(Tclunk, cat(fid :: pad :: nil))), -1, "a Tclunk with a byte after its fid");
+	t.asserteq(tunpack(msg(Tversion, cat(le32(8192) :: str16("9P2000") :: pad :: nil))), -1, "a Tversion with a byte after its version");
+	t.asserteq(tunpack(msg(Tattach, cat(fid :: le32(-1) :: str16("u") :: str16("") :: pad :: nil))), -1, "a Tattach with a byte after its names");
+	t.asserteq(tunpack(msg(Twalk, cat(fid :: le32(8) :: le16(1) :: str16("a") :: pad :: nil))), -1, "a Twalk with a byte after its names");
+	t.asserteq(tunpack(msg(Tcreate, cat(fid :: str16("f") :: le32(8r644) :: array[] of {byte 1} :: pad :: nil))), -1, "a Tcreate with a byte after its mode");
+	t.asserteq(tunpack(msg(Twrite, cat(fid :: off :: le32(5) :: array of byte "hello" :: pad :: nil))), -1, "a Twrite with a byte after its data");
+	t.asserteq(runpack(msg(Rclunk, nil)), 7, "an Rclunk");
+	t.asserteq(runpack(msg(Rclunk, pad)), -1, "an Rclunk with a byte after it");
+	t.asserteq(runpack(msg(Rerror, cat(str16("no") :: pad :: nil))), -1, "an Rerror with a byte after its text");
+	t.asserteq(runpack(msg(Rread, cat(le32(2) :: array of byte "ok" :: pad :: nil))), -1, "an Rread with a byte after its data");
+	t.asserteq(runpack(msg(Rwalk, cat(le16(1) :: array[13] of {* => byte 0} :: pad :: nil))), -1, "an Rwalk with a byte after its qids");
+
+	# two whole messages in hand: the first, by its own size
+	two := cat(msg(Tclunk, fid) :: msg(Tclunk, le32(9)) :: nil);
+	t.asserteq(tunpack(two), 11, "the first of two messages");
+	t.asserteq(tunpack(two[11:]), 11, "and the second");
+}
+
+# No more qids come back from a walk than a walk has names.
+testWalkCount(t: ref T)
+{
+	t.asserteq(runpack(msg(Rwalk, cat(le16(16) :: array[16*13] of {* => byte 0} :: nil))), 7+2+16*13, "an Rwalk of 16 qids");
+	t.asserteq(runpack(msg(Rwalk, cat(le16(17) :: array[17*13] of {* => byte 0} :: nil))), -1, "an Rwalk of 17 qids");
+	names: list of array of byte;
+	for(i := 0; i < 17; i++)
+		names = str16("a") :: names;
+	t.asserteq(tunpack(msg(Twalk, cat(le32(1) :: le32(2) :: le16(17) :: cat(names) :: nil))), -1, "a Twalk of 17 names");
+
+	# and neither is packed
+	t.assert((ref Tmsg.Walk(1, 1, 2, array[17] of {* => "a"})).pack() == nil, "a Twalk of 17 names is not packed");
+	t.assert((ref Rmsg.Walk(1, array[17] of Sys->Qid)).pack() == nil, "an Rwalk of 17 qids is not packed");
+	t.assert((ref Tmsg.Walk(1, 1, 2, array[16] of {* => "a"})).pack() != nil, "a Twalk of 16 is");
+}
+
+# A zero byte in a name, a user, a version or an error is no part of a
+# string: the message is refused.
+testNulInStrings(t: ref T)
+{
+	fid := le32(7);
+	nul := array[] of {byte 3, byte 0, byte 'a', byte 0, byte 'b'};	# "a\0b"
+	t.asserteq(tunpack(msg(Tcreate, cat(fid :: nul :: le32(8r644) :: array[] of {byte 1} :: nil))), -1, "a Tcreate of a\\0b");
+	t.asserteq(tunpack(msg(Twalk, cat(fid :: le32(8) :: le16(2) :: str16("ok") :: nul :: nil))), -1, "a Twalk to a\\0b");
+	t.asserteq(tunpack(msg(Tattach, cat(fid :: le32(-1) :: nul :: str16("") :: nil))), -1, "a Tattach by a\\0b");
+	t.asserteq(tunpack(msg(Tattach, cat(fid :: le32(-1) :: str16("u") :: nul :: nil))), -1, "a Tattach to a\\0b");
+	t.asserteq(tunpack(msg(Tversion, cat(le32(8192) :: nul :: nil))), -1, "a Tversion of a\\0b");
+	t.asserteq(runpack(msg(Rerror, nul)), -1, "an Rerror of a\\0b");
+	t.asserteq(tunpack(msg(Tcreate, cat(fid :: str16("ab") :: le32(8r644) :: array[] of {byte 1} :: nil))), 7+4+4+4+1, "a Tcreate of ab is still taken");
+
+	# in a stat's name
+	d := styx->packdir(dirnamed("a.b"));
+	d[41+2+1] = byte 0;
+	(n, nil) := styx->unpackdir(d);
+	t.asserteq(n, 0, "a stat whose name is a\\0b");
+}
+
+# An Rerror with no text is still an error to whoever reads it.
+testEmptyError(t: ref T)
+{
+	(n, m) := Rmsg.unpack(msg(Rerror, str16("")));
+	t.asserteq(n, 9, "an Rerror with no text is a message");
+	if(m != nil)
+		pick e := m {
+		Error =>
+			t.assert(e.ename != nil, "and its text is not nil, which reads as no error");
+		* =>
+			t.error("not an Rmsg.Error");
+		}
+}
+
+# A string too long for its 16-bit count is not packed with the count
+# cut and all of its bytes after it; an error's text is cut instead.
+testLongStrings(t: ref T)
+{
+	s := "";
+	for(i := 0; i < 70000; i++)
+		s[i] = 'x';
+	t.assert((ref Tmsg.Create(1, 1, s, 8r644, 0)).pack() == nil, "a Tcreate of a 70000-byte name is not packed");
+	t.assert((ref Tmsg.Attach(1, 1, -1, s, "")).pack() == nil, "nor a Tattach by such a user");
+	t.assert((ref Tmsg.Walk(1, 1, 2, array[] of {"a", s})).pack() == nil, "nor a Twalk to such a name");
+	t.assert((ref Tmsg.Version(1, 8192, s)).pack() == nil, "nor a Tversion");
+	t.assert((ref Tmsg.Wstat(1, 1, dirnamed(s))).pack() == nil, "nor a Twstat");
+	t.assert((ref Rmsg.Stat(1, dirnamed(s))).pack() == nil, "nor an Rstat");
+	t.assert((ref Tmsg.Create(1, 1, s[0:65535], 8r644, 0)).pack() != nil, "one of 65535 bytes is");
+
+	r := ref Rmsg.Error(1, s);
+	a := r.pack();
+	t.assert(a != nil, "an Rerror of 70000 bytes is packed");
+	if(a == nil)
+		return;
+	t.asserteq(len a, r.packedsize(), "as long as its packedsize");
+	(n, m) := Rmsg.unpack(a);
+	t.asserteq(n, len a, "and unpacks as one message");
+	if(m != nil)
+		pick e := m {
+		Error =>
+			t.asserteq(len e.ename, 65535, "its text cut to what the count can say");
+		}
+	# a text of runes is cut between them
+	u := "";
+	for(i = 0; i < 30000; i++)
+		u[i] = 16r4e16;	# three bytes each
+	a = (ref Rmsg.Error(1, u)).pack();
+	(n, m) = Rmsg.unpack(a);
+	t.asserteq(n, len a, "an Rerror of 90000 bytes of runes unpacks as one message");
+	if(m != nil)
+		pick e := m {
+		Error =>
+			t.asserteq(len e.ename, 21845, "of whole runes");
+		}
+}
+
+hasnl(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' || s[i] == '\r')
+			return 1;
+	return 0;
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+# text() writes one message as one line, whatever is in its names.
+testTextOneLine(t: ref T)
+{
+	evil := "a\"\nTmsg.Clunk(9,9)";
+	s := (ref Tmsg.Walk(1, 1, 2, array[] of {evil})).text();
+	t.assert(!hasnl(s), "a Twalk's text: " + s);
+	t.assert(contains(s, "\\\"") && contains(s, "\\n"), "the quote and the newline written as Limbo writes them");
+	t.assert(!hasnl((ref Tmsg.Create(1, 1, evil, 8r644, 0)).text()), "a Tcreate's text");
+	t.assert(!hasnl((ref Tmsg.Attach(1, 1, -1, evil, evil)).text()), "a Tattach's text");
+	t.assert(!hasnl((ref Tmsg.Version(1, 8192, evil)).text()), "a Tversion's text");
+	t.assert(!hasnl((ref Tmsg.Wstat(1, 1, dirnamed(evil))).text()), "a Twstat's text");
+	t.assert(!hasnl((ref Rmsg.Error(1, evil + "\r")).text()), "an Rerror's text");
+	t.assert(!hasnl((ref Rmsg.Stat(1, dirnamed(evil))).text()), "an Rstat's text");
+	t.assertseq((ref Tmsg.Walk(1, 1, 2, array[] of {"plain", "names"})).text(),
+		"Tmsg.Walk(1,1,2,array[] of {\"plain\",\"names\"})", "plain names as before");
+}
+
+# unpack in a process whose standard output is p: what it wrote there
+quiet(a: array of byte, p: ref Sys->FD, done: chan of int)
+{
+	sys->pctl(Sys->FORKFD, nil);
+	sys->dup(p.fd, 1);
+	p = nil;
+	Tmsg.unpack(a);
+	Rmsg.unpack(a);
+	done <-= 1;
+}
+
+# A message of no known type, or a stat whose count is wrong, is
+# refused and nothing is printed: the unpackers wrote of it on standard
+# output, which is the server's own (a file being served, a pipe to
+# another program).
+testQuiet(t: ref T)
+{
+	Twstat: con 126;
+	Rstat: con 125;
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0)
+		t.skip("no pipe");
+	done := chan of int;
+	bad := msg(2, array[4] of {* => byte 0});
+	spawn quiet(bad, fds[1], done);
+	<-done;
+	spawn quiet(msg(3, array[4] of {* => byte 0}), fds[1], done);
+	<-done;
+	# a stat inside a count two bytes too long
+	d := styx->packdir(dirnamed("f"));
+	w := msg(Twstat, cat(le32(7) :: le16(len d + 2) :: d :: array[2] of {* => byte 0} :: nil));
+	spawn quiet(w, fds[1], done);
+	<-done;
+	r := msg(Rstat, cat(le16(len d + 2) :: d :: array[2] of {* => byte 0} :: nil));
+	spawn quiet(r, fds[1], done);
+	<-done;
+	fds[1] = nil;
+	buf := array[256] of byte;
+	n := sys->read(fds[0], buf, len buf);
+	if(n < 0)
+		n = 0;
+	t.assertseq(string buf[0:n], "", "written on standard output");
+	t.asserteq(tunpack(bad), -1, "a message of type 2 is refused");
+
+	# a runt has no type to be a T-message by
+	t.asserteq(styx->istmsg(array[3] of {* => byte 0}), 0, "istmsg of three bytes");
+	t.asserteq(styx->istmsg(msg(Tclunk, le32(7))), 1, "istmsg of a Tclunk");
+	t.asserteq(styx->istmsg(msg(Rclunk, nil)), 0, "istmsg of an Rclunk");
+}
+
+# what readmsg gives for these bytes and then the end of the file
+cut(b: array of byte): (array of byte, string)
+{
+	fds := array[2] of ref Sys->FD;
+	sys->pipe(fds);
+	if(len b > 0)
+		sys->write(fds[1], b, len b);
+	fds[1] = nil;
+	# an error string from some earlier call, as a server always has
+	sys->open("/nonexistent/styx_pack_test", Sys->OREAD);
+	return styx->readmsg(fds[0], 8192);
+}
+
+# A message the connection ended in the middle of is said to be that:
+# not another call's error, and not a clean end.
+testCutMessage(t: ref T)
+{
+	(a, err) := cut(nil);
+	t.assert(a == nil && err == nil, "no bytes at all is the end: " + err);
+	(a, err) = cut(array[] of {byte 9, byte 0});
+	t.assert(a == nil, "two bytes of a header are no message");
+	t.assertseq(err, "9P message truncated", "and the error says so");
+	(a, err) = cut(array[] of {byte 11, byte 0, byte 0, byte 0, byte Tclunk, byte 1});
+	t.assert(a == nil, "a header and part of a body are no message");
+	t.assertseq(err, "9P message truncated", "and the error says so");
+	(a, err) = cut(array[] of {byte 11, byte 0, byte 0, byte 0});
+	t.assertseq(err, "9P message truncated", "a size and nothing after it");
+	(a, err) = cut(msg(Tclunk, le32(7)));
+	t.assert(a != nil && len a == 11 && err == nil, "a whole message is read: " + err);
+
+	# through Tmsg.read: an error, not the nil of a clean end
+	fds := array[2] of ref Sys->FD;
+	sys->pipe(fds);
+	sys->write(fds[1], array[] of {byte 9, byte 0}, 2);
+	fds[1] = nil;
+	sys->werrstr("");
+	m := Tmsg.read(fds[0], 8192);
+	t.assert(m != nil && tagof m == tagof Tmsg.Readerror, "Tmsg.read of two bytes is a Readerror");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -390,6 +681,14 @@ init(nil: ref Draw->Context, args: list of string)
 	run("LongStat", testLongStat);
 	run("Venti", testVenti);
 	run("HostileLengths", testHostileLengths);
+	run("TrailingBytes", testTrailingBytes);
+	run("WalkCount", testWalkCount);
+	run("NulInStrings", testNulInStrings);
+	run("EmptyError", testEmptyError);
+	run("LongStrings", testLongStrings);
+	run("TextOneLine", testTextOneLine);
+	run("Quiet", testQuiet);
+	run("CutMessage", testCutMessage);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

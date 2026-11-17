@@ -104,7 +104,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(verbose)
 			sys->fprint(stderr, "already up to date\n");
 		# Still update refs
-		git->updaterefs(gitdir, remote, refs, verbose);
+		warn(git->updaterefs(gitdir, remote, refs, verbose));
 		return;
 	}
 
@@ -135,10 +135,10 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("indexpack: " + xerr);
 
 	# Rename pack using its SHA-1
-	git->renamepak(gitdir, packpath, packname);
+	check(git->renamepak(gitdir, packpath, packname));
 
 	# Update refs
-	git->updaterefs(gitdir, remote, refs, verbose);
+	warn(git->updaterefs(gitdir, remote, refs, verbose));
 
 	sys->print("fetch complete\n");
 }
@@ -155,4 +155,17 @@ fail(msg: string)
 {
 	sys->fprint(stderr, "git/fetch: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+# a ref or pack that was not written is not passed over
+check(err: string)
+{
+	if(err != nil)
+		fail(err);
+}
+
+warn(err: string)
+{
+	if(err != nil)
+		sys->fprint(stderr, "git/fetch: warning: %s\n", err);
 }

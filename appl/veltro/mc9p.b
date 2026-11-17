@@ -560,7 +560,20 @@ Serve:
 			path := int fid.path;
 			if(path >= Qendpointbase) {
 				ep := findendpointbyqid(path);
-				if(ep != nil) {
+				if(len m.data >= srv.msize - Styx->IOHDRSZ) {
+					# A request is one write. The kernel sends a write
+					# longer than a 9P message as several, and each was
+					# run as a request of its own: a POST over 8K went
+					# out cut short, and the rest was answered "invalid
+					# URL", which is what the client then read. A write
+					# that fills a message is the first piece of one, and
+					# refusing it stops the kernel sending the others.
+					# (Not by offset: a descriptor used for a second
+					# request writes where its last read ended.)
+					srv.reply(ref Rmsg.Error(m.tag, sys->sprint(
+						"request longer than one 9P message (%d bytes at most); it was not sent",
+						srv.msize - Styx->IOHDRSZ - 1)));
+				} else if(ep != nil) {
 					# Execute this fid's request and retain only this fid's response.
 					fid.data = tagresponse(path, executeendpoint(ep, m.data));
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -632,7 +645,8 @@ exechttp(endpoint, request: string): string
 		(url, body) := splitfirst(request, "\n");
 		return httppost(strip(url), body);
 	"headers" =>
-		return "Content-Type: application/json\n";
+		# what post sends (it said application/json)
+		return "Content-Type: " + POSTTYPE + "\n";
 	}
 	return "error: unknown endpoint";
 }
@@ -702,14 +716,36 @@ httpget(url: string): string
 	if(sys->write(conn.dfd, data, len data) < 0)
 		return sys->sprint("error: write failed: %r");
 
-	# Read response
-	response := "";
-	buf := array[8192] of byte;
-	while((n := sys->read(conn.dfd, buf, len buf)) > 0)
-		response += string buf[0:n];
+	return answer(readall(conn.dfd));
+}
 
-	# Parse response
-	(nil, nil, rbody) := parseresponse(response);
+# All of fd, as bytes: converted to text a read at a time, a character
+# that fell across two reads became two bad ones.
+readall(fd: ref Sys->FD): array of byte
+{
+	all := array[0] of byte;
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		all = appendbytes(all, buf[0:n]);
+	return all;
+}
+
+appendbytes(a, b: array of byte): array of byte
+{
+	r := array[len a + len b] of byte;
+	r[0:] = a;
+	r[len a:] = b;
+	return r;
+}
+
+# The body of a response, or an error naming its status if the server
+# refused: a 404's page used to come back as though it were the answer.
+answer(raw: array of byte): string
+{
+	(status, nil, rbody) := parseresponse(string raw);
+	(nf, f) := sys->tokenize(status, " \t\r");
+	if(nf < 2 || len hd tl f != 3 || (hd tl f)[0] != '2')
+		return "error: HTTP: " + strip(status) + "\n" + rbody;
 	return rbody;
 }
 
@@ -727,23 +763,28 @@ httppost(url, body: string): string
 	if(ok < 0)
 		return sys->sprint("error: cannot connect: %r");
 
-	req := "POST " + path + " HTTP/1.0\r\n" +
-	       "Host: " + host + "\r\n" +
-	       "Content-Length: " + string len body + "\r\n" +
-	       "Content-Type: application/x-www-form-urlencoded\r\n" +
-	       "Connection: close\r\n" +
-	       "\r\n" + body;
-	data := array of byte req;
-	if(sys->write(conn.dfd, data, len data) < 0)
+	data := postrequest(host, path, body);
+	if(sys->write(conn.dfd, data, len data) != len data)
 		return sys->sprint("error: write failed: %r");
 
-	response := "";
-	buf := array[8192] of byte;
-	while((n := sys->read(conn.dfd, buf, len buf)) > 0)
-		response += string buf[0:n];
+	return answer(readall(conn.dfd));
+}
 
-	(nil, nil, rbody) := parseresponse(response);
-	return rbody;
+POSTTYPE: con "application/x-www-form-urlencoded";
+
+# A POST as bytes. Content-Length is the body's bytes: it was its
+# characters, so a body with anything past ASCII was sent longer than
+# it was said to be.
+postrequest(host, path, body: string): array of byte
+{
+	b := array of byte body;
+	hdr := "POST " + path + " HTTP/1.0\r\n" +
+	       "Host: " + host + "\r\n" +
+	       "Content-Length: " + string len b + "\r\n" +
+	       "Content-Type: " + POSTTYPE + "\r\n" +
+	       "Connection: close\r\n" +
+	       "\r\n";
+	return appendbytes(array of byte hdr, b);
 }
 
 # Load TLS module on first use
@@ -788,14 +829,13 @@ httpsget(host, port, path: string): string
 		return "error: TLS write failed";
 	}
 
-	response := "";
+	all := array[0] of byte;
 	buf := array[8192] of byte;
 	while((n := tc.read(buf, len buf)) > 0)
-		response += string buf[0:n];
+		all = appendbytes(all, buf[0:n]);
 	tc.close();
 
-	(nil, nil, rbody) := parseresponse(response);
-	return rbody;
+	return answer(all);
 }
 
 # HTTPS POST via TLS
@@ -816,26 +856,19 @@ httpspost(host, port, path, body: string): string
 	if(cerr != nil)
 		return "error: TLS: " + cerr;
 
-	req := "POST " + path + " HTTP/1.0\r\n" +
-	       "Host: " + host + "\r\n" +
-	       "Content-Length: " + string len body + "\r\n" +
-	       "Content-Type: application/x-www-form-urlencoded\r\n" +
-	       "Connection: close\r\n" +
-	       "\r\n" + body;
-	data := array of byte req;
+	data := postrequest(host, path, body);
 	if(tc.write(data, len data) < 0) {
 		tc.close();
 		return "error: TLS write failed";
 	}
 
-	response := "";
+	all := array[0] of byte;
 	buf := array[8192] of byte;
 	while((n := tc.read(buf, len buf)) > 0)
-		response += string buf[0:n];
+		all = appendbytes(all, buf[0:n]);
 	tc.close();
 
-	(nil, nil, rbody) := parseresponse(response);
-	return rbody;
+	return answer(all);
 }
 
 # Read file contents
@@ -845,12 +878,7 @@ readfile(path: string): string
 	if(fd == nil)
 		return sys->sprint("error: cannot open %s: %r", path);
 
-	content := "";
-	buf := array[8192] of byte;
-	while((n := sys->read(fd, buf, len buf)) > 0)
-		content += string buf[0:n];
-
-	return content;
+	return string readall(fd);
 }
 
 # List directory
@@ -899,6 +927,12 @@ parseurl(url: string): (string, string, string, string, string)
 	scheme := "http";
 	port := "80";
 	i: int;
+
+	# A URL is one word. With a line break in it the rest went onto the
+	# wire as header lines and a second request of the writer's making.
+	for(i = 0; i < len url; i++)
+		if(url[i] <= ' ' || url[i] == 16r7f)
+			return ("", "", "", "", "invalid URL (a blank or control character in it)");
 
 	if(len url > 7 && str->tolower(url[0:7]) == "http://") {
 		url = url[7:];

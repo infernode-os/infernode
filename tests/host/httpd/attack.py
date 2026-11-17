@@ -14,7 +14,7 @@
 # Each check prints PASS: or FAIL:; the exit status is the failures.
 #
 
-import os, random, socket, ssl, sys, time, threading, hashlib
+import glob, os, random, socket, ssl, sys, time, threading, hashlib
 
 PLAIN, TLSP, REDIR, FLOOD = (int(x) for x in sys.argv[1:5])
 CAFILE, SITE, EMULOG = sys.argv[5], sys.argv[6], sys.argv[7]
@@ -458,6 +458,9 @@ def slow():
         d = b""
     took = time.time() - t0
     check(took < 13, "a TLS handshake left unfinished hung up", "%.1fs" % took)
+    sb = connect(PLAIN, timeout=60)
+    sb.sendall(b"GET /block HTTP/1.1\r\nHost: a\r\n\r\n")
+    tb = time.time()
     # a body promised and not sent
     s = connect(PLAIN, timeout=60)
     s.sendall(b"POST /post/ctl HTTP/1.1\r\nHost: a\r\nContent-Length: 10\r\n\r\nab")
@@ -470,15 +473,17 @@ def slow():
     check(took < 33, "a body not sent: hung up within the I/O deadline", "%.1fs" % took)
     # a file whose reads never return (a 9P server that does not
     # answer): the connection's process is killed at its I/O deadline
-    s = connect(PLAIN, timeout=60)
-    s.sendall(b"GET /block HTTP/1.1\r\nHost: a\r\n\r\n")
-    t0 = time.time()
+    # (begun with the wait above, to wait once for both)
     try:
-        d = s.recv(1000)
+        d = sb.recv(1000)
     except Exception:
-        d = b""
-    took = time.time() - t0
-    check(took < 33, "a file that never answers: hung up within the I/O deadline", "%.1fs" % took)
+        d = b"?"
+    took = time.time() - tb
+    check(d == b"" and 25 < took < 33, "a file that never answers: hung up at the I/O deadline, unanswered", "%r after %.1fs" % (d[:20], took))
+    time.sleep(1)
+    log = "".join(open(f, errors="replace").read() for f in glob.glob(os.path.dirname(EMULOG) + "/access.log*"))
+    check('"GET /block HTTP/1.1" 408 0' in log and '"POST /post/ctl HTTP/1.1" 408 0' in log,
+          "requests cut at a deadline are in the access log, as 408")
     check(alive(), "still serving after the slow clients")
 
 def flood():
@@ -661,6 +666,23 @@ def caching():
     check("cache-control" not in r.headers and "etag" in r.headers, "-C: none on a page (asked about each time)")
     check("cache-control" not in get(PLAIN, "/style.css").headers, "no -C: no Cache-Control")
 
+# httpd's Progs now: the emulator's ps, which httpd_test.sh's script
+# writes to ps.now each second
+def httpdprogs():
+    f = os.path.join(os.path.dirname(EMULOG), "ps.now")
+    t = time.time()
+    while time.time() - t < 10:
+        try:
+            if os.path.getmtime(f) > t:
+                break
+        except OSError:
+            pass
+        time.sleep(0.2)
+    try:
+        return open(f, errors="replace").read().count("Httpd")
+    except OSError:
+        return -1
+
 def events():
     def open_stream(path, tls=False, port=PLAIN):
         s = connect(port, tls, timeout=30)
@@ -704,6 +726,30 @@ def events():
     s.close()
     r = raw(PLAIN, b"HEAD /events/fast HTTP/1.1\r\nHost: a\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n", head=True)
     check(r.status == 200 and r.headers.get("content-type") == "text/event-stream", "HEAD of a stream: its headers")
+    # a stream of a file whose read never answers, left by its client:
+    # its reader went on waiting for good, in a group nothing could
+    # name any more (the leak check at the end, by httpd's own Progs)
+    s, rd, st, h = open_stream("/block")
+    check(st == b"HTTP/1.1 200 OK", "a stream of a file that never answers: opened")
+    s.close()
+    # many events a second: no process to an event (there was a
+    # sleeper each, alive 15 s)
+    n0 = httpdprogs()
+    s, rd, st, h = open_stream("/events/burst")
+    t0 = time.time()
+    evs = [chunk(rd) for i in range(1500)]
+    took = time.time() - t0
+    n1 = httpdprogs()
+    s.close()
+    check(evs.count(b"data: tick\n\n") >= 1490, "1500 events as fast as the file gives them (%.1f s)" % took)
+    check(n1 - n0 < 10, "and no process to an event", "%d of httpd's Progs before, %d after" % (n0, n1))
+    # only a file with no length of its own is a stream's source: one
+    # with a length is sent as the file it is (a large one was read
+    # and sent 16K to an event)
+    big = open(SITE + "/big.bin", "rb").read()
+    r = raw(PLAIN, b"GET /big.bin HTTP/1.1\r\nHost: a\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n")
+    check(r.status == 200 and r.headers.get("content-type") != "text/event-stream" and r.body == big,
+          "a file with a length asked for as a stream: the file", "%s %s %d bytes" % (r.status, r.headers.get("content-type"), len(r.body)))
     check(alive(), "still serving after the streams")
 
 def suites():

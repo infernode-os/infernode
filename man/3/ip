@@ -321,6 +321,9 @@ On writes, the header provides the destination for the resulting datagram,
 and if the local IP address corresponds to a valid local unicast interface,
 that address is used, otherwise the IP address of the transmitting interface
 is substituted.
+A datagram of no bytes is read as its header alone.
+(Without headers it is a read of no bytes, which a reader cannot tell from
+the end of the file: a conversation that anyone may send to is read with headers.)
 .TP
 .B headers4
 Set the connection to use an address header with IPv4 addresses

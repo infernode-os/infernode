@@ -62,6 +62,20 @@ for maintaining keys; when read, it returns a list of keys.
 For secret attributes, only the attribute name follow by a
 .L ?
 is returned.
+.TP
+.B secstore
+when read, one line saying where a key added now is saved:
+.B none
+(nowhere);
+.BI "saving secstore " "address user"
+(followed by
+.B 2fa
+for an account with a second factor);
+.BI "saving keyfile " fileR;
+or
+.BI notsaving " reason"
+when a store is configured and nothing is being saved to it.
+It is the answer to ``is the secstore unlocked'' that no other program can forge.
 .PD
 .PP
 In any authentication, the caller typically acts as a client
@@ -92,10 +106,6 @@ any particular authentication protocol.
 .I Factotum
 currently supports the following protocols:
 .TF mschap
-.TP
-.B infauth
-Inferno's authentication protocol
-.IR auth (6)
 .TP
 .B p9any
 a metaprotocol used to negotiate which actual protocol to use.
@@ -322,6 +332,17 @@ add a new key.  This will replace any old key whose
 public attributes match (ie, non
 .B !
 attributes).
+The key is first given to its protocol's module to check, if its
+.B proto
+has one (a
+.B p9sk1
+key goes to
+.BR p9any ),
+and a key the protocol could never use is refused with the reason:
+see each protocol below.
+A key whose
+.B proto
+names no module is kept as it is.
 .TP
 .B "delkey \fIattribute-value-list\fP
 delete a key whose attributes match those given.
@@ -330,6 +351,65 @@ delete a key whose attributes match those given.
 synchronously save all keys through the configured encrypted keyfile or
 secstore backend.  The write fails if no persistence backend is configured or
 if the save fails; success means the backend accepted the complete key set.
+A save that cannot be made is always answered with its reason
+(with no random numbers for a nonce, a
+.B sync
+was once never answered, and
+.I factotum
+then served nothing more).
+If the keys in secstore could not be read when
+.I factotum
+started with
+.BR -S ,
+nothing is saved there, by
+.B sync
+or otherwise, until a
+.B secstore
+request says where to save: keys added after a failed load were once saved
+over the file that had not been read.
+.TP
+.B "secstore \fIaddress user password\fP [\fIdatakey\fP]"
+save the keys, from now on, in the account
+.I user
+of the
+.IR secstore (1)
+server at
+.IR address ,
+authenticating with
+.IR password ;
+with
+.IR datakey
+(64 hexadecimal digits) the file is encrypted under that key and not under the
+one made from the password (a second-factor account).
+The fields are parted by blanks, so none can hold one.
+.TP
+.B "secstoreq \fIaddress user password\fP [\fIdatakey\fP]"
+the same, the fields quoted as
+.B %q
+writes them (see
+.IR sys-print (2)),
+for a password with a blank or a quote in it.
+.TP
+.B "genkey \fIattribute-value-list\fP
+make a signing key inside
+.I factotum
+and keep it as a key with the attributes given and the secret key as
+.BR !sk ;
+.B alg
+(default
+.BR mldsa87 )
+and
+.B owner
+(default
+.BR audit )
+say what is made and are not kept.
+In CNSA mode
+.RB ( /env/cnsamode ,
+see
+.IR security-login (2))
+only
+.B alg=mldsa87
+is taken.
 .TP
 .B debug
 toggle debugging on and off, i.e., the debugging also
@@ -615,45 +695,6 @@ module in the directory
 .BR /dis/auth/proto .
 Currently only a few are implemented in Inferno:
 .PP
-.B Infauth
-is the Inferno public-key authentication protocol described by
-.IR auth (6).
-It requires a key with
-.BR proto = infauth ,
-and a
-.B !authinfo
-attribute providing Inferno authentication data as an S-expression (see
-.IR sexprs (6)).
-The S-expression has five string elements:
-the signer's public key, the certificate for the user's public key,
-the user's secret key, and the values for parameters
-.I alpha
-and
-.IR p ,
-selected by the signer when the key was generated.
-The keys and certificates are represented as strings of the form produced by
-.IR keyring-certtostr (2);
-the parameter values are represented as binary in the form produced by
-.B IPint.iptobytes
-(see
-.IR keyring-ipint (2)).
-Normally
-.B infauth
-checks that the other party's key was signed by the signer in the
-.B !authinfo
-data, but
-if the key has the attribute
-.B anysigner
-with non-zero integer value,
-.B infauth
-will accept keys signed by any signer.
-The actual signer can be determined by inspecting the data
-returned by the
-.B authinfo
-request;
-the option is intended for use by services that support calls from many domains,
-each with its own signer.
-.PP
 .BR P9sk1
 is the shared-secret protocol used to authenticate to various Plan 9 services.
 It requires a key with
@@ -673,6 +714,65 @@ normally is invoked by Plan 9's general authentication protocol,
 .BR p9any ,
 which is supported by Inferno's
 .IR factotum .
+Only the client's side of
+.B p9any
+is implemented
+.RB ( role=server
+is refused).
+Of the domains a server offers,
+.B p9any
+takes the first for which there is a
+.B p9sk1
+key matching the attributes the caller gave
+(a
+.B user
+or
+.B dom
+attribute chooses among several keys).
+The offered domains are looked at without asking anybody; only if none has a key is
+an agent reading
+.B needkey
+asked for one, for the first domain offered.
+The server's ticket request must then be for the domain negotiated, or
+.B p9sk1
+stops before it asks anything of anybody:
+the key is found by that domain, and the authentication server is the one
+the network database names for it
+.RB ( "authdom=\fIdom\fP auth=\fIserver\fP" ,
+see
+.IR ndb (6)).
+A domain with no authentication server named has none;
+the machine's own
+.B $auth
+is not asked in its place.
+The ticket that comes back must carry the server's challenge and the user it was asked for.
+A
+.B p9sk1
+key without
+.BR dom ,
+.B user
+or a
+.B !password
+(or a
+.B !hex
+of 14 digits) is refused when it is stored.
+.B P9sk1
+needs DES, which is in the
+.B $Crypt
+module of the Windows and Plan 9 hosted emulators only;
+elsewhere it stops at the ticket.
+.PP
+A request
+.RB ( start )
+for any protocol may not give a secret attribute a value
+.RB ( !password=\fIguess\fP ):
+every attribute is a pattern, and the answer would say whether the guess was right.
+It is refused, as
+.B delkey
+refuses it.
+A secret asked for by name
+.RB ( !password? )
+is no guess.
 .PP
 .B Pass
 requires a key with
@@ -682,6 +782,93 @@ in addition to
 and
 .B !password
 attributes.
+A key with no
+.B user
+or an empty password is refused when it is stored.
+.PP
+.B Wpapsk
+gives the passphrase of a wireless network to
+.IR wpa (8).
+It requires a key with
+.BR proto=wpapsk ,
+an
+.B essid
+attribute naming the network, and a
+.B !password
+attribute.
+The request must name the network with
+.BR essid .
+The key must have an
+.B essid
+and a
+.B !password
+that WPA2 can use: a passphrase of 8 to 63 characters, or the key made from one
+as 64 hexadecimal digits; any other is refused when it is stored.
+.PP
+.B Btpin
+gives a Bluetooth pairing PIN to
+.IR bt9p (4).
+It requires a key with
+.B proto=btpin
+and a
+.B !pin
+attribute; a key with an
+.B addr
+attribute is the PIN for the peer with that address,
+and a key with none is the PIN for any peer not named.
+A request with an
+.B addr
+is answered only by that peer's key,
+and one without only by a key that has no
+.BR addr .
+A PIN is 1 to 16 bytes.
+.PP
+.B Btlink
+and
+.B btltk
+give
+.IR bt9p (4)
+the link key or long-term key it shares with a peer.
+Their keys need an
+.B addr
+and a
+.B !key
+(or
+.BR !ltk )
+of 32 hexadecimal digits, and a
+.B rand
+of 16 if there is one; any other is refused when it is stored.
+.PP
+.B Sign
+signs what its caller writes with a signing key that stays in
+.IR factotum .
+It requires a key with
+.BR proto=sign ,
+a
+.B service
+attribute and an
+.B !sk
+attribute (made by the
+.B genkey
+request).
+A key whose
+.B !sk
+does not read as a secret key, or with no
+.BR service ,
+is refused when it is stored.
+In CNSA mode only an ML-DSA-87 key signs.
+The request must name the
+.BR service ;
+.B op=pubkey
+returns the public key instead of signing, and any other
+.B op
+is refused.
+The result is in the form of
+.IR keyring-certtostr (2),
+with an expiry time of 1, a second into 1970:
+it is a signature over the caller's bytes and can never be taken for
+a certificate that vouches for a public key,
+which everything that authenticates refuses once expired.
 .\" .PP
 .\" .B Rsa
 .\" requires a key with

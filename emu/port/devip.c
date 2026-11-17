@@ -645,8 +645,14 @@ ipread(Chan *ch, void *a, long n, vlong off)
 			if(n < hdrs)
 				error(Ebadarg);
 			p = a;
+			/*
+			 * A datagram of no bytes is its header: it was
+			 * returned as 0, the end of the file to any reader
+			 * (so one empty datagram from anyone ended a
+			 * listener's reading).
+			 */
 			r = so_recv(c->sfd, p + hdrs, n - hdrs, p, hdrs);
-			if(r > 0)
+			if(r >= 0)
 				r += hdrs;
 		} else
 			r = so_recv(c->sfd, a, n, nil, 0);

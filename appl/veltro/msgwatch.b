@@ -107,16 +107,21 @@ luciferloop(inputpath: string)
 		policy = "";
 	policy = agentlib->strip(policy);
 	if(policy == "")
-		log("warning: empty/unreadable policy " + policyfile + " — relaying raw");
+		warn("warning: empty/unreadable policy " + policyfile + " — relaying raw");
 
+	nopen := 0;
 	for(;;) {
 		# Blocking read on /mnt/msg/notify
 		notifyfd := sys->open(notifypath, Sys->OREAD);
 		if(notifyfd == nil) {
-			log("cannot open " + notifypath + ", retrying in 5s");
+			# said once whether or not -v was given: started without
+			# it, as the boot starts it, nothing was ever logged
+			if(nopen++ == 0)
+				warn(sys->sprint("cannot open %s: %r; retrying every 5s", notifypath));
 			sys->sleep(5000);
 			continue;
 		}
+		nopen = 0;
 
 		notification := blockread(notifyfd);
 		notifyfd = nil;
@@ -140,8 +145,14 @@ luciferloop(inputpath: string)
 
 		case verdict {
 		"ignore" =>
-			markseen(src, id);
-			log("[triage ignore] flagged seen, NOT dispatched: " + truncate(notification, 50));
+			# what was done is what is logged: the flag's result was
+			# dropped and "flagged seen" logged whatever it was
+			merr := markseen(src, id);
+			if(merr == nil)
+				log("[triage ignore] flagged seen, NOT dispatched: " + truncate(notification, 50));
+			else
+				warn("[triage ignore] NOT dispatched, and not flagged seen (" + merr + "): " +
+					truncate(notification, 50));
 			continue;
 		"context" =>
 			log("[triage context] noted, NOT dispatched: " + truncate(notification, 50));
@@ -167,18 +178,30 @@ luciferloop(inputpath: string)
 		# chat as if they had typed it).
 		turn = MSGEVENT + turn;
 
-		inputfd := sys->open(inputpath, Sys->OWRITE);
-		if(inputfd == nil) {
-			log("cannot open " + inputpath + ": " + sys->sprint("%r"));
-			continue;
-		}
-
+		# The notification has been taken from msg9p and is nowhere else:
+		# a relay that fails is tried again before it is given up, and a
+		# message given up is said to be lost.
 		data := array of byte turn;
-		n := sys->write(inputfd, data, len data);
-		inputfd = nil;
-
-		if(n != len data)
-			log("short write to input: " + sys->sprint("%r"));
+		rerr := "";
+		for(try := 0; try < 3; try++) {
+			if(try > 0)
+				sys->sleep(2000);
+			inputfd := sys->open(inputpath, Sys->OWRITE);
+			if(inputfd == nil) {
+				rerr = sys->sprint("cannot open %s: %r", inputpath);
+				continue;
+			}
+			n := sys->write(inputfd, data, len data);
+			inputfd = nil;
+			if(n == len data) {
+				rerr = nil;
+				break;
+			}
+			rerr = sys->sprint("write to %s: %r", inputpath);
+		}
+		if(rerr != nil)
+			warn("[triage " + verdict + "] NOT relayed, message lost to the agent (" + rerr + "): " +
+				truncate(notification, 80));
 		else
 			log("[triage " + verdict + "] relayed to Meta Agent (policy injected)");
 	}
@@ -225,19 +248,12 @@ strindex(hay, needle: string): int
 }
 
 # Mark a message seen via msg9p ctl, so an ignored message is not re-delivered.
-markseen(src, id: string)
+# Returns nil, or why it was not marked.
+markseen(src, id: string): string
 {
 	if(!safesrcname(src) || !safetoken(id))
-		return;
-	fd := sys->open("/mnt/msg/ctl", Sys->OWRITE);
-	if(fd == nil) {
-		log("markseen: cannot open /mnt/msg/ctl: " + sys->sprint("%r"));
-		return;
-	}
-	cmd := "flag " + src + " " + id + " seen";
-	b := array of byte cmd;
-	sys->write(fd, b, len b);
-	fd = nil;
+		return "no source or message id in the notification";
+	return msgctl("flag " + src + " " + id + " seen");
 }
 
 # Headless mode: classify and handle autonomously
@@ -548,6 +564,12 @@ log(msg: string)
 {
 	if(verbose)
 		sys->fprint(stderr, "msgwatch: %s\n", msg);
+}
+
+# what went wrong, logged with or without -v
+warn(msg: string)
+{
+	sys->fprint(stderr, "msgwatch: %s\n", msg);
 }
 
 fatal(msg: string)

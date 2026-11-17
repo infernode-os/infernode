@@ -11,8 +11,9 @@ implement ToolHttp;
 #   http GET <url>                    # GET request
 #   http POST <url> <body>            # POST request
 #   http PUT <url> <body>             # PUT request
+#   http PATCH <url> <body>           # PATCH request
 #   http DELETE <url>                 # DELETE request
-#   http HEAD <url>                   # HEAD request (headers only)
+#   http HEAD <url>                   # HEAD request (status and headers only)
 #
 # Examples:
 #   http GET http://example.com/api
@@ -44,6 +45,12 @@ ToolHttp: module {
 	schema: fn(): string;
 };
 
+REQUEST_TIMEOUT: con 30000;	# 30 seconds, redirects and body included
+# The most of a response that is read: what is returned goes into a
+# model's context, and this is already more than one holds (webfetch and
+# payfetch read as much).
+MAX_BODY: con 512 * 1024;
+
 init(): string
 {
 	sys = load Sys Sys->PATH;
@@ -62,8 +69,13 @@ init(): string
 	if(publicnet == nil)
 		return "cannot load Publicnet";
 	publicnet->init();
+	inited = 1;
 	return nil;
 }
+
+# set once init has loaded everything: a call is refused, saying why,
+# rather than made with half of it
+inited := 0;
 
 name(): string
 {
@@ -77,17 +89,22 @@ doc(): string
 		"  http GET <url>              # GET request\n" +
 		"  http POST <url> <body>      # POST request\n" +
 		"  http PUT <url> <body>       # PUT request\n" +
+		"  http PATCH <url> <body>     # PATCH request\n" +
 		"  http DELETE <url>           # DELETE request\n" +
-		"  http HEAD <url>             # HEAD request\n\n" +
+		"  http HEAD <url>             # HEAD request: the status line, then the headers\n\n" +
 		"Arguments:\n" +
 		"  url  - Full URL (http:// or https://)\n" +
-		"  body - Request body (for POST/PUT)\n\n" +
+		"  body - Request body (for POST/PUT/PATCH), sent as written\n\n" +
 		"Examples:\n" +
 		"  http GET http://example.com/api\n" +
 		"  http GET https://api.github.com/\n" +
 		"  http POST http://localhost:8080/data '{\"key\": \"value\"}'\n\n" +
 		"HTTP and HTTPS use native TLS 1.3 with certificate verification.\n" +
-		"Hostnames are resolved via Inferno's connection server.";
+		"Hostnames are resolved via Inferno's connection server.\n" +
+		"Only public addresses are reached. A request is given 30 seconds,\n" +
+		"and only the first 512KB of a response is read (the result says\n" +
+		"when there was more). A status of 400 or above is reported as\n" +
+		"\"error: HTTP <status>\" followed by the response.";
 }
 
 schema(): string
@@ -98,9 +115,9 @@ schema(): string
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"method\":{\"type\":\"string\",\"description\":\"HTTP method: GET, POST, PUT, DELETE, HEAD.\"}," +
+				"\"method\":{\"type\":\"string\",\"description\":\"HTTP method: GET, POST, PUT, PATCH, DELETE, HEAD.\"}," +
 				"\"url\":{\"type\":\"string\",\"description\":\"Full URL including scheme, e.g. https://api.example.com/v1/x.\"}," +
-				"\"body\":{\"type\":\"string\",\"description\":\"Request body. Required for POST/PUT; omit otherwise.\"}" +
+				"\"body\":{\"type\":\"string\",\"description\":\"Request body. Required for POST/PUT/PATCH; omit otherwise.\"}" +
 			"}," +
 			"\"required\":[\"method\",\"url\"]" +
 		"}" +
@@ -109,8 +126,8 @@ schema(): string
 
 exec(args: string): string
 {
-	if(sys == nil)
-		init();
+	if(!inited && (ierr := init()) != nil)
+		return "error: http: " + ierr;
 
 	# Parse arguments
 	(n, argv) := sys->tokenize(args, " \t");
@@ -122,16 +139,12 @@ exec(args: string): string
 	url := hd argv;
 	argv = tl argv;
 
+	# The body is the rest of the arguments as written.  (It was the
+	# rest's words joined by single blanks: what was sent was not what
+	# was asked for wherever the body had two blanks, a tab or a newline.)
 	body := "";
-	if(argv != nil) {
-		# Join remaining args as body
-		for(; argv != nil; argv = tl argv) {
-			if(body != "")
-				body += " ";
-			body += hd argv;
-		}
-		body = stripquotes(body);
-	}
+	if(argv != nil)
+		body = stripquotes(restafter(args, 2));
 
 	# Validate method
 	case method {
@@ -162,28 +175,56 @@ exec(args: string): string
 	if(body != "")
 		reqbody = array of byte body;
 
-	# Execute request
-	(resp, err) := webclient->requestpublic(method, url, hdrs, reqbody);
+	# Execute request.  It keeps its own time and limit: there was no
+	# deadline here at all, so a server that accepted and said nothing
+	# held the agent's turn until the user cancelled it.
+	(resp, err) := webclient->requestbounded(method, url, hdrs, reqbody, 1, REQUEST_TIMEOUT, MAX_BODY);
+	if(err == "request timed out")
+		return "error: request timed out (30s)";
 	if(err != nil)
 		return "error: " + err;
 
-	# For HEAD, return headers
+	# For HEAD, the status line and the headers (the status was left
+	# out: a 404 and a 200 read the same)
 	if(method == "HEAD") {
-		result := "";
+		result := resp.status;
 		for(h := resp.headers; h != nil; h = tl h) {
 			hdr := hd h;
-			if(result != "")
-				result += "\n";
-			result += hdr.name + ": " + hdr.value;
+			result += "\n" + hdr.name + ": " + hdr.value;
 		}
+		if(resp.statuscode >= 400)
+			return "error: " + result;
 		return result;
 	}
 
+	text := string resp.body;
+	if(resp.truncated)
+		text += "\n[the response is longer: only its first 512KB were read]";
+
 	# For error status, include status line
 	if(resp.statuscode >= 400)
-		return sys->sprint("error: HTTP %d\n%s", resp.statuscode, string resp.body);
+		return sys->sprint("error: HTTP %d\n%s", resp.statuscode, text);
 
-	return string resp.body;
+	# A response that begins as a failed call does ("error:") is said to
+	# be the response, so that it is not read as this tool failing.
+	if(len text >= 6 && str->tolower(text[0:6]) == "error:")
+		return sys->sprint("HTTP %d, the response:\n%s", resp.statuscode, text);
+	return text;
+}
+
+# s after its first n words, less the blanks before it
+restafter(s: string, n: int): string
+{
+	i := 0;
+	for(; n > 0; n--) {
+		while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+			i++;
+		while(i < len s && s[i] != ' ' && s[i] != '\t')
+			i++;
+	}
+	while(i < len s && (s[i] == ' ' || s[i] == '\t'))
+		i++;
+	return s[i:];
 }
 
 # Strip surrounding quotes

@@ -16,7 +16,7 @@ include "bufio.m";
 	Iobuf: import bufio;
 include "wiki.m";
 	wiki: Wiki;
-	Map, Wpage, Wdoc, Whist, Tpage, Toldpage, Thistory, Tdiff, Tedit, Twerror: import wiki;
+	Map, Wpage, Wdoc, Whist, Tpage, Toldpage, Thistory, Tdiff, Tedit, Twerror, Maxpages: import wiki;
 include "string.m";
 	str: String;
 include "arg.m";
@@ -42,6 +42,7 @@ reqpool: list of chan of (ref Tmsg, ref Aux, ref Fid);
 reqidle: int;
 reqdone: chan of chan of (ref Tmsg, ref Aux, ref Fid);
 srv: ref Styxserver;
+commitc: chan of (string, chan of (int, string));	# a page written to new, to the committer
 
 filelist := array[] of {
 	"index.html",
@@ -71,6 +72,7 @@ Derror, Droot, D1st, D2nd, Fnew, Fmap, F1st, F2nd: con iota;
 
 Maxreqidle: con 3;
 Maxreplyidle: con 3;
+Maxnew: con 1024*1024;	# bytes of a page written to new
 
 Aux: adt {
 	path:		big;
@@ -80,9 +82,11 @@ Aux: adt {
 	s:		string;
 };
 
+# Each field in its own bits: a page number past 16 bits ran into the
+# type, so /262144 was page 0's index.html, a file at the root.
 mkqid(typ, num, vers, file: int): big
 {
-	return  ((big typ)<< 40) |  ((big num)<<24) | big (vers<<8) | big file;
+	return  ((big (typ & 16rFF))<< 40) |  ((big (num & 16rFFFF))<<24) | big ((vers & 16rFFFF)<<8) | big (file & 16rFF);
 }
 
 qidtype(path: big): int
@@ -130,7 +134,8 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	args = arg->argv();
 
-	sys->pctl(Sys->FORKNS, nil);		# fork pgrp?
+	# a group of its own: its processes end with its connection (serve)
+	sys->pctl(Sys->FORKNS|Sys->NEWPGRP, nil);
 
 	navops := chan of ref Navop;
 	spawn navigator(navops);
@@ -145,7 +150,9 @@ serve(tchan: chan of ref Tmsg, navops: chan of ref Navop)
 	pidregister = chan of (int, int);
 	flush = chan of (int, int, chan of int);
 	reqdone = chan of chan of (ref Tmsg, ref Aux, ref Fid);
+	commitc = chan of (string, chan of (int, string));
 	spawn flushproc(flush);
+	spawn committer();
 
 Serve:
 	for(;;)alt{
@@ -175,11 +182,12 @@ Serve:
 			flush <-= (m.tag, m.oldtag, done);
 			<-done;
 		Stat =>
+			# (a stat of a fid not in use was answered and then the
+			# loop left: the server gone for one bad message)
 			c := srv.getfid(m.fid);
-			if(c == nil) {
+			if(c == nil)
 				srv.reply(ref Rmsg.Error(m.tag, "bad fid"));
-				return;
-			} else
+			else
 				request(m, c);
 		* =>
 			srv.default(gm);
@@ -191,7 +199,44 @@ Serve:
 			reqidle--;
 		}
 	}
+	# The connection has gone, and with it everything that served it:
+	# idle workers, the flush process and the committer stayed for
+	# ever.  The committer first, so a page being written is whole.
+	commitc <-= (nil, nil);
 	navops <-= nil;
+	fd := sys->open("/prog/" + string sys->pctl(0, nil) + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+# The one process that writes pages.  An edit says which version it was
+# made from, and is a conflict if the page is no longer that one: the
+# compare and the write are one step only because no other write runs
+# between them, and the lock wiki.b takes round them is a file made for
+# exclusive use, which the emulator's host file system does not have.
+# Not a lock held by the worker: a flush kills workers, and a killed
+# one would keep it.  The answer waits in the channel for a worker that
+# has been killed.
+committer()
+{
+	for(;;){
+		(file, rc) := <-commitc;
+		if(rc == nil)
+			break;
+		{
+			rc <-= newfile(file);
+		} exception e {
+		"*" =>
+			rc <-= (-1, "wikifs: " + e);
+		}
+	}
+}
+
+commit(file: string): (int, string)
+{
+	rc := chan[1] of (int, string);
+	commitc <-= (file, rc);
+	return <-rc;
 }
 
 request(m: ref Styx->Tmsg, fid: ref Fid)
@@ -239,17 +284,23 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 		Write =>
 			case qidtype(path) {
 			Fnew =>
-				if(len m.data != 0){
+				if(len fid.data + len m.data > Maxnew){
+					fid.data = nil;
+					srv.reply(ref Rmsg.Error(m.tag, sys->sprint("page too long: at most %d bytes", Maxnew)));
+				}else if(len m.data != 0){
 					n := len fid.data;
 					fid.data = (array[len fid.data + len m.data] of byte)[0:] = fid.data;
 					p := fid.data[n:];
 					p[0:] = m.data;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				}else if(len fid.data != 0) {
-					(n, err) := newfile(string fid.data);
+					(n, err) := commit(string fid.data);
 					if(n < 0){
+						# why: a title that names no page, a full wiki
 						fid.data = nil;
-						srv.reply(ref Rmsg.Error(m.tag, "newfile failed"));
+						if(err == nil)
+							err = "newfile failed";
+						srv.reply(ref Rmsg.Error(m.tag, err));
 					}else{
 						# as Plan 9's: a write refused (an update
 						# conflict) still names the page, so the
@@ -282,18 +333,20 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 			# so we have to read and generate the content and calculate it's length
 			# we can then stash it in the fid, or a cache of qid if we wanted.
 			# httpd also uses mtime for last-modified
+			# (an error here left the worker without telling the flush
+			# process or the pool; and a second stat of a file said 0)
 			(d, err) := dirgen(path);
-			if(d == nil) {
+			if(d == nil)
 				srv.reply(ref Rmsg.Error(m.tag, err));
-				return;
-			}
-			if(fid.data == nil)
+			else{
 				case qidtype(path) {
 				F1st or F2nd =>
-					fid.data = loadpath(path);
+					if(fid.data == nil)
+						fid.data = loadpath(path);
 					d.length = big len fid.data;
 				}
-			srv.reply(ref Rmsg.Stat(m.tag, *d));
+				srv.reply(ref Rmsg.Stat(m.tag, *d));
+			}
 		* =>
 			srv.reply(ref Rmsg.Error(gm.tag, "oh dear"));	
 		}
@@ -303,6 +356,7 @@ requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
 }
 
 # a page written to new: its number, and why its write was refused
+# (-1: it names no page, or none could be made, and why)
 newfile(file: string): (int, string)
 {
 	w: ref Whist;
@@ -311,19 +365,23 @@ newfile(file: string): (int, string)
 
 	fd := bufio->sopen(file);
 	if((title = fd.gets('\n')) == nil)
-		return (-1, nil);
+		return (-1, "no title");
 	w = ref Whist;
-	w.title = title[0:len title-1];
+	w.title = chomp(title);
 	author = "me";
 	t = 0;
 	while((s := fd.gets('\n')) != nil && s != "\n"){
+		# (a last line of one letter and no newline was sliced [1:0])
+		s = chomp(s);
+		if(s == nil)
+			continue;
 		case s[0] {
 		'A' =>
-			author = s[1:len s - 1];
+			author = s[1:];
 		'D' =>
 			t = int s[1:];
 		'C' =>
-			comment = s[1: len s - 1];
+			comment = s[1:];
 		}
 	}
 	w.doc = array[1] of ref Wdoc;
@@ -331,15 +389,40 @@ newfile(file: string): (int, string)
 	
 	w.doc[0].wtxt = wiki->Brdpage(fd, wiki->Srdwline);
 	if(w.doc[0].wtxt == nil)
-		return (-1, nil);
+		return (-1, "a page with no text");
 	w.ndoc = 1;
 	n = wiki->allocnum(w.title, 0);
 	if(n < 0)
-		return (-1, nil);
+		return (-1, sys->sprint("%r"));
 	s = wiki->doctext(w.doc[0]);
 	if(wiki->writepage(n, t, s, w.title) < 0)
 		return (n, sys->sprint("%r"));
 	return (n, nil);
+}
+
+chomp(s: string): string
+{
+	if(s != nil && s[len s - 1] == '\n')
+		return s[0:len s - 1];
+	return s;
+}
+
+# A page's number as a name: -1 if the name is not digits, -2 if it is
+# and names no page a qid can number
+pagenum(s: string): int
+{
+	if(s == nil)
+		return -1;
+	n := 0;
+	for(i := 0; i < len s; i++){
+		if(s[i] < '0' || s[i] > '9')
+			return -1;
+		if(n < Maxpages)
+			n = n*10 + s[i] - '0';
+	}
+	if(n >= Maxpages)
+		return -2;
+	return n;
 }
 
 loadpath(path: big): array of byte
@@ -364,6 +447,8 @@ loadpath(path: big): array of byte
 	else
 		t = Toldpage;
 	n := qidvers(path);
+	if(n >= wh.ndoc)
+		return nil;	# a history that has lost versions since the walk
 	case qidfile(path) {
 	Qindexhtml =>
 		s = wiki->tohtml(wh, wh.doc[n], t);
@@ -395,103 +480,127 @@ qid(path: big): Sys->Qid
 navigator(navops: chan of ref Navop)
 {
 	while((m := <-navops) != nil){
-		wiki->currentmap(0);
-		path := big 0;
-		pick n := m {
-		Stat =>
-			# stats from here return 0 length 
-			# (used by styxservers' attach, canopen, cancreate, walk)
-			# but for stat from client the above stat, not this one, is used.
-			n.reply <-= dirgen(n.path);
-		Walk =>
-			name := n.name;
-			case qidtype(m.path) {
-			Droot =>
-				case name {
-				".." =>
-					path = m.path;
-				"new" =>
-					path = mkqid(Fnew, 0, 0, 0);
-				"map" =>
-					path = mkqid(Fmap, 0, 0, 0);
-				* =>
-					(num, q) := str->toint(name, 10);
-					if(q != nil)
-						num = wiki->nametonum(name);
-					if(num != -1)
-						path = mkqid(D1st, num, 0, 0);
-				}
-			D1st =>
-				case name{
-				".." =>
-					path = mkqid(Droot, 0, 0, 0);
-				* =>
-					(num, q) := str->toint(name, 10);
-					if(q == nil){
-						wh := wiki->gethistory(qidnum(m.path));
-						if(wh == nil)
-							break;
-						for(i:=0;i<wh.ndoc;i++)
-							if(wh.doc[i].time==num){
-								path = mkqid(D2nd, qidnum(m.path), i, 0);
-								break;
-							}
-					}else{
-						for(i:=0;i<len filelist; i++)
-							if(name == filelist[i]){
-								path = mkqid(F1st, qidnum(m.path), 0, i);
-								break;
-							}
-					}
-				}
-			D2nd =>
-				case name {
-				".." =>
-					path = mkqid(D1st, qidnum(m.path), 0, 0);
-				* =>
-					for(i:=0;i<=Qraw;i++){
-						if(name==filelist[i]){
-							path = mkqid(F2nd, qidnum(m.path), qidvers(m.path), i);
+		# whatever goes wrong with one request is that request's error:
+		# every walk and stat waits for this process
+		{
+			navop(m);
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "wikifs: %s\n", e);
+			m.reply <-= (nil, "wikifs: " + e);
+		}
+	}
+}
+
+navop(m: ref Navop)
+{
+	wiki->currentmap(0);
+	path := big 0;
+	pick n := m {
+	Stat =>
+		# stats from here return 0 length 
+		# (used by styxservers' attach, canopen, cancreate, walk)
+		# but for stat from client the above stat, not this one, is used.
+		n.reply <-= dirgen(n.path);
+	Walk =>
+		name := n.name;
+		case qidtype(m.path) {
+		Droot =>
+			case name {
+			".." =>
+				path = m.path;
+			"new" =>
+				path = mkqid(Fnew, 0, 0, 0);
+			"map" =>
+				path = mkqid(Fmap, 0, 0, 0);
+			* =>
+				# A number is a page's if there is that page: any
+				# integer walked (to an empty page, each taking a
+				# place in the cache), and one past 65535 to
+				# another page's files.
+				num := pagenum(name);
+				if(num == -1)
+					num = wiki->nametonum(name);
+				if(num >= 0 && wiki->numtoname(num) != nil && wiki->getcurrent(num) != nil)
+					path = mkqid(D1st, num, 0, 0);
+			}
+		D1st =>
+			case name{
+			".." =>
+				path = mkqid(Droot, 0, 0, 0);
+			* =>
+				(num, q) := str->toint(name, 10);
+				if(q == nil){
+					wh := wiki->gethistory(qidnum(m.path));
+					if(wh == nil)
+						break;
+					for(i:=0;i<wh.ndoc && i < 16r10000;i++)
+						if(wh.doc[i].time==num){
+							path = mkqid(D2nd, qidnum(m.path), i, 0);
 							break;
 						}
+				}else{
+					for(i:=0;i<len filelist; i++)
+						if(name == filelist[i]){
+							path = mkqid(F1st, qidnum(m.path), 0, i);
+							break;
+						}
+				}
+			}
+		D2nd =>
+			case name {
+			".." =>
+				path = mkqid(D1st, qidnum(m.path), 0, 0);
+			* =>
+				for(i:=0;i<=Qraw;i++){
+					if(name==filelist[i]){
+						path = mkqid(F2nd, qidnum(m.path), qidvers(m.path), i);
+						break;
 					}
 				}
 			}
-			n.reply <-= dirgen(path);
-		Readdir =>
-			d: array of big;
-			wh: ref Whist;
-			case qidtype(m.path){
-			Droot =>
-				map := wiki->map;
-				d = array[2+map.nel] of big;
-				d[0] = mkqid(Fnew, 0, 0, 0);
-				d[1] = mkqid(Fmap, 0, 0, 0);
-				for(i:=0;i<map.nel;i++)
-					d[i+2] = mkqid(D1st, map.el[i].n, 0, 0);
-			D1st =>
-				nfiles := Nfile;
-				wh = wiki->gethistory(qidnum(m.path));
-				if(wh != nil)
-					nfiles += wh.ndoc;
-				d = array[nfiles] of big;
-				for(i:=0; i<Nfile; i++)
-					d[i] = mkqid(F1st, qidnum(m.path), 0, i);
-				for(; i<nfiles; i++)
-					d[i] = mkqid(D2nd, qidnum(m.path), i - Nfile, 0);
-			D2nd =>
-				d = array[Qraw+1] of big;
-				for(i:=0; i<=Qraw; i++)
-					d[i] = mkqid(F2nd, qidnum(m.path), qidvers(m.path), i);
-			}
-			if(d == nil){
-				n.reply <-= (nil, Enotdir);
-				break;
-			}
-			for (i := n.offset; i < len d; i++)
-				n.reply <-= dirgen(d[i]);
-			n.reply <-= (nil, nil);
 		}
+		n.reply <-= dirgen(path);
+	Readdir =>
+		d: array of big;
+		wh: ref Whist;
+		case qidtype(m.path){
+		Droot =>
+			map := wiki->map;
+			if(map == nil)
+				map = ref Map;
+			d = array[2+map.nel] of big;
+			d[0] = mkqid(Fnew, 0, 0, 0);
+			d[1] = mkqid(Fmap, 0, 0, 0);
+			for(i:=0;i<map.nel;i++)
+				d[i+2] = mkqid(D1st, map.el[i].n, 0, 0);
+		D1st =>
+			nfiles := Nfile;
+			wh = wiki->gethistory(qidnum(m.path));
+			if(wh != nil)
+				nfiles += wh.ndoc;
+			if(nfiles > Nfile + 16r10000)
+				nfiles = Nfile + 16r10000;	# the versions a qid can number
+			d = array[nfiles] of big;
+			for(i:=0; i<Nfile; i++)
+				d[i] = mkqid(F1st, qidnum(m.path), 0, i);
+			for(; i<nfiles; i++)
+				d[i] = mkqid(D2nd, qidnum(m.path), i - Nfile, 0);
+		D2nd =>
+			d = array[Qraw+1] of big;
+			for(i:=0; i<=Qraw; i++)
+				d[i] = mkqid(F2nd, qidnum(m.path), qidvers(m.path), i);
+		}
+		if(d == nil){
+			n.reply <-= (nil, Enotdir);
+			break;
+		}
+		for (i := n.offset; i < len d; i++){
+			(dir, nil) := dirgen(d[i]);
+			if(dir != nil)	# (a nil one ends the listing)
+				n.reply <-= (dir, nil);
+		}
+		n.reply <-= (nil, nil);
 	}
 }
 
@@ -517,7 +626,7 @@ dirgen(path: big): (ref Sys->Dir, string)
 		wh = wiki->getcurrent(qidnum(path));
 	D2nd =>
 		wh = wiki->gethistory(qidnum(path));
-		if(wh == nil)
+		if(wh == nil || vers >= wh.ndoc)
 			return (nil, Enotfound);
 		d.name = sys->sprint("%ud", wh.doc[vers].time);
 		d.mode = 8r555|Sys->DMDIR;
@@ -542,7 +651,9 @@ dirgen(path: big): (ref Sys->Dir, string)
 		d.qid.qtype = Sys->QTDIR;
 	d.uid = user;
 	d.gid = user;
-	if(wh != nil)
+	# (a file of a title and nothing else was a history of no versions,
+	# indexed here: the navigator ended, and the wiki with it)
+	if(wh != nil && vers < wh.ndoc)
 		d.mtime = d.atime = wh.doc[vers].time;
 	else
 		d.mtime = d.atime = daytime->now();
@@ -559,12 +670,14 @@ flushproc(flush: chan of (int, int, chan of int))
 	for(;;)alt{
 	(pid, tag) := <-pidregister =>
 		if(tag == -1){
+			# (an entry was dropped whether or not pid was found:
+			# after a flush had taken a worker's the count went
+			# negative and the next register indexed a[-1])
 			for(i := 0; i < n; i++)
-				if(a[i].t0 == pid)
+				if(a[i].t0 == pid){
+					a[i] = a[--n];
 					break;
-			n--;
-			if(i < n)
-				a[i] = a[n];
+				}
 		}else{
 			if(n >= len a){
 				na := array[n + 5] of (int, int);
@@ -574,22 +687,21 @@ flushproc(flush: chan of (int, int, chan of int))
 			a[n++] = (pid, tag);
 		}
 	(tag, oldtag, done) := <-flush =>
+		pid := -1;
 		for(i := 0; i < n; i++)
 			if(a[i].t1 == oldtag){
-				spawn doflush(tag, a[i].t0, done);
+				pid = a[i].t0;
+				a[i] = a[--n];	# its worker is killed: it will not say it is done
 				break;
 			}
-		if(i == n)
-			spawn doflush(tag, -1, done);
+		spawn doflush(tag, pid, done);
 	}
 }
 
 doflush(tag: int, pid: int, done: chan of int)
 {
-	if(pid != -1){
+	if(pid != -1)
 		kill(pid, "kill");
-		pidregister <-= (pid, -1);
-	}
 	srv.reply(ref Rmsg.Flush(tag));
 	done <-= 1;
 }

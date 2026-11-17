@@ -38,6 +38,7 @@ ffmpeg -hide_banner -loglevel error -y -i "$P.y4m" -f rawvideo -pix_fmt yuv420p 
 # loop) and 5 (13 mod 8)
 cat > "$P.sh" <<ISH
 load std
+mkdir -p /mnt/video
 mount {vid9p -w 0 -r /.vid9p_replay_test.y4m} /mnt/video
 cat /mnt/video/0/fmt > /.vid9p_replay_test.fmt
 sleep 2

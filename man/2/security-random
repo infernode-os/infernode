@@ -32,6 +32,14 @@ may be either
 or
 .B NotQuiteRandom
 to select the random data source.
+.PP
+Neither function returns anything but random data.
+If the device cannot be opened, a read fails, or it gives fewer bytes
+than were asked for, both raise an exception whose text begins
+.BR random: ,
+naming the device and the error;
+a caller with no handler ends there, with that reason.
+(They once returned zeros and said nothing.)
 .SH FILES
 .B /dev/random
 .br

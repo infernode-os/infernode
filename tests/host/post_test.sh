@@ -8,7 +8,8 @@
 #   - #s<spec>/fs appears, and a mount of it reads what the directory has
 #     (fmt; every frame byte for byte, against the direct mount)
 #   - each open is a connection of its own: two mounts read at once
-#   - a directory that is not one refused; a spec taken refused
+#   - a directory that is not one refused; a spec taken refused; no spec
+#     (a post nobody could reach) refused
 #   - post's group killed (kill -g, by its pid): the posted file gone and
 #     its connections with it (#s relays them through post)
 #   - the time to read the clip direct and through post printed
@@ -54,6 +55,7 @@ echo '-- two'; mount -A '#s$S/fs' /mnt/c
 sleep 1
 echo '-- refused'; post x /mnt/a/0/fmt; echo NOTDIR-\$status
 post $S /mnt/a; echo TAKEN-\$status
+post '' /mnt/a; echo NOSPEC-\$status
 echo '-- times'; time cat /mnt/a/0/frame > /dev/null; time cat /mnt/b/0/frame > /dev/null
 echo '-- killed'; kill -g \$postpid; sleep 1
 mkdir -p /mnt/d; mount -A '#s$S/fs' /mnt/d; echo NEWMOUNT-\$status
@@ -72,6 +74,7 @@ grep -q '^CMP-$' "$W/log" && ok "every frame byte for byte as the direct mount" 
 grep -q '^TWO-B-$' "$W/log" && grep -q '^TWO-C-$' "$W/log" && ok "two connections read at once" || bad "two: $(grep TWO- "$W/log" | tr '\n' ' ')"
 grep -q '^NOTDIR-..*' "$W/log" && ok "a directory that is not one refused" || bad "notdir: $(grep NOTDIR "$W/log")"
 grep -q '^TAKEN-..*' "$W/log" && ok "a spec taken refused" || bad "taken: $(grep TAKEN "$W/log")"
+grep -q '^NOSPEC-..*' "$W/log" && ok "no spec refused" || bad "nospec: $(grep NOSPEC "$W/log")"
 grep -q '^NEWMOUNT-..*' "$W/log" && ok "killed: no new connection" || bad "killed: $(grep NEWMOUNT "$W/log")"
 grep -q '^STILL-..*' "$W/log" && ok "killed: its connections end with it" || bad "still: $(grep STILL "$W/log")"
 echo "times (direct, posted): $(sed -n '/^-- times/,/^-- killed/p' "$W/log" | grep -o '[0-9.]*r' | tr '\n' ' ')"

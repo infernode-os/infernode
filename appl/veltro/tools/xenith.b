@@ -151,6 +151,12 @@ checkbodyaccess(winid: string): string
 	(wpath, nil) := splitfirst(tag);
 	if(wpath == "")
 		return sys->sprint("error: access denied — window %s has no path", winid);
+	# A window with no name has a tag that begins with its commands
+	# ("Del Snarf ..."), and "Del" was looked up as a file in the
+	# tool's working directory: an agent that could make a file of
+	# that name there read every unnamed window.
+	if(wpath[0] != '/')
+		return sys->sprint("error: access denied — window %s shows no file", winid);
 
 	# Check if the path is accessible in our namespace
 	(ok, nil) := sys->stat(wpath);
@@ -163,7 +169,9 @@ checkbodyaccess(winid: string): string
 	# file the user has open beside the project, outside it, was read on
 	# the strength of its directory; and an /+Agent window (another
 	# conversation) on the strength of /.
-	if(len wpath > 7 && wpath[len wpath - 7:] == "/+Errors") {
+	# ("/+Errors" is eight characters; it was compared with the last
+	# seven, so this never held.)
+	if(len wpath > 8 && wpath[len wpath - 8:] == "/+Errors") {
 		(ok2, nil) := sys->stat(dirname(wpath));
 		if(ok2 >= 0)
 			return nil;
@@ -190,7 +198,44 @@ windowlabel(name: string): (string, string)
 			return (nil, "error: a window's name is a label, not a file: " + name +
 				" (windows you create are named /+label; to change a file, use write or edit)");
 	name = ctlfield(name);
+	# Xenith's own: /+Errors is where it puts the output of commands run
+	# in /, /+Agent a conversation with an agent.  An agent's window of
+	# either name would be taken for it.
+	if(name == "Errors" || name == "Agent")
+		return (nil, "error: " + name + " is one of Xenith's own window names: choose another label");
 	return ("/+" + name, nil);
+}
+
+# A window is named by its number.  ("new" is a name too: reading its
+# tag made a window nobody owned, as often as asked.)
+validwinid(id: string): int
+{
+	if(id == "" || len id > 9)
+		return 0;
+	for(i := 0; i < len id; i++)
+		if(id[i] < '0' || id[i] > '9')
+			return 0;
+	return 1;
+}
+
+# A request to a window's ctl or colors file is one 9P message.  A
+# longer write is sent as several, and Xenith runs each as it comes: the
+# end of a long line, which only the first word of was checked, was run
+# as a line of its own ("name <file>", "put").
+MAXCTL: con 1024;
+
+writectl(path, cmds: string): string
+{
+	data := array of byte cmds;
+	if(len data > MAXCTL)
+		return sys->sprint("error: %d bytes is too long for one request to a window (the limit is %d)",
+			len data, MAXCTL);
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("error: cannot open %s: %r", path);
+	if(sys->write(fd, data, len data) != len data)
+		return sys->sprint("error: write to %s failed: %r", path);
+	return nil;
 }
 
 # The control commands an agent may give its own windows: layout and
@@ -310,19 +355,18 @@ docreate(args: string): string
 
 	# ctl returns "id  tag  body  ..." — extract just the window ID (first token)
 	(winid, nil) := splitfirst(string buf[0:n]);
+	if(!validwinid(winid))
+		return "error: failed to create window: no window number";
 
 	# Track ownership
 	owned = winid :: owned;
 
 	# Set name if provided
 	if(winname != "") {
-		ctlpath := sys->sprint("%s/%s/ctl", XENITH_ROOT, winid);
-		ctlfd := sys->open(ctlpath, Sys->OWRITE);
-		if(ctlfd != nil) {
-			namecmd := sys->sprint("name %s\n", ctlfield(winname));
-			sys->write(ctlfd, array of byte namecmd, len namecmd);
-			ctlfd = nil;
-		}
+		nerr := writectl(sys->sprint("%s/%s/ctl", XENITH_ROOT, winid),
+			sys->sprint("name %s\n", ctlfield(winname)));
+		if(nerr != nil)
+			return sys->sprint("%s (window made, but it could not be named %s: %s)", winid, winname, nerr);
 	}
 
 	return winid;
@@ -358,7 +402,8 @@ dowrite(args: string): string
 	if(n != len data)
 		return sys->sprint("error: write failed: %r");
 
-	return sys->sprint("wrote %d bytes to %s/%s", n, winid, target);
+	# Xenith does not truncate: what is written goes at the end
+	return sys->sprint("wrote %d bytes at the end of %s/%s", n, winid, target);
 }
 
 # Read from window body or tag
@@ -367,6 +412,8 @@ doread(args: string): string
 	(winid, rest) := splitfirst(args);
 	if(winid == "")
 		return "error: usage: read <id> [body|tag]";
+	if(!validwinid(winid))
+		return "error: a window is named by its number (see 'xenith list'): " + winid;
 
 	target := strip(rest);
 	if(target == "")
@@ -446,22 +493,13 @@ doctl(args: string): string
 	if(err != nil)
 		return err;
 
-	filepath := sys->sprint("%s/%s/ctl", XENITH_ROOT, winid);
-	fd := sys->open(filepath, Sys->OWRITE);
-	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r", filepath);
-
 	# Ensure commands end with newline
 	if(len cmds > 0 && cmds[len cmds - 1] != '\n')
 		cmds += "\n";
 
-	data := array of byte cmds;
-	n := sys->write(fd, data, len data);
-	fd = nil;
-
-	if(n != len data)
-		return sys->sprint("error: ctl write failed: %r");
-
+	werr := writectl(sys->sprint("%s/%s/ctl", XENITH_ROOT, winid), cmds);
+	if(werr != nil)
+		return werr;
 	return "ok";
 }
 
@@ -475,22 +513,13 @@ docolors(args: string): string
 	if(!isowned(winid))
 		return sys->sprint("error: permission denied — window %s not owned by agent", winid);
 
-	filepath := sys->sprint("%s/%s/colors", XENITH_ROOT, winid);
-	fd := sys->open(filepath, Sys->OWRITE);
-	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r", filepath);
-
 	# Ensure settings end with newline
 	if(len settings > 0 && settings[len settings - 1] != '\n')
 		settings += "\n";
 
-	data := array of byte settings;
-	n := sys->write(fd, data, len data);
-	fd = nil;
-
-	if(n != len data)
-		return sys->sprint("error: colors write failed: %r");
-
+	werr := writectl(sys->sprint("%s/%s/colors", XENITH_ROOT, winid), settings);
+	if(werr != nil)
+		return werr;
 	return "ok";
 }
 
@@ -504,15 +533,9 @@ dodelete(args: string): string
 	if(!isowned(winid))
 		return sys->sprint("error: permission denied — window %s not owned by agent", winid);
 
-	filepath := sys->sprint("%s/%s/ctl", XENITH_ROOT, winid);
-	fd := sys->open(filepath, Sys->OWRITE);
-	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r", filepath);
-
-	data := array of byte "delete\n";
-	sys->write(fd, data, len data);
-	fd = nil;
-
+	werr := writectl(sys->sprint("%s/%s/ctl", XENITH_ROOT, winid), "delete\n");
+	if(werr != nil)
+		return werr;	# it said ok whatever Xenith answered
 	return "ok";
 }
 

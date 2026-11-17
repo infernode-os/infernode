@@ -4,6 +4,84 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **A review of the cryptography, certificates, authentication and
+  network services, and what it changes for an installation.** The
+  fixes and their tests are in `CLAUDE.md`'s table. These are the changes
+  that are not compatible with what ran before:
+  - **Login (login(6)) is version 2.** logind and `getauthinfo` speak
+    only it; an old end is told which version is spoken. A realm that
+    ran the old `auth/logind` or `auth/countersigner` on a network
+    should make a new signer key and enrol its users again.
+  - **Certificates to sign again.** ML-DSA (`mldsa65`, `mldsa87`) and
+    SLH-DSA certificates and signatures made before are refused: both
+    now sign as FIPS 204 and FIPS 205 say. ElGamal keys of the old
+    default group are refused. One Ed25519 or SLH-DSA certificate in 256
+    (a digest beginning with a zero byte) is refused. Keys are unchanged
+    except ElGamal's; signers issue again. Audit-log checkpoints signed
+    before are verified with the build that made them.
+  - **CNSA mode is a rule.** In it a signer key is ML-DSA-87 with a
+    3072-bit group or it is refused, keys made by the old
+    `createsignerkey -c` included.
+  - **Both ends of an authenticated connection need this build.** The
+    ssl algorithm is now confirmed under the shared secret and made part
+    of the keys (version 2 of the exchange in auth(2)); old and new
+    refuse each other and say why. Keyring's messages take a five-digit
+    length, so a certificate of any algorithm fits one.
+  - **Listeners.** A list of algorithms ssl(3) does not have is refused
+    at start. `svc/auth` no longer starts `signer` or `countersigner`.
+  - **keyfs** converts an old key file when it starts; the file is
+    salted PBKDF2-HMAC-SHA-384 and AES-256-GCM, mode 0600.
+  - **secstore** accounts move to a verifier that costs what the files
+    cost; an old client and a moved account do not interoperate, and an
+    old-format file is converted once with `auth/secstore m file`.
+    `secstore-setup` wants eight characters and `-f` to replace an
+    account.
+  - **factotum** refuses keys its protocol cannot use (an empty
+    password, a WPA passphrase under eight characters). The `infauth`
+    protocol, which could not start, is gone.
+  - **Removed:** the SSL 3.0 client (`ssl3`, `sslsession`; POP3 and
+    webget use the TLS client), `$Crypt`, DES, `auth/ai2key`, X.509's
+    and PKCS's encoders and unused arms, and C that nothing built.
+  - **Interfaces:** `X509->verify_certchain` and
+    `verify_certchain_roots` take the usage asked for; ASN.1 decoding
+    takes DER only; `Random->randombuf` raises where it returned zeros;
+    `IPint.bits` of zero is 0; a wstat naming another owner on a host
+    file is an error.
+  - **Feeds and services.** vid9p's `ctl` drives the playhead and names
+    no source (`replay file` to `ctl` is gone; use `-r`); a network GPS
+    source is a clock only when named `sync`; mail9p sends a compose
+    whole or not at all; the registry lets only a service's owner change
+    it.
+  - **Slower by design:** AES in C is constant time, about half the
+    speed for GCM where the processor has no AES instructions used
+    (x86-64 as built, the Pi 3 and 4, RISC-V); an RSA private operation
+    is blinded.
+
+### Changed
+
+- **sdrfs(4)'s `iq` says its own format, so nothing is told the rate
+  twice (#1094).** Each open starts with a header in audio(6)'s form
+  (`rate`, `enc cu8`, `freq`, each a command `ctl` takes, padded to 4
+  bytes), true for the whole stream: a write to `ctl` changing the rate
+  or frequency ends every open stream after what it has queued, and a
+  reopen on the held connection gets the new header. `sdr/fm` and
+  `sdr/am` take their rate from it (`-r` is gone) and write audio(6)
+  sound that `auplay` sets `audioctl` from (`-R` for raw).
+  `sdr/rawiq -r rate [-f freq]` gives a headerless capture a header;
+  `sdr/iqhdr < rec > /mnt/sdr/ctl` retunes the radio to a recording's.
+  `ctl` takes `enc cu8`.
+
+### Fixed
+
+- **The login profile with no `HOME` (#737).** A hosted emu started with
+  no `HOME` (a launchd or systemd service, `env -i`) stopped the profile
+  at "null list in concatenation": no `~/.infernode` overlay, factotum or
+  services. The home is now `$HOME` or the passwd entry's, kept as one
+  name when it has a blank, and with neither the profile says so and
+  goes on with `/usr/$user`.
+
 ## [0.10.1] - 2026-11-11
 
 ### Added

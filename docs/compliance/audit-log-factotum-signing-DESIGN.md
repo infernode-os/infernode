@@ -34,10 +34,11 @@ disk" forces a holder, and that holder is factotum.
 ## 2. Why this shape
 
 - **Canonical pattern.** Factotum holding a key and performing a private-key op for a
-  client over its `rpc` *file* is the native Plan 9 mechanism — exactly what the
-  existing (unbuilt, SSH-shaped) `proto/rsa.b` does. We reuse the *pattern*, not its
-  crypto.
-- **Not `rsa.b` as-is.** `rsa.b` is RSA-only, SSH-challenge-decrypt semantics, returns
+  client over its `rpc` *file* is the native Plan 9 mechanism — exactly what Plan 9's
+  SSH-shaped `proto/rsa.b` did (a copy sat in this tree, never built, and has been
+  removed: it answered any caller's ciphertext with the raw private-key operation).
+  We reuse the *pattern*, not its crypto.
+- **Not `rsa.b` as it was.** `rsa.b` was RSA-only, SSH-challenge-decrypt semantics, returned
   a raw bigint — **not** the keyring `Certificate` our `auditverify` checks, and
   **not quantum-safe**. Reusing it would force rewriting verification and lock us to
   classical RSA.

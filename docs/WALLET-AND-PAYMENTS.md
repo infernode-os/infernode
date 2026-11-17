@@ -330,7 +330,7 @@ The wallet filesystem mounts at `/mnt/wallet/` and provides account management, 
 └── {name}/
     ├── address      r    public address (EIP-55 checksummed)
     ├── balance      r    live balance from blockchain RPC
-    ├── chain        rw   chain name
+    ├── chain        r    chain name the account was made with
     ├── pay          rw   write: "amount recipient" → read: pending:id
     ├── authorize    rw   write: structured x402 request → read: pending:id;
     │                         signature is returned after trusted approval
@@ -482,7 +482,12 @@ payment and returns `pending:<id>` to the first read of that fid; a read
 there again at offset 0 waits until the payment is approved, denied or
 expires, and gives the outcome. Requests are validated *before* queueing
 (malformed or over-budget requests are rejected immediately), and pending
-entries expire after 15 minutes if unapproved.
+entries expire after 15 minutes if unapproved. One account holds at most 16
+proposals awaiting approval (and all accounts 100), so one requester cannot use
+up the queue for the others. An amount is written one way, with no leading zero;
+anything else is refused, since the approver is shown the amount as it was
+written. An account cannot be named after one of the wallet's own files (`ctl`,
+`accounts`, `default`, `new`, `pending`, `network`, `event`).
 
 To review: open the wallet GUI and choose **Pending Payments** from the
 right-click menu (the status bar shows a count when payments are waiting),
@@ -494,7 +499,9 @@ echo 'approve 3' > /mnt/wallet/ctl      # or: deny 3
 ```
 
 A controller that shows the count, as the wallet GUI does, reads
-`/mnt/wallet/event` and re-reads `pending` on each line; nothing polls.
+`/mnt/wallet/event` and re-reads `pending` on each line; nothing polls. It
+shows each proposal with the account, the amount, the token, the whole payee
+and the network on lines of their own, however long they are.
 
 Payments the user initiates in the wallet GUI itself are auto-approved (the
 human just clicked Send); agent proposals always wait.

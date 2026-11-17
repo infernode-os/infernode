@@ -16,7 +16,8 @@ static int	nettrans(char*, char*, int na, char*, int);
 enum
 {
 	Maxstring=	128,
-	Maxpath=	100
+	Maxpath=	100,
+	Maxrecipes=	64	/* translations of one address tried */
 };
 
 struct DS
@@ -75,10 +76,60 @@ kdial(char *dest, char *local, char *dir, int *cfdp)
 	return rv;
 }
 
+/*
+ * A connection server's answer is a translation, "clonefile address",
+ * and is held to one: the clone file of a protocol in the network
+ * directory that was asked, netdir/proto/clone, and an address of one
+ * word.  The connection server is whatever file is at netdir/cs, which
+ * can be the caller's own (a name space is the caller's to build), and
+ * what it said was done as it stood: a clone file anywhere
+ * (x/../../t/clone) was opened and "connect" written to it, and an
+ * address of two words put a local address, or with a new line another
+ * request, into what was written to the protocol.  As dial(2)'s Limbo
+ * dial (appl/lib/dial.b).  ans is cut where its fields end; -1 if it
+ * is no translation.
+ */
+static int
+cstrans(char *netdir, char *ans, char *clone, int nclone, char **addrp)
+{
+	char *p, *f, *q, *e;
+	int n;
+
+	p = strchr(ans, ' ');
+	if(p == nil)
+		return -1;
+	*p++ = 0;
+	e = p + strlen(p);
+	if(e > p && e[-1] == '\n')
+		*--e = 0;
+	for(q = p; *q != 0; q++)
+		if((uchar)*q <= ' ')
+			return -1;
+
+	/* /net/proto/clone, whatever the first element: the directory is the one asked */
+	f = ans;
+	if(f[0] == '/' && f[1] != 0){
+		q = strchr(f+1, '/');
+		if(q != nil)
+			f = q+1;
+	}
+	q = strchr(f, '/');
+	if(q == nil || q == f || strcmp(q+1, "clone") != 0)
+		return -1;
+	n = q - f;
+	if((n == 1 && f[0] == '.') || (n == 2 && f[0] == '.' && f[1] == '.'))
+		return -1;
+	if(strlen(netdir) + 1 + strlen(f) >= nclone)
+		return -1;
+	snprint(clone, nclone, "%s/%s", netdir, f);
+	*addrp = p;
+	return 0;
+}
+
 static int
 csdial(DS *ds)
 {
-	int n, fd, rv;
+	int n, fd, rv, i;
 	char *p, buf[Maxstring], clone[Maxpath], err[ERRMAX], besterr[ERRMAX];
 
 	/*
@@ -112,13 +163,14 @@ csdial(DS *ds)
 	kstrcpy(err, Egreg, sizeof err);
 	rv = -1;
 	kseek(fd, 0, 0);
-	while((n = kread(fd, buf, sizeof(buf) - 1)) > 0){
+	/* (so many and no more: a connection server could go on answering for ever) */
+	for(i = 0; i < Maxrecipes && (n = kread(fd, buf, sizeof(buf) - 1)) > 0; i++){
 		buf[n] = 0;
-		p = strchr(buf, ' ');
-		if(p == 0)
+		if(cstrans(ds->netdir, buf, clone, sizeof(clone), &p) < 0){
+			kstrcpy(err, "cs: bad translation", sizeof err);
 			continue;
-		*p++ = 0;
-		rv = call(buf, p, ds);
+		}
+		rv = call(clone, p, ds);
 		if(rv >= 0)
 			break;
 		err[0] = 0;
@@ -139,7 +191,7 @@ static int
 call(char *clone, char *dest, DS *ds)
 {
 	int fd, cfd, n;
-	char name[Maxpath], data[Maxpath], err[ERRMAX], *p;
+	char name[Maxpath], data[Maxpath], err[ERRMAX], *p, *e, *q;
 
 	cfd = kopen(clone, ORDWR);
 	if(cfd < 0){
@@ -157,9 +209,22 @@ call(char *clone, char *dest, DS *ds)
 		return -1;
 	}
 	name[n] = 0;
-	for(p = name; *p == ' '; p++)
+	/*
+	 * the conversation's number, and nothing else: whatever else a
+	 * clone file said was conversation 0
+	 */
+	for(p = name; *p == ' ' || *p == '\t'; p++)
 		;
-	snprint(name, sizeof(name), "%ld", strtoul(p, 0, 0));
+	for(e = p; *e >= '0' && *e <= '9'; e++)
+		;
+	for(q = e; *q == ' ' || *q == '\t' || *q == '\n'; q++)
+		;
+	if(e == p || e - p > 9 || *q != 0){
+		kclose(cfd);
+		kwerrstr("clone file's reply is not a number (%s)", clone);
+		return -1;
+	}
+	snprint(name, sizeof(name), "%ld", strtoul(p, 0, 10));
 	/*
 	 * The clone file is what the connection server said, and the
 	 * connection server is whatever is at netdir/cs: a file of the
@@ -178,7 +243,7 @@ call(char *clone, char *dest, DS *ds)
 	snprint(data, sizeof(data), "%s/%s/data", clone, name);
 
 	/* connect */
-	if(ds->local)
+	if(ds->local && ds->local[0] != 0)	/* (an empty one left a blank after the address) */
 		snprint(name, sizeof(name), "connect %s %s", dest, ds->local);
 	else
 		snprint(name, sizeof(name), "connect %s", dest);
@@ -449,22 +514,13 @@ nettrans(char *addr, char *naddr, int na, char *file, int nf)
 	buf[n] = 0;
 
 	/*
-	 *  parse the reply
+	 *  parse the reply: a translation, or nothing (see cstrans)
 	 */
-	p = strchr(buf, ' ');
-	if(p == 0)
+	if(cstrans(netdir, buf, file, nf, &p) < 0){
+		kwerrstr("cs: bad translation");
 		return -1;
-	*p++ = 0;
+	}
 	strncpy(naddr, p, na);
 	naddr[na-1] = 0;
-
-	if(buf[0] == '/'){
-		p = strchr(buf+1, '/');
-		if(p == nil)
-			p = buf;
-		else
-			p++;
-	}
-	snprint(file, nf, "%s/%s", netdir, p);
 	return 0;
 }

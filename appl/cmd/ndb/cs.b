@@ -40,10 +40,12 @@ CSdial: module
 Reply: adt
 {
 	fid:	int;
-	pid:	int;
+	cancel:	chan of int;	# buffered: cs's loop tells the query its client has gone
 	addrs:	list of string;
 	err:	string;
 };
+
+Ecancelled: con "cs: request cancelled";
 
 Cached: adt
 {
@@ -121,12 +123,12 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	sys->remove(svcname+"/cs");
 	sys->unmount(svcname, mntpt);
-	publish(svcname);
 	if(sys->bind(svcname, mntpt, Sys->MBEFORE) < 0)
 		error(sys->sprint("can't bind #s on %s: %r", mntpt));
 	file := sys->file2chan(mntpt, "cs");
 	if(file == nil)
 		error(sys->sprint("can't make %s/cs: %r", mntpt));
+	publish(svcname, mntpt+"/cs");
 	sys->pctl(Sys->FORKFD|Sys->NEWPGRP, nil);
 	refresh();
 	if(dialmod != nil){
@@ -145,12 +147,27 @@ svcpt(s: string): string
 	return s;
 }
 
-publish(dir: string)
+#
+# The file is for every program of the name space, whoever it runs
+# as (a listener's command runs as its caller); the directory stays
+# its owner's, so that nobody else can attach it and put a file of
+# their own (a dns, a tcp) before /net's.  The directory used to be
+# made 0777 before it was bound: on a first start nothing held it, so
+# it was made again 0770 by the bind and the file was the owner's
+# alone; started again while the old one was still bound, it stayed
+# 0777 and anyone could post into it.  Both are now set once the
+# directory is bound and the file made, the same at every start.
+#
+publish(dir: string, file: string)
 {
 	d := Sys->nulldir;
-	d.mode = 8r777;
+	d.mode = Sys->DMDIR|8r770;
 	if(sys->wstat(dir, d) < 0)
-		sys->fprint(sys->fildes(2), "cs: can't publish %s: %r\n", dir);
+		sys->fprint(sys->fildes(2), "cs: can't set mode of %s: %r\n", dir);
+	d = Sys->nulldir;
+	d.mode = 8r666;
+	if(sys->wstat(file, d) < 0)
+		sys->fprint(sys->fildes(2), "cs: can't publish %s: %r\n", file);
 }
 
 cantload(m: string)
@@ -167,6 +184,10 @@ error(s: string)
 refresh()
 {
 	myname = sysname();
+	# what was answered from the old data is not kept
+	nets = nil;
+	for(i := 0; i < len cache; i++)
+		cache[i] = nil;
 	if(ndb == nil){
 		ndb2 := Db.open(ndbfile);
 		if(ndb2 == nil){
@@ -192,6 +213,12 @@ refresh()
 			ndb = ndb2;
 	}else
 		ndb.reopen();
+	# a file that cannot be read, or lines of one that are not
+	# attributes, are not left out without a word
+	if(ndb != nil)
+		for(dbs := ndb.dbs; dbs != nil; dbs = tl dbs)
+			for(el := (hd dbs).errs; el != nil; el = tl el)
+				sys->fprint(sys->fildes(2), "cs: %s\n", hd el);
 }
 
 sysname(): string
@@ -231,13 +258,11 @@ rf(name: string): string
 
 cs(file: ref Sys->FileIO)
 {
-	pidc := chan of int;
-	donec := chan of ref Reply;
 	for (;;) {
 		alt {
 		(nil, buf, fid, wc) := <-file.write =>
 			cleanfid(fid);	# each write cancels previous requests
-			if(dialmod != nil){
+			if(wc != nil && dialmod != nil){	# not for a close, which has nobody to tell
 				e := dialmod->connect();
 				if(e != nil){
 					if(len e > 5 && e[0:5]=="fail:")
@@ -259,8 +284,8 @@ cs(file: ref Sys->FileIO)
 				now := time();
 				r := ref Reply;
 				r.fid = fid;
-				spawn request(r, query, nbytes, now, wc, pidc, donec);
-				r.pid = <-pidc;
+				r.cancel = chan[1] of int;
+				spawn request(r, query, nbytes, now, wc);
 				rlist = r :: rlist;
 			}
 
@@ -273,9 +298,6 @@ cs(file: ref Sys->FileIO)
 					rc <-= (nil, "unknown request");
 			} else
 				;	# cleanfid(fid);		# compensate for csendq in file2chan
-
-		r := <-donec =>
-			r.pid = 0;
 		}
 	}
 }
@@ -290,6 +312,16 @@ findfid(fid: int): ref Reply
 	return nil;
 }
 
+#
+# A query whose client has gone, or has written another, is dropped
+# from the list and told so; its Prog is not killed.  It used to be,
+# wherever it was: in the middle of a database search it died holding
+# the database's lock, and then no name was translated for anyone; and
+# the client whose write it was to answer waited for ever.  The query
+# now always answers its write (the reply channel is buffered, so that
+# cannot block), and only the Prog reading /net/dns for it, which
+# holds nothing of cs's, is killed.
+#
 cleanfid(fid: int)
 {
 	rl := rlist;
@@ -299,22 +331,24 @@ cleanfid(fid: int)
 		if(r.fid != fid)
 			rlist = r :: rlist;
 		else
-			killgrp(r.pid);
+			alt{
+			r.cancel <-= 1 =>
+				;
+			* =>
+				;	# told already
+			}
 	}
 }
 
-killgrp(pid: int)
+kill(pid: int)
 {
-	if(pid != 0){
-		fd := sys->open("#p/"+string pid+"/ctl", Sys->OWRITE);
-		if(fd == nil || sys->fprint(fd, "killgrp") < 0)
-			sys->fprint(stderr, "cs: can't killgrp %d: %r\n", pid);
-	}
+	fd := sys->open("#p/"+string pid+"/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }
 
-request(r: ref Reply, query: string, nbytes: int, now: int, wc: chan of (int, string), pidc: chan of int, donec: chan of ref Reply)
+request(r: ref Reply, query: string, nbytes: int, now: int, wc: chan of (int, string))
 {
-	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
 	# Run the translation under an exception handler.  A fault in the
 	# resolver (e.g. a nil dereference deep in the ndb/ip lookup path)
 	# must never kill this worker silently: if it dies before the
@@ -326,7 +360,7 @@ request(r: ref Reply, query: string, nbytes: int, now: int, wc: chan of (int, st
 			# general query
 			(r.addrs, r.err) = genquery(query[1:]);
 		}else{
-			(r.addrs, r.err) = xlate(query, now);
+			(r.addrs, r.err) = xlate(query, now, r.cancel);
 			if(r.addrs == nil && r.err == nil)
 				r.err = "cs: can't translate address";
 		}
@@ -335,13 +369,19 @@ request(r: ref Reply, query: string, nbytes: int, now: int, wc: chan of (int, st
 		r.addrs = nil;
 		r.err = "cs: " + ex;
 	}
+	alt{
+	<-r.cancel =>
+		r.addrs = nil;
+		r.err = Ecancelled;
+	* =>
+		;
+	}
 	if(r.err != nil){
 		if(verbose)
 			sys->fprint(stderr, "cs: %s: %s\n", query, r.err);
 		wc <-= (0, r.err);
 	} else
 		wc <-= (nbytes, nil);
-	donec <-= r;
 }
 
 reply(r: ref Reply, off: int, nbytes: int, rc: chan of (array of byte, string))
@@ -391,6 +431,8 @@ lookcache(query: string, now: int): ref Cached
 putcache(query: string, addrs: list of string, now: int)
 {
 	ce := ref Cached;
+	if(now == 0)
+		return;	# no clock: it would never expire
 	ce.expire = now+120;
 	ce.query = query;
 	ce.addrs = addrs;
@@ -398,7 +440,7 @@ putcache(query: string, addrs: list of string, now: int)
 	nextcache = (nextcache+1)%Ncache;
 }
 
-xlate(address: string, now: int): (list of string, string)
+xlate(address: string, now: int, cancel: chan of int): (list of string, string)
 {
 	n: int;
 	l, rl, results: list of string;
@@ -469,7 +511,7 @@ xlate(address: string, now: int): (list of string, string)
 		}
 		if(attr != "ip"){
 			err: string;
-			(results, err) = querydns(mach, "ip");
+			(results, err) = querydns(mach, "ip", cancel);
 			if(err != nil)
 				return (nil, err);
 		}else if(results == nil)
@@ -512,7 +554,33 @@ xlate(address: string, now: int): (list of string, string)
 	return (rl, nil);
 }
 
-querydns(name: string, rtype: string): (list of string, string)
+#
+# The read of /net/dns can take as long as the Internet likes, so it
+# is made by a Prog of its own, which is the one killed if the client
+# goes away meanwhile.
+#
+querydns(name: string, rtype: string, cancel: chan of int): (list of string, string)
+{
+	pidc := chan of int;
+	resc := chan[1] of (list of string, string);
+	spawn dnsproc(name, rtype, pidc, resc);
+	pid := <-pidc;
+	alt{
+	(rl, err) := <-resc =>
+		return (rl, err);
+	<-cancel =>
+		kill(pid);
+		return (nil, Ecancelled);
+	}
+}
+
+dnsproc(name: string, rtype: string, pidc: chan of int, resc: chan of (list of string, string))
+{
+	pidc <-= sys->pctl(0, nil);
+	resc <-= askdns(name, rtype);
+}
+
+askdns(name: string, rtype: string): (list of string, string)
 {
 	fd := sys->open(mntpt+"/dns", Sys->ORDWR);
 	if(fd == nil)
@@ -587,6 +655,15 @@ nets: list of string;
 
 isnetwork(s: string) : int
 {
+	# a network is one name in the network directory.  With a slash
+	# in it, any directory of cs's name space with a file called
+	# clone was a network (../x), was given back as a clone file to
+	# open, and was remembered for good.
+	if(s == nil || s == "." || s == "..")
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/')
+			return 0;
 	if(find(s, nets))
 		return 1;
 	(ok, nil) := sys->stat(mntpt+"/"+s+"/clone");

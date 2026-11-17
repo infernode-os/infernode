@@ -208,7 +208,11 @@ readfile(path: string): (string, string)
 		if(total >= MAX_RESPONSE)
 			break;
 		n := sys->read(fd, buf[total:], len buf - total);
-		if(n <= 0)
+		# (a read the server refused was taken for the end of the
+		# file: "cannot allocate session" came back as an empty id)
+		if(n < 0)
+			return ("", sys->sprint("error: cannot read %s: %r", path));
+		if(n == 0)
 			break;
 		total += n;
 	}
@@ -224,7 +228,7 @@ schema(): string
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"description\":{\"type\":\"string\",\"description\":\"Natural-language description of the program: what it should do, command-line arguments, and any specific module dependencies. Or, to check a Limbo file you already have: compile <absolute path of the .b file>, which reports whether it compiles, with the compiler's errors.\"}," +
-				"\"path\":{\"type\":\"string\",\"description\":\"Where to save the new file, e.g. /tmp/veltro/scratch/fib.b. Without it the source is only returned, not saved anywhere.\"}" +
+				"\"path\":{\"type\":\"string\",\"description\":\"Where to save the new file, e.g. /tmp/veltro/scratch/fib.b: in the workspace or a folder granted read-write, as for the write tool. Without it the source is only returned, not saved anywhere.\"}" +
 			"}," +
 			"\"required\":[\"description\"]" +
 		"}" +
@@ -262,6 +266,15 @@ exec(args: string): string
 			desc = desc[1:];
 		if(desc == "")
 			return "error: usage: limbo -o <file.b> <description-of-what-to-write>";
+		# Where the source is saved is held to what write and edit are:
+		# the workspace or the most specific rw grant.  It was any path
+		# the name space let be created, so a directory granted
+		# read-only inside one granted read-write was written to.
+		# Asked before the model is, so nothing is written for nothing.
+		if(len outpath < 3 || outpath[len outpath - 2:] != ".b")
+			return "error: the path to save to must be an absolute path ending in .b (" + outpath + ")";
+		if((gerr := checkreadonly(outpath)) != nil)
+			return gerr + "; nothing written";
 	}
 
 	# compile <path>: check a Limbo source file the agent has (written,
@@ -390,12 +403,15 @@ save(resp, outpath: string): string
 		return "\nNot saved to " + outpath + ": there was no ```limbo block to save.";
 	if(outpath[0] != '/' || len outpath < 3 || outpath[len outpath - 2:] != ".b")
 		return "\nNot saved: the path must be an absolute path ending in .b (" + outpath + ").";
+	if(checkreadonly(outpath) != nil)
+		return "\nNot saved to " + outpath + ": it is not a path this tool may write.";
 	fd := sys->create(outpath, Sys->OWRITE, 8r644);
 	if(fd == nil)
 		return sys->sprint("\nNot saved to %s: %r", outpath);
 	b := array of byte code;
+	# (a file that was there is cut short by now: say so)
 	if(sys->write(fd, b, len b) != len b)
-		return sys->sprint("\nNot saved to %s: %r", outpath);
+		return sys->sprint("\nNot saved to %s: the write failed (%r), and the file now holds only part of the source.", outpath);
 	return "\nSaved to " + outpath + " (change it with edit, check it with limbo compile " + outpath + ").";
 }
 
@@ -464,41 +480,32 @@ compileat(srcpath, sid, passmsg, failmsg: string): string
 			break;
 		}
 
-	limbo := load Command "/dis/limbo.dis";
-	if(limbo == nil)
-		return gatenote(sys->sprint("not compiled: cannot load /dis/limbo.dis: %r"));
+	# A .dis left under this name by an earlier compile is not this one's
+	# (the verdict below is whether the compiler made the file).
+	sys->remove(dispath);
 
-	# The compiler's diagnostics (its output and its error output) go to a
-	# pipe that drain() empties as they come, so a long list of errors
-	# cannot block it.  (A file in the workspace, written through the
-	# dup'd descriptor, read back empty.)
-	p := array[2] of ref Sys->FD;
-	saved1 := sys->dup(1, -1);
-	saved2 := sys->dup(2, -1);
-	if(sys->pipe(p) < 0 || saved1 < 0 || saved2 < 0) {
-		return gatenote(sys->sprint("not compiled: cannot capture the compiler's errors: %r"));
-	}
+	# The compiler runs in a process of its own, with a descriptor group
+	# and a name space of its own.  It ran in the call's thread with
+	# descriptors 1 and 2 of the group every tool call shares turned to a
+	# pipe and turned back after: two compiles at once each saved the
+	# other's pipe as the standard output to put back, and waited for
+	# ever for an end of file that could not come; and each compile left
+	# its two saved descriptors open in that group.
 	diag := chan[1] of string;
-	spawn drain(p[0], diag);
-	p[0] = nil;
-	sys->dup(p[1].fd, 1);
-	sys->dup(p[1].fd, 2);
-	p[1] = nil;
-
-	ok := 1;
-	raised := "";
-	{
-		limbo->init(nil, "limbo" :: "-I" :: "/module" :: "-I" :: incdir :: "-o" :: dispath :: srcpath :: nil);
-	} exception e {
-	"*" =>
-		ok = 0;
-		raised = e;
-	}
-	limbo = nil;
-
-	sys->dup(saved1, 1);	# the pipe's last writers gone: drain sees its end
-	sys->dup(saved2, 2);
+	res := chan[1] of string;
+	spawn compiler(srcpath, dispath, incdir, sid, diag, res);
 	errtxt := <-diag;
+	raised := "";
+	alt {
+	raised = <-res =>
+		;
+	* =>
+		;	# it ended without saying: the .dis below decides
+	}
+	sys->remove(sys->sprint("%s/limbo-gate-%s.empty", GATEDIR, sid));
+	if(len raised > 12 && raised[0:12] == "not compiled")
+		return gatenote(raised);
+	ok := raised == "";
 
 	(stok, nil) := sys->stat(dispath);
 	if(stok < 0)
@@ -540,6 +547,171 @@ srchints(srcpath: string): string
 				"// and /* */ are not comments in Limbo.\n";
 	}
 	return "";
+}
+
+# Run by compileat in a process of its own.  What the compiler prints goes
+# to a pipe that drain() empties as it comes and gives to diag when the
+# pipe's writers are gone, which is when this process is done, however it
+# ends; res gets nil, or what the compiler raised, or why it was not run.
+compiler(srcpath, dispath, incdir, sid: string, diag: chan of string, res: chan of string)
+{
+	limbo := load Command "/dis/limbo.dis";
+	if(limbo == nil) {
+		res <-= sys->sprint("not compiled: cannot load /dis/limbo.dis: %r");
+		diag <-= "";
+		return;
+	}
+
+	# Nothing of the caller's descriptors; /dev/null as 0, 1 and 2 until
+	# the pipe takes 1 and 2.
+	sys->pctl(Sys->NEWFD, nil);
+	std := array[3] of ref Sys->FD;
+	for(n := 0; n < len std; n++)
+		std[n] = sys->open("/dev/null", Sys->ORDWR);
+	p := array[2] of ref Sys->FD;
+	if(std[2] == nil || std[2].fd != 2 || sys->pipe(p) < 0) {
+		res <-= sys->sprint("not compiled: cannot capture the compiler's errors: %r");
+		diag <-= "";
+		return;
+	}
+	spawn drain(p[0], diag);
+	p[0] = nil;
+
+	# The compiler opens what a source's include lines name, whatever
+	# they name, so it is given a name space without what is not source:
+	# the services (this tool's own /mnt/llm among them, where reading
+	# "new" makes a session each time), devices, processes, the network
+	# and the tool server's own files.  A file including "/mnt/llm/new",
+	# compiled again and again, took every session the model server had.
+	if((herr := hide(sid)) != nil) {
+		res <-= "not compiled: " + herr;
+		return;
+	}
+
+	# The pipe as 1 and 2, in a group this process alone is in: when it
+	# is done, or dies, the pipe's writers are gone and drain sees its end.
+	if(sys->dup(p[1].fd, 1) != 1 || sys->dup(p[1].fd, 2) != 2 ||
+	   sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: nil) < 0) {
+		res <-= sys->sprint("not compiled: cannot capture the compiler's errors: %r");
+		return;
+	}
+	p[1] = nil;
+	std = nil;
+
+	raised := "";
+	{
+		limbo->init(nil, "limbo" :: "-I" :: "/module" :: "-I" :: incdir :: "-o" :: dispath :: srcpath :: nil);
+	} exception e {
+	"*" =>
+		raised = e;
+		if(raised == "")
+			raised = "the compiler failed";
+	}
+	limbo = nil;
+	res <-= raised;
+	sys->pctl(Sys->NEWFD, nil);
+}
+
+# In a copy of the name space, put an empty directory over each place that
+# is not source files.
+hide(sid: string): string
+{
+	if(sys->pctl(Sys->FORKNS, nil) < 0)
+		return sys->sprint("cannot fork the name space: %r");
+	empty := sys->sprint("%s/limbo-gate-%s.empty", GATEDIR, sid);
+	sys->create(empty, Sys->OREAD, Sys->DMDIR | 8r700);
+	(ok, d) := sys->stat(empty);
+	if(ok < 0 || !(d.mode & Sys->DMDIR))
+		return "cannot make a directory in " + GATEDIR;
+	places := array[] of {"/mnt", "/dev", "/prog", "/net", "/net.alt", "/env", "/chan", "/tool", "/srv", "/fd"};
+	err: string;
+	for(i := 0; i < len places && err == nil; i++) {
+		(pok, nil) := sys->stat(places[i]);
+		if(pok >= 0 && sys->bind(empty, places[i], Sys->MREPL) < 0)
+			err = sys->sprint("cannot hide %s from the compiler: %r", places[i]);
+	}
+	return err;
+}
+
+# Permit the private workspace or the most-specific explicit rw grant, as
+# the write and edit tools do (the same rule, from the same file).
+validatepath(path: string): string
+{
+	if(path == nil || len path == 0)
+		return "empty path";
+	if(path[0] != '/')
+		return "path must be absolute";
+	for(i := 0; i < len path; i++)
+		if(path[i] == ' ' || path[i] == '\n' || path[i] == '\r' ||
+		   path[i] == '\t' || path[i] == ',' || path[i] == '=')
+			return "path contains control delimiter";
+	start := 1;
+	for(i = 1; i <= len path; i++) {
+		if(i == len path || path[i] == '/') {
+			comp := path[start:i];
+			if(comp == "")
+				return "empty path component";
+			if(comp == "." || comp == "..")
+				return "dot path component";
+			start = i + 1;
+		}
+	}
+	return nil;
+}
+
+checkreadonly(path: string): string
+{
+	perr := validatepath(path);
+	if(perr != nil)
+		return "error: invalid path: " + perr;
+
+	tmp := "/tmp/veltro/scratch";
+	if(len path >= len tmp && path[0:len tmp] == tmp &&
+	   (len path == len tmp || path[len tmp] == '/'))
+		return nil;
+
+	fd := sys->open("/tool/paths", Sys->OREAD);
+	if(fd == nil)
+		return "error: cannot verify writable path grants";
+	buf := array[65536] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return "error: cannot read writable path grants";
+	if(n == len buf)
+		return "error: writable path grants exceed limit";
+	raw := string buf[0:n];
+
+	bestlen := -1;
+	bestperm := "";
+	i := 0;
+	while(i < len raw) {
+		j := i;
+		while(j < len raw && raw[j] != '\n')
+			j++;
+		line := raw[i:j];
+		i = j + 1;
+		if(line == "")
+			continue;
+
+		sp := -1;
+		for(k := len line - 1; k > 0; k--)
+			if(line[k] == ' ') { sp = k; break; }
+		if(sp < 0)
+			continue;
+		bpath := line[0:sp];
+		perm := line[sp+1:];
+		if((perm == "ro" || perm == "rw") && len bpath > bestlen &&
+		   len path >= len bpath && path[0:len bpath] == bpath &&
+		   (len path == len bpath || path[len bpath] == '/')) {
+			bestlen = len bpath;
+			bestperm = perm;
+		}
+	}
+	if(bestperm == "rw")
+		return nil;
+	if(bestperm == "ro")
+		return sys->sprint("error: %s is read-only", path);
+	return sys->sprint("error: %s is not covered by an rw path grant", path);
 }
 
 compilefile(path: string): string

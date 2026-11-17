@@ -10,8 +10,21 @@
  * SLH-DSA-SHAKE-192s: h=63, d=7, h'=9
  * SLH-DSA-SHAKE-256s: h=64, d=8, h'=8
  *
- * Reference: FIPS 205 Sections 6, 9
+ * Reference: FIPS 205 Sections 6, 7
+ *
+ * Every function here that can fail says so, and its callers stop.  A
+ * failure used to be dropped (the tree hash's result was not looked at,
+ * the rest returned nothing): with no memory for one tree hash, the
+ * signer took an authentication path of zeros for the real one, worked
+ * the "root" out from that, and had the layer above sign it with a
+ * one-time key that signs the real root every other time.  Two values
+ * under one WOTS+ key give away what is needed to sign others.
  */
+
+enum {
+	TREE_MAXN = 32,		/* the largest n offered (256s) */
+	TREE_MAXH = 9,		/* the largest h' offered (192s) */
+};
 #include "os.h"
 #include <libsec.h>
 
@@ -25,9 +38,9 @@ extern void slhdsa_adrs_set_height(uchar*, u32int);
 extern void slhdsa_adrs_set_index(uchar*, u32int);
 extern void slhdsa_adrs_copy(uchar*, const uchar*);
 extern void slhdsa_H(uchar*, int, const uchar*, int, const uchar*, const uchar*, int, const uchar*, int);
-extern void slhdsa_wots_pkgen(uchar*, int, const uchar*, int, const uchar*, int, uchar*);
-extern void slhdsa_wots_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*);
-extern void slhdsa_wots_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*);
+extern int  slhdsa_wots_pkgen(uchar*, int, const uchar*, int, const uchar*, int, uchar*);
+extern int  slhdsa_wots_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*);
+extern int  slhdsa_wots_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*);
 extern int  slhdsa_wots_len(int);
 
 /*
@@ -36,7 +49,10 @@ extern int  slhdsa_wots_len(int);
  * Builds a binary Merkle tree of height h' over WOTS+ public keys.
  * If auth_idx >= 0, also computes the authentication path.
  *
- * Algorithm 10 from FIPS 205
+ * FIPS 205 Algorithm 9 (xmss_node at the root) and the nodes Algorithm
+ * 10 takes for the authentication path, in one pass over the leaves.
+ *
+ * Returns 0, or -1 with root and auth not to be used.
  */
 int
 slhdsa_treehash(uchar *root, uchar *auth, int n,
@@ -46,15 +62,14 @@ slhdsa_treehash(uchar *root, uchar *auth, int n,
 	int auth_idx)
 {
 	uchar adrs[32];
-	uchar *stack;	/* (hprime+1) * n */
+	uchar stack[(TREE_MAXH + 1) * TREE_MAXN];	/* (hprime+1) * n */
 	uchar node[64];	/* current node being merged up (max n=32) */
 	uchar tmp[64];
 	int i, j, leaves;
 
-	leaves = 1 << hprime;
-	stack = malloc((hprime + 1) * n);
-	if(stack == nil)
+	if(n > TREE_MAXN || hprime > TREE_MAXH)
 		return -1;
+	leaves = 1 << hprime;
 
 	slhdsa_adrs_init(adrs);
 	slhdsa_adrs_set_layer(adrs, layer);
@@ -64,7 +79,10 @@ slhdsa_treehash(uchar *root, uchar *auth, int n,
 		/* Generate WOTS+ public key for leaf i */
 		slhdsa_adrs_set_type(adrs, 0);	/* WOTS_HASH */
 		slhdsa_adrs_set_keypair(adrs, i);
-		slhdsa_wots_pkgen(node, n, pkseed, seedlen, skseed, skseedlen, adrs);
+		if(slhdsa_wots_pkgen(node, n, pkseed, seedlen, skseed, skseedlen, adrs) != 0){
+			secureZero(stack, sizeof(stack));
+			return -1;
+		}
 
 		slhdsa_adrs_set_type(adrs, 2);	/* TREE */
 
@@ -97,8 +115,7 @@ slhdsa_treehash(uchar *root, uchar *auth, int n,
 	}
 
 	memmove(root, stack + hprime*n, n);
-	secureZero(stack, (hprime + 1) * n);
-	free(stack);
+	secureZero(stack, sizeof(stack));
 	return 0;
 }
 
@@ -106,9 +123,12 @@ slhdsa_treehash(uchar *root, uchar *auth, int n,
  * Generate XMSS signature at a given layer
  * Produces: WOTS+ signature || authentication path
  *
- * Algorithm 11 from FIPS 205
+ * Algorithm 10 from FIPS 205
+ *
+ * Returns 0, or -1: the signature is then not to be used (the caller
+ * clears it).
  */
-void
+int
 slhdsa_xmss_sign(uchar *sig, int n,
 	const uchar *msg,
 	const uchar *pkseed, int seedlen,
@@ -128,10 +148,11 @@ slhdsa_xmss_sign(uchar *sig, int n,
 	slhdsa_adrs_set_keypair(adrs, idx);
 
 	/* Generate WOTS+ signature on msg */
-	slhdsa_wots_sign(sig, n, msg, pkseed, seedlen, skseed, skseedlen, adrs);
+	if(slhdsa_wots_sign(sig, n, msg, pkseed, seedlen, skseed, skseedlen, adrs) != 0)
+		return -1;
 
 	/* Compute authentication path using treehash */
-	slhdsa_treehash(root, sig + wots_siglen, n,
+	return slhdsa_treehash(root, sig + wots_siglen, n,
 		pkseed, seedlen, skseed, skseedlen,
 		layer, tree, hprime, idx);
 }
@@ -139,9 +160,11 @@ slhdsa_xmss_sign(uchar *sig, int n,
 /*
  * Compute XMSS root from signature
  *
- * Algorithm 12 from FIPS 205 (partial - computes root)
+ * Algorithm 11 from FIPS 205
+ *
+ * Returns 0, or -1 with root untouched.
  */
-void
+int
 slhdsa_xmss_root_from_sig(uchar *root, int n,
 	const uchar *sig, int idx,
 	const uchar *msg,
@@ -165,7 +188,8 @@ slhdsa_xmss_root_from_sig(uchar *root, int n,
 	slhdsa_adrs_set_keypair(adrs, idx);
 
 	/* Recover WOTS+ public key */
-	slhdsa_wots_pk_from_sig(node, n, sig, msg, pkseed, seedlen, adrs);
+	if(slhdsa_wots_pk_from_sig(node, n, sig, msg, pkseed, seedlen, adrs) != 0)
+		return -1;
 
 	/* Walk up the tree using auth path */
 	slhdsa_adrs_set_type(adrs, 2);	/* TREE */
@@ -186,17 +210,21 @@ slhdsa_xmss_root_from_sig(uchar *root, int n,
 	}
 
 	memmove(root, node, n);
+	return 0;
 }
 
 /*
  * Generate hypertree signature
  *
- * Algorithm 13 from FIPS 205
+ * Algorithm 12 from FIPS 205
  *
  * Signs message M using d layers of XMSS trees.
  * idx_tree encodes the tree path, idx_leaf selects the leaf.
+ *
+ * Returns 0, or -1: no layer signs anything once a layer below it has
+ * failed, and the signature is not to be used (the caller clears it).
  */
-void
+int
 slhdsa_ht_sign(uchar *sig, int n,
 	const uchar *msg,
 	const uchar *pkseed, int seedlen,
@@ -213,12 +241,14 @@ slhdsa_ht_sign(uchar *sig, int n,
 	xmss_siglen = (slhdsa_wots_len(n) + hprime) * n;
 
 	/* Layer 0: sign the message */
-	slhdsa_xmss_sign(sig, n, msg, pkseed, seedlen, skseed, skseedlen,
-		0, idx_tree, hprime, idx_leaf);
+	if(slhdsa_xmss_sign(sig, n, msg, pkseed, seedlen, skseed, skseedlen,
+		0, idx_tree, hprime, idx_leaf) != 0)
+		return -1;
 
 	/* Get root for verification of next layer */
-	slhdsa_xmss_root_from_sig(root, n, sig, idx_leaf, msg,
-		pkseed, seedlen, 0, idx_tree, hprime);
+	if(slhdsa_xmss_root_from_sig(root, n, sig, idx_leaf, msg,
+		pkseed, seedlen, 0, idx_tree, hprime) != 0)
+		return -1;
 	sig += xmss_siglen;
 
 	/* Layers 1 to d-1: each signs the root of the layer below */
@@ -227,23 +257,26 @@ slhdsa_ht_sign(uchar *sig, int n,
 		leafidx = treeidx & ((1ULL << (unsigned)hprime) - 1);
 		treeidx >>= (unsigned)hprime;
 
-		slhdsa_xmss_sign(sig, n, root, pkseed, seedlen, skseed, skseedlen,
-			i, treeidx, hprime, leafidx);
+		if(slhdsa_xmss_sign(sig, n, root, pkseed, seedlen, skseed, skseedlen,
+			i, treeidx, hprime, leafidx) != 0)
+			return -1;
 
 		if(i < d - 1){
-			slhdsa_xmss_root_from_sig(root, n, sig, leafidx, root,
-				pkseed, seedlen, i, treeidx, hprime);
+			if(slhdsa_xmss_root_from_sig(root, n, sig, leafidx, root,
+				pkseed, seedlen, i, treeidx, hprime) != 0)
+				return -1;
 		}
 		sig += xmss_siglen;
 	}
+	return 0;
 }
 
 /*
  * Verify hypertree signature
  *
- * Algorithm 14 from FIPS 205
+ * Algorithm 13 from FIPS 205
  *
- * Returns 1 if valid, 0 if invalid.
+ * Returns 1 if valid, 0 if invalid or if it could not be worked out.
  */
 int
 slhdsa_ht_verify(const uchar *sig, int n,
@@ -262,8 +295,9 @@ slhdsa_ht_verify(const uchar *sig, int n,
 	xmss_siglen = (slhdsa_wots_len(n) + hprime) * n;
 
 	/* Layer 0: recover root from signature */
-	slhdsa_xmss_root_from_sig(node, n, sig, idx_leaf, msg,
-		pkseed, seedlen, 0, idx_tree, hprime);
+	if(slhdsa_xmss_root_from_sig(node, n, sig, idx_leaf, msg,
+		pkseed, seedlen, 0, idx_tree, hprime) != 0)
+		return 0;
 	sig += xmss_siglen;
 
 	/* Layers 1 to d-1 */
@@ -272,8 +306,9 @@ slhdsa_ht_verify(const uchar *sig, int n,
 		leafidx = treeidx & ((1ULL << (unsigned)hprime) - 1);
 		treeidx >>= (unsigned)hprime;
 
-		slhdsa_xmss_root_from_sig(node, n, sig, leafidx, node,
-			pkseed, seedlen, i, treeidx, hprime);
+		if(slhdsa_xmss_root_from_sig(node, n, sig, leafidx, node,
+			pkseed, seedlen, i, treeidx, hprime) != 0)
+			return 0;
 		sig += xmss_siglen;
 	}
 

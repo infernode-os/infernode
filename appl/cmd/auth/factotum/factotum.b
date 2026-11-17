@@ -46,6 +46,7 @@ Files: adt {
 	rpc:	ref Sys->FileIO;
 	proto:	ref Sys->FileIO;
 	needkey:	ref Sys->FileIO;
+	secstore:	ref Sys->FileIO;
 };
 
 Debug: con 0;
@@ -75,8 +76,8 @@ secstoreuser: string;		# username for secstore auth
 secstorepwhash: array of byte;	# legacy password hash for secstore auth
 secstorepwhash2: array of byte;	# secstore2 password hash for new PAK auth
 secstorerootkey: array of byte;	# SGCM2 root key for new secstore blobs
-secstorefilekey: array of byte;	# SGCM1 key for reading existing secstore blobs
-secstorelkey: array of byte;	# legacy file encryption key (AES-CBC, for reading old files)
+secstorepwhash4: array of byte;	# version 4's, from the file key's root (mkseckey4)
+secstorevault: array of byte;	# a second-factor account's vault key, shown before a save
 
 # Cached secstore connection — avoids full PAK handshake on every save
 secstoreconn: ref Dial->Connection;
@@ -137,11 +138,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(secstoreuser == nil)
 			secstoreuser = user();
 		if(secstorepassarg != nil){
-			secstorepwhash = secstore->mkseckey(secstorepassarg);
-			secstorepwhash2 = secstore->mkseckey2(secstorepassarg);
-			secstorerootkey = secstore->mkfilekey3(secstoreuser, secstorepassarg);
-			secstorefilekey = secstore->mkfilekey2(secstorepassarg);
-			secstorelkey = secstore->mkfilekey(secstorepassarg);
+			setsecstorekeys(secstorepassarg, nil);
 			secstorepassarg = nil;
 		}
 	} else if(keyfilepath != nil){
@@ -163,10 +160,32 @@ init(nil: ref Draw->Context, args: list of string)
 	files.rpc = sys->file2chan(mntpt, "rpc");
 	files.proto = sys->file2chan(mntpt, "proto");
 	files.needkey = sys->file2chan(mntpt, "needkey");
-	if(files.ctl == nil || files.rpc == nil || files.proto == nil || files.needkey == nil)
+	files.secstore = sys->file2chan(mntpt, "secstore");
+	if(files.ctl == nil || files.rpc == nil || files.proto == nil || files.needkey == nil || files.secstore == nil)
 		err(sys->sprint("can't create %s/*: %r", mntpt));
 	keymanc = chan of (list of ref Attr, int, chan of (list of ref Key, string));
 	spawn factotumsrv();
+}
+
+# The keys a secstore password gives: the three PAK hashes (version 4's
+# from the root of the file key, the others for an account not yet
+# moved) and the file key's root.  dk, when given, is a second-factor
+# account's data key: the files are under it, and its vault key is shown
+# to the server before each save.
+setsecstorekeys(pass: string, dk: array of byte)
+{
+	secstorepwhash = secstore->mkseckey(pass);
+	secstorepwhash2 = secstore->mkseckey2(pass);
+	root := secstore->mkfilekey3(secstoreuser, pass);
+	secstorepwhash4 = secstore->mkseckey4(root);
+	if(dk != nil){
+		secstore->erasekey(root);
+		secstorerootkey = dk;
+		secstorevault = secstore->vaultkey(dk);
+	}else{
+		secstorerootkey = root;
+		secstorevault = nil;
+	}
 }
 
 hexdig(c: int): int
@@ -233,9 +252,11 @@ factotumsrv()
 		syncc = chan of chan of string;
 		e := secstoreload();
 		if(e != nil){
-			if(debug)
-				sys->fprint(sys->fildes(2), "factotum: secstore: %s\n", e);
-			# Degrade gracefully — continue with empty keys
+			# Go on with no keys, but save none either: the keys in
+			# the store were not read, and the first key added
+			# here was then saved over them.
+			nosave = "the keys in secstore could not be read when factotum started (" + e + ")";
+			sys->fprint(sys->fildes(2), "factotum: secstore: %s; nothing will be saved there\n", e);
 		}
 		spawn persist();
 	} else if(keyfilepath != nil){
@@ -301,6 +322,15 @@ factotumsrv()
 				wc <-= (0, "key with a line break in it");
 				break;
 			}
+			# its protocol's own check: a key the protocol could
+			# never use (a link key that is not sixteen bytes, a
+			# passphrase WPA does not take) is refused when it is
+			# stored, not found out when it is wanted.  Every
+			# module has a keycheck, and none was ever called.
+			if((kerr := keycheck(k)) != nil){
+				wc <-= (0, kerr);
+				break;
+			}
 			allkeys = addkey(allkeys, k);
 			auditkey("keyadd", k.safetext());
 			wc <-= (len data, nil);
@@ -329,6 +359,11 @@ factotumsrv()
 			galg := lookattrval(gattrs, "alg");
 			if(galg == nil)
 				galg = "mldsa87";
+			# CNSA mode is a rule for every key made in it
+			if((cerr := cnsarefuses(galg)) != nil){
+				wc <-= (0, "genkey: " + cerr);
+				break;
+			}
 			gowner := lookattrval(gattrs, "owner");
 			if(gowner == nil)
 				gowner = "audit";
@@ -343,6 +378,10 @@ factotumsrv()
 					gka = hd gl :: gka;
 			gka = ref Attr(Aval, "!sk", encodesk(kr->sktostr(gsk))) :: gka;
 			gk := Key.mk(gka);
+			if((gerr := keycheck(gk)) != nil){
+				wc <-= (0, "genkey: " + gerr);
+				break;
+			}
 			allkeys = addkey(allkeys, gk);
 			auditkey("keygen", gk.safetext());
 			wc <-= (len data, nil);
@@ -378,10 +417,18 @@ factotumsrv()
 				wc <-= (0, "sync: " + serr);
 			else
 				wc <-= (len data, nil);
-		"secstore" =>
-			# ctl line: "secstore addr user password"
-			# verb "secstore" already stripped; s = "addr user password"
-			(nil, stoks) := sys->tokenize(s, " \t");
+		"secstore" or "secstoreq" =>
+			# ctl line: "secstore addr user password [datakey]", its
+			# fields parted by blanks; or "secstoreq ...", the same
+			# with the fields quoted as %q writes them, for a
+			# password with a blank or a quote in it (cut at its
+			# first blank, such an account logged in and then saved
+			# nothing: the save's password was not the account's)
+			stoks: list of string;
+			if(verb == "secstoreq")
+				stoks = str->unquoted(s);
+			else
+				(nil, stoks) = sys->tokenize(s, " \t");
 			if(len stoks < 3){
 				wc <-= (0, "usage: secstore addr user password [datakey]");
 				break;
@@ -409,21 +456,20 @@ factotumsrv()
 				wc <-= (0, "cannot load secstore module");
 				break;
 			}
-			if(secstore != nil){
-				secstorepwhash = secstore->mkseckey(spass);
-				secstorepwhash2 = secstore->mkseckey2(spass);
-				# 2FA: encrypt save-back under the data key (auth still uses the
-				# password); ordinary accounts use the password-derived root key.
-				dk2fa := unhexkey(sdk);
-				if(dk2fa != nil)
-					secstorerootkey = dk2fa;
-				else
-					secstorerootkey = secstore->mkfilekey3(secstoreuser, spass);
-				secstorefilekey = secstore->mkfilekey2(spass);
-				secstorelkey = secstore->mkfilekey(spass);
+			if(sdk != "" && unhexkey(sdk) == nil){
+				wc <-= (0, "the data key is 64 hexadecimal digits");
+				break;
 			}
+			# 2FA: encrypt save-back under the data key (auth still uses the
+			# password); ordinary accounts use the password-derived root key.
+			setsecstorekeys(spass, unhexkey(sdk));
+			secstoreconn = nil;	# a connection kept was another account's, or another password's
 			spass = nil;
 			sdk = nil;
+			# whoever configured this read the store itself (the
+			# login screen): what a failed load at start forbade
+			# is allowed again
+			nosave = nil;
 			# Start persist thread if not already running
 			if(dirtyc == nil){
 				dirtyc = chan[1] of int;	# one change is always remembered, whatever persist is doing
@@ -484,6 +530,17 @@ factotumsrv()
 			break;
 		rc <-= reads(readprotos(), off, nbytes);
 	(nil, nil, nil, wc) := <-files.proto.write =>
+		if(wc != nil)
+			wc <-= (0, "illegal operation");
+
+	# Where the keys are kept, from the one program that knows: a
+	# file in /tmp said "secstore is unlocked", made by whoever liked
+	# and left there from boot to boot.
+	(off, nbytes, nil, rc) := <-files.secstore.read =>
+		if(rc == nil)
+			break;
+		rc <-= reads(savestatus(), off, nbytes);
+	(nil, nil, nil, wc) := <-files.secstore.write =>
 		if(wc != nil)
 			wc <-= (0, "illegal operation");
 
@@ -711,6 +768,17 @@ startproto(request: string): (Authproto, list of ref Attr, string)
 		sys->print("proto=%s\n", p);
 	if(any(p, "./"))	# avoid unpleasantness
 		return (nil, nil, "illegal protocol: "+p);
+	# A secret attribute with a value in the request is a guess at
+	# one: every attribute is a pattern, the secret ones too, so
+	# "start proto=pass ... !password=guess" found a key when the
+	# guess was right and "needkey" when it was not, for whoever can
+	# open rpc.  delkey has always refused it; start refuses it for
+	# every protocol (wpapsk alone did).
+	for(al := attrs; al != nil; al = tl al){
+		a := hd al;
+		if(len a.name > 0 && a.name[0] == '!' && (a.val != nil || a.tag != Aquery))
+			return (nil, nil, "cannot specify values for private fields");
+	}
 	proto := load Authproto "/dis/auth/proto/"+p+".dis";
 	if(proto == nil)
 		return (nil, nil, sys->sprint("protocol %s: %r", p));
@@ -1195,9 +1263,22 @@ any(s: string, t: string): int
 	return 0;
 }
 
-IO.findkey(io: self ref IO, attrs: list of ref Attr, extra: string): (ref Key, string)
+#
+# findkey is for the key a protocol needs: with none, an agent reading
+# needkey is asked for one.  findkeys is a look at what there is: the
+# keys that match, or none, and nobody is asked (it asked, as findkey
+# does, so a protocol that looked for a key under each of several names
+# had the agent prompted for every one it did not find).  A protocol
+# that has looked and found nothing asks with needkey.
+#
+IO.findkey(nil: self ref IO, attrs: list of ref Attr, extra: string): (ref Key, string)
 {
-	(kl, err) := io.findkeys(attrs, extra);
+	ea := parseline(extra);
+	for(; ea != nil; ea = tl ea)
+		attrs = hd ea :: attrs;
+	kc := chan of (list of ref Key, string);
+	keymanc <-= (attrs, 1, kc);
+	(kl, err) := <-kc;
 	if(kl != nil)
 		return (hd kl, err);
 	return (nil, err);
@@ -1209,7 +1290,7 @@ IO.findkeys(nil: self ref IO, attrs: list of ref Attr, extra: string): (list of 
 	for(; ea != nil; ea = tl ea)
 		attrs = hd ea :: attrs;
 	kc := chan of (list of ref Key, string);
-	keymanc <-= (attrs, 1, kc);	# TO DO: 1 => 0 for not needed
+	keymanc <-= (attrs, 0, kc);
 	return <-kc;
 }
 
@@ -1421,14 +1502,21 @@ derivekey(password: string): array of byte
 #
 # Generate cryptographically random bytes using the host CSPRNG.
 #
+# nil, with the error string set, when there are none: it raised, in
+# the thread that saves, which ended it; a sync was then never
+# answered, and the serving loop, waiting for the answer, stopped.
 cryptorand(n: int): array of byte
 {
 	buf := array[n] of byte;
 	fd := sys->open("/dev/random", Sys->OREAD);
-	if(fd == nil)
-		err("can't open /dev/random for nonce generation");
-	if(sys->read(fd, buf, n) != n)
-		err("can't read /dev/random for nonce generation");
+	if(fd == nil){
+		sys->werrstr(sys->sprint("can't open /dev/random: %r"));
+		return nil;
+	}
+	if(sys->readn(fd, buf, n) != n){
+		sys->werrstr(sys->sprint("can't read /dev/random: %r"));
+		return nil;
+	}
 	return buf;
 }
 
@@ -1562,6 +1650,12 @@ savekeyfile(path: string): string
 
 	# Generate random nonce using host CSPRNG
 	nonce := cryptorand(AES_GCM_NONCE_LEN);
+	if(nonce == nil){
+		why := sys->sprint("%r");
+		for(j := 0; j < len plaintext; j++)
+			plaintext[j] = byte 0;
+		return "no nonce: " + why;
+	}
 
 	# Encrypt with AES-GCM
 	magic := array of byte KEYFILE_MAGIC;
@@ -1642,6 +1736,7 @@ savekeyfile(path: string): string
 #
 persist()
 {
+	lasterr: string;
 	dirty := 0;
 	ticker := chan of int;
 	spawn timer(ticker, 30000);
@@ -1653,10 +1748,15 @@ persist()
 	<-ticker =>
 		if(dirty){
 			e := dosave();
-			if(e != nil && debug)
-				sys->fprint(sys->fildes(2), "factotum: persist: %s\n", e);
-			else if(e == nil)
+			if(e != nil){
+				# said once for each failure that is not the last one again
+				if(e != lasterr)
+					sys->fprint(sys->fildes(2), "factotum: keys not saved: %s\n", e);
+				lasterr = e;
+			}else{
 				dirty = 0;
+				lasterr = nil;
+			}
 		}
 
 	rc := <-syncc =>
@@ -1670,14 +1770,84 @@ persist()
 	}
 }
 
-# Save keys via whichever backend is configured
+# Save keys via whichever backend is configured.  Whatever goes wrong
+# is an answer: an exception in a save ended the thread that saves, and
+# whoever asked for a sync waited for ever, with the serving loop.
 dosave(): string
 {
+	{
+		return dosave1();
+	} exception e {
+	"*" =>
+		return "save failed: " + e;
+	}
+}
+
+nosave: string;	# why nothing is saved, when nothing may be
+
+# the secstore file: one line saying where keys added now are saved
+savestatus(): string
+{
+	if(secstoreaddr != nil){
+		if(nosave != nil)
+			return "notsaving " + nosave + "\n";
+		if(secstorepwhash4 == nil)
+			return "notsaving no secstore password yet\n";
+		s := sys->sprint("saving secstore %q %q", secstoreaddr, secstoreuser);
+		if(secstorevault != nil)
+			s += " 2fa";
+		return s + "\n";
+	}
+	if(keyfilepath != nil && keyfilepass != nil)
+		return sys->sprint("saving keyfile %q\n", keyfilepath);
+	return "none\n";
+}
+
+dosave1(): string
+{
+	if(nosave != nil)
+		return "not saved: " + nosave;
 	if(secstoreaddr != nil)
 		return secstoresave();
 	if(keyfilepath != nil && keyfilepass != nil)
 		return savekeyfile(keyfilepath);
 	return "no persistence backend configured";
+}
+
+#
+# A key's protocol module checks it (keycheck): nil, or why it is no key
+# of that protocol.  A protocol with no module is a name for keys some
+# other program asks for, and has no check; p9sk1's keys are p9any's.
+#
+keycheck(k: ref Key): string
+{
+	p := lookattrval(k.attrs, "proto");
+	if(p == nil || any(p, "./"))
+		return nil;
+	if(p == "p9sk1")
+		p = "p9any";
+	{
+		proto := load Authproto "/dis/auth/proto/"+p+".dis";
+		if(proto == nil)
+			return nil;
+		e := proto->init(authio);
+		if(e != nil)
+			return nil;	# it cannot run here: nothing to say about its keys
+		return proto->keycheck(k);
+	} exception ex {
+	"*" =>
+		return "key check failed: " + ex;
+	}
+}
+
+# In CNSA mode (/env/cnsamode: login(2)) the one signature algorithm
+# is ML-DSA-87; nil, or why alg is refused.
+cnsarefuses(alg: string): string
+{
+	login := load Login Login->PATH;
+	if(login == nil || !login->cnsamode())
+		return nil;
+	return login->cnsaalg(alg);
 }
 
 timer(ch: chan of int, ms: int)
@@ -1747,16 +1917,12 @@ secstoreload(): string
 		pass := promptpassword("secstore password: ");
 		if(pass == nil)
 			return "no password provided";
-		secstorepwhash = secstore->mkseckey(pass);
-		secstorepwhash2 = secstore->mkseckey2(pass);
-		secstorerootkey = secstore->mkfilekey3(secstoreuser, pass);
-		secstorefilekey = secstore->mkfilekey2(pass);
-		secstorelkey = secstore->mkfilekey(pass);
+		setsecstorekeys(pass, nil);
 		pass = nil;
 	}
 
 	# Connect and authenticate
-	(conn, sname, diag) := secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
+	(conn, sname, diag) := secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
 	if(conn == nil){
 		# Connect failed — auto-create account if it doesn't exist
 		reason := "";
@@ -1770,7 +1936,7 @@ secstoreload(): string
 		if(e != nil)
 			return "secstore setup: " + e;
 		# Retry connect after setup
-		(conn, sname, diag) = secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
+		(conn, sname, diag) = secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
 		if(conn == nil){
 			if(diag != nil)
 				return "secstore connect after setup: " + diag;
@@ -1782,20 +1948,33 @@ secstoreload(): string
 		sys->fprint(sys->fildes(2), "factotum: secstore: connected to %s as %s\n",
 			sname, secstoreuser);
 
-	# Fetch the "factotum" file
-	file := secstore->getfile(conn, "factotum", 0);
+	# Fetch the "factotum" file.  An account with nothing stored has
+	# none, and the server says so; a file that could not be read, or
+	# is empty, is another matter: it was taken for the same, and the
+	# keys added afterwards were saved over the file that was not read.
+	(file, absent, ferr) := secstore->fetch(conn, "factotum", 0);
 	secstore->bye(conn);
 
-	if(file == nil){
+	if(absent){
 		if(debug)
 			sys->fprint(sys->fildes(2), "factotum: secstore: no factotum file (new account)\n");
 		return nil;	# Not an error — new account, no keys yet
 	}
+	if(ferr != nil)
+		return "cannot read the keys: " + ferr;
+	if(len file == 0)
+		return "the key file is empty (damaged)";
 
 	# Decrypt (auto-detects modern GCM vs legacy CBC format)
-	plaintext := secstore->decrypt3(file, secstorerootkey, secstorefilekey, secstorelkey);
-	if(plaintext == nil)
-		return "secstore: decryption failed (wrong password?)";
+	# The format written, and no other: given the older formats' keys
+	# every time, the file chose its own format, a weaker one if
+	# whoever wrote it liked.
+	plaintext := secstore->decrypt3(file, secstorerootkey, nil, nil);
+	if(plaintext == nil){
+		if(!secstore->iscurrent(file))
+			return "the key file is in an old format: move it with auth/secstore m factotum";
+		return "secstore: decryption failed (wrong password, or a second-factor account's file)";
+	}
 
 	# Parse key lines
 	s := string plaintext;
@@ -1838,7 +2017,7 @@ secstoreload(): string
 #
 secstoresetup(): string
 {
-	if(secstorepwhash == nil || secstorepwhash2 == nil)
+	if(secstorepwhash4 == nil)
 		return "no password";
 
 	storedir := "/usr/inferno/secstore";
@@ -1851,15 +2030,23 @@ secstoresetup(): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	hexHi := secstore->mkverifier(secstoreuser, "secstore3", secstorepwhash2);
+	hexHi := secstore->mkverifier(secstoreuser, "secstore4", secstorepwhash4);
+	if(hexHi == nil)
+		return "can't make the verifier";
 
 	# Write PAK verifier
 	pakpath := userdir + "/PAK";
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", pakpath);
-	b := array of byte secstore->formatverifier("secstore3", hexHi);
-	sys->write(fd, b, len b);
+	b := array of byte (secstore->formatverifier("secstore4", hexHi) + "\n");
+	# a verifier cut short locked the account out, with "created" said
+	if(sys->write(fd, b, len b) != len b){
+		why := sys->sprint("%r");
+		fd = nil;
+		sys->remove(pakpath);
+		return sys->sprint("can't write %s: %s", pakpath, why);
+	}
 	fd = nil;
 
 	sys->fprint(sys->fildes(2), "factotum: secstore account created for %s\n", secstoreuser);
@@ -1897,6 +2084,8 @@ secstoresave(): string
 	now := int (sys->millisec() / 1000);
 	if(secstoreconn != nil && (now - secstoreconntime) < SECSTORE_CONN_TTL) {
 		rc := secstore->putfile(secstoreconn, "factotum", encrypted);
+		if(rc < 0)
+			sys->fprint(sys->fildes(2), "factotum: secstore: store on the kept connection: %r\n");
 		if(rc >= 0) {
 			secstoreconntime = now;	# refresh TTL on success
 			if(debug)
@@ -1910,18 +2099,32 @@ secstoresave(): string
 	}
 
 	# Connect and authenticate (full PAK handshake)
-	(conn, nil, diag) := secstore->connect2(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2);
+	(conn, nil, diag) := secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
 	if(conn == nil){
 		if(diag != nil)
 			return "secstore save connect: " + diag;
 		return sys->sprint("secstore save connect: %r");
 	}
 
-	# Put the file
+	# A second-factor account's files change only in a session that
+	# has shown the vault key; an account whose factor was enrolled
+	# before the server kept such keys is enrolled now.
+	if(secstorevault != nil){
+		(shown, verr) := secstore->showvault(conn, secstorevault);
+		if(shown == 0)
+			verr = secstore->enrolvault(conn, secstorevault);
+		if(verr != nil){
+			secstore->bye(conn);
+			return "secstore: the second factor's vault key: " + verr;
+		}
+	}
+
+	# Put the file (a version 4 session is told whether it was stored)
 	rc := secstore->putfile(conn, "factotum", encrypted);
 	if(rc < 0) {
+		e := sys->sprint("%r");
 		secstore->bye(conn);
-		return sys->sprint("secstore putfile: %r");
+		return "secstore putfile: " + e;
 	}
 
 	# Cache the connection for reuse (don't call bye)

@@ -1,0 +1,135 @@
+.TH MAILCONN 2
+.SH NAME
+mailconn \- a mail server's connection, with deadlines and bounds
+.SH SYNOPSIS
+.EX
+include "keyring.m";
+include "tls.m";
+include "mailconn.m";
+mailconn := load Mailconn Mailconn->PATH;
+Link: import mailconn;
+
+CLEAR, IMPLICIT, IMAPSTARTTLS, SMTPSTARTTLS: con iota;
+STOPPED: con "stopped";
+
+init: fn(): string;
+
+Link: adt {
+    err:      string;
+    dial:     fn(addr, servername: string, how: int,
+                 helo: string, ms: int): (ref Link, string);
+    deadline: fn(c: self ref Link, idlems, totalms: int);
+    getline:  fn(c: self ref Link, max: int): (string, string);
+    waitline: fn(c: self ref Link, max: int,
+                 stop: chan of int): (string, string);
+    getbytes: fn(c: self ref Link, n: int): (array of byte, string);
+    write:    fn(c: self ref Link, b: array of byte): string;
+    close:    fn(c: self ref Link);
+};
+.EE
+.SH DESCRIPTION
+.B Mailconn
+is the connection
+.IR smtp (2),
+.IR pop3 (2)
+and the IMAP client of
+.IR mail9p (4)
+speak their protocols on.
+A server is never waited for without limit, and is never taken at
+its word about how much it will send.
+.PP
+.B Init
+loads what the module needs and returns nil, or why it could not.
+.PP
+.B Link.dial
+connects to
+.I addr
+(a dial string,
+.BI tcp! host ! port \fR)
+within
+.I ms
+milliseconds, the TLS handshake included, and returns the connection,
+or nil and the reason
+.RB ( "timed out"
+at the deadline).
+.I How
+is
+.B CLEAR
+for a connection with no TLS;
+.B IMPLICIT
+for TLS from the first byte;
+.B IMAPSTARTTLS
+for IMAP's greeting and STARTTLS in clear and then TLS;
+.B SMTPSTARTTLS
+for SMTP's greeting,
+.B EHLO
+.I helo
+and STARTTLS in clear and then TLS.
+A server that does not offer STARTTLS, or refuses it, is refused:
+nothing else is sent in clear.
+TLS is
+.IR tls (2)'s
+client with its default configuration: the server's chain is verified
+against the system's roots, and
+.I servername
+against its certificate.
+.PP
+.B Deadline
+sets the limits for the reads and writes that follow:
+.I idlems
+milliseconds with nothing moving, and
+.I totalms
+in all from now; 0 is no such limit.
+.PP
+.B Getline
+returns the next line, without its CR LF or LF.
+A line of more than
+.I max
+bytes is an error.
+.B Waitline
+is
+.B getline
+with no deadline, for a caller that waits on a server by design
+(IMAP's IDLE): it returns the error
+.B STOPPED
+when a value arrives on
+.IR stop ,
+leaving the connection as it was.
+.B Getbytes
+returns exactly
+.I n
+bytes; its memory is taken as the bytes arrive, so a count costs
+nothing until it is kept.
+.B Write
+writes
+.IR b .
+.PP
+Each returns an error string, nil if there is none.
+After any error but
+.BR STOPPED
+\(em a timeout, the server's hanging up, a line too long, a failed
+write \(em the connection is closed and
+.B err
+holds the reason, which every later call returns.
+.B Close
+closes it: its processes go and the server is hung up on.
+.SH SOURCE
+.B /appl/lib/mailconn.b
+.SH SEE ALSO
+.IR pop3 (2),
+.IR smtp (2),
+.IR tls (2),
+.IR mail9p (4)
+.SH DIAGNOSTICS
+.B "timed out"
+(a deadline passed),
+.B "connection closed"
+(the server hung up),
+.B "line too long" ,
+.BR "write failed: " ...,
+and from
+.BR dial :
+.BR "dial " ...,
+.BR "tlsdial: tls: " ...,
+.BR "STARTTLS refused: " ...,
+.BR "STARTTLS not offered by " ....

@@ -11,6 +11,14 @@ implement Gdl90Test;
 # its position, a group whose ETX was lost.  And a fix from each
 # written as NMEA reads back the same.
 #
+# And what a sender can do with them (Callsign, GarminHostile, Fuzz).
+# A GDL 90 call sign was its eight bytes as they came: with a newline
+# among them a craft was two lines of gpsfs's traffic file, the second
+# the sender's.  Garmin's track was brought into 0..360 by taking 360
+# off until it fitted: thirty nines never did, and gpsfs's reader of
+# that source span for ever; a sign in a latitude's degrees or minutes
+# made a fix somewhere else.  Random frames and records raise nothing.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -225,6 +233,223 @@ testGarmin(t: ref T)
 	t.assertseq(sys->sprint("%.1f %.1f", (hd fl).lat, (hd tl fl).lat), "40.0 41.0", "each its own");
 }
 
+# a traffic report for an address, with the eight bytes of its call sign
+report(addr: int, cs: array of byte): array of byte
+{
+	m := bytes(N825V);
+	m[2] = byte (addr >> 16);
+	m[3] = byte (addr >> 8);
+	m[4] = byte addr;
+	m[19:] = array[8] of {* => byte ' '};
+	m[19:] = cs;
+	return m;
+}
+
+testCallsign(t: ref T)
+{
+	d := Framer.new();
+	p := Parser.new();
+	names := array[] of {
+		(16rAB0001, array of byte "A\nkind=x", ""),
+		(16rAB0002, array of byte "N1'2=3", ""),
+		(16rAB0003, array[] of {byte 'A', byte 16rFF, byte 'B'}, ""),
+		(16rAB0004, array of byte "n825v", ""),
+		(16rAB0005, array of byte "N825V", "N825V"),
+		(16rAB0006, array[] of {byte 'B', byte 'A', byte '1', byte '2', byte 0, byte 0, byte 0, byte 0}, "BA12"),
+		(16rAB0007, array of byte "AB 12", "AB 12"),
+	};
+	for(i := 0; i < len names; i++) {
+		(addr, cs, want) := names[i];
+		(nil, ts) := d.feed(gdl90->frame(report(addr, cs)));
+		t.asserteq(len ts, 1, "a report: a target");
+		if(ts == nil)
+			continue;
+		t.assertseq((hd ts).name, want, sys->sprint("the call sign of %.6x", addr));
+		p.target(hd ts);
+	}
+	(n, nil) := sys->tokenize(p.traffic(sys->millisec()), "\n");
+	t.asserteq(n, len names, "a line a craft in the traffic file");
+}
+
+# a group fed in a proc of its own: the fixes' text, "raised ...", or
+# "hung" if it has not returned in three seconds
+garminproc(s: string, done: chan of string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	{
+		g := Grouper.new();
+		r := "";
+		for(fl := g.feed(array of byte s); fl != nil; fl = tl fl)
+			r += "[" + (hd fl).text() + "] " + nmea->sentences(hd fl);
+		done <-= r;
+	} exception e {
+	"*" =>
+		done <-= "raised " + e;
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+killproc(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+garmin(s: string): string
+{
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn garminproc(s, done, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, 3000);
+	alt {
+	r := <-done =>
+		return r;
+	<-tc =>
+		killproc(pid);
+		return "hung";
+	}
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+testGarminHostile(t: ref T)
+{
+	pos := "\u0002z00673\r\nAN 40 4106\r\nBW 074 2393\r\n";
+	r := garmin(pos + "C9999999999999999999999999999999\r\nD045\r\n\u0003");
+	t.assert(r != "hung", "a track of thirty-one nines returns");
+	t.assert(!contains(r, "raised") && !contains(r, "course="), "and is no course: " + r);
+	r = garmin(pos + "C090\r\nQE99999999999999999999999999999\r\n\u0003");
+	t.assert(r != "hung", "a variation of twenty-nine nines returns");
+	t.assert(contains(r, "course=90.0") && !contains(r, "magvar="), "and is no variation: " + r);
+	r = garmin(pos + "C-90\r\nD-45\r\n\u0003");
+	t.assert(!contains(r, "course=") && !contains(r, "speed="), "a track and a speed below nothing are none: " + r);
+	r = garmin(pos + "C360\r\nQE010\r\n\u0003");
+	t.assert(contains(r, "course=1.0 "), "a track of 360 and 1 east is 1: " + r);
+	r = garmin(pos + "C005\r\nQW100\r\n\u0003");
+	t.assert(contains(r, "course=355.0 "), "a track of 5 and 10 west is 355: " + r);
+	r = garmin("\u0002z9999999999999999999999999999999\r\nAN 40 4106\r\nBW 074 2393\r\nD9999999999999999999\r\n\u0003");
+	t.assert(!contains(r, "alt=") && !contains(r, "speed="), "an altitude and a speed past any are none: " + r);
+
+	# a sign in the degrees or the minutes
+	r = garmin("\u0002z00100\r\nAN-941.06\r\nBW-9955.50\r\n\u0003");
+	t.assert(!contains(r, "lat="), "signed degrees are no position: " + r);
+	r = garmin("\u0002z00100\r\nAN40-1.06\r\nBW074+3.50\r\n\u0003");
+	t.assert(!contains(r, "lat="), "signed minutes are no position: " + r);
+}
+
+rstate := 20261116;
+rnd(n: int): int
+{
+	rstate = rstate * 1103515245 + 12345;
+	return ((rstate >> 8) & 16r7fffff) % n;
+}
+
+fuzzproc(done: chan of string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	what := "";
+	{
+		d := Framer.new();
+		p := Parser.new();
+		g := Grouper.new();
+		recs := "zABCDQEGIKLSTl";
+		for(n := 0; n < 20000; n++) {
+			# a frame with a good CRC and a body of any bytes, of any
+			# length; sometimes raw bytes with no frame to them
+			what = "gdl90";
+			m := array[rnd(40)] of byte;
+			for(i := 0; i < len m; i++)
+				m[i] = byte rnd(256);
+			if(len m > 0 && rnd(4) != 0)
+				m[0] = byte (array[] of {0, 10, 20})[rnd(3)];
+			b := m;
+			if(rnd(8) != 0)
+				b = gdl90->frame(m);
+			(fl, ts) := d.feed(b);
+			for(; ts != nil; ts = tl ts)
+				p.target(hd ts);
+			for(; fl != nil; fl = tl fl) {
+				f := hd fl;
+				(hd fl).text();
+				if(f.haspos && !(f.lat >= -90.0 && f.lat <= 90.0 && f.lon >= -180.0 && f.lon <= 180.0)) {
+					done <-= sys->sprint("a GDL 90 position of %g %g", f.lat, f.lon);
+					return;
+				}
+				nmea->sentences(f);
+			}
+			# a Garmin group of records that are any printable bytes
+			what = "garmin";
+			s := "\u0002";
+			for(k := rnd(8); k > 0; k--) {
+				s[len s] = recs[rnd(len recs)];
+				for(j := rnd(34); j > 0; j--)
+					case rnd(6) {
+					0 =>
+						s[len s] = ' ' + rnd(95);
+					1 =>
+						s[len s] = "NSEW-+. "[rnd(8)];
+					* =>
+						s[len s] = '0' + rnd(10);
+					}
+				s += "\r\n";
+			}
+			if(rnd(4) != 0)
+				s[len s] = 16r03;
+			for(fl = g.feed(array of byte s); fl != nil; fl = tl fl) {
+				f := hd fl;
+				f.text();
+				if(f.haspos && !(f.lat >= -90.0 && f.lat <= 90.0 && f.lon >= -180.0 && f.lon <= 180.0) ||
+				   f.hascourse && !(f.course >= 0.0 && f.course < 360.0)) {
+					done <-= sys->sprint("a Garmin fix of %s from %s", f.text(), s);
+					return;
+				}
+				nmea->sentences(f);
+			}
+		}
+		tr := p.traffic(sys->millisec());
+		(ntr, nil) := sys->tokenize(tr, "\n");
+		if(ntr != len p.targets) {
+			done <-= sys->sprint("%d targets are %d lines", len p.targets, ntr);
+			return;
+		}
+		done <-= nil;
+	} exception e {
+	"*" =>
+		done <-= "raised " + e + " in " + what;
+	}
+}
+
+testFuzz(t: ref T)
+{
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn fuzzproc(done, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, 60000);
+	alt {
+	r := <-done =>
+		t.assertnil(r, "20000 random frames and groups");
+	<-tc =>
+		killproc(pid);
+		t.fatal("a frame or a group never returned");
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -253,6 +478,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Ownship", testOwnship);
 	run("Framing", testFraming);
 	run("Garmin", testGarmin);
+	run("Callsign", testCallsign);
+	run("GarminHostile", testGarminHostile);
+	run("Fuzz", testFuzz);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

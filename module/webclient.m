@@ -19,12 +19,22 @@ Webclient: module {
 		headers:	list of Header;
 		body:		array of byte;
 		url:		string;		# the URL that answered, after redirects
+		truncated:	int;		# the body is its first bytes: it was longer than the caller's limit (or MAXBODY)
 
 		hdrval:	fn(r: self ref Response, name: string): string;
 	};
 
 	# An HTTP state store (RFC 6265): cookies set by responses, sent
 	# with the requests they match.  One jar is one browsing session.
+	# set() takes what RFC 6265 §5.3 and its revision (6265bis) let a
+	# response set: no control characters; a Domain the host is, or
+	# ends in, that is not a name sites are registered under (one
+	# label; co.uk, com.au and their like; a short list of others and
+	# of hosting services: there is no Public Suffix List here, so a
+	# registry not among them is not known for one); no Secure cookie
+	# from a URL that is not https, and none that would replace or
+	# shadow one; __Secure- and __Host- names as they promise.  A
+	# Secure cookie is in header() only for an https URL.
 	Cookie: adt {
 		name, value:	string;
 		domain, path:	string;	# domain lower case, without a leading dot
@@ -45,15 +55,52 @@ Webclient: module {
 		clear:	fn(j: self ref Jar);
 	};
 
+	# How long request, requestpublic, requestjar, requesttypes, get and
+	# post wait for a server: the whole exchange, redirects and body
+	# included, is over within total milliseconds, and no more than
+	# stall milliseconds pass with no byte moving on its connection.
+	# Then the answer is "request timed out" and the connection is
+	# hung up, as at requestbounded's deadline.  The TLS handshake of
+	# tlsdial and tlsclient is given stall ("tls: handshake timed
+	# out").  They start as DEADLINE and STALL, generous enough for a
+	# 64 MB body on a slow line and a server slow to answer;
+	# setdeadline changes them for this load of the module, 0 for
+	# either being no limit.  A connect is the system's to time.
+	DEADLINE: con 60*60*1000;
+	STALL: con 5*60*1000;
+	setdeadline:	fn(total, stall: int);
+
+	# A connection is kept after its response for the next request to
+	# the same place, for IDLEMS milliseconds; then it is closed, by
+	# a Prog that is there only while a connection is kept.  setidle
+	# changes the time for this load of the module (0: none is kept
+	# past its response's use).
+	IDLEMS: con 30*1000;
+	setidle:	fn(ms: int);
+
+	# Host, Content-Length and Transfer-Encoding are the request's own:
+	# ones among hdrs are not sent.  Credentials among hdrs go no
+	# further than the origin asked (scheme, host and port).
 	request:	fn(method, url: string, hdrs: list of Header,
 			   body: array of byte): (ref Response, string);
 	# Resolve and dial only validated public IPv4 destinations. Revalidates every
 	# redirect and strips credential headers when the origin changes.
 	requestpublic: fn(method, url: string, hdrs: list of Header,
 			   body: array of byte): (ref Response, string);
+	# request (public: requestpublic) for a caller that will not wait for
+	# ever or take whatever comes: the whole exchange, redirects and body
+	# included, is over within ms milliseconds, and no more than maxbody
+	# bytes of body are kept (Response.truncated says when there were
+	# more).  At the deadline the answer is "request timed out" and the
+	# connection is hung up, so nothing goes on behind the caller's back.
+	# ms 0: no deadline (and no stall limit: setdeadline's are not
+	# requestbounded's); maxbody 0: MAXBODY.
+	requestbounded: fn(method, url: string, hdrs: list of Header,
+			   body: array of byte, public, ms, maxbody: int): (ref Response, string);
 	# request, keeping cookies in jar across redirects, and decoding a
-	# gzip or deflate Content-Encoding (asked for by the caller's
-	# Accept-Encoding header)
+	# gzip, deflate or br Content-Encoding (asked for by the caller's
+	# Accept-Encoding header).  A body that does not decode, or decodes
+	# to more than MAXBODY, is an error.
 	requestjar:	fn(method, url: string, hdrs: list of Header,
 			   body: array of byte, jar: ref Jar): (ref Response, string);
 	# requestjar, reading a successful response's body only if its
@@ -68,7 +115,11 @@ Webclient: module {
 	post:		fn(url, contenttype: string,
 			   body: array of byte): (ref Response, string);
 
-	# TLS-integrated dial: connect TCP + TLS handshake
+	# TLS-integrated dial: connect TCP + TLS handshake.  The fd is one
+	# end of a pipe carried to and from the connection.  When the
+	# server closes, or the connection fails, a read of it returns 0;
+	# after the next write, reads return 0 and writes fail as on a
+	# closed pipe.  Dropping the fd closes the connection.
 	tlsdial:	fn(addr, servername: string): (ref Sys->FD, string);
 	# TLS on a connection already open (STARTTLS); fd is not to be used after
 	tlsclient:	fn(fd: ref Sys->FD, servername: string): (ref Sys->FD, string);

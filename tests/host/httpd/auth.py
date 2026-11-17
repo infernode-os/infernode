@@ -145,6 +145,41 @@ def passwords():
     time.sleep(1.1)
     check(st(R, "/", user="dave:davepass") == 200, "the password file changed: dave in, no restart")
 
+    # (on the server with no rules: its wrong guesses are counted apart)
+    # every guess costs the file's most rounds: alice's line has 20000 and
+    # carol's 100000, and a wrong password for alice came back five times
+    # sooner than one for a name that is no user
+    def took(user):
+        t = []
+        for i in range(2):
+            t0 = time.time(); request(D, "/", user=user % i); t.append(time.time() - t0)
+        return min(t)
+    ta, tn = took("alice:wrong%d"), took("nobody%d:x")
+    check(ta > 0.6 * tn, "a user with fewer rounds than the file's most takes an unknown user's time (%.0f ms against %.0f)" % (ta*1000, tn*1000))
+
+    # of two lines for one user the last is the user's (the first was:
+    # a password changed by adding a line left the old one in force)
+    pwf = SITE + "/../pw"
+    saved = open(pwf).read()
+    open(pwf, "a").write(open(W + "/alice2.pw").read())
+    time.sleep(1.1)
+    check(st(D, "/", user="alice:newsesame") == 200, "a second line for alice: her new password")
+    check(st(D, "/", user="alice:opensesame") == 401, "and not the old one")
+    # a file emptied, or gone, is no users: those it held went on logging in
+    open(pwf, "w").close()
+    time.sleep(1.1)
+    check(st(D, "/", user="dave:davepass") == 401, "the password file emptied: dave refused")
+    os.remove(pwf)
+    time.sleep(1.1)
+    check(st(D, "/", user="dave:davepass") == 401, "the password file removed: dave refused")
+    open(pwf, "w").write(saved)
+    time.sleep(1.1)
+    check(st(D, "/", user="dave:davepass") == 200, "the file back: dave in")
+    check(st(D, "/", user="alice:opensesame") == 200, "and alice with the password of her one line")
+    log = open(W + "/emu.log", errors="replace").read()
+    n = log.count("every password is refused")
+    check(1 <= n <= 6 and "no users" in log and "alice again" in log, "each said once on standard error (%d)" % n)
+
 def rules():
     for p in ("/ADMIN/x.txt", "/Admin/x.txt", "/aDmIn/x.txt", "//admin/x.txt", "/admin/X.TXT", "/public/../admin/x.txt",
               "/public/%2e%2e/admin/x.txt", "/admin./x.txt", "/admin%20/x.txt", "/admin%5cx.txt", "/public%5c..%5cadmin/x.txt",
@@ -315,8 +350,17 @@ def wedge():
     # to take about 45 s here, from the speed measured): the connection
     # is killed while the authenticator works, and the authenticator
     # must still be there for the next login
-    t0 = time.time(); request(R, "/", user="carol:wrong"); per = (time.time() - t0) / 100000
+    # (timed with carol's right password, twice, the faster: no wrong
+    # guess is counted, and a moment's load does not make the check
+    # short; the file has changed since she was last found right)
+    ts = []
+    for i in range(2):
+        open(W + "/pw", "a").write("# again\n")
+        time.sleep(1.1)
+        t0 = time.time(); request(R, "/", user="carol:carolpass"); ts.append(time.time() - t0)
+    per = min(ts) / 100000
     iters = int(45 / max(per, 1e-7))
+    saved = open(W + "/pw").read()
     line = "slow:pbkdf2-sha256:%d:%s:%s\n" % (iters, base64.b64encode(b"saltsaltsaltsalt").decode(), base64.b64encode(b"h" * 32).decode())
     open(W + "/pw", "a").write(line)
     time.sleep(1.1)
@@ -329,6 +373,8 @@ def wedge():
         d = b""
     took = time.time() - t0
     check(d == b"" and took < 40, "a check longer than the deadline: its connection hung up", "%r after %.0fs" % (d[:20], took))
+    # (the slow line taken out again: every guess costs the file's most rounds)
+    open(W + "/pw", "w").write(saved)
     t0 = time.time()
     r = request(R, "/", user="alice:opensesame")
     check(r.status == 200, "and the authenticator answers the next login (%.0f s later)" % (time.time() - t0), str(r.status))

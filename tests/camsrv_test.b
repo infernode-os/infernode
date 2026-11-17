@@ -4,6 +4,20 @@ implement CamsrvTest;
 # camsrv against its simulated sensor: the vid9p schema, the colours
 # through $Bayer, frames moving, ctl, and the stream's lifetime.
 #
+# And requests that ended it (HostileRead, HostileCtl), each against a
+# camsrv of its own, each request in a proc with a deadline.  Its serve
+# loop had no handler, and one request from any holder of the feed
+# broke it: every reader then waited for ever, with the capture left
+# running and the sensor on.
+#   - a read of frame at an offset near the frame size times 2^32: the
+#     frame's number was cut to an int, went negative, and indexed the
+#     ring before its start;
+#   - "fps", "gain" or "flip" written to ctl with no value: the head of
+#     the argument was taken before the words were counted.
+# An argument that is no number ("exposure abc" set 0, automatic) and
+# one out of range ("exposure -1") are refused; ctl is not writable by
+# others.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -207,8 +221,16 @@ testFrames(t: ref T)
 	fd2 = nil;
 	# kept: the last few; below them, refused
 	sys->sleep(500);
-	first := statusnum("first");
-	frames := statusnum("frames");
+	# both from one reading of status: read apart, a frame made between
+	# the two put them nine apart on a loaded machine
+	(first, frames) := (-1, -1);
+	(nil, sw) := sys->tokenize(file("status"), " \t\n");
+	for(; sw != nil; sw = tl sw){
+		if(len hd sw > 6 && (hd sw)[0:6] == "first=")
+			first = int (hd sw)[6:];
+		if(len hd sw > 7 && (hd sw)[0:7] == "frames=")
+			frames = int (hd sw)[7:];
+	}
 	t.assert(first >= 0 && frames > first && frames - first <= 8, sys->sprint("status first=%d frames=%d", first, frames));
 	(got, e) = readat(fd, c, first - 1);
 	t.assert(first == 0 || e == "frame expired", "a frame no longer kept: " + e);
@@ -355,9 +377,205 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Raw", testRaw);
 		run("Rotate", testRotate);
 		run("Posted", testPosted);
+		run("HostileRead", testHostileRead);
+		run("HostileCtl", testHostileCtl);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
+}
+
+# one request of the camsrv at dir, in a proc of its own:
+#	ctl TEXT	written to ctl: "ok", or the error
+#	frame N	8192 bytes read of frame at N frames: "read K", or the error
+#	status	"ok" if status reads
+op(dir, what, arg: string, n: big, done: chan of string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	case what {
+	"ctl" =>
+		fd := sys->open(dir + "/0/ctl", Sys->OWRITE);
+		if(fd == nil)
+			done <-= sys->sprint("open: %r");
+		else if(sys->fprint(fd, "%s", arg) < 0)
+			done <-= sys->sprint("%r");
+		else
+			done <-= "ok";
+	"frame" =>
+		fd := sys->open(dir + "/0/frame", Sys->OREAD);
+		if(fd == nil){
+			done <-= sys->sprint("open: %r");
+			return;
+		}
+		b := array[8192] of byte;
+		k := sys->pread(fd, b, len b, n * big FS);
+		if(k < 0)
+			done <-= sys->sprint("%r");
+		else
+			done <-= sys->sprint("read %d", k);
+	"status" =>
+		if(has(rd(dir + "/0/status"), "camera "))
+			done <-= "ok";
+		else
+			done <-= "no status";
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# its answer, or "hung" if none has come in three seconds
+try(dir, what, arg: string, n: big): string
+{
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn op(dir, what, arg, n, done, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, 3000);
+	alt {
+	r := <-done =>
+		return r;
+	<-tc =>
+		k := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+		if(k != nil)
+			sys->fprint(k, "kill");
+		return "hung";
+	}
+}
+
+# a camsrv of the test's own, mounted at dir
+own(dir: string): int
+{
+	sys->create(dir, Sys->OREAD, Sys->DMDIR|8r777);
+	p := array[2] of ref Sys->FD;
+	sys->pipe(p);
+	spawn server(p[1]);
+	return sys->mount(p[0], nil, dir, Sys->MREPL, "");
+}
+
+# The body of a hostile test runs in a proc of its own and says what it
+# found: against a camsrv that has stopped answering, an unmount or the
+# close of a file waits for ever, and the suite with it.  A line
+# beginning "FAIL " is a failure, "END" the end.
+hostile(t: ref T, body: ref fn(out: chan of string))
+{
+	out := chan of string;
+	spawn body(out);
+	tc := chan[1] of int;
+	spawn timer(tc, 60000);
+	for(;;) alt {
+	s := <-out =>
+		if(s == "END")
+			return;
+		if(len s > 5 && s[0:5] == "FAIL ")
+			t.error(s[5:]);
+		else
+			t.log(s);
+	<-tc =>
+		t.fatal("camsrv stopped answering");
+	}
+}
+
+check(out: chan of string, ok: int, what: string)
+{
+	if(!ok)
+		out <-= "FAIL " + what;
+}
+
+testHostileRead(t: ref T)
+{
+	hostile(t, hostileread);
+}
+
+hostileread(out: chan of string)
+{
+	dir := MNT + ".r";
+	if(own(dir) < 0){
+		out <-= sys->sprint("FAIL mount: %r");
+		out <-= "END";
+		return;
+	}
+	# held open, so the sensor is on and frames are made
+	hold := sys->open(dir + "/0/frame", Sys->OREAD);
+	check(out, hold != nil, "frame opens");
+	sys->sleep(300);
+	far := array[] of {
+		big 16r100000000 - big 3,	# -3 as an int
+		big 16r80000000,		# the most negative int
+		big 16r100000000,		# 0 as an int: frame 0, which is not this one
+		big 16r7fffffff,
+		big 1 << 40,
+		big 100000,
+	};
+	for(i := 0; i < len far; i++){
+		r := try(dir, "frame", nil, far[i]);
+		if(r == "hung"){
+			out <-= sys->sprint("FAIL a read of frame %bd was never answered, and nor is anything after it", far[i]);
+			out <-= "END";
+			return;
+		}
+		check(out, r == "frame expired", sys->sprint("a read of frame %bd: %s", far[i], r));
+	}
+	check(out, try(dir, "status", nil, big 0) == "ok", "status reads after them");
+	b := array[FS] of byte;
+	n := 0;
+	(nil, f) := sys->tokenize(rd(dir + "/0/status"), " \t\n");
+	for(; f != nil; f = tl f)
+		if(len hd f > 7 && (hd f)[0:7] == "frames=")
+			n = int (hd f)[7:];
+	(got, e) := readat(hold, b, n);
+	check(out, got == FS && e == nil, sys->sprint("the next frame is read whole: %d bytes %s", got, e));
+	hold = nil;
+	sys->unmount(nil, dir);
+	out <-= "END";
+}
+
+testHostileCtl(t: ref T)
+{
+	hostile(t, hostilectl);
+}
+
+hostilectl(out: chan of string)
+{
+	dir := MNT + ".c";
+	if(own(dir) < 0){
+		out <-= sys->sprint("FAIL mount: %r");
+		out <-= "END";
+		return;
+	}
+	(ok, d) := sys->stat(dir + "/0/ctl");
+	check(out, ok >= 0 && (d.mode & 8r777) == 8r664, sys->sprint("ctl is not writable by others: %uo", d.mode & 8r777));
+	bad := array[] of {
+		"fps", "gain", "flip", "exposure", "focus", "rotate", "mode", "mode 144",
+		"fps abc", "fps 1e1", "fps -5", "fps 10 20", "fps 99999999999",
+		"gain abc", "gain -1", "gain 4294967297",
+		"flip x", "flip -1",
+		"exposure abc", "exposure -1", "exposure 70000", "exposure 1 2",
+		"focus abc", "focus -1", "focus 2000",
+		"mode abc def", "mode -144 -81", "mode 144 81 1",
+		"", " ",
+	};
+	for(i := 0; i < len bad; i++){
+		r := try(dir, "ctl", bad[i], big 0);
+		if(r == "hung"){
+			out <-= sys->sprint("FAIL \"%s\" written to ctl was never answered, and nor is anything after it", bad[i]);
+			out <-= "END";
+			return;
+		}
+		check(out, r != "ok" && has(r, "camsrv:"), sys->sprint("\"%s\" is refused: %s", bad[i], r));
+	}
+	good := array[] of {"fps 12", "gain 300", "flip 1", "exposure 500", "exposure 0", "focus 400", "mode 576 324", "rotate 180"};
+	for(i = 0; i < len good; i++)
+		check(out, try(dir, "ctl", good[i], big 0) == "ok", "\"" + good[i] + "\" is taken");
+	c := rd(dir + "/0/ctl");
+	check(out, has(c, "fps 12\n") && has(c, "gain 300\n") && has(c, "flip 1\n") && has(c, "exposure 0\n") &&
+		has(c, "focus 400\n") && has(c, "mode 576 324\n") && has(c, "rotate 180\n"), "and read back: " + c);
+	check(out, try(dir, "status", nil, big 0) == "ok", "status reads after them");
+	sys->unmount(nil, dir);
+	out <-= "END";
 }
 
 PostMod: module {

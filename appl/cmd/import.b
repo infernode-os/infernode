@@ -70,6 +70,10 @@ init(nil: ref Draw->Context, args: list of string)
 	if(len args != 2 && len args != 3)
 		arg->usage();
 	arg = nil;
+	# said before anything is dialled: it used to be said once the
+	# far end had been authenticated to and told the tree
+	if(cryptalg != nil)
+		fail("import", "Plan 9's p9sk1 gives a 56-bit key, too weak for ssl(3)'s aes_256_gcm and hmac_sha384; leave out -e for clear text, on a network you trust");
 	addr := hd args;
 	file := hd tl args;
 	mountpt := file;
@@ -97,13 +101,13 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->werrstr("bad remote tree: "+string buf[0:n]);
 		fail("import", sys->sprint("import %s %s: %r", addr, file));
 	}
-	if(cryptalg != nil)
-		fail("import", "Plan 9's p9sk1 gives a 56-bit key, too weak for ssl(3)'s aes_256_gcm and hmac_sha384; leave out -e for clear text, on a network you trust");
 	if(sys->fprint(c.dfd, "impo nofilter clear\n") < 0)
 			fail("import", sys->sprint("can't write to remote: %r"));
+	# the attach is authenticated with the key the connection was (it
+	# was not given -k's), and not mounted if that fails (it was)
 	afd := sys->fauth(c.dfd, "");
-	if(afd != nil)
-		factotum->proxy(afd, facfd, "proto=p9any role=client");
+	if(afd != nil && factotum->proxy(afd, facfd, "proto=p9any role=client "+keyspec) == nil)
+		fail("auth", sys->sprint("can't authenticate the attach: %r"));
 	if(sys->mount(c.dfd, afd, mountpt, flags, "") < 0)
 		fail("mount failed", sys->sprint("import %s %s: mount failed: %r", addr, file));
 }

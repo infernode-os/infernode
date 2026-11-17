@@ -30,6 +30,14 @@ Twofaslot: module
 	# Is this account in 2FA mode (has any key-slots)?
 	is2fa:	fn(user: string): int;
 
+	# Where its second factor stands: "none", "enrolling" (slots, and
+	# the vault perhaps still under the password), "enrolled" (the
+	# vault is under the data key and nothing else is it), "disabling".
+	# markenrolled records that the vault has been read under the data
+	# key (an account enrolled before the mark was kept).
+	state:	fn(user: string): string;
+	markenrolled:	fn(user: string): string;
+
 	# Recover the data key DK from the slots. Tries each key slot (present
 	# YubiKey, touch) first; then the recovery slot if recoverypass is given.
 	# rootkey is mkfilekey3(user,pass). Returns (DK, nil) or (nil, error).

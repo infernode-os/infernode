@@ -21,9 +21,9 @@ struct AESstate
 	ulong	setup;
 	int	rounds;
 	int	keybytes;
-	uchar	key[AESmaxkey];		/* unexpanded key */
 	u32int	ekey[4*(AESmaxrounds + 1)];	/* encryption key */
-	u32int	dkey[4*(AESmaxrounds + 1)];	/* decryption key */
+	u32int	dkey[4*(AESmaxrounds + 1)];	/* decryption key (the equivalent inverse cipher's) */
+	u64int	bkey[8*(AESmaxrounds + 1)];	/* encryption key as bit planes (aes.c) */
 	uchar	ivec[AESbsize];	/* initialization vector */
 };
 
@@ -31,12 +31,8 @@ void	setupAESstate(AESstate *s, uchar key[], int keybytes, uchar *ivec);
 void	aesCBCencrypt(uchar *p, int len, AESstate *s);
 void	aesCBCdecrypt(uchar *p, int len, AESstate *s);
 void	aesEncryptBlock(AESstate *s, uchar pt[16], uchar ct[16]);
-
-/* ===================================================== */
-/* AES-CTR */
-/* ===================================================== */
-void	aesCTRencrypt(uchar *p, int len, AESstate *s);
-void	aesCTRdecrypt(uchar *p, int len, AESstate *s);
+void	aesCTR32(AESstate *s, const uchar ctr[16], uchar *p, ulong n);
+void	clearAESstate(AESstate *s);	/* when done with one: it holds the key */
 
 /* ===================================================== */
 /* AES-GCM */
@@ -186,7 +182,10 @@ void	bfECBencrypt(uchar*, int, BFstate*);
 void	bfECBdecrypt(uchar*, int, BFstate*);
 
 /* ===================================================== */
-/* DES definitions */
+/* DES is gone from libsec (des.c and its modes: nothing called them;
+ * Keyring's DES functions only refuse).  The state's type stays until
+ * libkeyring/keys.h's XDESstate, which those functions' adt is made of,
+ * goes with them. */
 /* ===================================================== */
 
 enum
@@ -194,7 +193,6 @@ enum
 	DESbsize=	8
 };
 
-/* single des */
 typedef struct DESstate DESstate;
 struct DESstate
 {
@@ -203,45 +201,6 @@ struct DESstate
 	ulong	expanded[32];	/* expanded key */
 	uchar	ivec[8];	/* initialization vector */
 };
-
-void	setupDESstate(DESstate *s, uchar key[8], uchar *ivec);
-void	des_key_setup(uchar[8], ulong[32]);
-void	block_cipher(ulong*, uchar*, int);
-void	desCBCencrypt(uchar*, int, DESstate*);
-void	desCBCdecrypt(uchar*, int, DESstate*);
-void	desECBencrypt(uchar*, int, DESstate*);
-void	desECBdecrypt(uchar*, int, DESstate*);
-
-/* for backward compatibility with 7 byte DES key format */
-void	des56to64(uchar *k56, uchar *k64);
-void	des64to56(uchar *k64, uchar *k56);
-void	key_setup(uchar[7], ulong[32]);
-
-/* triple des encrypt/decrypt orderings */
-enum {
-	DES3E=		0,
-	DES3D=		1,
-	DES3EEE=	0,
-	DES3EDE=	2,
-	DES3DED=	5,
-	DES3DDD=	7
-};
-
-typedef struct DES3state DES3state;
-struct DES3state
-{
-	ulong	setup;
-	uchar	key[3][8];		/* unexpanded key */
-	ulong	expanded[3][32];	/* expanded key */
-	uchar	ivec[8];		/* initialization vector */
-};
-
-void	setupDES3state(DES3state *s, uchar key[3][8], uchar *ivec);
-void	triple_block_cipher(ulong keys[3][32], uchar*, int);
-void	des3CBCencrypt(uchar*, int, DES3state*);
-void	des3CBCdecrypt(uchar*, int, DES3state*);
-void	des3ECBencrypt(uchar*, int, DES3state*);
-void	des3ECBdecrypt(uchar*, int, DES3state*);
 
 /* IDEA */
 typedef struct IDEAstate IDEAstate;
@@ -312,6 +271,22 @@ DigestState* hmac_sha1(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 DigestState* hmac_sha256(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 DigestState* hmac_sha384(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
 
+/* a signature's nonce: RFC 6979 3.2 with 3.6's additional data (nonce.c) */
+typedef struct Noncestate Noncestate;
+struct Noncestate
+{
+	int	hlen;
+	int	used;
+	uchar	k[SHA512dlen];
+	uchar	v[SHA512dlen];
+};
+int	noncehlen(int nbits);
+void	noncestart(Noncestate*, int hlen, uchar *x, int nx, uchar *h1, int nh, uchar *extra, int nextra);
+void	noncenext(Noncestate*, uchar *t, int n);
+void	nonceclear(Noncestate*);
+int	mpnoncestart(Noncestate*, mpint *x, mpint *m, mpint *q, uchar *extra, int nextra);
+int	mpnoncenext(Noncestate*, mpint *q, mpint *k);
+
 /* HMAC_DRBG, SHA-512, SP 800-90A 10.1.2 (hmacdrbg.c): K and V the caller's */
 enum
 {
@@ -323,10 +298,6 @@ void	hmacdrbgreseed(uchar *k, uchar *v, uchar *e, int ne);
 void	hmacdrbggen(uchar *k, uchar *v, uchar *p, int n);
 int	hmacdrbgcheck(void);
 DigestState* hmac_sha512(uchar*, ulong, uchar*, ulong, uchar*, DigestState*);
-char* md5pickle(MD5state*);
-MD5state* md5unpickle(char*);
-char* sha1pickle(SHA1state*);
-SHA1state* sha1unpickle(char*);
 
 /* ===================================================== */
 /* SHA-3 / SHAKE (FIPS 202) */
@@ -342,11 +313,19 @@ typedef struct SHA3state SHA3state;
 struct SHA3state
 {
 	u64int	a[25];		/* Keccak state (5x5 x 64-bit) */
-	uchar	buf[200];	/* rate buffer */
 	int	rate;		/* rate in bytes */
-	int	pt;		/* buffer position */
+	int	pt;		/* position in the block */
 	int	mdlen;		/* output length (0 for XOF) */
+	int	phase;		/* absorbing, or padded and squeezing */
 };
+
+/*
+ * A SHAKE is init, absorb any number of times, finalize, squeeze any
+ * number of times.  Out of turn: a squeeze with no finalize finalizes
+ * first, and an absorb after it takes nothing.  A state that absorbed a
+ * secret is the caller's to clear (secureZero): Keccak's permutation
+ * runs backwards.  The one-call forms clear their own.
+ */
 
 void	sha3_256(const uchar *in, ulong inlen, uchar out[32]);
 void	sha3_512(const uchar *in, ulong inlen, uchar out[64]);
@@ -428,12 +407,29 @@ enum
 	MLDSA87_SIGLEN=		4627,
 };
 
+/*
+ * FIPS 204's external interface (Algorithms 1, 2, 3): the pure, hedged
+ * signature, of msg under an empty context string, or (_ctx) under one
+ * of up to 255 bytes.  sign: 0, or -1 with nothing in sig; verify: 1 or 0.
+ */
 int	mldsa65_keygen(uchar *pk, uchar *sk);
 int	mldsa65_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk);
+int	mldsa65_sign_ctx(uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *sk);
 int	mldsa65_verify(const uchar *sig, const uchar *msg, ulong msglen, const uchar *pk);
+int	mldsa65_verify_ctx(const uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *pk);
 int	mldsa87_keygen(uchar *pk, uchar *sk);
 int	mldsa87_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk);
+int	mldsa87_sign_ctx(uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *sk);
 int	mldsa87_verify(const uchar *sig, const uchar *msg, ulong msglen, const uchar *pk);
+int	mldsa87_verify_ctx(const uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *pk);
+/*
+ * its internal one (Algorithms 6, 7, 8), for known-answer tests only:
+ * set is 65 or 87, the randomness is an argument, mp is M' whole, and
+ * mu, when not nil, is used in place of H(tr || mp)
+ */
+int	mldsa_keygen_internal(int set, uchar *pk, uchar *sk, const uchar xi[32]);
+int	mldsa_sign_internal(int set, uchar *sig, const uchar *mp, ulong mplen, const uchar *mu, const uchar rnd[32], const uchar *sk);
+int	mldsa_verify_internal(int set, const uchar *sig, const uchar *mp, ulong mplen, const uchar *mu, const uchar *pk);
 
 /* internal NTT/poly functions used across mldsa_*.c files */
 int32	mldsa_barrett_reduce(int32 a);
@@ -462,12 +458,30 @@ enum
 	SLHDSA256S_SIGLEN=	29792,
 };
 
+/*
+ * FIPS 205's external interface (Algorithms 21, 22, 24): the pure,
+ * hedged signature, of msg under an empty context string, or (_ctx)
+ * under one of up to 255 bytes.  sign: 0, or -1 with sig cleared;
+ * verify: 1 or 0.
+ */
 int	slhdsa192s_keygen(uchar *pk, uchar *sk);
 int	slhdsa192s_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk);
+int	slhdsa192s_sign_ctx(uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *sk);
 int	slhdsa192s_verify(const uchar *sig, ulong siglen, const uchar *msg, ulong msglen, const uchar *pk);
+int	slhdsa192s_verify_ctx(const uchar *sig, ulong siglen, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *pk);
 int	slhdsa256s_keygen(uchar *pk, uchar *sk);
 int	slhdsa256s_sign(uchar *sig, const uchar *msg, ulong msglen, const uchar *sk);
+int	slhdsa256s_sign_ctx(uchar *sig, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *sk);
 int	slhdsa256s_verify(const uchar *sig, ulong siglen, const uchar *msg, ulong msglen, const uchar *pk);
+int	slhdsa256s_verify_ctx(const uchar *sig, ulong siglen, const uchar *msg, ulong msglen, const uchar *ctx, int ctxlen, const uchar *pk);
+/*
+ * its internal one (Algorithms 18, 19, 20), for known-answer tests
+ * only: set is 192 or 256, the seeds and addrnd are n bytes (24 or 32),
+ * mp is M' whole, and with addrnd nil the signature is deterministic
+ */
+int	slhdsa_keygen_internal(int set, uchar *pk, uchar *sk, const uchar *skseed, const uchar *skprf, const uchar *pkseed);
+int	slhdsa_sign_internal(int set, uchar *sig, const uchar *mp, ulong mplen, const uchar *addrnd, const uchar *sk);
+int	slhdsa_verify_internal(int set, const uchar *sig, ulong siglen, const uchar *mp, ulong mplen, const uchar *pk);
 
 /* internal SLH-DSA functions used across slhdsa_*.c files */
 void	slhdsa_adrs_init(uchar*);
@@ -484,18 +498,18 @@ void	slhdsa_F(uchar*, int, const uchar*, int, const uchar*, const uchar*, int);
 void	slhdsa_H(uchar*, int, const uchar*, int, const uchar*, const uchar*, int, const uchar*, int);
 void	slhdsa_Tl(uchar*, int, const uchar*, int, const uchar*, const uchar*, int);
 void	slhdsa_PRF(uchar*, int, const uchar*, int, const uchar*, int, const uchar*);
-void	slhdsa_PRF_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
-void	slhdsa_H_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
-void	slhdsa_wots_pkgen(uchar*, int, const uchar*, int, const uchar*, int, uchar*);
-void	slhdsa_wots_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*);
-void	slhdsa_wots_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*);
+void	slhdsa_PRF_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
+void	slhdsa_H_msg(uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, int, const uchar*, ulong);
+int	slhdsa_wots_pkgen(uchar*, int, const uchar*, int, const uchar*, int, uchar*);
+int	slhdsa_wots_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*);
+int	slhdsa_wots_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*);
 int	slhdsa_wots_len(int);
-void	slhdsa_fors_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*, int, int);
-void	slhdsa_fors_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*, int, int);
+int	slhdsa_fors_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, uchar*, int, int);
+int	slhdsa_fors_pk_from_sig(uchar*, int, const uchar*, const uchar*, const uchar*, int, uchar*, int, int);
 int	slhdsa_treehash(uchar*, uchar*, int, const uchar*, int, const uchar*, int, u32int, u64int, int, int);
-void	slhdsa_xmss_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u32int, u64int, int, int);
-void	slhdsa_xmss_root_from_sig(uchar*, int, const uchar*, int, const uchar*, const uchar*, int, u32int, u64int, int);
-void	slhdsa_ht_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u64int, u32int, int, int);
+int	slhdsa_xmss_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u32int, u64int, int, int);
+int	slhdsa_xmss_root_from_sig(uchar*, int, const uchar*, int, const uchar*, const uchar*, int, u32int, u64int, int);
+int	slhdsa_ht_sign(uchar*, int, const uchar*, const uchar*, int, const uchar*, int, u64int, u32int, int, int);
 int	slhdsa_ht_verify(const uchar*, int, const uchar*, const uchar*, int, const uchar*, u64int, u32int, int, int);
 
 /* ===================================================== */
@@ -508,7 +522,6 @@ void	_genrandomqunlock(void);
 void	prng(uchar *buf, int nbytes);
 int	prngtry(uchar *buf, int nbytes);	/* 0 ok, -1 no secure source (never aborts) */
 ulong	fastrand(void);
-ulong	nfastrand(ulong);
 
 /* ===================================================== */
 /* secure memory clearing */
@@ -519,9 +532,14 @@ void	secureZero(void *buf, ulong nbytes);
 /* primes */
 /* ===================================================== */
 void	genprime(mpint *p, int n, int accuracy); /* generate an n bit probable prime */
-void	gensafeprime(mpint *p, mpint *alpha, int n, int accuracy);	/* prime and generator */
+/* the searches for a prime, stopped when stop() says so (-1): genprime.c */
+extern int	(*secstop)(void);
+int	genprimestop(mpint *p, int n, int accuracy, int (*stop)(void));
+int	gensafeprimestop(mpint *p, mpint *alpha, int n, int accuracy, int (*stop)(void));
+int	genstrongprimestop(mpint *p, int n, int accuracy, int (*stop)(void));
+int	gensafeprime(mpint *p, mpint *alpha, int n, int accuracy);	/* prime and generator; -1 if none was found, or secstop said to stop */
 int	getdhparams(int bits, mpint *p, mpint *alpha);	/* get pre-computed RFC 3526 params */
-void	genstrongprime(mpint *p, int n, int accuracy);	/* generate an n bit strong prime */
+int	genstrongprime(mpint *p, int n, int accuracy);	/* generate an n bit strong prime; -1 if secstop said to stop */
 void	DSAprimes(mpint *q, mpint *p, uchar seed[SHA1dlen]);
 int	probably_prime(mpint *n, int nrep);	/* miller-rabin test */
 int	smallprimetest(mpint *p);		/* returns -1 if not prime, 0 otherwise */
@@ -589,8 +607,6 @@ RSApub*		rsaprivtopub(RSApriv*);
 RSApub*		X509toRSApub(uchar*, int, char*, int);
 RSApriv*	asn1toRSApriv(uchar*, int);
 void		asn1dump(uchar *der, int len);
-uchar*		decodePEM(char *s, char *type, int *len, char **new_s);
-PEMChain*	decodepemchain(char *s, char *type);
 uchar*		X509gen(RSApriv *priv, char *subj, ulong valid[2], int *certlen);
 uchar*		X509req(RSApriv *priv, char *subj, int *certlen);
 char*		X509verify(uchar *cert, int ncert, RSApub *pk);
@@ -625,10 +641,12 @@ struct EGsig
 };
 
 EGpriv*		eggen(int nlen, int rounds);
-mpint*		egencrypt(EGpub *k, mpint *in, mpint *out);	/* deprecated */
-mpint*		egdecrypt(EGpriv *k, mpint *in, mpint *out);
 EGsig*		egsign(EGpriv *k, mpint *m);
+EGsig*		egsignrnd(EGpriv *k, mpint *m, uchar *rnd, int nrnd);	/* the nonce's random bytes given: none, RFC 6979's own */
 int		egverify(EGpub *k, EGsig *sig, mpint *m);
+int		egpubvalid(EGpub *k);		/* 0 if signatures may be checked with k: see egverify.c */
+int		egsafeprime(mpint *p);		/* 0 if p and (p-1)/2 are prime */
+void		egsecret(EGpriv *k);		/* a secret and public value for k's p and alpha */
 EGpub*		egpuballoc(void);
 void		egpubfree(EGpub*);
 EGpriv*		egprivalloc(void);
@@ -666,8 +684,10 @@ struct DSAsig
 	mpint	*r, *s;
 };
 
-DSApriv*	dsagen(DSApub *opub);	/* opub not checked for consistency! */
+DSApriv*	dsagen(DSApub *opub);
+int		dsaparamsok(mpint *p, mpint *q);	/* 0 if p and q can be a key's: see dsagen.c */	/* opub not checked for consistency! */
 DSAsig*		dsasign(DSApriv *k, mpint *m);
+DSAsig*		dsasignrnd(DSApriv *k, mpint *m, uchar *rnd, int nrnd);	/* the nonce's random bytes given: none, RFC 6979's own */
 int		dsaverify(DSApub *k, DSAsig *sig, mpint *m);
 DSApub*		dsapuballoc(void);
 void		dsapubfree(DSApub*);

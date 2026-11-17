@@ -26,6 +26,7 @@ emu \- Inferno emulator (hosted Inferno)
 [
 .RB \-C " channel"
 ]
+.RB [ \-L ]
 [
 .RB \-S
 ]
@@ -164,6 +165,24 @@ The default value is
 on most systems, but
 .BR \einferno
 on Windows.
+.TP
+.B \-L
+Link modules strictly: a module is linked to another only if the type digests
+of the functions it imports are the same as the other's (see
+.IR dis (6)).
+Without
+.BR \-L ,
+a module that has no digests (one made by a compiler from before there
+were any, or by something that is not the compiler) is linked by the
+32-bit signatures alone, which do not tell two types apart reliably.
+With it, such a module is not linked, and must be rebuilt.
+A running system is made strict by writing
+.B 1
+to
+.B /dev/strictlink
+(see
+.IR cons (3)),
+which nothing undoes.
 .TP
 .B \-s
 Specify how the emulator deals with traps reported by the operating system.

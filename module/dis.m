@@ -11,6 +11,9 @@ Dis: module
 	HASLDT0:	con	1<<4;
 	HASEXCEPT:	con	1<<5;
 	HASLDT:	con	1<<6;
+	HASSIGS:	con	1<<7;	# type digests follow the source path
+
+	SIGDLEN:	con	32;	# bytes in a type digest (SHA-256)
 
 	AMP:	con 16r00;	# Src/Dst op addressing
 	AFP:	con 16r01;
@@ -84,12 +87,14 @@ Dis: module
 		desc:	int;
 		sig:	int;
 		name:	string;
+		dig:	array of byte;	# SIGDLEN bytes, the digest of the type; nil if the file has none
 	};
 
 	Import: adt
 	{
 		sig:	int;
 		name:	string;
+		dig:	array of byte;	# as Link's
 	};
 
 	Except: adt

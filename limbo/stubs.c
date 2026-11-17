@@ -155,11 +155,17 @@ modcode(Decl *globals)
 void
 modtab(Decl *globals)
 {
-	int n;
+	int n, i;
+	uchar *dig;
 	Desc *md;
 	Decl *d, *id;
 
-	print("typedef struct{char *name; long sig; void (*fn)(void*); int size; int np; uchar map[16];} Runtab;\n");
+	/*
+	 * Runtab is interp.h's.  It was a typedef written here, at the head
+	 * of each table: a table left over from before a row had its
+	 * signature's digest would have been read as rows of the new
+	 * length; with the old typedef in it, it no longer compiles.
+	 */
 	for(d = globals; d != nil; d = d->next){
 		if(d->store == Dtype && d->ty->kind == Tmodule && strcmp(d->sym->name, emittab) == 0){
 			n = 0;
@@ -169,7 +175,8 @@ modtab(Decl *globals)
 				print("\t\"");
 				if(id->dot != d)
 					print("%s.", id->dot->sym->name);
-				print("%s\",0x%lux,%s_%s,", id->sym->name, sign(id),
+				/* the 32 bits there are, as the Limbo compiler writes them: a ulong printed them sign-extended */
+				print("%s\",0x%lux,%s_%s,", id->sym->name, sign(id) & 0xffffffffUL,
 					id->dot->sym->name, id->sym->name);
 				if(id->ty->varargs)
 					print("0,0,{0},");
@@ -177,7 +184,11 @@ modtab(Decl *globals)
 					md = mkdesc(idoffsets(id->ty->ids, MaxTemp, MaxAlign), id->ty->ids);
 					print("%ld,%ld,%M,", md->size, md->nmap, md);
 				}
-				print("\n");
+				dig = signdigest(id);
+				print("{");
+				for(i = 0; i < SIGDLEN; i++)
+					print("0x%x,", dig[i]);
+				print("},\n");
 			}
 			print("\t0\n};\n");
 			print("#define %smodlen	%d\n", d->sym->name, n);

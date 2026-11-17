@@ -148,6 +148,44 @@ contains "legacy sdg PSK migrated" "$CASE_OUTPUT" "MIGRATED-PSK"
 contains "legacy D2 key migrated" "$CASE_OUTPUT" "MIGRATED-D2"
 not_contains "migration leaves no reported cleartext secret" "$CASE_OUTPUT" "BAD-MIGRATE-"
 
+# -R with the draft's cleartext files present: nothing old is imported
+run_case /tests/brick/factotum_rotate_legacy.sh
+contains "rotation with legacy files completes" "$CASE_OUTPUT" "FACTOTUM-ROTATE-LEGACY-DONE"
+contains "-R gives the brick a PSK" "$CASE_OUTPUT" "^RL-SDG psk [0-9a-f]\{64\}"
+not_contains "-R does not give the brick the legacy PSK" "$CASE_OUTPUT" "^RL-SDG psk 7777"
+contains "-R gives the brick a D2 key" "$CASE_OUTPUT" "^RL-D2 key [0-9a-f]\{64\}"
+not_contains "-R does not give the brick the legacy D2 key" "$CASE_OUTPUT" "^RL-D2 key 8888"
+contains "-R says the legacy files were not imported" "$CASE_OUTPUT" "not importing .*sdg.psk"
+contains "-R removes the legacy TLS scalar" "$CASE_OUTPUT" "RL-GONE-CLIENT"
+contains "-R removes the legacy sdg scalar" "$CASE_OUTPUT" "RL-GONE-SDG"
+contains "-R removes the legacy PSK" "$CASE_OUTPUT" "RL-GONE-PSK"
+contains "-R removes the legacy D2 key" "$CASE_OUTPUT" "RL-GONE-D2"
+not_contains "no legacy secret file is left" "$CASE_OUTPUT" "BAD-RL-"
+RL_OLD=$(printf '%s\n' "$CASE_OUTPUT" | awk '/RL-OLD-PIN/{getline; print; exit}')
+RL_NEW=$(printf '%s\n' "$CASE_OUTPUT" | awk '/RL-NEW-PIN/{getline; print; exit}')
+RL_KEYR=$(printf '%s\n' "$CASE_OUTPUT" | awk '/RL-KEYR-PIN/{getline; if($0 ~ /not importing/) getline; print; exit}')
+if [ -n "$RL_OLD" ] && [ -n "$RL_NEW" ] && [ "$RL_OLD" != "$RL_NEW" ]; then
+    pass "-R with legacy files replaces the TLS identity"
+else
+    fail "-R with legacy files kept the TLS identity"
+fi
+if [ -n "$RL_KEYR" ] && [ "$RL_KEYR" != "$RL_NEW" ]; then
+    pass "key -R with a legacy client.key makes a new identity"
+else
+    fail "key -R with a legacy client.key did not make a new identity"
+fi
+contains "key -R removes the legacy TLS scalar" "$CASE_OUTPUT" "RL-KEYR-GONE-CLIENT"
+contains "wifi is recorded" "$CASE_OUTPUT" "^RL-AUDIT1 brick wifi .*credentials=set"
+not_contains "a passphrase on the ssid line is not recorded" "$CASE_OUTPUT" "^RL-AUDIT1 .*hunter2"
+contains "the network's name is recorded when the passphrase has its own line" "$CASE_OUTPUT" "^RL-AUDIT2 brick wifi .*ssid=my%20home"
+not_contains "and the passphrase is not" "$CASE_OUTPUT" "^RL-AUDIT2 .*hunter2"
+contains "a pair.lock left long ago is taken" "$CASE_OUTPUT" "RL-STALE-LOCK-TAKEN"
+contains "a new pair.lock is respected" "$CASE_OUTPUT" "RL-FRESH-LOCK-HELD"
+contains "and the refusal names the file" "$CASE_OUTPUT" "holds .*rlprofile/pair.lock"
+contains "with no random numbers pairing is refused" "$CASE_OUTPUT" "RL-NORANDOM-REFUSED"
+contains "and the brick is given no key" "$CASE_OUTPUT" "^RL-NR-SDG pub aaaa"
+not_contains "least of all one of zeros" "$CASE_OUTPUT" "psk 0000000000000000"
+
 echo "=== $TESTS tests, $FAILURES failures ==="
 if [ "$FAILURES" -ne 0 ]; then
     exit 1

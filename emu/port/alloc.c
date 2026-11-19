@@ -132,6 +132,16 @@ heapactivity(void)
 	return heapmem->nalloc + heapmem->nfree;
 }
 
+/*
+ * How many objects the heap holds: what a round of the collector goes
+ * round.  The idle collector measures a change in the heap against it.
+ */
+ulong
+heaplive(void)
+{
+	return heapmem->nalloc - heapmem->nfree;
+}
+
 int
 memlowpass(int n)
 {

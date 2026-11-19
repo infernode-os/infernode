@@ -15,6 +15,7 @@ DIRS=\
 TARG=\
 	woff2.dis\
 	parread.dis\
+	livefeed.dis\
 	sdg.dis\
 	bidi.dis\
 	brotli.dis\
@@ -208,6 +209,7 @@ SYSMODULES=\
 	bidi.m\
 	jpeg.m\
 	parread.m\
+	livefeed.m\
 	layers.m\
 	visnet.m\
 	visrec.m\

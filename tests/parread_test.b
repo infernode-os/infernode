@@ -161,6 +161,61 @@ testInFlight(t: ref T)
 	t.assertseq(err, "refused here", "and its error");
 }
 
+# A mount's reads are its iounit at most (1176 bytes over sdg(2), and
+# here over a pipe whose version asked for sdg's 1200), and a buffer under 16K a
+# piece was read as one loop: a request at a time.  Split by the
+# iounit, its pieces are in flight together.
+testSmallMessages(t: ref T)
+{
+	sys->bind("#s", "/chan", Sys->MBEFORE);
+	fio := sys->file2chan("/chan", "parread_msg");
+	if(fio == nil){
+		t.skip(sys->sprint("file2chan: %r"));
+		return;
+	}
+	lock := chan[1] of int;
+	lock <-= 1;
+	spawn holdsrv(fio, lock);
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0){
+		t.skip(sys->sprint("pipe: %r"));
+		return;
+	}
+	if(sys->export(p[0], "/chan", Sys->EXPASYNC) < 0){
+		t.skip(sys->sprint("export: %r"));
+		return;
+	}
+	p[0] = nil;
+	# sdg(2)'s message size: one datagram
+	(vok, nil) := sys->fversion(p[1], 1200, "9P2000");
+	if(vok < 0){
+		t.skip(sys->sprint("fversion: %r"));
+		return;
+	}
+	sys->create("/tmp/parread_mnt", Sys->OREAD, Sys->DMDIR|8r777);
+	if(sys->mount(p[1], nil, "/tmp/parread_mnt", Sys->MREPL, "") < 0){
+		t.skip(sys->sprint("mount: %r"));
+		return;
+	}
+	fd := sys->open("/tmp/parread_mnt/parread_msg", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("open through the mount: %r"));
+	io := sys->iounit(fd);
+	t.log(sys->sprint("iounit %d", io));
+	if(io <= 0 || io >= 16*1024){
+		t.skip(sys->sprint("iounit %d: no small messages here", io));
+		return;
+	}
+	b := array[4*io] of byte;
+	most = 0;
+	(n, err) := parread->pread(fd, b, big 0, 4);
+	t.asserteq(n, len b, "four messages' worth: every byte");
+	t.assertnil(err, "and no error");
+	t.assert(same(b[0:n], 0), "the file's bytes");
+	t.assert(most >= 4, sys->sprint("its four pieces in flight at once, under 16K (%d)", most));
+	sys->unmount(nil, "/tmp/parread_mnt");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -184,6 +239,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Bytes", testBytes);
 	run("Short", testShort);
 	run("InFlight", testInFlight);
+	run("SmallMessages", testSmallMessages);
 	sys->remove(FILE);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -116,6 +116,25 @@ vidplay9p and
 .IR vision (4)
 read it unchanged.
 A frame read in several pieces, as viewers read one, is decoded once.
+.PP
+Across a network a frame read one request after another falls behind a
+live feed, so while frames are being read
+.I vidjpeg
+also fetches and decodes the four after the latest one asked for, each
+once it is due by the feed's live edge
+(see
+.IR livefeed (2))
+less 50 ms, so that few reads wait at the feed's server for frames not yet
+made.
+A frame's bytes are read in eight pieces at once, and a read answered
+.L "reply gone"
+by
+.IR sdg (2)
+is sent again.
+The edge is taken from the feed's
+.B status
+at the start and again when a frame has expired.
+A second with no frame asked for, and it fetches nothing ahead.
 .B status
 is the feed's, read through;
 .B ctl

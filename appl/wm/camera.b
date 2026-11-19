@@ -33,8 +33,9 @@ implement Camera;
 
 include "sys.m";
 	sys: Sys;
-include "parread.m";
-	parread: Parread;
+include "livefeed.m";
+	livefeed: Livefeed;
+	Edge: import livefeed;
 
 include "draw.m";
 	draw: Draw;
@@ -78,11 +79,12 @@ focus := 512;
 init(ctxt: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
-	parread = load Parread Parread->PATH;
-	if(parread == nil){
-		sys->fprint(sys->fildes(2), "camera: cannot load %s: %r\n", Parread->PATH);
+	livefeed = load Livefeed Livefeed->PATH;
+	if(livefeed == nil){
+		sys->fprint(sys->fildes(2), "camera: cannot load %s: %r\n", Livefeed->PATH);
 		raise "fail:load";
 	}
+	livefeed->init();
 	draw = load Draw Draw->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
 	i420 = load I420 I420->PATH;
@@ -219,6 +221,14 @@ show(w: ref Window, frame: ref Image)
 # The server paces this: a read of the next frame waits for it. Frames
 # are numbered (frame n at n*framesize): it starts at the newest and,
 # if it falls behind ("frame expired"), goes on from the newest again.
+# Where the newest is, it keeps by the clock (livefeed(2)), from fmt's
+# rate and status read when it takes the feed and again when a frame
+# has expired: a status read after every frame was a round trip of its
+# own through a mount (vidjpeg(1) reads it through to the feed), longer
+# than a frame at 30 fps across a network.  A frame's read failing for
+# the transport (sdg(2)'s "timed out", "link down"; "reply gone" is
+# sent again) loses that frame, not the feed: it goes on from the
+# newest, and says so in the window only after LOST ms of nothing.
 # It is a camera's window, so it keeps to the live edge: more than
 # Behind frames behind the newest (a feed across a network it cannot
 # read as fast as the feed makes them) it goes on from the newest, not
@@ -242,21 +252,48 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 			got <-= (sys->sprint("%s/frame: %r", FEED), nil);
 			return;
 		}
-		f := newest();
+		edge := Edge.new(FEED, readfps());
+		f := 0;
+		if(edge != nil)
+			f = edge.newest();
+		lost := 0;		# since when frames have failed, if they have
 		for(;;){
 			(n, e) := readat(fd, buf, f);
 			if(e == "frame expired"){
-				f = newest();
+				if(edge == nil)
+					edge = Edge.new(FEED, readfps());
+				else
+					edge.again();
+				if(edge != nil)
+					f = edge.newest();
+				else
+					f++;
 				continue;
 			}
 			if(n < len buf){
-				if(e == nil)
-					e = "end of the feed";
-				got <-= ("camera: " + e, nil);
-				return;
+				if(e == nil){
+					got <-= ("camera: end of the feed", nil);
+					return;
+				}
+				# the transport lost this frame: go on from the newest,
+				# giving up only after LOST ms of nothing but failures
+				now := sys->millisec();
+				if(lost == 0)
+					lost = now;
+				else if(now - lost > LOST){
+					got <-= ("camera: " + e, nil);
+					return;
+				}
+				sys->sleep(10);
+				if(edge != nil && edge.newest() > f)
+					f = edge.newest();
+				else
+					f++;
+				continue;
 			}
+			lost = 0;
 			pic.n = f++;
-			if((nf := newest()) - f > Behind)
+			if(edge != nil && (nf := edge.newest()) - f > Behind)
 				f = nf;
 			got <-= (nil, pic);
 			if(<-more == 0)
@@ -268,47 +305,35 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 }
 
 Behind: con 3;	# frames behind the newest that a reader may be
+LOST: con 5000;	# ms of failed frames before the window says so
 
 # frame f, whole, at its offset, with WAYS reads in flight (parread(2)):
 # (bytes, error)
 WAYS: con 4;
 readat(fd: ref Sys->FD, b: array of byte, f: int): (int, string)
 {
-	return parread->pread(fd, b, big f * big len b, WAYS);
+	return livefeed->read(fd, b, big f * big len b, WAYS);
 }
 
-# where a live reader starts: the newest frame (status frames= less one)
-# if it is still kept (not below first=), else the next, which a read
-# waits for
-newest(): int
+
+
+# fmt's frame rate ("w h i420 fps"); 30 if it says none
+readfps(): int
 {
-	fd := sys->open(FEED + "/status", Sys->OREAD);
+	fd := sys->open(FEED + "/fmt", Sys->OREAD);
 	if(fd == nil)
-		return 0;
-	b := array[512] of byte;
-	k := sys->read(fd, b, len b);
-	if(k <= 0)
-		return 0;
-	(frames, first) := (0, 0);
-	(nil, t) := sys->tokenize(string b[0:k], " \t\n");
-	for(; t != nil; t = tl t){
-		(key, v) := splitkv(hd t);
-		case key {
-		"frames" =>	frames = int v;
-		"first" =>	first = int v;
-		}
-	}
-	if(frames > first)
-		return frames - 1;
-	return frames;
-}
-
-splitkv(s: string): (string, string)
-{
-	for(i := 0; i < len s; i++)
-		if(s[i] == '=')
-			return (s[0:i], s[i+1:]);
-	return (s, nil);
+		return 30;
+	b := array[64] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return 30;
+	(nt, t) := sys->tokenize(string b[0:n], " \n");
+	if(nt < 4)
+		return 30;
+	fps := int hd tl tl tl t;
+	if(fps <= 0)
+		return 30;
+	return fps;
 }
 
 readfmt(): (int, int)

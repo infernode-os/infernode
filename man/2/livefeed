@@ -1,0 +1,157 @@
+.TH LIVEFEED 2
+.SH NAME
+livefeed \- read a live video feed across a network
+.SH SYNOPSIS
+.EX
+include "livefeed.m";
+livefeed := load Livefeed Livefeed->PATH;
+Edge: import livefeed;
+
+init:    fn();
+status:  fn(feed: string): (int, int);
+pread:   fn(fd: ref Sys->FD, b: array of byte, n: int, off: big): int;
+read:    fn(fd: ref Sys->FD, b: array of byte, off: big, ways: int): (int, string);
+
+Edge: adt {
+	feed:   string;
+	fps:    int;
+	lf:     int;
+	lt:     int;
+	new:    fn(feed: string, fps: int): ref Edge;
+	newest: fn(e: self ref Edge): int;
+	due:    fn(e: self ref Edge, n: int): int;
+	again:  fn(e: self ref Edge): int;
+	set:    fn(e: self ref Edge, lf, lt: int);
+};
+.EE
+.SH DESCRIPTION
+A feed served in the
+.IR vid9p (4)
+schema numbers its frames, and a reader at the live edge reads frame
+.I n
+as it is made.
+Across a network, over
+.IR sdg (2)
+or TCP, a reader that asks the feed's
+.B status
+where the edge is after every frame spends a round trip on that alone, and
+one that reads a frame's bytes one request after another spends several:
+at 30 frames a second it falls behind.
+This module is what
+.IR wm-camera (1)
+and
+.IR vidjpeg (1)
+read a feed with instead.
+.PP
+.B Status
+returns the newest frame
+.I feed
+.B /status
+names
+.RB ( frames=
+less one, or
+.B first=
+when nothing older is kept)
+and
+.B sys->millisec()
+just before the read that told it was sent; the frame was made no later
+than that read reached the feed.
+It returns \-1 for the frame if status could not be read, or names no
+frames.
+.PP
+An
+.B Edge
+keeps the live edge by the clock: from a frame known to exist
+.RI ( lf )
+at a time
+.RI ( lt )
+and the feed's rate
+.RI ( fps ,
+from its
+.BR fmt ).
+.B Edge.new
+takes it from
+.BR status ,
+and is nil if that could not be read.
+.B Newest
+is the newest frame by the clock;
+.B due
+the milliseconds until frame
+.I n
+is due (0 or less once it is).
+.B Again
+takes the edge from
+.B status
+again: a reader calls it when a frame has expired (it is behind what the
+feed keeps), not on other errors, since under loss a status read is itself
+delayed, and an edge taken from every one runs ahead and skips frames that
+could have been shown.
+If status cannot be read,
+.B again
+returns 0 and leaves the edge as it was.
+.B Set
+does the same with a status read made elsewhere (in a process of the
+caller's own).
+.PP
+.B Pread
+is
+.BR sys->pread ,
+except that a read answered
+.L "reply gone"
+(sdg's: its reply was lost and is no longer in the server's cache) is sent
+again, up to
+.B GONETRIES
+times in all.
+A frame's bytes are read at known offsets, so a read sent again cannot do
+anything twice.
+Any other error is returned at once.
+.PP
+.B Read
+reads
+.BI len " b"
+bytes at
+.I off
+as
+.I ways
+pieces at once, whatever their size, each a loop of
+.BR pread .
+Its result is
+.IR parread (2)'s:
+the bytes read contiguously from
+.I off
+and the first error in the order of the pieces.
+.SH EXAMPLE
+The reading loop of a viewer at the live edge, three frames' slack:
+.EX
+	edge := Edge.new(feed, fps);
+	f := edge.newest();
+	for(;;){
+		(n, e) := livefeed->read(fd, buf, big f * big len buf, 4);
+		if(e == "frame expired"){
+			edge.again();
+			f = edge.newest();
+			continue;
+		}
+		if(n < len buf){
+			# lost to the transport: this frame, not the feed
+			f = edge.newest();
+			continue;
+		}
+		show(f++);
+		if(edge.newest() - f > 3)
+			f = edge.newest();
+	}
+.EE
+.SH SOURCE
+.B /appl/lib/livefeed.b
+.SH SEE ALSO
+.IR parread (2),
+.IR sdg (2),
+.IR vid9p (4),
+.IR videnc (1),
+.IR vidjpeg (1)
+.SH BUGS
+The clock is the reader's: across machines it drifts from the feed's by
+the clocks' difference in rate, which
+.B again
+corrects when a frame expires.

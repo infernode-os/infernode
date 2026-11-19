@@ -46,8 +46,15 @@ error, and a refused piece gives its error and the bytes before it, as one
 loop would.
 With
 .I ways
-1 or less, or a buffer too small to be worth sharing (under 16K a piece),
-it is that one loop.
+1 or less it is that one loop.
+A piece is at least 16K, except over a mount whose messages are smaller
+(its
+.IR sys-iounit (2)):
+there a piece is at least one message's worth, since one loop over the
+buffer would be that many requests one after another
+(over
+.IR sdg (2),
+1176 bytes each).
 .SH EXAMPLES
 A 720p frame from a Raspberry Pi 5's feed, read by a Raspberry Pi 4 over
 an encrypted mount at 32512-byte messages, took 67 ms in one read and 39 ms
@@ -55,5 +62,6 @@ in two or more: the connection's decryption is then the limit.
 .SH SOURCE
 .B /appl/lib/parread.b
 .SH SEE ALSO
+.IR livefeed (2),
 .IR sys-read (2),
 .IR vid9p (4)

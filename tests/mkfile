@@ -223,6 +223,7 @@ TARG=\
 	styx_pack_test.dis\
 	ninep_pack_test.dis\
 	parread_test.dis\
+	livefeed_test.dis\
 	devprog_read_test.dis\
 	devprog_nslock_test.dis\
 	kill_deadserver_test.dis\
@@ -341,6 +342,7 @@ SYSMODULES=\
 	tensor.m\
 	layers.m\
 	parread.m\
+	livefeed.m\
 	visnet.m\
 	woff2.m\
 	touchgest.m\

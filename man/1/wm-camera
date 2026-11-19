@@ -46,6 +46,24 @@ and their
 .B frame=*
 records.
 .PP
+It starts at the feed's newest frame and keeps to it by the clock, at the
+rate the feed's
+.B fmt
+gives, taking the newest from
+.B status
+again only when a frame has expired; more than three frames behind, it
+goes on from the newest
+(see
+.IR livefeed (2)).
+A frame lost to the transport of a feed mounted from another machine
+(over
+.IR sdg (2),
+.L "timed out"
+or
+.LR "link down" )
+is skipped, not the end of the feed: the window says so only after 5 s of
+nothing else.
+.PP
 The keys
 .B +
 and

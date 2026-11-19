@@ -9,13 +9,19 @@ include "sys.m";
 	sys: Sys;
 include "parread.m";
 
-MINPIECE: con 16*1024;	# smaller pieces are not worth a process
+MINPIECE: con 16*1024;	# smaller pieces of a local file are not worth a process
 
 pread(fd: ref Sys->FD, b: array of byte, off: big, ways: int): (int, string)
 {
 	if(sys == nil)
 		sys = load Sys Sys->PATH;
-	if(ways > len b / MINPIECE)
+	# Over a mount whose messages are smaller than MINPIECE (sdg's
+	# 1176 bytes), one read of b is len b / iounit requests one after
+	# another: a piece per message's worth is worth a process there.
+	if((io := sys->iounit(fd)) > 0 && io < MINPIECE){
+		if(ways > (len b + io - 1) / io)
+			ways = (len b + io - 1) / io;
+	}else if(ways > len b / MINPIECE)
 		ways = len b / MINPIECE;
 	if(ways <= 1)
 		return piece(fd, b, off);

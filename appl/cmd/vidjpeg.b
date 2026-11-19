@@ -16,6 +16,17 @@ implement Vidjpeg;
 # to the feed's; layer/ is empty, as vid9p serves it, for layers bound
 # here.  Errors (frame expired) are the feed's.
 #
+# Across a network (the feed mounted from another machine, over sdg(2)
+# or TCP) a frame read one request after another falls behind a live
+# feed, so while frames are being read, the AHEAD frames after the
+# latest one asked for are fetched and decoded too, each once it is due
+# by the live edge (livefeed(2)) less LEAD ms, so that few reads wait at
+# the feed's server for frames not yet made.  A frame's bytes are read
+# in WAYS pieces at once, and a read answered "reply gone" is sent
+# again.  The edge is taken from the feed's status at the start and
+# again when a frame has expired, never on other errors.  A second
+# without a frame asked for and nothing more is fetched.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -30,8 +41,9 @@ include "styxservers.m";
 	Tree: import nametree;
 include "jpeg.m";
 	jp: Jpegplanes;
-include "parread.m";
-	parread: Parread;
+include "livefeed.m";
+	livefeed: Livefeed;
+	Edge: import livefeed;
 
 Vidjpeg: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
@@ -39,9 +51,13 @@ Vidjpeg: module {
 
 Qroot, Qstream, Qctl, Qfmt, Qframe, Qstatus, Qlayer: con iota;
 RECLEN: con 32;
-NKEEP: con 8;	# frames kept decoded
-NWORK: con 4;	# frames decoding at once
-WAYS: con 4;	# reads in flight for one frame's bytes
+NKEEP: con 16;	# frames kept decoded
+NWORK: con 8;	# frames fetched and decoding at once
+WAYS: con 8;	# reads in flight for one frame's bytes
+AHEAD: con 4;	# frames fetched after the latest one asked for
+LEAD: con 50;	# ms before its frame is due that a fetch may start
+TICK: con 15;	# ms between looks at what is due
+IDLE: con 1000;	# ms without a frame asked for: stop fetching ahead
 
 Frm: adt {
 	n:	int;
@@ -57,6 +73,14 @@ busy: list of int;
 waiting: list of ref Tmsg.Read;
 srv: ref Styxserver;
 done: chan of (int, array of byte, string);
+edge: ref Edge;		# nil until status has been read
+want := -1;		# the latest frame asked for
+asked := 0;		# when (sys->millisec())
+ticking := 0;
+tick: chan of int;
+tickgo: chan of int;
+anchoring := 0;
+anchorc: chan of (int, int);
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -66,8 +90,8 @@ init(nil: ref Draw->Context, args: list of string)
 	styxservers = load Styxservers Styxservers->PATH;
 	nametree = load Nametree Nametree->PATH;
 	jp = load Jpegplanes Jpegplanes->PATH;
-	parread = load Parread Parread->PATH;
-	if(styx == nil || styxservers == nil || nametree == nil || jp == nil || parread == nil)
+	livefeed = load Livefeed Livefeed->PATH;
+	if(styx == nil || styxservers == nil || nametree == nil || jp == nil || livefeed == nil)
 		fatal(sys->sprint("can't load a module: %r"));
 	styx->init();
 	styxservers->init(styx);
@@ -88,7 +112,12 @@ init(nil: ref Draw->Context, args: list of string)
 	if(index == nil || data == nil)
 		fatal(sys->sprint("can't open %s/jpeg: %r", src));
 	sys->pctl(Sys->NEWPGRP, nil);
+	livefeed->init();
 	done = chan of (int, array of byte, string);
+	tick = chan of int;
+	tickgo = chan of int;
+	anchorc = chan of (int, int);
+	edge = Edge.new(src, fps);
 
 	(tree, treeop) := nametree->start();
 	tree.create(big Qroot, dir(".", Sys->DMDIR|8r555, Qroot));
@@ -223,7 +252,79 @@ serve(tc: chan of ref Tmsg, tree: ref Tree)
 		waiting = still;
 		for(; again != nil; again = tl again)
 			start(n, hd again);
+		if(e != nil && contains(e, "frame expired") && !anchoring){
+			# the readers are behind: where the feed is, again
+			anchoring = 1;
+			spawn anchor();
+		}
+	<-tick =>
+		if(sys->millisec() - asked > IDLE){
+			ticking = 0;
+			tickgo <-= 0;
+			break;
+		}
+		tickgo <-= 1;
+		ahead();
+	(lf, lt) := <-anchorc =>
+		anchoring = 0;
+		if(lf >= 0){
+			if(edge == nil)
+				edge = ref Edge(src, fps, lf, lt);
+			else
+				edge.set(lf, lt);
+		}
 	}
+}
+
+# the frames after the latest asked for, once each is due less LEAD
+ahead()
+{
+	if(edge == nil){
+		if(!anchoring){
+			anchoring = 1;
+			spawn anchor();
+		}
+		return;
+	}
+	for(m := want + 1; m <= want + AHEAD; m++){
+		if(member(busy, m) || iskept(m))
+			continue;
+		if(len busy >= NWORK)
+			return;
+		if(m > edge.newest() && edge.due(m) > LEAD)
+			return;
+		busy = m :: busy;
+		spawn decode(m);
+	}
+}
+
+iskept(n: int): int
+{
+	for(l := kept; l != nil; l = tl l)
+		if((hd l).n == n)
+			return 1;
+	return 0;
+}
+
+anchor()
+{
+	anchorc <-= livefeed->status(src);
+}
+
+ticker()
+{
+	do{
+		sys->sleep(TICK);
+		tick <-= 1;
+	}while(<-tickgo);
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
 }
 
 shutdown(tree: ref Tree)
@@ -246,6 +347,12 @@ ctlwrite(tm: ref Tmsg.Write)
 readframe(tm: ref Tmsg.Read)
 {
 	n := int (tm.offset / big framesize);
+	want = n;
+	asked = sys->millisec();
+	if(!ticking){
+		ticking = 1;
+		spawn ticker();
+	}
 	for(l := kept; l != nil; l = tl l)
 		if((hd l).n == n){
 			replyframe(tm, (hd l).b);
@@ -256,7 +363,8 @@ readframe(tm: ref Tmsg.Read)
 
 start(n: int, tm: ref Tmsg.Read)
 {
-	waiting = tm :: waiting;
+	if(tm != nil)
+		waiting = tm :: waiting;
 	if(member(busy, n))
 		return;
 	if(len busy >= NWORK){
@@ -300,7 +408,7 @@ keep(n: int, b: array of byte)
 decode(n: int)
 {
 	rec := array[RECLEN] of byte;
-	k := sys->pread(index, rec, len rec, big n * big RECLEN);
+	k := livefeed->pread(index, rec, len rec, big n * big RECLEN);
 	if(k <= 0){
 		e := sys->sprint("%r");
 		if(k == 0)
@@ -320,7 +428,7 @@ decode(n: int)
 		return;
 	}
 	j := array[sz] of byte;
-	(got, err) := parread->pread(data, j, off, WAYS);
+	(got, err) := livefeed->read(data, j, off, WAYS);
 	if(got != sz){
 		if(err == nil)
 			err = "vidjpeg: short frame";

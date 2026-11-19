@@ -192,6 +192,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	c := <-wmctl or
 	c = <-top.ctxt.ctl or
 	c = <-top.wreq =>
+		if(c == "exit")
+			quit();
 		tkclient->wmctl(top, c);
 		if(c != nil && c[0] == '!')
 			resized();
@@ -252,6 +254,20 @@ runwebfs(webfs: Command, done: chan of string)
 		return;
 	}
 	done <-= nil;
+}
+
+# The browser goes, its page's realm with it. The realm is a process
+# group of its own (browser.b, startrealm), so the exit's killgrp, which
+# takes this group, left it running, with its scripts' timers: a page
+# left open when the browser was closed held its heap and woke for ever
+# (a desktop's, days after: its realm still starting timer processes,
+# and the idle collector going round the heap they kept changing). Quit
+# and ^Q were a bare exit, which left this group as well.
+quit()
+{
+	if(sess != nil)
+		sess.close();
+	tkclient->wmctl(top, "exit");
 }
 
 fatal(s: string)
@@ -539,7 +555,7 @@ action(a: string)
 	"stop" =>
 		sess.stop();
 	"quit" =>
-		exit;
+		quit();
 	"resized" =>
 		resized();
 	"menu" =>
@@ -813,7 +829,7 @@ key(k: int)
 			return;
 		}
 	'q' & 16r1F =>
-		exit;
+		quit();
 	'l' & 16r1F =>
 		tk->cmd(top, "focus .bar.url");
 		tk->cmd(top, ".bar.url selection range 0 end");

@@ -331,12 +331,19 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 		case int c.path {
 		Qroot or Qstream or Qlayer =>
 			srv.read(tm);
-		Qfmt =>
-			srv.reply(styxservers->readstr(tm, sys->sprint("%d %d i420 %d\n", fw(), fh(), fps)));
-		Qstatus =>
-			srv.reply(styxservers->readstr(tm, status()));
-		Qctl =>
-			srv.reply(styxservers->readstr(tm, settings()));
+		Qfmt or Qstatus or Qctl =>
+			# One open reads one text, as vid9p's: made at a read at
+			# offset 0 and kept with the fid (made at every read and
+			# cut at its offset, a status that moved between two
+			# reads gave the second the newer one's tail).
+			if(tm.offset == big 0 || c.data == nil){
+				case int c.path {
+				Qfmt =>	c.data = array of byte sys->sprint("%d %d i420 %d\n", fw(), fh(), fps);
+				Qstatus =>	c.data = array of byte status();
+				Qctl =>	c.data = array of byte settings();
+				}
+			}
+			srv.reply(styxservers->readbytes(tm, c.data));
 		Qframe or Qraw =>
 			s := find(tm.fid);
 			if(s == nil)

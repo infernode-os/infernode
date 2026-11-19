@@ -313,12 +313,21 @@ serve1()
 				case int c.path {
 				Qroot or Qstream or Qlayer =>
 					srv.read(tm);
-				Qfmt =>
-					srv.reply(styxservers->readstr(tm, fmtstr()));
-				Qstatus =>
-					srv.reply(styxservers->readstr(tm, statusstr()));
-				Qctl =>
-					srv.reply(styxservers->readstr(tm, ctlhelp()));
+				Qfmt or Qstatus or Qctl =>
+					# One open reads one text: it is made at a read
+					# at offset 0 and kept with the fid.  Made at
+					# every read and cut at the read's offset, a
+					# text that changed between two reads (pos=
+					# gaining a digit) gave the second the newer
+					# one's tail.
+					if(tm.offset == big 0 || c.data == nil){
+						case int c.path {
+						Qfmt =>	c.data = array of byte fmtstr();
+						Qstatus =>	c.data = array of byte statusstr();
+						Qctl =>	c.data = array of byte ctlhelp();
+						}
+					}
+					srv.reply(styxservers->readbytes(tm, c.data));
 				Qframe =>
 					serviceframe(tm);
 				* =>

@@ -2785,8 +2785,15 @@ endrealm(s: ref Session)
 # engine and every value the page's scripts made (a sleeper waits
 # forever to tell a realm that is gone: ten visits to bbc.com, 600 MB).
 # Its group goes once it has, through any of them still there.
+#
+# The reaper is a group of its own: it outlives the session's.  Charon
+# closes its session and exits at once, the exit a killgrp of its own
+# group, which was the reaper's: the realm quit, but its sleepers, each
+# stuck telling it of a timer, were never killed, and held the page's
+# heap (130 MB of bbc.com's) for as long as emu ran.
 reap(g: int)
 {
+	sys->pctl(Sys->NEWPGRP, nil);
 	for(i := 0; i < 50 && alive(g); i++)
 		sys->sleep(100);
 	if(alive(g))

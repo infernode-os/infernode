@@ -780,6 +780,7 @@ dis/tests/hid_test.dis
 dis/tests/hostplumb_test.dis
 dis/tests/html_test.dis
 dis/tests/icon_test.dis
+dis/tests/idlepoll.dis
 dis/tests/imap_test.dis
 dis/tests/imgload_test.dis
 dis/tests/inflate_test.dis

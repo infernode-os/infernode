@@ -75,6 +75,28 @@ All notable changes to InferNode are documented in this file.
 
 ### Fixed
 
+- **An idle emu no longer spins or holds memory after Charon, a camera
+  or a video window.** Three causes, each enough to keep a core busy
+  for as long as emu ran:
+  - **The idle collector rests when there is nothing to free, whatever
+    wakes.** Any allocation began its round again, so a proc that
+    polls (a layers watcher, a page's timer) kept it running. A round
+    now runs to its end; one that frees nothing rests 1 s, doubling to
+    60 s; one that freed something, or a heap changed by a quarter,
+    does not rest. `idle_poll_cpu_test.sh` (a page loaded, a poller
+    beside it): 5 s of CPU in 15 before, 0 after.
+  - **A layers(2) watcher ends with its window.** `Stack.stop` was a
+    send that was lost unless the watcher was waiting for it, and a
+    window that died never called it; each lost one read its directory
+    twice a second for good. The stop is kept, and a watcher whose
+    owner is gone stops itself.
+  - **Closing Charon ends the page's scripts.** wm's Delete, Quit and
+    Ctrl-Q left the page's realm, its own process group, running with
+    its timers; the reaper meant to end it was killed with Charon, so
+    the timers' procs (and 130 MB of heap) stayed. The session is
+    closed on the way out and the reaper is in a group of its own. In
+    a run on four real sites: 9 procs and 400 MB left and a core busy
+    before, none, 8 MB and 2 s of CPU in 10 minutes after.
 - **The login profile with no `HOME` (#737).** A hosted emu started with
   no `HOME` (a launchd or systemd service, `env -i`) stopped the profile
   at "null list in concatenation": no `~/.infernode` overlay, factotum or

@@ -56,7 +56,7 @@ Edge.new(feed: string, fps: int): ref Edge
 	(lf, lt) := status(feed);
 	if(lf < 0)
 		return nil;
-	return ref Edge(feed, fps, lf, lt);
+	return ref Edge(feed, fps, lf, lt, -1, -1, 0);
 }
 
 Edge.newest(e: self ref Edge): int
@@ -84,6 +84,26 @@ Edge.set(e: self ref Edge, lf, lt: int)
 		return;
 	e.lf = lf;
 	e.lt = lt;
+}
+
+Edge.next(e: self ref Edge, f, behind: int): int
+{
+	lag := e.newest() - f;
+	now := sys->millisec();
+	if(e.lagt == 0 || e.lagcur < 0){
+		(e.lagcur, e.lagprev, e.lagt) = (lag, lag, now);
+	}else if(now - e.lagt >= 1000){
+		(e.lagprev, e.lagcur, e.lagt) = (e.lagcur, lag, now);
+	}else if(lag < e.lagcur)
+		e.lagcur = lag;
+	usual := e.lagcur;
+	if(e.lagprev < usual)
+		usual = e.lagprev;
+	if(usual < 0)
+		usual = 0;
+	if(lag - usual > behind)
+		return e.newest() - usual;
+	return f + 1;
 }
 
 pread(fd: ref Sys->FD, b: array of byte, n: int, off: big): int

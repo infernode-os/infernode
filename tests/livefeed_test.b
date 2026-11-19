@@ -226,6 +226,34 @@ testAgain(t: ref T)
 	statuserr = nil;
 }
 
+# next: a reader whose frames come a steady lag behind the edge (the
+# network's round trips) reads on; one fallen more than behind frames
+# further back than that goes to that lag behind the edge
+testNext(t: ref T)
+{
+	statustext = "frames=1000 first=900";
+	statuserr = nil;
+	e := Edge.new(FEED, 30);
+	if(e == nil)
+		t.fatal("Edge.new: nil");
+	# five frames behind, steadily: reads on
+	ok := 1;
+	for(i := 0; i < 10; i++){
+		f := e.newest() - 5;
+		if(e.next(f, 3) != f + 1)
+			ok = 0;
+	}
+	t.assert(ok, "a steady lag of five frames (more than three): reads on, frame after frame");
+	# ten behind now: five further back than usual, more than three
+	f := e.newest() - 10;
+	n := e.next(f, 3);
+	t.assert(n > f + 1, sys->sprint("ten behind: it skips (%d to %d)", f, n));
+	t.assert(e.newest() - n >= 4 && e.newest() - n <= 6, sys->sprint("to its usual five behind the edge (%d)", e.newest() - n));
+	# two further back than usual: within three, reads on
+	f = e.newest() - 7;
+	t.asserteq(e.next(f, 3), f + 1, "two further back than usual: reads on");
+}
+
 testGone(t: ref T)
 {
 	fd := sys->open(FEED + "/data", Sys->OREAD);
@@ -313,6 +341,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Status", testStatus);
 	run("Edge", testEdge);
 	run("Again", testAgain);
+	run("Next", testNext);
 	run("Gone", testGone);
 	run("Pieces", testPieces);
 	if(testing->summary(passed, failed, skipped) > 0)

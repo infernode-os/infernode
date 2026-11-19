@@ -120,7 +120,7 @@ A frame read in several pieces, as viewers read one, is decoded once.
 Across a network a frame read one request after another falls behind a
 live feed, so while frames are being read
 .I vidjpeg
-also fetches and decodes the four after the latest one asked for, each
+also fetches and decodes the eight after the latest one asked for, each
 once it is due by the feed's live edge
 (see
 .IR livefeed (2))

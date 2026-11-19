@@ -29,6 +29,7 @@ Livefeed: module
 		fps:	int;
 		lf:	int;	# a frame known to exist
 		lt:	int;	# by this sys->millisec()
+		lagcur, lagprev, lagt:	int;	# next's lag, its least in this second and the last
 
 		# nil if status could not be read
 		new:	fn(feed: string, fps: int): ref Edge;
@@ -41,6 +42,12 @@ Livefeed: module
 		again:	fn(e: self ref Edge): int;
 		# set it from a status read made elsewhere
 		set:	fn(e: self ref Edge, lf, lt: int);
+		# the frame to read after f, just read: f+1, unless the reader
+		# is more than behind frames further back than it has been in
+		# the last second or two (its usual lag, the frame's round trips
+		# over the network: at a 100 ms round trip five frames), when it
+		# is that usual lag behind the edge
+		next:	fn(e: self ref Edge, f, behind: int): int;
 	};
 
 	# sys->pread, a read answered "reply gone" sent again (GONETRIES

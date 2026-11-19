@@ -22,6 +22,7 @@ Edge: adt {
 	due:    fn(e: self ref Edge, n: int): int;
 	again:  fn(e: self ref Edge): int;
 	set:    fn(e: self ref Edge, lf, lt: int);
+	next:   fn(e: self ref Edge, f, behind: int): int;
 };
 .EE
 .SH DESCRIPTION
@@ -93,6 +94,20 @@ returns 0 and leaves the edge as it was.
 does the same with a status read made elsewhere (in a process of the
 caller's own).
 .PP
+.B Next
+is the frame for a reader that has just read frame
+.I f
+to read next:
+.IR f +1,
+unless the reader is more than
+.I behind
+frames further back from the edge than it has been in the last second or
+two, when it is the edge less that usual lag.
+Across a network a frame comes round trips after it is made (five frames'
+worth at 30 frames a second and a 100 ms round trip); a reader that
+skipped whenever it was a few frames behind the clock would skip every
+frame fetched for it.
+.PP
 .B Pread
 is
 .BR sys->pread ,
@@ -137,9 +152,8 @@ The reading loop of a viewer at the live edge, three frames' slack:
 			f = edge.newest();
 			continue;
 		}
-		show(f++);
-		if(edge.newest() - f > 3)
-			f = edge.newest();
+		show(f);
+		f = edge.next(f, 3);
 	}
 .EE
 .SH SOURCE

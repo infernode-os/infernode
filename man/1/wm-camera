@@ -51,8 +51,9 @@ rate the feed's
 .B fmt
 gives, taking the newest from
 .B status
-again only when a frame has expired; more than three frames behind, it
-goes on from the newest
+again only when a frame has expired; more than three frames further behind
+it than its usual lag (a network's round trips), it goes on from the newest
+less that lag
 (see
 .IR livefeed (2)).
 A frame lost to the transport of a feed mounted from another machine

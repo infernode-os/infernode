@@ -227,7 +227,11 @@ show(w: ref Window, frame: ref Image)
 # own through a mount (vidjpeg(1) reads it through to the feed), longer
 # than a frame at 30 fps across a network.  A frame's read failing for
 # the transport (sdg(2)'s "timed out", "link down"; "reply gone" is
-# sent again) loses that frame, not the feed: it goes on from the
+# sent again) loses that frame, not the feed.  Behind is counted from
+# its usual lag (livefeed(2)'s next): across a network a frame takes
+# round trips to come, five frames' worth at a 100 ms round trip, and a
+# reader skipping whenever it was three behind the clock skipped every
+# frame fetched for it: it goes on from the
 # newest, and says so in the window only after LOST ms of nothing.
 # It is a camera's window, so it keeps to the live edge: more than
 # Behind frames behind the newest (a feed across a network it cannot
@@ -292,9 +296,11 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 				continue;
 			}
 			lost = 0;
-			pic.n = f++;
-			if(edge != nil && (nf := edge.newest()) - f > Behind)
-				f = nf;
+			pic.n = f;
+			if(edge != nil)
+				f = edge.next(f, Behind);
+			else
+				f++;
 			got <-= (nil, pic);
 			if(<-more == 0)
 				break;

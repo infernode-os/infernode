@@ -54,7 +54,7 @@ RECLEN: con 32;
 NKEEP: con 16;	# frames kept decoded
 NWORK: con 8;	# frames fetched and decoding at once
 WAYS: con 8;	# reads in flight for one frame's bytes
-AHEAD: con 4;	# frames fetched after the latest one asked for
+AHEAD: con 8;	# frames fetched after the latest one asked for (a 100 ms round trip at 30 fps)
 LEAD: con 50;	# ms before its frame is due that a fetch may start
 TICK: con 15;	# ms between looks at what is due
 IDLE: con 1000;	# ms without a frame asked for: stop fetching ahead
@@ -269,7 +269,7 @@ serve(tc: chan of ref Tmsg, tree: ref Tree)
 		anchoring = 0;
 		if(lf >= 0){
 			if(edge == nil)
-				edge = ref Edge(src, fps, lf, lt);
+				edge = ref Edge(src, fps, lf, lt, -1, -1, 0);
 			else
 				edge.set(lf, lt);
 		}

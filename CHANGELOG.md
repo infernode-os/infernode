@@ -4,6 +4,52 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-19
+
+### Added
+
+- **httpd: a web server for a name space, with a TLS 1.3 server side
+  (#1193).** `svc/httpd/httpd` is one module serving HTTP/1.1 from a
+  directory and whatever is bound or mounted under it; dynamic content
+  comes from file servers in the site, not CGI. Each connection runs in
+  a name space of its own (the site over `/`, `NODEVS`, its own
+  environment and fds). The TLS library gains a server side: TLS 1.3
+  only, X25519MLKEM768, X25519 and P-256, an ECDSA P-256 certificate,
+  ALPN, client certificates. Passwords (`-P`, HTTP Basic over TLS only,
+  PBKDF2-SHA-256 lines from `svc/httpd/passwd`, with lockout), rules per
+  path and method (`-x`, matched by the file's identity as well as its
+  name), wikifs's edit form (`-w`), a redirect to https (`-r`), HSTS
+  (`-S`) and a rotated access log (`-m`, `-M`).
+- **wercfs: werc sites served by httpd (#1194).** A file server that
+  reads a werc site directory and serves its pages rendered, werc's rc
+  reimplemented in Limbo (pages, menu, templates): `mount {wercfs
+  site} /services/www; svc/httpd/httpd -T text/html /services/www`.
+  `mdhtml(2)` converts Markdown to HTML as Markdown.pl does, raw HTML,
+  images, nested lists and reference links kept.
+- **Charon: text selection, zoom, container queries (#1203, #1204).**
+  Drag to select, double-click for a word, Ctrl-A, Ctrl-C and Ctrl-V;
+  zoom from 0.5x to 3x with `+`, `-` and `0`, kept across pages; a hand
+  over links and scrolling while dragging past the edge. CSS `@container`
+  queries; SVG `clip-path`, `mask`, `use` and `symbol`, forward
+  references included; `loading="lazy"` images deferred; first letters
+  by grapheme cluster; TeX Gyre Helvetica and Times as Arial's and Times
+  New Roman's stand-ins. A web-platform-tests reftest baseline, with
+  regressions against it reported.
+- **JPEGs decoded at 1/2, 1/4 or 1/8 (#1197).** readjpg implements
+  `Jpegscaled` (imagefile(2)) through a smaller inverse DCT, and Charon
+  decodes a photograph no larger than the screen needs: a 24-megapixel
+  JPEG 2.4 s to 1.3 s. `/env/pagetime` gives each image's fetch and
+  decode.
+- **Module link digests (#1205).** Both compilers write a SHA-256 of each
+  exported and imported function's type into a module, and the loader
+  compares those where it compared a 32-bit fold of MD5. `emu -L`, or
+  `1` written to `/dev/strictlink` (once, for good), refuses a link
+  where either side has none. An emulator built before this loads
+  modules built after it; `dis/` grows about 9.5%.
+- **The soak runs kfs, gefs and video beside its network loads (#1176,
+  #1179),** and a stalled network push records where it stopped and
+  both ends' TCP.
+
 ### Security
 
 - **A review of the cryptography, certificates, authentication and
@@ -58,8 +104,64 @@ All notable changes to InferNode are documented in this file.
     speed for GCM where the processor has no AES instructions used
     (x86-64 as built, the Pi 3 and 4, RISC-V); an RSA private operation
     is blinded.
+- **The source review's other tranches.** Each fix has a regression test
+  that fails on the code before; the commit messages say what was wrong.
+  - **TLS, 9P, name spaces, parsers and file servers (#1200).** A TLS
+    server's handshake messages are taken once each and in order, its
+    version and suite held to the configuration; Keyring refuses key
+    strings that are not keys and Ed25519 signatures of a second
+    encoding; auth, factotum and secstored refuse short messages and a
+    PAK value outside the group; export(2), the mount driver and devssl
+    hold a read to its buffer and a fid to one changer.
+  - **The kernels' system calls and devices (#1201),** hosted and
+    native: sizes and offsets no file has refused before use, `#U`,
+    `#s` and the other devices a confined program can name bounded and
+    locked, three ways a program outlived its group's kill closed, and
+    locals changed after `waserror()` made volatile (clang, which builds
+    every emulator but Linux's and every native kernel, gave the handler
+    their old values).
+  - **The Dis VM, builtin modules and `limbo` (#1202):** places where a
+    program compiled by the stock compiler could get outside Limbo's
+    type safety, a builtin trusting a size or object it was given or
+    generated code keeping an address into an object that could be
+    freed (print, `$Math`, `$Keyring`, `$IPint`, `$Draw`, `$Tk`,
+    `$Tensor`, `$Bayer`, `$I420`).
+  - **The agent confinement stack (#1205).** What the human or the
+    harness decides can no longer be decided by text a model or remote
+    content chose: the approval gate judges the parsed call that will
+    run (`sms` and `dial` ask too); a task's staged changes are applied
+    only to the folder the harness granted; a subagent cannot reach its
+    parent's tool server, the model service or a tool needing approval,
+    and ends with its parent; after `NODEVS` a program opens only its
+    own name space's `#D` conversations. `git` is no longer in the
+    default delegation budget. Memory and plans are per activity; the
+    old shared stores are not carried over.
+  - **What a peer, a radio or a device sends (#1185-#1191).** The native
+    IP stack (Ethernet, ARP, ICMP, UDP, IPv6 extension headers and
+    reassembly, TCP options and control arguments, the route table),
+    USB (xHCI's completion residuals), Bluetooth, Wi-Fi, DNS and DHCP:
+    lengths checked before use, a peer's numbers bounded, tables read
+    under their locks. TCP's initial sequence numbers are a keyed hash
+    (RFC 6528) and only a reset at the expected sequence number closes a
+    connection (RFC 5961).
+  - **logind (#1182, #1184).** Ten failed attempts for a name refuse it
+    for 60 s, before any lookup or key exchange (NIST AC-7), counted in
+    `/keydb/loginfail` by the name's hash. A missing, disabled or
+    expired account is answered as a wrong password, after the same
+    work, so names cannot be enumerated; the reason goes to the console.
+  - **wikifs (#1196).** What anyone writes through `httpd -w` stays text:
+    titles, links, headings and the edit form were written raw (stored
+    XSS, `javascript:` links). An edit of an out-of-date version is a
+    conflict again, the losing edit kept in the history.
 
 ### Changed
+
+- **The old httpd is gone (#1193).** Lucent's HTTP/1.0 server and its
+  modules under `services/httpd/` are replaced by the new one above.
+- **`listen -A` runs each connection's command in a process of its own
+  (#1183).** It ran in the listener's loop, so one idle client held up
+  every other: `lib/sh/srv`'s logind and every `listen -A ... {export
+  ...}` served one client at a time.
 
 - **sdrfs(4)'s `iq` says its own format, so nothing is told the rate
   twice (#1094).** Each open starts with a header in audio(6)'s form
@@ -103,6 +205,18 @@ All notable changes to InferNode are documented in this file.
   services. The home is now `$HOME` or the passwd entry's, kept as one
   name when it has a blank, and with neither the profile says so and
   goes on with `/usr/$user`.
+- **The native kernels' clocks keep time (#1180).** Every ARM board ran
+  slow (2.6 s an hour on a Pi 5, 4.5 on a Pi 3): the tick was rearmed
+  after the next deadline and overrode it, and a tick an interrupt came
+  late for was lost from the time of day. The time of day now comes
+  from the hardware counter, as Plan 9's does, and every overdue tick is
+  counted.
+- **A text file of vid9p, vidjpeg or camsrv read in pieces is one text
+  (#1210).** `status`, `fmt` and `ctl` were made again at each read, so
+  a second read could come from a newer, longer text.
+- **wm/tetris, About, wm/lens (#1177).** Tetris's keys work after New
+  game; About's version no longer says its build twice; wm/lens
+  magnifies instead of opening solid red.
 
 ## [0.10.1] - 2026-11-11
 

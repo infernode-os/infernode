@@ -84,6 +84,17 @@ that has left
 last 64, is
 .BR "frame expired" ;
 a frame past a clip's end is refused.
+A feed turned while it is read
+.RI ( camsrv (4)'s
+.BR rotate )
+says so to each reader once,
+.LR "format changed" ;
+each of
+.IR videnc 's
+encoders reads through a descriptor of its own, takes the new size and
+encodes the frame at it.
+.B jpeg/fmt
+says the newest frame's size.
 With
 .IR export (4)
 in front, a remote viewer reads
@@ -125,6 +136,13 @@ is empty, as vid9p serves it, for layers bound on the viewer.
 The feed's errors, such as
 .BR "frame expired" ,
 come through as they are.
+A JPEG of another width and height than a reader last had (the feed was
+turned) is refused to that reader once, as
+.IR camsrv (4)
+refuses it,
+.LR "format changed: \fIw h\fP i420 \fIfps\fP" ;
+.B fmt
+says the newest frame's.
 .PP
 JPEG at quality 75 makes the frames of a busy street scene about a sixth
 of their raw size; a smooth or still scene shrinks further.  Encoding a

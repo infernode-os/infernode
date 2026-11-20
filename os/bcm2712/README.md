@@ -6,7 +6,8 @@ cores through PSCI, the Dis JIT, all the RAM, userspace from the
 card at 19 MB/s, Ethernet at 1000, 100 and 10 Mbit/s, USB through RP1,
 real MSI-X, Wi-Fi with WPA2, Bluetooth pairing, L2CAP and LE scan, GPIO with
 edges, I2C, SPI, PWM, the real-time clock, the fan, an NVMe drive on the
-external PCIe connector, and the desktop on either HDMI port.
+external PCIe connector, a Camera Module 3 on either camera connector,
+and the desktop on either HDMI port.
 [INVENTORY.md](INVENTORY.md) says what each of those means, and what
 "proved" was on each.
 
@@ -15,7 +16,7 @@ the other way from the Pi 4's: the board first, and each step asks the
 hardware instead of assuming.
 
 Not done or not proved: two screens at once; audio, since a Pi 5 has no
-analogue output; DSI and CSI. The D0 stepping (2GB boards and later) has its own pin
+analogue output; DSI. The D0 stepping (2GB boards and later) has its own pin
 tables in `radio.c`, and has not run on a D0 chip.
 
 ## What is here
@@ -28,7 +29,8 @@ tables in `radio.c`, and has not run on a D0 chip.
 | `etherrp1.c` | the gigabit port: a Cadence GEM |
 | `usbxhcirp1.c` | the USB ports: two DWC3s, as xHCI |
 | `gpiorp1.c` | RP1's pins, under `../bcm/devgpio.c` |
-| `devi2c.c`, `devspi.c`, `devpwm.c` | `#J`, `#Q`, `#W`: RP1's I2C, SPI and PWM on the header |
+| `devi2c.c`, `devspi.c`, `devpwm.c` | `#J`, `#Q`, `#W`: RP1's I2C, SPI and PWM on the header; `#J` also the camera connectors' buses |
+| `devcam.c` | `#V`: RP1's CSI-2 receiver, the camera connectors, as the Pi 4's Unicam files |
 | `emmc2.c` | the card: `../bcm/emmc.c` again |
 | `radio.c` | Wi-Fi's pins, power and SDIO2 for `../bcm/ether4330.c`; Bluetooth's pins |
 | `uartbt.c` | Bluetooth's UART, as `/dev/eia0` |

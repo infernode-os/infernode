@@ -43,7 +43,7 @@ has the feature, which is what parity means.
 | D0 stepping (2GB and newer boards) | n/a | `radio.c` | Detected from the device tree; pin tables from Linux. Dry run on C1 with D0's tree writes what Linux's table says. Has not run on a D0 chip |
 | Audio (PWM jack) | yes | none | No jack on a Pi 5; HDMI audio or I2S instead |
 | DSI panel, touch | yes | none | Not done; DSI is RP1's here |
-| Camera device (`#V`) | no | none | Not in this kernel: `#V` is the Pi 4's Unicam (`../bcm2711/devcam.c`), and the Pi 5's CSI is RP1's own receiver, not done. `camsrv -t` (the simulated sensor) runs without it |
+| Camera device (`#V`) | yes | `devcam.c` | **Proved** with a Camera Module 3 (IMX708): RP1's CSI-2 receiver on either CAM/DISP connector, RAW10 on two lanes at 900 Mbit/s, the Pi 4's `#V/unicam` files, so camsrv(4) is unchanged; frames at 576x324 (the sensor's binned mode) through `camsrv` under the soak's video load. camsrv powers each connector in turn until the sensor answers. The PiSP is not used: `$Bayer` makes the picture, as on the Pi 4 |
 | Memory above 4GB | no | `../bcm/mmu.c` | **Proved**: found at boot from the device tree, every bank mapped at run time, no constant to change for a bigger board. Dis heap may take three quarters: 5.9GB touched on 8GB. `memlimit=N` runs as a smaller board: 4, 3, 2 and 1GB boots proved |
 
 ## What only a Pi 5 has
@@ -58,7 +58,7 @@ has the feature, which is what parity means.
 | Status LEDs | ACT AON GPIO 9, `#P/led`; PWR RP1 GPIO 44, `#G` | ACT **proved** by a person. PWR written, not watched |
 | Debug UART connector | `uart10` | Output only, unread: see above |
 | Second console | RP1 UART4, GPIO 12, 13 (pins 32, 33) | **Proved**, in and out |
-| Two HDMI, DSI/CSI connectors | HVS, RP1 | Either HDMI, one at a time. Two together, DSI and CSI not done |
+| Two HDMI, DSI/CSI connectors | HVS, RP1 | Either HDMI, one at a time; a camera on either CAM/DISP connector (`#V`). Two HDMI together and DSI not done |
 | RTC battery charging | the firmware, `trickle-charge-microvolt` | Not done; off unless asked for, which is right for a primary cell |
 
 ## RP1's blocks
@@ -66,7 +66,7 @@ has the feature, which is what parity means.
 | Block | Count | State |
 |---|---|---|
 | UART | 6 | UART0 console only |
-| I2C | 7 | `devi2c.c`, `#J`, i2c0 and i2c1 at 100 and 400kHz. **Proved** on the wire: i2c1 scans clean with nothing on it, i2c0's address byte seen at 10.0us a bit through the jumper. No device has answered yet: nothing is on the bus. 400kHz set, too fast for the edge interrupt to time |
+| I2C | 7 | `devi2c.c`, `#J`, i2c0 and i2c1 at 100 and 400kHz. **Proved** on the wire: i2c1 scans clean with nothing on it, i2c0's address byte seen at 10.0us a bit through the jumper. 400kHz set, too fast for the edge interrupt to time. i2c6 and i2c4, the CAM/DISP connectors' buses: **proved** by the Camera Module 3's sensor and lens answering there. Each open of a data file keeps its own address |
 | SPI | 9 | `devspi.c`, `#Q`, SPI0, two chip selects. **Proved** in the block's own loopback: 8192 bytes back intact at 1 and 10MHz, in the time they should take. No device on the wire yet |
 | PWM | 2 | `devpwm.c`, `#W`, PWM0's four channels. **Proved**: 10ms period, 2.5ms duty measured at the pin to the microsecond. PWM1 is the fan's |
 | I2S | 3 | Not done |
@@ -74,7 +74,8 @@ has the feature, which is what parity means.
 | PIO | 1 | Not done; needs RP1's mailbox |
 | DMA | 1 | Not done; CPU copies today |
 | SDIO | 2 | Not done; wired to the header pins |
-| CSI, DSI, DPI, VEC | 2, 2, 1, 1 | Not done |
+| CSI | 2 | `devcam.c`, `#V`: either connector, one at a time. **Proved**, above |
+| DSI, DPI, VEC | 2, 1, 1 | Not done |
 | Audio out | 1 | Not done |
 
 ## Blocks probably left alone

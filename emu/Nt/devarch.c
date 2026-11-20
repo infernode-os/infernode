@@ -224,14 +224,26 @@ archread(Chan* c, void* a, long n, vlong offset)
 			n = readstr(offset, a, n, p);
 			break;
 		case REG_BINARY:
+			/*
+			 * "bin" and then the value's bytes, in the room the
+			 * reader has. After the three of "bin" the bytes were
+			 * copied for the whole count again, three past the
+			 * reader's buffer, and with an offset under three
+			 * from before the value.
+			 */
 			l = n;
-			n = readstr(offset, a, l, "bin");
-			if(n >= 3){
+			n = 0;
+			if(offset < 3){
+				n = readstr(offset, a, l, "bin");
+				offset = 0;
+			}else
 				offset -= 3;
-				if(offset+l > v->size)
-					l = v->size - offset;
-				memmove((char*)a+n, v->data+offset, l);
-				n += l;
+			if(n < l && offset < v->size){
+				i = v->size - offset;
+				if(i > l - n)
+					i = l - n;
+				memmove((char*)a+n, v->data+offset, i);
+				n += i;
 			}
 			break;
 		default:

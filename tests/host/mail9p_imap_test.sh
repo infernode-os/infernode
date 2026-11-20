@@ -10,13 +10,15 @@
 # made here, with openssl, for 127.0.0.1 (an iPAddress subjectAltName).
 #
 #   - connect over TLS: the account's ctl, its boxes, INBOX's messages by
-#     UID; a message's subject, from and body; its flags set (STORE); a
-#     search (SEARCH, the UIDs read back from the box's ctl); archive
-#     (COPY to Archive and \Deleted)
+#     UID; a message's subject, from and body; its flags set (UID STORE);
+#     a search (UID SEARCH, the UIDs read back from the box's ctl);
+#     archive (UID COPY to Archive and \Deleted); every message named to
+#     the server by its UID
 #   - connect over STARTTLS: the same server's session after the upgrade
 #   - compose sent: over implicit TLS for the TLS account, after STARTTLS
 #     for the STARTTLS one (AUTH PLAIN inside TLS, the message's Subject
-#     arriving)
+#     arriving); the message goes when the file is closed, and compose
+#     read afterwards says what became of it
 #   - refused: a certificate naming only localhost, for 127.0.0.1; one
 #     from a CA not trusted; an IMAP server declining STARTTLS; an SMTP
 #     server not offering it, and one refusing it (no AUTH sent to either)
@@ -153,6 +155,7 @@ To: carol@example.org
 Subject: Sent over TLS
 
 Hi.' > $A/compose
+cat $A/compose
 
 echo '<<< 17 compose-starttls >>>'
 echo 'From: alice@example.com
@@ -160,6 +163,7 @@ To: carol@example.org
 Subject: Sent after STARTTLS
 
 Hi.' > /mnt/mail/accounts/st/compose
+cat /mnt/mail/accounts/st/compose
 
 echo '<<< 18 compose-not-offered >>>'
 echo connect sno 127.0.0.1!$P_ST starttls 'smtp=127.0.0.1!$S_NO' > /mnt/mail/ctl
@@ -168,6 +172,7 @@ To: carol@example.org
 Subject: Never sent
 
 Hi.' > /mnt/mail/accounts/sno/compose
+cat /mnt/mail/accounts/sno/compose
 
 echo '<<< 19 compose-refused >>>'
 echo connect sref 127.0.0.1!$P_ST starttls 'smtp=127.0.0.1!$S_REF' > /mnt/mail/ctl
@@ -176,6 +181,7 @@ To: carol@example.org
 Subject: Never sent
 
 Hi.' > /mnt/mail/accounts/sref/compose
+cat /mnt/mail/accounts/sref/compose
 
 echo '<<< 12 wrong-name >>>'
 echo connect name 127.0.0.1!$P_NAME > /mnt/mail/ctl
@@ -227,11 +233,11 @@ expect 05 "a message's subject" "^Lunch on Friday$"
 expect 06 "a message's from" "alice@example.com"
 expect 07 "a message's body" "^Shall we meet at noon?"
 expect 08 "flags set read back" 'Seen'
-served tls "08 flags set: STORE 2 +FLAGS (\\Seen)" '^STORE 2 +FLAGS (\\Seen)$'
+served tls "08 flags set: UID STORE 102 +FLAGS (\\Seen)" '^UID STORE 102 +FLAGS (\\Seen)$'
 expect 09 "search: the matching UID in the box's ctl" "^101$"
-served tls "09 search sent: SEARCH FROM alice" '^SEARCH FROM alice$'
-served tls "10 archive: COPY 1 to Archive" '^COPY 1 "\?Archive"\?$'
-served tls "10 archive: \\Deleted set" '^STORE 1 +FLAGS (\\Deleted)$'
+served tls "09 search sent: UID SEARCH FROM alice" '^UID SEARCH FROM alice$'
+served tls "10 archive: UID COPY 101 to Archive" '^UID COPY 101 "\?Archive"\?$'
+served tls "10 archive: \\Deleted set" '^UID STORE 101 +FLAGS (\\Deleted)$'
 served tls "01 LOGIN with the factotum key's user" '^LOGIN "\?alice"\?$'
 expect 11 "connect over STARTTLS, then the session in TLS" "connected.*box=INBOX.*exists=2"
 served starttls "11 STARTTLS, then LOGIN inside TLS" '^LOGIN "\?alice"\?$'
@@ -239,13 +245,11 @@ expect 12 "a certificate naming only localhost refused for 127.0.0.1" "connect: 
 expect 13 "a certificate from an untrusted CA refused" "connect: tlsdial: tls: certificate chain verification failed"
 expect 14 "a server declining STARTTLS refused" "connect: STARTTLS refused"
 served refuse "14 nothing sent after STARTTLS's NO" '^after NO: nothing$'
-out=$(slice 16)
-if [[ -z "$out" ]]; then pass "16 compose over implicit TLS accepted"; else fail "16 compose over TLS: $out"; fi
+expect 16 "compose over implicit TLS sent, and compose says so" "^sent to carol@example.org$"
 served smtps "16 AUTH PLAIN as the factotum key's user, inside TLS" '^user alice$'
 served smtps "16 the message sent: its Subject arrived" '^data Subject: Sent over TLS$'
 served smtps "16 to its To: address" '^RCPT TO:<carol@example.org>$'
-out=$(slice 17)
-if [[ -z "$out" ]]; then pass "17 compose after STARTTLS accepted"; else fail "17 compose after STARTTLS: $out"; fi
+expect 17 "compose after STARTTLS sent" "^sent to carol@example.org$"
 served submission "17 STARTTLS taken, then EHLO again" '^STARTTLS$'
 served submission "17 the message sent after STARTTLS" '^data Subject: Sent after STARTTLS$'
 if [[ "$(sed -n '/^STARTTLS$/q;p' "$D/submission.log" | grep -c AUTH)" = 0 ]] &&
@@ -254,8 +258,8 @@ if [[ "$(sed -n '/^STARTTLS$/q;p' "$D/submission.log" | grep -c AUTH)" = 0 ]] &&
 else
     fail "17 AUTH before STARTTLS: $(cat "$D/submission.log")"
 fi
-expect 18 "an SMTP server not offering STARTTLS refused" "STARTTLS not offered"
-expect 19 "an SMTP server refusing STARTTLS refused" "STARTTLS refused: 454"
+expect 18 "an SMTP server not offering STARTTLS refused" "^not sent: .*STARTTLS not offered"
+expect 19 "an SMTP server refusing STARTTLS refused" "^not sent: .*STARTTLS refused: 454"
 if grep -q 'AUTH\|^user\|^MAIL\|^data' "$D/smtpno.log" "$D/smtpref.log"; then
     fail "18/19 credentials or mail sent in clear: $(cat "$D/smtpno.log" "$D/smtpref.log")"
 else

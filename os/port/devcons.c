@@ -22,6 +22,7 @@ extern char*	heapaudittext(void);	/* libinterp/heapaudit.c */
 #include	"keyboard.h"
 
 extern int cflag;
+extern int strictlink;	/* libinterp/link.c */
 extern int keepbroken;
 extern ulong intrcount[];	/* portclock.c: clock interrupts, per core */
 extern ulong fcallcount[];	/* portclock.c: Timer callbacks run, per core */
@@ -676,6 +677,7 @@ enum{
 	Qjit,
 	Qsysstat,
 	Qchaos,
+	Qstrictlink,
 };
 
 static Dirtab consdir[]=
@@ -704,6 +706,7 @@ static Dirtab consdir[]=
 	"user",		{Quser},	0,	0644,
 	"jit",		{Qjit},	0,	0666,
 	"sysstat",	{Qsysstat},	0,	0444,
+	"strictlink",	{Qstrictlink},	0,	0644,
 #ifdef CHAOS
 	"chaos",	{Qchaos},	0,	0664,	/* chaos.c: faults made often */
 #endif
@@ -978,7 +981,8 @@ fddump()
 	Chan *c;
 
 	p = proctab(6);
-	o = p->env;
+	if(p == nil || (o = p->env) == nil || o->fgrp == nil)
+		return;	/* (process 6 need not have descriptors, or be there) */
 	for(i = 0; i <= o->fgrp->maxfd; i++) {
 		if((c = o->fgrp->fd[i]) == nil)
 			continue;
@@ -1100,6 +1104,19 @@ static Chan*
 consopen(Chan *c, int omode)
 {
 	c->aux = 0;
+	/*
+	 * Whether it may be opened, first. That was asked last, after the
+	 * file's own state had been set up, and a refusal undid none of
+	 * it: an open of kprint for reading and writing was refused and
+	 * left its queue installed (in use for ever after, and the
+	 * screen's console silent), one of keyboard with a mode no file
+	 * has left the local keyboard taken from the console for good.
+	 */
+	c = devopen(c, omode, consdir, nelem(consdir), devgen);
+	if(waserror()){
+		c->flag &= ~COPEN;
+		nexterror();
+	}
 	switch((ulong)c->qid.path){
 	case Qconsctl:
 		if(!iseve())
@@ -1189,8 +1206,11 @@ consopen(Chan *c, int omode)
 		}
 		break;
 	}
-	return devopen(c, omode, consdir, nelem(consdir), devgen);
+	poperror();
+	return c;
 }
+
+static QLock heaptypesl;	/* one reader of heaptypes at a time: its text is on the channel */
 
 static void
 consclose(Chan *c)
@@ -1229,8 +1249,10 @@ consclose(Chan *c)
 		break;
 
 	case Qheaptypes:
+		qlock(&heaptypesl);
 		free(c->aux);
 		c->aux = nil;
+		qunlock(&heaptypesl);
 		break;
 	}
 }
@@ -1346,6 +1368,10 @@ consread(Chan *c, void *buf, long n, vlong offset)
 		snprint(tmp, sizeof(tmp), "%d", cflag);
 		return readstr(offset, buf, n, tmp);
 
+	case Qstrictlink:
+		snprint(tmp, sizeof(tmp), "%d", strictlink);
+		return readstr(offset, buf, n, tmp);
+
 #ifdef CHAOS
 	case Qchaos:
 		return chaosread(buf, n, offset);
@@ -1387,13 +1413,28 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	 * the same open take the same text.
 	 */
 	case Qheaptypes:
+		/*
+		 * One reader at a time. The text is kept on the channel
+		 * and made again at offset 0, and reads of one channel are
+		 * not otherwise kept apart: two at once both freed the old
+		 * text, or one freed what the other was copying from.
+		 */
+		qlock(&heaptypesl);
+		if(waserror()){
+			qunlock(&heaptypesl);
+			nexterror();
+		}
 		if(offset == 0 || c->aux == nil){
 			free(c->aux);
+			c->aux = nil;
 			c->aux = heapaudittext();
 			if(c->aux == nil)
 				error(Enomem);
 		}
-		return readstr(offset, buf, n, c->aux);
+		n = readstr(offset, buf, n, c->aux);
+		poperror();
+		qunlock(&heaptypesl);
+		return n;
 
 	/*
 	 * One line per running core: its tick count, how many clock
@@ -1622,6 +1663,24 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		if(x < 0 || x > 9)
 			error(Ebadarg);
 		cflag = x;
+		return n;
+
+	case Qstrictlink:
+		/*
+		 * Modules are linked by their type digests alone from now on
+		 * (libinterp/link.c).  One way: init sets it when the card
+		 * has a strictlink file, and nothing that runs later can
+		 * take it back.
+		 */
+		if(!iseve())
+			error(Eperm);
+		if(n >= sizeof(buf))
+			n = sizeof(buf)-1;
+		strncpy(buf, va, n);
+		buf[n] = '\0';
+		if(buf[0] != '1' || (buf[1] != '\0' && buf[1] != '\n'))
+			error("strictlink: only 1; it stays set until the machine restarts");
+		strictlink = 1;
 		return n;
 
 	case Qnull:

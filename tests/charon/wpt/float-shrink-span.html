@@ -1,0 +1,20 @@
+<!doctype html><title>a shrink-to-fit box's inline background reaches its edge</title>
+<!-- Each float is as wide as its text (max-content, rounded), and the
+     span's background must end on the same pixel as the float: Arial
+     (TeX Gyre Heros) has fractional advances, so the text's width is
+     rarely whole.  A column of the float's red shows where they part. -->
+<style>
+body{margin:0;font:20px/1 Arial,sans-serif;color:green}
+.f{float:left;clear:left;background:red;margin-right:4px}
+.f span{background:green}
+.c{float:left;width:130px}
+</style>
+<div class=c>
+<div class=f><span>a</span></div><div class=f><span>ab</span></div><div class=f><span>abc</span></div><div class=f><span>abcd</span></div><div class=f><span>abcde</span></div><div class=f><span>abcdef</span></div><div class=f><span>abcdefg</span></div><div class=f><span>Filler</span></div><div class=f><span>text</span></div><div class=f><span>Filler text</span></div><div class=f><span>xyzzy</span></div><div class=f><span>minimum</span></div>
+</div>
+<div class=c>
+<div class=f><span>i</span></div><div class=f><span>il</span></div><div class=f><span>ill</span></div><div class=f><span>wide</span></div><div class=f><span>wider</span></div><div class=f><span>widest</span></div><div class=f><span>The quick</span></div><div class=f><span>brown fox</span></div><div class=f><span>jumps</span></div><div class=f><span>over the</span></div><div class=f><span>lazy dog</span></div><div class=f><span>Charon</span></div>
+</div>
+<div class=c style="font-family:'Times New Roman',serif">
+<div class=f><span>a</span></div><div class=f><span>ab</span></div><div class=f><span>abc</span></div><div class=f><span>abcd</span></div><div class=f><span>abcde</span></div><div class=f><span>Filler</span></div><div class=f><span>text</span></div><div class=f><span>Filler text</span></div><div class=f><span>wider</span></div><div class=f><span>The quick</span></div><div class=f><span>brown fox</span></div><div class=f><span>Charon</span></div>
+</div>

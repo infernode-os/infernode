@@ -103,8 +103,15 @@ validarraysize(int elementsize, int count)
 	uint maxalloc;
 
 	maxalloc = 128*1024*1024;
+	/*
+	 * An element of no bytes makes an array of no bytes however many
+	 * there are, but its length is walked all the same: no more of them
+	 * than of the smallest element there is.
+	 */
+	if(elementsize == 0)
+		elementsize = 1;
 	return elementsize >= 0 && count >= 0 &&
-		(elementsize == 0 || (uint)count <= (maxalloc-sizeof(Array))/(uint)elementsize);
+		(uint)count <= (maxalloc-sizeof(Array))/(uint)elementsize;
 }
 
 static int
@@ -269,6 +276,7 @@ brpatch(Inst *ip, Module *m)
  * compile with no lock at all.
  */
 static void*	complock;
+extern	int	libcompile(void*, Module*, int);
 
 static int
 lockedcompile(Module *m, int isize)
@@ -276,17 +284,43 @@ lockedcompile(Module *m, int isize)
 	int ok;
 
 	if(complock == nil){
+		/*
+		 * No lock to be had: no compiling, now or later. With none,
+		 * every load after this one compiled with no lock at all.
+		 */
 		complock = libqlalloc();
-		return compile(m, isize, nil);
+		if(complock == nil)
+			return 0;
 	}
-	libqlockproc(complock);
-	ok = compile(m, isize, nil);
-	libqunlockproc(complock);
+	/* the kernel's: libinterp has no error labels to let the lock go with */
+	ok = libcompile(complock, m, isize);
 	return ok;
 }
 
+/*
+ * A module being built that will not be finished: what it holds goes
+ * back.
+ */
+void
+parsefail(Module *m)
+{
+	destroy(m->origmp);
+	if(m->ext != nil)
+		destroylinks(m);
+	freemod(m);
+}
+
+/*
+ * *building is the module while it is being built and nil otherwise,
+ * for libparsemod, which holds the error label this library cannot:
+ * the heap allocations below raise when the heap is full, and so does
+ * the code generator.  A raise used to leave the module, its
+ * instructions and its types (and readmod's copy of the file) in the
+ * kernel's pool for good: tens of megabytes for each load of an
+ * ordinary module by a program that had filled the heap first.
+ */
 Module*
-parsemod(char *path, uchar *code, ulong length, Dir *dir)
+parsemod(char *path, uchar *code, ulong length, Dir *dir, Module *volatile *building)
 {
 	Heap *h;
 	Inst *ip;
@@ -296,7 +330,7 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	Array *ary;
 	ulong ul[2];
 	WORD lo, hi;
-	int lsize, id, v, entry, entryt, tnp, tsz, siglen;
+	int lsize, id, v, entry, entryt, tnp, mnp, tsz, siglen;
 	int de, pc, i, n, nbytes, isize, dsize, hsize, dasp;
 	uchar *mod, sm, *istream, **isp, *si, *addr, *addrend, *database;
 	uchar *dastack[DADEPTH], *endstack[DADEPTH], *basestack[DADEPTH];
@@ -319,6 +353,7 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	m->mtime = dir->mtime;
 	m->origmp = H;
 	m->pctab = nil;
+	*building = m;
 
 	switch(operand(&ps, isp)) {
 	default:
@@ -448,7 +483,18 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 			kwerrstr("implausible Dis file");
 			goto bad;
 		}
-		pt = dtype(freeheap, tsz, istream, tnp);
+		/*
+		 * Zero bytes at a map's end mark no pointer, and the compiler
+		 * writes some; but the whole map is walked for every object of
+		 * the type and every element of an array of it. A type of one
+		 * byte with 128K of zeros for a map, and an array of 128M of
+		 * them, was 2^44 steps to initialize and as many to free. The
+		 * type is made with the map up to its last set bit.
+		 */
+		mnp = tnp;
+		while(mnp > 0 && istream[mnp-1] == 0)
+			mnp--;
+		pt = dtype(freeheap, tsz, istream, mnp);
 		if(pt == nil) {
 			kwerrstr(exNomem);
 			goto bad;
@@ -650,10 +696,13 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 		/*
 		 * pc == -1 is a legitimate sentinel for a Dglobal link entry
 		 * (limbo/dis.c emits "discon(-1); discon(-1); disword(sig); .mp"
-		 * for a module's exported global / .mp reference). Allow it; only
-		 * reject pc values that are out-of-range positive offsets.
+		 * for a module's exported global / .mp reference). Allow it in
+		 * that shape and no other: a function's entry with pc -1 was
+		 * linked as the instruction before the module's first, and a
+		 * call through it ran whatever lay before the code.
 		 */
-		if(ps.error || pc < -1 || pc >= isize || (de != -1 && (de < 0 || de >= hsize || m->type[de] == nil)) || memchr(istream, 0, ps.end-istream) == nil){
+		if(ps.error || pc < -1 || pc >= isize || (de != -1 && (de < 0 || de >= hsize || m->type[de] == nil)) || memchr(istream, 0, ps.end-istream) == nil ||
+		   (pc == -1 && (de != -1 || strcmp((char*)istream, ".mp") != 0))){
 			kwerrstr("bad module link");
 			goto bad;
 		}
@@ -752,6 +801,11 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 				kwerrstr("truncated exception table");
 				goto bad;
 			}
+			/* the entries for exception types are among the entries */
+			if((n>>16) > (n&0xffff)){
+				kwerrstr("bad exception handler");
+				goto bad;
+			}
 			h->ne = n>>16;
 			n &= 0xffff;
 			h->etab = mallocz((n+1)*sizeof(Except), 1);
@@ -792,6 +846,53 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 		istream++;
 	}
 
+	if(m->rt & HASSIGS){
+		int j, nd;
+		uchar *dp;
+		Import *i1, **i2;
+
+		/*
+		 * The digests of the types: a count, then SIGDLEN bytes for
+		 * each link above and each import, in their order.  They
+		 * follow the source path, which nothing here reads, so that
+		 * a loader from before them takes the module all the same.
+		 * The count is the file's own and is believed only if it is
+		 * the number of links and imports, and the bytes are there.
+		 */
+		if(istream >= ps.end || memchr(istream, 0, ps.end-istream) == nil){
+			kwerrstr("bad type digests");
+			goto bad;
+		}
+		while(*istream++)
+			;
+		nd = lsize;
+		if(m->ldt != nil)
+			for(i2 = m->ldt; *i2 != nil; i2++)
+				for(i1 = *i2; i1->name != nil; i1++)
+					nd++;
+		n = operand(&ps, isp);
+		if(ps.error || n != nd || (ulong)n > (ulong)(ps.end-istream)/SIGDLEN){
+			kwerrstr("bad type digests");
+			goto bad;
+		}
+		if(n != 0){
+			m->sigs = malloc((ulong)n*SIGDLEN);
+			if(m->sigs == nil){
+				kwerrstr(exNomem);
+				goto bad;
+			}
+			memmove(m->sigs, istream, (ulong)n*SIGDLEN);
+			istream += (ulong)n*SIGDLEN;
+			dp = m->sigs;
+			for(j = 0; j < lsize; j++, dp += SIGDLEN)
+				m->ext[j].dig = dp;
+			if(m->ldt != nil)
+				for(i2 = m->ldt; *i2 != nil; i2++)
+					for(i1 = *i2; i1->name != nil; i1++, dp += SIGDLEN)
+						i1->dig = dp;
+		}
+	}
+
 	m->entryt = nil;
 	m->entry = m->prog;
 	if((ulong)entry < isize && (ulong)entryt < hsize) {
@@ -823,12 +924,11 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 	m->link = modules;
 	modules = m;
 
+	*building = nil;
 	return m;
 bad:
-	destroy(m->origmp);
-	if(m->ext != nil)
-		destroylinks(m);
-	freemod(m);
+	*building = nil;
+	parsefail(m);
 	return nil;
 }
 
@@ -898,6 +998,7 @@ freemod(Module *m)
 	free(m->prog);
 	free(m->path);
 	free(m->pctab);
+	free(m->sigs);
 	if(m->ldt != nil){
 		for(i2 = m->ldt; *i2 != nil; i2++){
 			for(i1 = *i2; i1->name != nil; i1++)

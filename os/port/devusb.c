@@ -597,6 +597,14 @@ newdevep(Ep *ep0, int i, int tt, int mode)
 	}
 
 	d = ep0->dev;
+	/*
+	 * not on a device that has gone: detach takes the device's
+	 * endpoints away under this lock, and one made after it has
+	 * been through them stayed for good, with the device's slot
+	 * and address. The device chooses when it is unplugged.
+	 */
+	if(d->state == Ddetach)
+		error(Edetach);
 	if(d->eps[i] != nil)
 		error("endpoint already in use");
 	ep = epalloc(ep0->hp);

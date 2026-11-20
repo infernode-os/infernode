@@ -146,7 +146,10 @@ retrydelay(err: string, attempt: int): int
 			}
 		}
 	}
-	if(contains(err, "overloaded") || contains(err, "cannot connect"))
+	# An error that is a status is tried again, or not, by its status
+	# alone: the words after it are the server's, and a 400 whose body
+	# said "overloaded" was sent again four times.
+	if(st == nil && (contains(err, "overloaded") || contains(err, "cannot connect")))
 		retry = 1;
 	# A backend that went quiet before any of the answer, once: a gateway
 	# that starts a model per conversation stalls now and then, and the
@@ -162,7 +165,9 @@ retrydelay(err: string, attempt: int): int
 	(nil, ra) := str->splitstrl(err, "retry-after=");
 	if(ra != nil) {
 		(secs, nil) := str->toint(ra[len "retry-after=":], 10);
-		if(secs > 0)
+		if(secs > RETRYMAXMS / 1000)
+			ms = RETRYMAXMS;	# (not multiplied: 3000000 s came out negative, "not worth retrying")
+		else if(secs > 0)
 			ms = secs * 1000;
 	}
 	if(ms > RETRYMAXMS)
@@ -486,10 +491,18 @@ newantstate(): ref AntState
 	return ref AntState(array[4] of ref AntBlock, 0, "", 0, 0, nil, 0);
 }
 
+# The most content blocks, or tool calls, one answer has.  The number
+# is the API's (a block's "index"), and blocks up to it were made as
+# asked: an index of 5000000 in one event filled the heap, which every
+# program shares.  An answer has a handful.
+MAXBLOCKS: con 1024;
+
 antblock(st: ref AntState, idx: int): ref AntBlock
 {
 	if(idx < 0)
 		idx = 0;
+	if(idx >= MAXBLOCKS)
+		return ref AntBlock("", "", "", "", "", "");	# no block of the answer: what is said of it is dropped
 	if(idx >= len st.blocks) {
 		nb := array[2 * idx + 4] of ref AntBlock;
 		nb[0:] = st.blocks[0:st.nblocks];
@@ -682,8 +695,39 @@ antbuild(st: ref AntState, req: ref AskRequest): (ref AskResponse, string)
 	response += joinrev(toollines, "\n");
 	if(toollines != nil)
 		response += "\n";
-	response += text;
+	response += textafter(text);
 	return (ref AskResponse(response, structjson, tokens), nil);
+}
+
+# A tool call's arguments as they go into the stored turn: the JSON
+# object they are, written out again, or {} if they are not one.  The
+# model's text was put into the turn's JSON as it came, so arguments
+# that were not JSON made the stored turn unreadable, and ones that
+# closed the object early added blocks of their own to it.
+objectjson(args: string): string
+{
+	if(args == "")
+		return "{}";
+	(jv, err) := readjsonstring(args);
+	if(err != nil || jv == nil)
+		return "{}";
+	pick o := jv {
+	Object =>
+		return o.text();
+	}
+	return "{}";
+}
+
+# The answer's text, as it follows the STOP: line and the TOOL: lines.
+# The tool calls are the TOOL: lines before the first line that is not
+# one, so text that itself begins "TOOL:" (a model quoting what it
+# read) was one more call to whoever parsed the answer.  It is put
+# after an empty line, which ends the calls.
+textafter(text: string): string
+{
+	if(hasprefix(text, "TOOL:"))
+		return "\n" + text;
+	return text;
 }
 
 parseanthropicresponse(body: string, req: ref AskRequest): (ref AskResponse, string)
@@ -1392,9 +1436,7 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 		(id, name, rawargs) := hd revtc;
 		# JSON verbatim; wirefmt escapes; flatten for legacy /tool is in calltool.
 		toolentries = wirefmt->encodetool(id, name, rawargs) :: toolentries;
-		inputjson := rawargs;
-		if(inputjson == "")
-			inputjson = "{}";
+		inputjson := objectjson(rawargs);
 		structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
 			",\"name\":" + jquote(name) +
 			",\"input\":" + inputjson + "}") :: structblocks;
@@ -1408,7 +1450,7 @@ parseopenairesponse(body: string, req: ref AskRequest): (ref AskResponse, string
 	response += joinrev(toolentries, "\n");
 	if(toolentries != nil)
 		response += "\n";
-	response += joinrev(textparts, "");
+	response += textafter(joinrev(textparts, ""));
 
 	return (ref AskResponse(response, structjson, tokens), nil);
 }
@@ -1496,6 +1538,8 @@ _ssehandle_event(jv: ref JValue, st: ref _SseState, req: ref AskRequest)
 					idxv := tc.get("index");
 					idx := 0;
 					if(idxv != nil) pick iv := idxv { Int => idx = int iv.value; }
+					if(idx < 0 || idx >= MAXBLOCKS)
+						continue;	# (see MAXBLOCKS)
 					while(listlen(st.tcids) <= idx) {
 						st.tcids = append(st.tcids, "");
 						st.tcnames = append(st.tcnames, "");
@@ -1563,9 +1607,7 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 		rawargs := listget(st.tcargs, i);
 		# JSON verbatim; wirefmt escapes; flatten for legacy /tool is in calltool.
 		toolentries = wirefmt->encodetool(id, name, rawargs) :: toolentries;
-		inputjson := rawargs;
-		if(inputjson == "")
-			inputjson = "{}";
+		inputjson := objectjson(rawargs);
 		structblocks = ("{\"type\":\"tool_use\",\"id\":" + jquote(id) +
 			",\"name\":" + jquote(name) +
 			",\"input\":" + inputjson + "}") :: structblocks;
@@ -1579,7 +1621,7 @@ _ssebuild_response(st: ref _SseState, req: ref AskRequest): (ref AskResponse, st
 	response += joinrev(toolentries, "\n");
 	if(toolentries != nil)
 		response += "\n";
-	response += joinrev(textparts, "");
+	response += textafter(joinrev(textparts, ""));
 
 	return (ref AskResponse(response, structjson, st.tokens), nil);
 }
@@ -2048,14 +2090,17 @@ extracttextcontent(response: string): string
 	if(!hasprefix(response, "STOP:"))
 		return response;
 
-	lines := splitlines(response);
+	# The STOP: line, the TOOL: lines after it, and then the text, all
+	# of it.  (Every line beginning STOP: or TOOL: was left out, so the
+	# answer's own lines that began so were lost from it.)
+	lines := tl splitlines(response);
+	while(lines != nil && hasprefix(hd lines, "TOOL:"))
+		lines = tl lines;
+	if(lines != nil && hd lines == "" && tl lines != nil && hasprefix(hd tl lines, "TOOL:"))
+		lines = tl lines;	# textafter's empty line
 	textlines: list of string;
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		if(hasprefix(line, "STOP:") || hasprefix(line, "TOOL:"))
-			continue;
-		textlines = line :: textlines;
-	}
+	for(; lines != nil; lines = tl lines)
+		textlines = hd lines :: textlines;
 	return joinrev(textlines, "\n");
 }
 

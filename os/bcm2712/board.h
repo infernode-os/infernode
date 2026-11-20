@@ -58,7 +58,7 @@ vlong	nvmelength(void);
 long	nvmerw(int, void*, long, vlong);
 long	nvmestat(char*, long);
 
-void	sdaddnvmepart(char*, vlong, vlong);
+char*	sdaddnvmepart(char*, vlong, vlong);
 
 /* uartrp1.c */
 void	rp1uartlink(void);

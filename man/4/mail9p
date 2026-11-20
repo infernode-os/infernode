@@ -8,6 +8,9 @@ mail9p \- IMAP/SMTP mailbox as a 9P filesystem
 ] [
 .B -m
 .I mountpoint
+] [
+.B -t
+.I seconds
 ]
 .SH DESCRIPTION
 .I Mail9p
@@ -25,6 +28,25 @@ The
 flag relocates the mount; the
 .B -D
 flag enables Styx tracing on stderr.
+.PP
+A mail server is waited for
+.I seconds
+(default 30) at each step: the making of a connection, and each stretch
+in which nothing comes from it; one command may take twenty times that
+in all.
+After that, as when a server hangs up or sends more than is taken (a
+line of 1MB, a literal of 64MB, 128MB in answer to one command), the
+request fails with an error naming the account, and the account is
+.BR disconnected :
+its
+.B ctl
+says why, what was listed stays listed, and its next use connects
+again (not sooner than ten seconds, or
+.IR seconds ,
+after a connection that could not be made).
+Each account's requests are done one at a time by a process of its
+own, so one account's server never holds up another account or the
+tree.
 .SH FILESYSTEM
 .TF accounts/
 .TP
@@ -42,9 +64,12 @@ is a host, or
 .IB host ! port
 for another port (a local bridge's, say);
 .BR "disconnect " \fIname\fP
-LOGOUTs and frees the slot;
+removes the account's files at once and LOGOUTs.
+Files open in it name nothing from then on: a later account, of that
+name or another, is another account;
 .BR "sync " \fIname\fP
-re-fetches the folder list and re-SELECTs the current mailbox.
+re-fetches the folder list, re-SELECTs the current mailbox and lists
+its messages again.
 .TP
 .B accounts/
 one entry per connected account.
@@ -52,16 +77,41 @@ one entry per connected account.
 .BI accounts/ name /ctl
 read: status line
 .RB ( connected | disconnected ", " "box=" "\fIname\fP, " "exists=" "N, " "unseen=" "N" );
-write:
+after
+.B disconnected
+comes the reason in parentheses, and
+.BI listed= N
+follows when not every message that exists is listed (the newest
+100000 are).
+Write:
 .BR "select " \fImailbox\fP
 or
 .BR sync .
 .TP
 .BI accounts/ name /compose
-write-only. Writes a full RFC822 message; it is sent via SMTP using
-factotum credentials. Recipients are extracted from the
+A full RFC822 message written here is sent via SMTP using
+factotum credentials, to the addresses of its
 .B To:
-header unless overridden.
+header, from the address of its
+.B From:
+header (the account's user if it has none).
+The message is everything written between the file's open and its
+close, in as many writes as it takes (32MB at most); it is sent when
+the file is closed.
+A close cannot fail, so to learn what happened read the file: on the
+descriptor the message was written on, the read waits for the send and
+returns
+.BR sent ,
+or fails with the reason; opened afresh,
+.B compose
+gives one line about the account's last send
+.RB ( "sent to"
+and the recipients, or
+.B "not sent:"
+and the reason).
+A message that was not sent is also reported on
+.IR mail9p 's
+standard error.
 .TP
 .BI accounts/ name /boxes/
 one entry per server-reported mailbox.
@@ -69,9 +119,11 @@ one entry per server-reported mailbox.
 .BI accounts/ name /boxes/ box /ctl
 write:
 .BR "search " \fIimap-criteria\fP
-runs IMAP SEARCH; the matching UIDs land in the same ctl file (one
+runs IMAP UID SEARCH; the matching UIDs land in the same ctl file (one
 per line) and are returned on the next
-.B read.
+.B read
+of that box's ctl.
+The criteria are one line: a line break in them is refused.
 .BR "archive " \fIuid\fP
 COPYs the message to
 .B Archive
@@ -79,9 +131,15 @@ and STOREs
 .BR \eDeleted .
 .BR "move " "\fIuid\fP \fIdest-box\fP"
 COPYs then STOREs
-.BR \eDeleted .
+.BR \eDeleted ;
+.I dest-box
+is one of the account's boxes, as
+.B boxes
+names it or as the server does, and nothing else.
 Operations only succeed against the currently-selected box; SELECT
 via the account ctl first.
+Every message is named to the server by its UID, so a message another
+client has moved or removed is never mistaken for its neighbour.
 .TP
 .BI accounts/ name /boxes/ box / uid
 one directory per message in the currently-selected box, named by
@@ -95,11 +153,20 @@ sub-entries (select the box first).
 .TP
 .BI accounts/ name /boxes/ box / uid /cc
 .TP
+.BI accounts/ name /boxes/ box / uid /replyto
+.TP
 .BI accounts/ name /boxes/ box / uid /subject
 .TP
 .BI accounts/ name /boxes/ box / uid /date
 .PD
 read-only header fields, parsed from the IMAP envelope.
+.B Replyto
+is the message's Reply-To, empty if it has none: where it is not
+empty, that is where
+.B draft-reply
+sends, not to
+.BR from .
+A name beside an address is the sender's own text.
 .TP
 .BI accounts/ name /boxes/ box / uid /flags
 read: space-separated flag tokens (\fB\eSeen\fP, \fB\eFlagged\fP, ...).
@@ -122,15 +189,23 @@ themselves.
 full RFC822 message (headers + body). Fetched lazily and cached.
 .TP
 .BI accounts/ name /boxes/ box / uid /draft-reply
-write-only. The body is sent via SMTP with
+The text written is sent via SMTP, as
+.B compose
+sends (at the file's close; read back for the result), to the
+message's Reply-To addresses, or its From's if it has none, with
 .BR Subject ,
 .BR To ,
 .BR In-Reply-To ,
 and
 .B References
 auto-injected from the original envelope (the caller's body wins if
-it already supplies any of them). On success the original message is
-STOREd
+it already supplies any of them).
+The reply is from the account: a text with a
+.B From:
+of its own is refused.
+So is a reply to a message whose address, subject or id would add
+lines of its own to the reply (a line break in one of them).
+When the server has taken it, the original message is STOREd
 .BR \eAnswered .
 .SH CAPABILITY MODEL
 The namespace is the only enforcement primitive. Bind paths into a
@@ -224,12 +299,21 @@ binary
 .B /dis/lib/mailparse.dis
 shared parser library (also used by the test suite)
 .TP
+.B /dis/lib/imap.dis /dis/lib/smtp.dis /dis/lib/mailconn.dis
+the protocols and their connections
+.TP
 .B /mnt/factotum
 credential source
 .SH SOURCE
 .B /appl/cmd/mail9p.b
 .PP
 .B /appl/lib/mailparse.b
+.br
+.B /appl/lib/imap.b
+.br
+.B /appl/lib/smtp.b
+.br
+.B /appl/lib/mailconn.b
 .SH BUGS
 MIME parsing is not implemented; the
 .B body.html
@@ -246,7 +330,14 @@ Archive and move STORE
 .B \eDeleted
 but do not EXPUNGE, mirroring Gmail-style retention. There is no
 EXPUNGE verb exposed yet.
+.PP
+.B Compose
+reads its recipients from
+.B To:
+alone.
 .SH SEE ALSO
+.IR mailconn (2),
+.IR smtp (2),
 .IR factotum (4),
 .IR llmsrv (4),
 .IR styx (5)

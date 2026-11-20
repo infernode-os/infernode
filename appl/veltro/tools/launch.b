@@ -22,7 +22,12 @@ include "draw.m";
 include "string.m";
 	str: String;
 
+include "publicnet.m";
+	publicnet: Publicnet;
+
 include "../tool.m";
+
+Maxurl: con 2048;	# of a URL given to the browser
 
 ToolLaunch: module {
 	init: fn(): string;
@@ -42,6 +47,10 @@ init(): string
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
+	# without it no URL is given to the browser (below)
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet != nil)
+		publicnet->init();
 	return nil;
 }
 
@@ -62,7 +71,7 @@ doc(): string
 		"  Launch wm/clock                — launch with wm/ prefix\n" +
 		"  Launch /dis/wm/clock           — launch by full path (.dis optional)\n" +
 		"  Launch charon <url>            — launch Charon browser at the given URL\n" +
-		"  Launch charon file:/path/to/file — open a local file in Charon\n\n" +
+		"                                   (http:// or https:// only)\n\n" +
 		"Navigating Charon:\n" +
 		"  Launch charon http://example.com  — opens Charon at example.com\n" +
 		"  If Charon is already running, it is killed and relaunched at the new URL.\n" +
@@ -74,7 +83,8 @@ doc(): string
 		"  xenith                — Xenith text environment (Acme-like)\n\n" +
 		"Not available (require Tk, which is not built in):\n" +
 		"  task, tetris, sh, ftree, deb\n\n" +
-		"Returns 'launched <name> in presentation zone' on success.";
+		"Returns 'launched <name> in presentation zone' on success, and an\n" +
+		"error saying why when the presentation zone refuses.";
 }
 
 schema(): string
@@ -161,17 +171,33 @@ exec(args: string): string
 
 	# disname is the .dis filename — normally same as appname.
 	disname := appname;
-	if(extradata != "" && disname != "charon" && disname != "xenith")
+	# (xenith was let by with data it is never given, and the answer
+	# said it was launched "with url" what followed its name)
+	if(extradata != "" && disname != "charon")
 		return "error: launch data is only supported for charon";
 	if(disname == "charon" && extradata != "" && !isallowedurl(extradata))
 		return "error: charon only accepts http:// and https:// URLs";
+	# The browser opens the address with the user's network, not the
+	# agent's: one naming this machine or a private network is refused
+	# here, by the rule the fetch tools use for a URL's host as written
+	# (what a public name resolves to is the browser's own to check).
+	if(disname == "charon" && extradata != "") {
+		if(len extradata > Maxurl)
+			return sys->sprint("error: a URL of more than %d characters is not opened", Maxurl);
+		if(publicnet == nil)
+			return "error: cannot check the URL's host (publicnet did not load); nothing was opened";
+		if(publicnet->hostblocked(publicnet->urlhost(extradata)))
+			return "error: charon is not opened at a local or private address";
+	}
 
-	# Reject names containing path separators — belt-and-suspenders guard
-	# against any normalization gaps that could reach outside /dis/wm/.
+	# An app's name is letters, digits, - and _, as the presentation zone
+	# takes an id: anything else is refused there, after this tool had
+	# looked for the file under a name cut short at the odd character.
 	for(pi := 0; pi < len disname; pi++) {
-		if(disname[pi] == '/') {
-			return "error: app name may not contain '/'";
-		}
+		c := disname[pi];
+		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		     (c >= '0' && c <= '9') || c == '-' || c == '_'))
+			return "error: an app's name is letters, digits, - and _ (Launch list shows the apps)";
 	}
 
 	# Resolve the .dis path.
@@ -204,6 +230,7 @@ exec(args: string): string
 	# id must match the app's wmsrv registration (derived from .dis name).
 	# label is the user-facing tab name.
 	cmd: string;
+	killed := 0;	# an instance that was running was closed first
 	if(disname == "xenith") {
 		# no -t: Xenith follows the system theme itself
 		xenithargs := "-c 1 -E";
@@ -214,7 +241,7 @@ exec(args: string): string
 		killfd := sys->open(pctl, Sys->OWRITE);
 		if(killfd != nil) {
 			kb := array of byte ("kill id=" + disname);
-			sys->write(killfd, kb, len kb);
+			killed = sys->write(killfd, kb, len kb) == len kb;
 			killfd = nil;
 		}
 		cmd = sys->sprint("create id=%s type=app dis=%s label=%s data=%s",
@@ -224,8 +251,24 @@ exec(args: string): string
 	fd := sys->open(pctl, Sys->OWRITE);
 	if(fd == nil)
 		return sys->sprint("error: cannot open presentation/ctl: %r");
+	# What the presentation zone answers is the result.  It was not
+	# looked at: a launch it refused (an app already open, too many
+	# open, a name it does not take) was reported as launched.
 	b := array of byte cmd;
-	sys->write(fd, b, len b);
+	if(sys->write(fd, b, len b) != len b) {
+		why := sys->sprint("%r");
+		if(!killed && contains(why, "already exists")) {
+			fd = sys->open(pctl, Sys->OWRITE);
+			if(fd != nil) {
+				b = array of byte ("center id=" + disname);
+				sys->write(fd, b, len b);
+			}
+			return label + " is already open in the presentation zone: shown again, not launched a second time";
+		}
+		if(killed)
+			return "error: " + label + " was closed, and could not be opened again: " + why;
+		return "error: " + label + " was not launched: " + why;
+	}
 	fd = nil;
 
 	# Center the new app tab
@@ -258,6 +301,14 @@ tolower(s: string): string
 		if(s[i] >= 'A' && s[i] <= 'Z')
 			s[i] += 'a' - 'A';
 	return s;
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
 }
 
 hasprefix(s, prefix: string): int

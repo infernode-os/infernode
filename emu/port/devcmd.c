@@ -288,6 +288,21 @@ cmdopen(Chan *c, int omode)
 static void
 closeconv(Conv *c)
 {
+	int i;
+
+	/*
+	 * The command's pipes, if they are still open. They were closed
+	 * only when the last channel on data or stderr was, so a command
+	 * whose output nobody opened kept its three for good, and the
+	 * next use of the conversation set them to -1 over the top:
+	 * "echo exec true > /cmd/clone" thirty times cost the emulator
+	 * ninety descriptors, and it has only so many.
+	 */
+	for(i = 0; i < nelem(c->fd); i++)
+		if(c->fd[i] != -1){
+			close(c->fd[i]);
+			c->fd[i] = -1;
+		}
 	kstrdup(&c->owner, "cmd");
 	kstrdup(&c->dir, rootdir);
 	c->perm = 0666;

@@ -15,7 +15,11 @@ implement RImagefile;
 #   - Text elements (basic positioning)
 #   - Linear and radial gradients: href'd stops, units, gradientTransform,
 #     focal points, spreadMethod, stop-opacity
-#   - Use/defs references
+#   - use (an element or a symbol, by href or xlink:href), defs
+#   - clip-path and mask (by url(#id), in user space: clipPathUnits and
+#     maskContentUnits objectBoundingBox are not done), the element
+#     drawn into a layer and through their coverage; what they name
+#     may come after what names it
 #   - Style attributes (inline)
 #
 # Uses Inferno's XML parser for SVG parsing.  Shapes are drawn as
@@ -146,7 +150,25 @@ Canvas: adt {
 	viewbox_h:	real;
 	defs:		list of ref Gradient;
 	transform:	ref Matrix;
+	ids:		list of ref Idref;	# every element with an id, where it is
 };
+
+# An element with an id: what clip-path, mask and use name, wherever in
+# the document it is, found before drawing begins (they are often
+# after what uses them); drawn again from its mark
+Idref: adt {
+	id:	string;
+	name:	string;
+	attrs:	Attributes;
+	mark:	ref Xml->Mark;
+};
+
+# drawing a clip path's or a mask's content, or a use's target: how
+# deep, so that one naming itself ends
+refdepth := 0;
+MAXREFDEPTH: con 8;
+clipping := 0;		# drawing a clip path: geometry alone, filled white
+noclipnext := 0;	# the next element is drawn into a layer its clip or mask is applied to: not again
 
 display: ref Display;
 
@@ -178,6 +200,18 @@ readmulti(fd: ref Iobuf): (array of ref Rawimage, string)
 }
 
 readarray(fd: ref Iobuf): (array of ref Rawimage, string)
+{
+	# a fault in the drawing is the image's, not its caller's (a page
+	# painting one as a background was left blank)
+	{
+		return readarray1(fd);
+	} exception e {
+	"*" =>
+		return (nil, "SVG: " + e);
+	}
+}
+
+readarray1(fd: ref Iobuf): (array of ref Rawimage, string)
 {
 	if(xml == nil)
 		return (nil, "SVG: cannot load XML parser");
@@ -219,6 +253,14 @@ parse_svg(parser: ref Parser): (ref Canvas, string)
 		Tag =>
 			if(t.name == "svg") {
 				canvas = new_canvas(t.attrs);
+				rules = nil;
+				nrules = 0;
+				m0 := parser.mark();
+				parser.down();
+				scanids(parser, canvas);
+				parser.up();
+				pregradients(parser, canvas);
+				parser.goto(m0);
 				parser.down();
 				# the root's own fill, stroke, color and style pass down
 				# like any element's (an icon's <svg fill="none"
@@ -331,6 +373,300 @@ new_canvas(attrs: Attributes): ref Canvas
 	return c;
 }
 
+# every gradient with an id, wherever it is: a fill names one in <defs>
+# at the end as often as before it (MediaWiki's logo, its flower's 16)
+pregradients(parser: ref Parser, canvas: ref Canvas)
+{
+	for(l := canvas.ids; l != nil; l = tl l) {
+		r := hd l;
+		g: ref Gradient;
+		parser.goto(r.mark);
+		case r.name {
+		"linearGradient" =>
+			g = parse_linear_gradient(parser, r.attrs);
+		"radialGradient" =>
+			g = parse_radial_gradient(parser, r.attrs);
+		}
+		if(g != nil)
+			canvas.defs = g :: canvas.defs;
+	}
+}
+
+# every element with an id, where it is
+scanids(parser: ref Parser, canvas: ref Canvas)
+{
+	for(;;) {
+		item := parser.next();
+		if(item == nil)
+			break;
+		pick t := item {
+		Tag =>
+			if((id := t.attrs.get("id")) != nil)
+				canvas.ids = ref Idref(id, t.name, t.attrs, parser.mark()) :: canvas.ids;
+			parser.down();
+			if(t.name == "style")
+				sheetrules(stylecss(parser));
+			else
+				scanids(parser, canvas);
+			parser.up();
+		}
+	}
+}
+
+# ---- style sheets: <style> (SVG 2 §6.3) ----
+#
+# What drawing programs write: Illustrator's .cls-1{fill:#c8e8eb}, a
+# rule a class, on every shape (Kubernetes' icons were black).  Rules
+# of type, class and id selectors, compounds of them and lists, are
+# taken; one with a combinator, a pseudo-class or an attribute is not.
+# A rule's declarations come after the element's presentation
+# attributes and before its style attribute, by specificity then
+# order (Cascade 4).
+
+Rule: adt {
+	tag:	string;	# nil for any
+	id:	string;
+	classes:	list of string;
+	spec:	int;	# id << 16 | classes << 8 | type
+	order:	int;
+	decls:	string;
+};
+rules: list of ref Rule;
+nrules := 0;
+
+stylecss(parser: ref Parser): string
+{
+	t := "";
+	for(;;) {
+		item := parser.next();
+		if(item == nil)
+			break;
+		pick x := item {
+		Text =>
+			t += x.ch;
+		}
+	}
+	return t;
+}
+
+sheetrules(css: string)
+{
+	# comments out, then selector { declarations } until the end;
+	# an at-rule's block is passed over
+	c := "";
+	for(i := 0; i < len css; i++) {
+		if(i + 1 < len css && css[i] == '/' && css[i+1] == '*') {
+			for(i += 2; i + 1 < len css && !(css[i] == '*' && css[i+1] == '/'); i++)
+				;
+			i++;
+			continue;
+		}
+		c[len c] = css[i];
+	}
+	for(i = 0; i < len c; ) {
+		j := i;
+		while(j < len c && c[j] != '{')
+			j++;
+		if(j >= len c)
+			break;
+		sel := trim(c[i:j]);
+		k := j + 1;
+		depth := 1;
+		while(k < len c && depth > 0) {
+			if(c[k] == '{')
+				depth++;
+			else if(c[k] == '}')
+				depth--;
+			k++;
+		}
+		body := c[j+1:k-1];
+		i = k;
+		if(len sel > 0 && sel[0] == '@')
+			continue;
+		(nil, sl) := sys->tokenize(sel, ",");
+		for(; sl != nil; sl = tl sl)
+			if((r := compound(trim(hd sl))) != nil) {
+				r.decls = body;
+				r.order = nrules++;
+				rules = r :: rules;
+			}
+	}
+}
+
+# a compound selector: type, .class, #id; nil for anything else
+compound(sel: string): ref Rule
+{
+	if(sel == nil)
+		return nil;
+	r := ref Rule(nil, nil, nil, 0, 0, nil);
+	i := 0;
+	while(i < len sel) {
+		c := sel[i];
+		j := i + 1;
+		while(j < len sel && sel[j] != '.' && sel[j] != '#' && identc(sel[j]))
+			j++;
+		case c {
+		'.' =>
+			if(j == i + 1)
+				return nil;
+			r.classes = sel[i+1:j] :: r.classes;
+			r.spec += 1 << 8;
+		'#' =>
+			if(j == i + 1 || r.id != nil)
+				return nil;
+			r.id = sel[i+1:j];
+			r.spec += 1 << 16;
+		'*' =>
+			if(i != 0)
+				return nil;
+		* =>
+			if(i != 0 || !identc(c))
+				return nil;
+			r.tag = sel[i:j];
+			r.spec += 1;
+		}
+		if(j < len sel && !(sel[j] == '.' || sel[j] == '#'))
+			return nil;	# a combinator, a pseudo-class, an attribute
+		i = j;
+	}
+	return r;
+}
+
+identc(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c >= 16r80;
+}
+
+# the element's attributes with the rules that match it put before its
+# style attribute
+sheetattrs(name: string, attrs: Attributes): Attributes
+{
+	if(rules == nil)
+		return attrs;
+	id := attrs.get("id");
+	(nil, cl) := sys->tokenize(attrs.get("class"), " \t\n\r");
+	m: list of ref Rule;
+	for(l := rules; l != nil; l = tl l) {
+		r := hd l;
+		if(r.tag != nil && r.tag != name || r.id != nil && r.id != id)
+			continue;
+		ok := 1;
+		for(rc := r.classes; ok && rc != nil; rc = tl rc)
+			ok = member(hd rc, cl);
+		if(ok)
+			m = r :: m;
+	}
+	if(m == nil)
+		return attrs;
+	# by specificity, then order: the later wins
+	a := array[len m] of ref Rule;
+	for(i := 0; m != nil; m = tl m)
+		a[i++] = hd m;
+	for(i = 1; i < len a; i++)
+		for(j := i; j > 0 && (a[j].spec < a[j-1].spec || a[j].spec == a[j-1].spec && a[j].order < a[j-1].order); j--)
+			(a[j], a[j-1]) = (a[j-1], a[j]);
+	st := "";
+	for(i = 0; i < len a; i++)
+		st += a[i].decls + ";";
+	r: list of Xml->Attribute;
+	for(al := attrs.attrs; al != nil; al = tl al)
+		if((hd al).name == "style")
+			st += (hd al).value;
+		else
+			r = hd al :: r;
+	r = Xml->Attribute("style", st) :: r;
+	return Attributes(r);
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+findid(canvas: ref Canvas, id: string): ref Idref
+{
+	for(l := canvas.ids; l != nil; l = tl l)
+		if((hd l).id == id)
+			return hd l;
+	return nil;
+}
+
+# the id in a url(#id), or nil
+urlref(v: string): string
+{
+	v = trim(v);
+	if(len v < 6 || lower(v[0:4]) != "url(")
+		return nil;
+	v = trim(v[4:len v - 1]);
+	if(len v > 1 && (v[0] == '"' || v[0] == '\'') && v[len v - 1] == v[0])
+		v = v[1:len v - 1];
+	if(len v < 2 || v[0] != '#')
+		return nil;
+	return v[1:];
+}
+
+# an element's clip-path or mask, from its attribute or its style attribute
+clipprop(attrs: Attributes, name: string): string
+{
+	v := attrs.get(name);
+	if((st := attrs.get("style")) != nil && (sv := extract_style_prop(st, name)) != nil)
+		v = sv;
+	return urlref(v);
+}
+
+# The coverage a clip path or a mask gives, as a GREY8 image the size of
+# the canvas: a clip path's shapes filled (clip-rule as fill-rule, their
+# paint ignored), a mask's content drawn and taken as luminance times
+# alpha (mask-type: luminance).  Both in the user space of the element
+# they apply to (clipPathUnits and maskContentUnits userSpaceOnUse);
+# nil for objectBoundingBox, which is not done, and for an id that is
+# no clip path or mask.  The parser is left where it was.
+coverage(parser: ref Parser, canvas: ref Canvas, ref_: ref Idref, xform: ref Matrix, here: ref Xml->Mark): ref Image
+{
+	ismask := ref_.name == "mask";
+	if(!ismask && ref_.name != "clipPath")
+		return nil;
+	units := ref_.attrs.get("clipPathUnits");
+	if(ismask)
+		units = ref_.attrs.get("maskContentUnits");
+	if(units == "objectBoundingBox")
+		return nil;
+	r := canvas.img.r;
+	layer := display.newimage(r, Draw->RGBA32, 0, Draw->Transparent);
+	cov := display.newimage(r, Draw->GREY8, 0, Draw->Black);
+	if(layer == nil || cov == nil)
+		return nil;
+	xf := xform;
+	if((t := ref_.attrs.get("transform")) != nil)
+		xf = matrix_multiply(xform, parse_transform(t));
+	saved := canvas.img;
+	oclip := clipping;
+	canvas.img = layer;
+	clipping = !ismask;
+	refdepth++;
+	{
+		parser.goto(ref_.mark);
+		parser.down();
+		render_children(parser, canvas, xf, parse_style(ref_.attrs, default_style()));
+		parser.up();
+	} exception {
+	"*" =>
+		;
+	}
+	refdepth--;
+	clipping = oclip;
+	canvas.img = saved;
+	parser.goto(here);
+	if(ismask)
+		cov.draw(r, layer, nil, r.min);	# premultiplied, over black, made grey: luminance times alpha
+	else
+		cov.draw(r, display.white, layer, r.min);	# the shapes' coverage
+	return cov;
+}
+
 # Render child elements
 render_children(parser: ref Parser, canvas: ref Canvas, xform: ref Matrix, parent_style: ref Style)
 {
@@ -341,7 +677,19 @@ render_children(parser: ref Parser, canvas: ref Canvas, xform: ref Matrix, paren
 
 		pick t := item {
 		Tag =>
-			render_element(parser, canvas, t.name, t.attrs, xform, parent_style);
+			# an element the draw device cannot draw (a path beyond
+			# the 2^20 pixels its coordinates reach: nodejs.org's
+			# background) is left out, and the rest drawn
+			here := parser.mark();
+			{
+				render_element(parser, canvas, t.name, t.attrs, xform, parent_style);
+			} exception e {
+			"path coordinate*" =>
+				parser.goto(here);
+				parser.down();
+				skip_element(parser);
+				parser.up();
+			}
 		}
 	}
 }
@@ -357,8 +705,60 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 		xform = matrix_multiply(parent_xform, local_xf);
 	}
 
+	# a clip path or a mask: the element drawn into a layer of its own,
+	# then onto the canvas through the coverage they give (CSS Masking
+	# 1 §5, §7).  Stripe's Sign in button is a rect with its label cut
+	# out by a mask, and its icons' arrows clipped
+	if(noclipnext)
+		noclipnext = 0;
+	else if(!clipping && refdepth < MAXREFDEPTH && name != "clipPath" && name != "mask" && name != "defs") {
+		cov: ref Image;
+		here := parser.mark();
+		for(l := "clip-path" :: "mask" :: nil; l != nil; l = tl l)
+			if((id := clipprop(attrs, hd l)) != nil && (rf := findid(canvas, id)) != nil &&
+			   (c := coverage(parser, canvas, rf, xform, here)) != nil) {
+				if(cov == nil)
+					cov = c;
+				else if((both := display.newimage(c.r, Draw->GREY8, 0, Draw->Black)) != nil) {
+					both.draw(both.r, cov, c, both.r.min);	# both: the product
+					cov = both;
+				}
+			}
+		if(cov != nil) {
+			r := canvas.img.r;
+			layer := display.newimage(r, Draw->RGBA32, 0, Draw->Transparent);
+			if(layer != nil) {
+				saved := canvas.img;
+				canvas.img = layer;
+				noclipnext = 1;
+				{
+					render_element(parser, canvas, name, attrs, parent_xform, parent_style);
+				} exception {
+				"*" =>
+					;
+				}
+				noclipnext = 0;
+				canvas.img = saved;
+				saved.draw(r, layer, cov, r.min);
+				return;
+			}
+		}
+	}
+
 	# Parse style
+	attrs = sheetattrs(name, attrs);
 	style := parse_style(attrs, parent_style);
+	if(clipping) {
+		# a clip path's geometry: filled, whatever paint it is given
+		style.fill = ref Color(255, 255, 255, 255);
+		style.fillurl = nil;
+		style.stroke = nil;
+		style.strokeurl = nil;
+		style.opacity = 1.0;
+		style.fill_opacity = 1.0;
+		if((cr := attrs.get("clip-rule")) != nil)
+			style.fill_rule = fillrule(cr);
+	}
 
 	case name {
 	"g" =>
@@ -399,9 +799,36 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 	"text" =>
 		render_text(parser, canvas, attrs, xform, style);
 	"use" =>
-		# Basic use element support
+		# the element href names, drawn here as if it were a g with its
+		# x and y as a translation; a symbol as an svg, its viewBox
+		# fitted into the use's width and height (SVG 2 §5.6)
+		h := attrs.get("href");
+		if(h == nil)
+			h = attrs.get("xlink:href");
+		if(h != nil && len h > 1 && h[0] == '#' && refdepth < MAXREFDEPTH &&
+		   (rf := findid(canvas, h[1:])) != nil && rf.name != "clipPath" && rf.name != "mask") {
+			here := parser.mark();
+			x := px(attrs.get("x"), 0.0);
+			y := py(attrs.get("y"), 0.0);
+			uxf := matrix_multiply(xform, ref Matrix(1.0, 0.0, x, 0.0, 1.0, y));
+			refdepth++;
+			{
+				parser.goto(rf.mark);
+				if(rf.name == "symbol") {
+					parser.down();
+					render_children(parser, canvas, matrix_multiply(uxf, symbol_viewport(rf.attrs, attrs)), parse_style(rf.attrs, style));
+					parser.up();
+				} else
+					render_element(parser, canvas, rf.name, rf.attrs, uxf, style);
+			} exception {
+			"*" =>
+				;
+			}
+			refdepth--;
+			parser.goto(here);
+		}
 		parser.down();
-		render_children(parser, canvas, xform, style);
+		skip_element(parser);
 		parser.up();
 	"image" or "switch" or "clipPath" or "mask" or
 	"symbol" or "marker" or "pattern" or "filter" or
@@ -467,6 +894,40 @@ nested_viewport(attrs: Attributes): ref Matrix
 	"Max" =>	ay = 1.0;
 	}
 	return ref Matrix(sc, 0.0, x + (w - vw*sc)*ax - vx*sc, 0.0, sc, y + (h - vh*sc)*ay - vy*sc);
+}
+
+# a symbol's viewBox into the width and height a use gives it (100% of
+# the viewport when it gives none), at 0, 0: the use's x and y are its
+# translation already
+symbol_viewport(sym, use: Attributes): ref Matrix
+{
+	a := array[] of {
+		("viewBox", sym.get("viewBox")),
+		("preserveAspectRatio", sym.get("preserveAspectRatio")),
+		("width", use.get("width")),
+		("height", use.get("height")),
+	};
+	if(a[2].t1 == nil)
+		a[2].t1 = sym.get("width");
+	if(a[3].t1 == nil)
+		a[3].t1 = sym.get("height");
+	return nested_viewport(attrsof(a));
+}
+
+fillrule(v: string): int
+{
+	if(trim(v) == "evenodd")
+		return 1;
+	return ~0;
+}
+
+attrsof(a: array of (string, string)): Attributes
+{
+	l: list of Xml->Attribute;
+	for(i := len a - 1; i >= 0; i--)
+		if(a[i].t1 != nil)
+			l = Xml->Attribute(a[i].t0, a[i].t1) :: l;
+	return Attributes(l);
 }
 
 # Skip an element and its children
@@ -1692,14 +2153,15 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 	stroke := attrs.get("stroke");
 	if(stroke != nil)
 		setpaint(s, 1, stroke);
-	if(style_str != nil)
-		apply_css_style(s, style_str);
 
 	sw := attrs.get("stroke-width");
 	if(sw != nil)
 		s.stroke_width = pd(sw, 1.0);
 
+	# opacity is the element's, attribute or style, times its groups'
 	op := attrs.get("opacity");
+	if(style_str != nil && (cop := extract_style_prop(style_str, "opacity")) != nil)
+		op = cop;
 	if(op != nil)
 		s.opacity *= real op;
 
@@ -1714,16 +2176,20 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 	fs := attrs.get("font-size");
 	if(fs != nil)
 		s.font_size = parse_length(fs, s.font_size);
+	for(k := 0; k < len strokeprops; k++)
+		if((v := attrs.get(strokeprops[k])) != nil)
+			setstrokeprop(s, strokeprops[k], v);
+
+	# then the style attribute (and the style sheet's rules, before it),
+	# which wins over them (SVG 2 §6.4)
+	if(style_str != nil)
+		apply_css_style(s, style_str);
 	for(tk := 0; tk < len textprops; tk++) {
 		if((tv := attrs.get(textprops[tk])) != nil)
 			settextprop(s, textprops[tk], tv);
 		if(style_str != nil && (sv := extract_style_prop(style_str, textprops[tk])) != nil)
 			settextprop(s, textprops[tk], sv);
 	}
-
-	for(k := 0; k < len strokeprops; k++)
-		if((v := attrs.get(strokeprops[k])) != nil)
-			setstrokeprop(s, strokeprops[k], v);
 
 	# the colours stay as given, shared with the parent's and siblings'
 	# styles: opacity is applied when painting (paint)
@@ -1809,7 +2275,7 @@ apply_css_style(s: ref Style, css: string)
 		"stroke-width" =>
 			s.stroke_width = pd(value, 1.0);
 		"opacity" =>
-			s.opacity *= real value;
+			;	# (parse_style's: the attribute's or this, not both)
 		"fill-opacity" =>
 			s.fill_opacity = real value;
 		"stroke-opacity" =>
@@ -2196,6 +2662,7 @@ split_whitespace_comma(s: string): array of string
 	return result;
 }
 
+# in the order written, so that the last of a property is the one taken
 split_semicolons(s: string): list of string
 {
 	parts: list of string;
@@ -2207,7 +2674,10 @@ split_semicolons(s: string): list of string
 			start = i + 1;
 		}
 	}
-	return parts;
+	r: list of string;
+	for(; parts != nil; parts = tl parts)
+		r = hd parts :: r;
+	return r;
 }
 
 lower(s: string): string
@@ -2241,13 +2711,15 @@ trim(s: string): string
 
 extract_style_prop(style, prop: string): string
 {
+	# the last declaration wins, as in CSS
+	v: string;
 	parts := split_semicolons(style);
 	for(p := parts; p != nil; p = tl p) {
 		(name, value) := split_colon(hd p);
 		if(trim(name) == prop)
-			return trim(value);
+			v = trim(value);
 	}
-	return nil;
+	return v;
 }
 
 reverse_segments(segs: list of ref Segment): list of ref Segment

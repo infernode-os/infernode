@@ -239,7 +239,10 @@ enum
 	HASLDT0	= (1<<4),
 	HASEXCEPT	= (1<<5),
 	HASLDT	= (1<<6),
+	HASSIGS	= (1<<7),	/* a digest of each link's and import's type, after the source path */
 };
+
+#define SIGDLEN		32	/* SHA-256 of a signature's text */
 
 #define DTYPE(x)	(x>>4)
 #define DBYTE(x, l)	((x<<4)|l)

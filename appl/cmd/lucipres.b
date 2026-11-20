@@ -1510,12 +1510,7 @@ openintopres(path: string)
 
 	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
 	if(atype == "app") {
-		# The editor reads its argv from the data field the instant the
-		# artifact is created, so the path must ride in the create command
-		# (data= is terminal, hence last).
-		writetofile(ctlpath, sys->sprint(
-			"create id=%s type=app label=%s dis=/dis/wm/editor.dis data=%s",
-			id, label, path));
+		id = plumbeditor(path, ctlpath, id, label);
 	} else {
 		writetofile(ctlpath, sys->sprint("create id=%s type=%s label=%s",
 			id, atype, label));
@@ -1529,6 +1524,101 @@ openintopres(path: string)
 			mountpt_g, actid_g, id), data);
 	}
 	writetofile(ctlpath, "center id=" + id);
+}
+
+# A plumbed text file goes to Lucifer's editor, the artifact `editor`,
+# as lucictx and matrix send a file when they open one themselves: one
+# editor, given each file in
+# turn through its posted server (#seditor/fs, post9p(2)), not a new
+# one for every file.  Its document is replaced only when it holds no
+# unsaved changes: an editor with changes keeps them, and the file gets
+# an editor of its own (fresh).  No editor yet, or one that does not
+# answer in time: one is started on the file.  The artifact to centre
+# is returned.
+Editwait: con 3000;
+
+plumbeditor(path, ctlpath, fresh, label: string): string
+{
+	if(hasartifact("editor")) {
+		done := chan[1] of int;
+		spawn editorgive(path, done);
+		t := chan[1] of int;
+		spawn editortimer(t);
+		r := -1;
+		alt {
+		r = <-done =>
+			;
+		<-t =>
+			sys->fprint(sys->fildes(2), "lucipres: the editor did not answer\n");
+		}
+		if(r > 0)
+			return "editor";
+		# unsaved changes there (0), or no answer (-1): one of its own
+	} else {
+		fresh = "editor";
+		label = "editor";
+	}
+	# The editor reads its argv from the data field the instant the
+	# artifact is created, so the path must ride in the create command
+	# (data= is terminal, hence last).
+	writetofile(ctlpath, sys->sprint(
+		"create id=%s type=app label=%s dis=/dis/wm/editor.dis data=%s",
+		fresh, label, path));
+	return fresh;
+}
+
+hasartifact(id: string): int
+{
+	(ok, nil) := sys->stat(sys->sprint("%s/activity/%d/presentation/%s", mountpt_g, actid_g, id));
+	return ok >= 0;
+}
+
+# Give the running editor path: 1 if it took it (or has it already), 0
+# if its document has unsaved changes, -1 if there is none to ask.
+editorgive(path: string, done: chan of int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#seditor/fs", Sys->ORDWR);
+	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
+		done <-= -1;
+		return;
+	}
+	fd = nil;
+	# index: a line per document, "id path dirty"
+	idx := readfile("/mnt/editor/index");
+	if(idx == nil) {
+		done <-= -1;
+		return;
+	}
+	(nil, lines) := sys->tokenize(idx, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(n, f) := sys->tokenize(hd lines, " \t");
+		if(n < 3)
+			continue;
+		dpath := hd tl f;
+		dirty := hd tl tl f;
+		if(dpath == path) {
+			done <-= 1;	# already open there
+			return;
+		}
+		if(dirty != "0") {
+			done <-= 0;
+			return;
+		}
+	}
+	cfd := sys->open("/mnt/editor/ctl", Sys->OWRITE);
+	b := array of byte ("open " + path);
+	if(cfd == nil || sys->write(cfd, b, len b) != len b) {
+		done <-= -1;
+		return;
+	}
+	done <-= 1;
+}
+
+editortimer(t: chan of int)
+{
+	sys->sleep(Editwait);
+	t <-= 1;
 }
 
 # The artifact a plumbed file becomes, and whether its text is its

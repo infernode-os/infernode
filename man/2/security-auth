@@ -81,6 +81,52 @@ If an authenticated connection cannot be established,
 or the client's chosen algorithm is not listed,
 .B server
 returns a nil file descriptor and an error message.
+When
+.I algs
+is not nil, a client that names no algorithm at all is refused
+(it is not taken to have asked for
+.BR none ),
+as is one that names
+.B none
+together with an algorithm;
+and if no name in
+.I algs
+is one that
+.IR ssl (3)
+has, or
+.B none
+or
+.BR clear ,
+every client is refused.
+.PP
+The client's choice is confirmed by both ends with the secret the
+authentication gave them, and the keys of
+.IR ssl (3)
+are made of that secret and of what each end said:
+the client's message carries a keyed digest of its choice,
+.B server
+acts on no choice whose digest is not the client's,
+and
+.B client
+goes on only when the server's answer, with a digest of its own,
+says that it took that choice.
+A choice changed on the way fails at both ends, and with
+.B none
+in a list beside an algorithm nobody but the client can make a client's
+session a clear one.
+(The choice used to be one message in the clear that nothing vouched for,
+and someone on the path could.)
+A choice that
+.B server
+will not have is refused in a message the client can check, so
+.BR client 's
+error says why and what the server does take.
+Both ends of a connection must be of this version of the exchange:
+.B server
+refuses a client that sends a bare algorithm, saying that it is an older one,
+and
+.B client
+reports a server that does not confirm its choice.
 .PP
 Any string acceptable to
 .IR ssl (3),

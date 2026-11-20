@@ -299,10 +299,20 @@ enumerate(channel: string, count: int): (list of ref Message, string)
 	return (nil, "sms: enumerate not supported (no inbox-history API)");
 }
 
+# No inbox history: what is kept of a message is who sent it, and that
+# is what a reply to it is addressed to. msg9p asks, to show whoever
+# approves a drafted reply the number it will go to.
 fetch(id: string): (ref Message, string)
 {
-	id = id;
-	return (nil, "sms: fetch not supported (no inbox-history API)");
+	num := lookupseen(id);
+	if(num == "")
+		return (nil, "sms: " + id + " is not a recently seen message (there is no inbox history)");
+	m := ref Message;
+	m.id = id;
+	m.source = "sms";
+	m.sender = num;
+	m.threadid = num;
+	return (m, nil);
 }
 
 search(query: string): (list of ref Message, string)

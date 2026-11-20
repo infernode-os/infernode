@@ -9,7 +9,8 @@ Usage:
   memory append <key> <val>  Append to existing value
 
 Arguments:
-  key   - Alphanumeric key (a-z, 0-9, _)
+  key   - letters, digits, _ and -, at most 64 characters
   value - Any string value
 
-Data persists across agent sessions.
+Each agent has its own memory. The main agent's persists across
+sessions; a task's lasts as long as the task.

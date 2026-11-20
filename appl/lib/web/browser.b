@@ -8,7 +8,7 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Point: import draw;
+	Point, Rect: import draw;
 include "web/dom.m";
 	dom: Dom;
 	Doc: import dom;
@@ -72,7 +72,7 @@ init(d: ref Draw->Display): string
 
 Session.new(width, height: int): ref Session
 {
-	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, 0, chan[1] of int, nil, 0);
+	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, 0, chan[1] of int, nil, 0, 1);
 }
 
 # The session's lock.  A page's realm takes it for each task, and a
@@ -184,7 +184,7 @@ Session.unlisten(s: self ref Session, c: chan of string)
 
 Session.open(s: self ref Session, url: string)
 {
-	navigate(s, typed(s, url), "GET", nil, nil, Hnew);
+	navto(s, typed(s, url), "GET", nil, nil, Hnew);
 }
 
 Session.show(s: self ref Session, data: array of byte, ctype, url: string): string
@@ -231,34 +231,43 @@ typed(s: ref Session, u: string): string
 
 Session.goback(s: self ref Session): string
 {
-	lock(s);
-	if(s.back == nil) {
-		unlock(s);
-		return "no previous page";
-	}
-	(u, nil) := hd s.back;
-	unlock(s);
-	navigate(s, u, "GET", nil, nil, Hback);
-	return nil;
+	return s.gohistory(-1);
 }
 
 Session.goforward(s: self ref Session): string
 {
+	return s.gohistory(1);
+}
+
+Session.gohistory(s: self ref Session, n: int): string
+{
 	lock(s);
-	if(s.fwd == nil) {
+	h := s.fwd;
+	hist := Hforward;
+	if(n < 0) {
+		h = s.back;
+		hist = Hback;
+		n = -n;
+	}
+	if(n == 0 || len h < n) {
 		unlock(s);
+		if(hist == Hback)
+			return "no previous page";
 		return "no next page";
 	}
-	(u, nil) := hd s.fwd;
+	for(i := 1; i < n; i++)
+		h = tl h;
+	(u, nil) := hd h;
+	s.hops = n;
 	unlock(s);
-	navigate(s, u, "GET", nil, nil, Hforward);
+	navto(s, u, "GET", nil, nil, hist);
 	return nil;
 }
 
 Session.reload(s: self ref Session)
 {
 	if(s.url != "")
-		navigate(s, s.url, "GET", nil, nil, Hreload);
+		navto(s, s.url, "GET", nil, nil, Hreload);
 }
 
 Session.stop(s: self ref Session)
@@ -302,7 +311,52 @@ Session.resize(s: self ref Session, width, height: int)
 	unlock(s);
 }
 
-navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: int)
+# A browser's zoom: the page laid out again at another ratio of device
+# pixels to the CSS px, as a denser screen has it (its media queries
+# seeing a narrower viewport), and the pages after it at that ratio too
+Session.zoom(s: self ref Session, r: real): real
+{
+	if(r <= 0.0)
+		return page->dpr();	# asked, not changed
+	lock(s);
+	page->scale(r);
+	r = page->dpr();
+	if(s.pg != nil && s.pg.env.dpr != r) {
+		s.pg.env.dpr = r;
+		s.pg.computed = nil;	# every length: restyled whole, not what changed
+		{
+			s.pg.update();
+		} exception e {
+		"*" =>
+			unlock(s);
+			raise e;
+		}
+	}
+	unlock(s);
+	return r;
+}
+
+# Where the page shown takes the session: a link followed or clicked, a
+# form sent, a refresh, a script's word.  Whoever asked (the user's
+# click, an agent's "follow 3", the page itself), the address is the
+# page's, so it goes only where the page may send the browser
+# (page->mayload): a page from the network had a link to
+# file:///usr/someone/notes followed, and the file was the next page.
+# What the user asks for by name (open, back, forward, reload) is
+# navto.  nil, or why not.
+navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: int): string
+{
+	if(!page->mayload(s.url, url)) {
+		sch := lower(scheme(url));
+		if(sch == "")
+			sch = "file";
+		return "a page from the network may not open a " + sch + ": address";
+	}
+	navto(s, url, method, ctype, body, hist);
+	return nil;
+}
+
+navto(s: ref Session, url, method, ctype: string, body: array of byte, hist: int)
 {
 	if(url == "about:blank")
 		url = "data:text/html,";
@@ -346,16 +400,27 @@ history(s: ref Session, prev: string, hist: int)
 			s.back = (prev, s.at) :: s.back;
 		s.fwd = nil;
 	Hback =>
-		if(s.back != nil)
-			s.back = tl s.back;
+		# the page left, then those passed over, go forward, as a
+		# step at a time would have put them
 		if(prev != "")
 			s.fwd = (prev, s.at) :: s.fwd;
+		for(i := 1; i < s.hops && s.back != nil; i++) {
+			s.fwd = hd s.back :: s.fwd;
+			s.back = tl s.back;
+		}
+		if(s.back != nil)
+			s.back = tl s.back;
 	Hforward =>
-		if(s.fwd != nil)
-			s.fwd = tl s.fwd;
 		if(prev != "")
 			s.back = (prev, s.at) :: s.back;
+		for(i := 1; i < s.hops && s.fwd != nil; i++) {
+			s.back = hd s.fwd :: s.back;
+			s.fwd = tl s.fwd;
+		}
+		if(s.fwd != nil)
+			s.fwd = tl s.fwd;
 	}
+	s.hops = 1;
 }
 
 # where the view was on the page Back or Fwd goes to, as history has it
@@ -367,6 +432,8 @@ wasat(s: ref Session, hist: int): int
 	Hforward =>	h = s.fwd;
 	* =>	return -1;
 	}
+	for(i := 1; i < s.hops && h != nil; i++)
+		h = tl h;
 	if(h == nil)
 		return -1;
 	(nil, y) := hd h;
@@ -427,6 +494,8 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	if(y < 0)
 		y = 0;
 	s.scroll = s.at = y;
+	pg.lazy = 1;	# its lazy images as the view comes near them
+	pg.view = y;
 	u := s.url;
 	s.status = "loading images " + u;
 	unlock(s);
@@ -466,8 +535,22 @@ images(s: ref Session, g: int, pg: ref Pg)
 		urls = claim(r, urls);
 		r.imaging = 1;
 	}
+	urls = unsent(pg, urls);
 	unlock(s);
 	fetchpics(s, g, pg, urls);
+}
+
+# what of urls has not been sent for for pg; the rest it now has (the
+# session's lock held): a view moved asks again for what is near it
+unsent(pg: ref Pg, urls: list of string): list of string
+{
+	n: list of string;
+	for(; urls != nil; urls = tl urls)
+		if(!member(hd urls, pg.sent)) {
+			pg.sent = hd urls :: pg.sent;
+			n = hd urls :: n;
+		}
+	return rev(n);
 }
 
 # what of urls is not fetched or being fetched for the realm's page; the
@@ -483,11 +566,28 @@ claim(r: ref Realm, urls: list of string): list of string
 	return rev(n);
 }
 
+# /env/pagetime: each image's fetch and decode said too (the decode
+# waits its turn: one decodes at a time)
+imgtime := 0;
+
 fetchpics(s: ref Session, g: int, pg: ref Pg, urls: list of string)
 {
 	n := len urls;
 	if(n == 0)
 		return;
+	(ok, nil) := sys->stat("/env/pagetime");
+	imgtime = ok >= 0;
+	# the sizes the layout shows them at, where it knows them: each is
+	# decoded no smaller than that rather than the screen's width
+	sizes: list of (string, int, int);
+	{
+		sizes = pg.shown(urls);
+	} exception {
+	"*" =>
+		sizes = nil;
+	}
+	if(imgtime)
+		sys->fprint(sys->fildes(2), "page: images: %d of %d at a size the layout gives\n", len sizes, n);
 	work := chan[n] of string;
 	for(; urls != nil; urls = tl urls)
 		work <-= hd urls;
@@ -496,7 +596,7 @@ fetchpics(s: ref Session, g: int, pg: ref Pg, urls: list of string)
 	if(nw > n)
 		nw = n;
 	for(i := 0; i < nw; i++)
-		spawn picfetcher(s, g, work, res);
+		spawn picfetcher(s, g, work, res, sizes);
 	tick := chan of int;
 	stop := chan[1] of int;
 	spawn ticker(tick, stop);
@@ -603,7 +703,7 @@ apply(s: ref Session, g: int, pg: ref Pg, batch: list of ref Page->Pic, got, n: 
 	return 1;
 }
 
-picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->Pic)
+picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->Pic, sizes: list of (string, int, int))
 {
 	for(;;) alt {
 	u := <-work =>
@@ -613,8 +713,19 @@ picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->
 		}
 		pic: ref Page->Pic;
 		{
+			t0 := sys->millisec();
 			(data, ctype, err) := page->fetchimage(u);
-			pic = page->picture(u, data, ctype, err);
+			t1 := sys->millisec();
+			(mw, mh) := (0, 0);
+			for(sl := sizes; sl != nil; sl = tl sl)
+				if((hd sl).t0 == u) {
+					(nil, mw, mh) = hd sl;
+					break;
+				}
+			pic = page->picturefor(u, data, ctype, err, mw, mh);
+			if(imgtime)
+				sys->fprint(sys->fildes(2), "page: image %s: fetched %d ms, decoded %d ms (%d bytes, %s)\n",
+					u, t1-t0, sys->millisec()-t1, len data, ctype);
 		} exception e {
 		"*" =>
 			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil, 0, 0, nil, nil);
@@ -656,7 +767,7 @@ refresh(s: ref Session, g: int, pg: ref Pg)
 		if(u == "")
 			u = unfrag(pg.url);
 		else
-			u = resolve(pg.url, u);
+			u = resolve(d.url, u);
 		spawn refresher(s, g, u, secs);
 		return;
 	}
@@ -669,8 +780,8 @@ refresher(s: ref Session, g: int, url: string, secs: int)
 	lock(s);
 	live := s.gen == g;
 	unlock(s);
-	if(live)
-		navigate(s, url, "GET", nil, nil, Hnew);
+	if(live && (e := navigate(s, url, "GET", nil, nil, Hnew)) != nil)
+		sys->fprint(sys->fildes(2), "charon: refresh to %s: %s\n", url, e);
 }
 
 # "5; url=http://x", "0;URL='x'", "3" -> (seconds, url); seconds -1 if unreadable
@@ -938,8 +1049,7 @@ Session.follow(s: self ref Session, n: int): string
 	a := s.links();
 	if(n < 1 || n > len a)
 		return sys->sprint("no link %d", n);
-	navigate(s, a[n-1].url, "GET", nil, nil, Hnew);
-	return nil;
+	return navigate(s, a[n-1].url, "GET", nil, nil, Hnew);
 }
 
 # ---- forms ----
@@ -1403,17 +1513,14 @@ Session.submit(s: self ref Session, form, submitter: int): string
 		}
 	}
 	if(method == "post")
-		navigate(s, url, "POST", "application/x-www-form-urlencoded", array of byte q, Hnew);
-	else {
-		u := unfrag(url);
-		for(i = 0; i < len u; i++)
-			if(u[i] == '?') {
-				u = u[0:i];
-				break;
-			}
-		navigate(s, u + "?" + q, "GET", nil, nil, Hnew);
-	}
-	return nil;
+		return navigate(s, url, "POST", "application/x-www-form-urlencoded", array of byte q, Hnew);
+	u := unfrag(url);
+	for(i = 0; i < len u; i++)
+		if(u[i] == '?') {
+			u = u[0:i];
+			break;
+		}
+	return navigate(s, u + "?" + q, "GET", nil, nil, Hnew);
 }
 
 anyselected(l: list of (string, string, int)): int
@@ -1456,13 +1563,28 @@ Session.scrollto(s: self ref Session, y: int)
 	lock(s);
 	s.scroll = y;
 	unlock(s);
+	lazynear(s, y);
 	event(s, "scroll " + string y);
 }
 
 Session.viewing(s: self ref Session, y: int)
 {
 	s.at = y;	# (one word: read under the lock when the page is left)
+	lazynear(s, y);
 }
+
+# the view at y: the lazy images it has come near sent for (with no
+# window, as charonfs's scroll leaves it, viewing is never called)
+lazynear(s: ref Session, y: int)
+{
+	pg := s.pg;
+	if(pg != nil && pg.lazy && (y - pg.view >= LAZYSTEP || pg.view - y >= LAZYSTEP)) {
+		pg.view = y;
+		spawn images(s, s.gen, pg);
+	}
+}
+
+LAZYSTEP: con 200;	# pixels the view moves before its lazy images are looked at again
 
 # A fault in the engine while the session's lock is held: said, and
 # the lock let go as ever.  Raised out of a section holding it, it was
@@ -1672,8 +1794,9 @@ findin(b: ref Box, what: string, after, ox, oy: int): (int, Draw->Rect)
 		ln := b.lines[i];
 		for(j := 0; j < len ln.frags; j++) {
 			f := ln.frags[j];
-			if(f.kind == Layout->Ftext && y + ln.y + f.y > after && contains(lower(f.text), what))
-				return (1, ((x + f.x, y + ln.y + f.y), (x + f.x + f.w, y + ln.y + f.y + ln.h)));
+			# a fragment's y is its box's, not its line's
+			if(f.kind == Layout->Ftext && y + f.y > after && contains(lower(f.text), what))
+				return (1, ((x + f.x, y + f.y), (x + f.x + f.w, y + f.y + f.h)));
 		}
 	}
 	for(i = 0; i < len b.kids; i++) {
@@ -1687,6 +1810,218 @@ findin(b: ref Box, what: string, after, ox, oy: int): (int, Draw->Rect)
 			return (ok, r);
 	}
 	return (0, ((0, 0), (0, 0)));
+}
+
+# ---- selection ----
+
+# A text fragment where it is drawn: its line's band in page coordinates,
+# its x, and the block whose lines it is in (a new block, a new line of
+# the text copied; a line wrapped in one, a space)
+Sel: adt {
+	x, y, h:	int;	# the line's band: where a point is on it
+	fy, fh:	int;	# the fragment's own: where it is drawn
+	f:	ref Layout->Frag;
+	line:	int;
+	blk:	ref Box;
+};
+
+Session.selection(s: self ref Session, p0, p1: Point, words, every: int): (string, list of Rect)
+{
+	freshen(s);
+	pg := s.pg;
+	if(pg == nil || pg.root == nil)
+		return ("", nil);
+	locked := trylock(s, 500);
+	r: (string, list of Rect);
+	{
+		r = selection1(pg, p0, p1, words, every);
+	} exception e {
+	"*" =>
+		if(locked)
+			unlock(s);
+		raise e;
+	}
+	if(locked)
+		unlock(s);
+	return r;
+}
+
+selline := 0;
+
+selection1(pg: ref Pg, p0, p1: Point, words, every: int): (string, list of Rect)
+{
+	selline = 0;
+	items := selfrags(pg.root, 0, 0, nil);
+	a := array[len items] of ref Sel;
+	for(i := len a; items != nil; items = tl items)
+		a[--i] = hd items;
+	if(len a == 0)
+		return ("", nil);
+	(i0, o0) := (0, 0);
+	(i1, o1) := (len a - 1, len a[len a - 1].f.text);
+	if(!every) {
+		(i0, o0) = selhit(a, p0);
+		(i1, o1) = selhit(a, p1);
+		if(i1 < i0 || i1 == i0 && o1 < o0)
+			(i0, o0, i1, o1) = (i1, o1, i0, o0);
+		if(words) {
+			o0 = wordstart(a[i0].f.text, o0);
+			o1 = wordend(a[i1].f.text, o1);
+		}
+	}
+	text := "";
+	rects: list of Rect;
+	for(i = i0; i <= i1; i++) {
+		it := a[i];
+		t := it.f.text;
+		b := 0;
+		e := len t;
+		if(i == i0)
+			b = o0;
+		if(i == i1)
+			e = o1;
+		if(b > e)
+			b = e;
+		if(i > i0) {
+			p := a[i-1];
+			if(p.blk != it.blk) {
+				text = trimblanks(text);
+				if(text != "" && text[len text - 1] != '\n')
+					text += "\n";
+			} else if(p.line != it.line && text != "" && text[len text - 1] != ' ' && (len t == 0 || t[0] != ' '))
+				text += " ";
+		}
+		piece := t[b:e];
+		if(text == "" || text[len text - 1] == '\n') {
+			# a line begins with what is not a blank (a field's empty line is none)
+			k := 0;
+			while(k < len piece && (piece[k] == ' ' || piece[k] == '\t'))
+				k++;
+			piece = piece[k:];
+		}
+		text += piece;
+		if(e > b) {
+			x0 := it.x + fragx(it.f, b);
+			x1 := it.x + fragx(it.f, e);
+			rects = Rect((x0, it.fy), (x1, it.fy + it.fh)) :: rects;
+		}
+	}
+	# what ends it a blank or a block's end, not text (a field's empty line)
+	n := len text;
+	while(n > 0 && (text[n-1] == ' ' || text[n-1] == '\n' || text[n-1] == '\t'))
+		n--;
+	return (text[0:n], rects);
+}
+
+# s without the blanks that end it
+trimblanks(s: string): string
+{
+	n := len s;
+	while(n > 0 && (s[n-1] == ' ' || s[n-1] == '\t'))
+		n--;
+	return s[0:n];
+}
+
+# the page's text fragments in document order, where they are drawn
+selfrags(b: ref Box, ox, oy: int, acc: list of ref Sel): list of ref Sel
+{
+	x := ox + b.x;
+	y := oy + b.y;
+	if(b.st != nil && b.st.visibility != Style->Vvisible && b.kids == nil)
+		return acc;
+	for(i := 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		selline++;
+		for(j := 0; j < len ln.frags; j++) {
+			f := ln.frags[j];
+			if(f.kind == Layout->Ftext && f.text != "")
+				acc = ref Sel(x + f.x, y + ln.y, ln.h, y + f.y, f.h, f, selline, b) :: acc;
+		}
+	}
+	for(i = 0; i < len b.kids; i++)
+		acc = selfrags(b.kids[i], x, y, acc);
+	for(l := b.pos; l != nil; l = tl l)
+		acc = selfrags(hd l, x, y, acc);
+	return acc;
+}
+
+# where in its fragment's text a character offset is drawn, from its left
+fragx(f: ref Layout->Frag, k: int): int
+{
+	if(k <= 0)
+		return 0;
+	if(k >= len f.text)
+		return f.w;
+	if(f.face == nil)
+		return f.w * k / len f.text;
+	fonts := layout->fontmod();
+	Typeface: import fonts;
+	return int f.face.width(f.text[0:k]);
+}
+
+# the fragment and character a point is at: in a line's band, the
+# fragment under it or the nearest along it; above or below every line,
+# the next line's start (or the last's end)
+selhit(a: array of ref Sel, p: Point): (int, int)
+{
+	best := -1;
+	bestd := 1 << 30;
+	for(i := 0; i < len a; i++) {
+		it := a[i];
+		if(p.y < it.y || p.y >= it.y + it.h)
+			continue;
+		d := 0;
+		if(p.x < it.x)
+			d = it.x - p.x;
+		else if(p.x >= it.x + it.f.w)
+			d = p.x - (it.x + it.f.w) + 1;
+		if(d < bestd) {
+			best = i;
+			bestd = d;
+		}
+		if(d == 0)
+			break;
+	}
+	if(best < 0) {
+		for(i = 0; i < len a; i++)
+			if(a[i].y >= p.y)
+				return (i, 0);
+		return (len a - 1, len a[len a - 1].f.text);
+	}
+	it := a[best];
+	t := it.f.text;
+	if(p.x <= it.x)
+		return (best, 0);
+	if(p.x >= it.x + it.f.w)
+		return (best, len t);
+	# the character whose middle is past the point
+	for(k := 0; k < len t; k++) {
+		mid := (fragx(it.f, k) + fragx(it.f, k + 1)) / 2;
+		if(it.x + mid > p.x)
+			return (best, k);
+	}
+	return (best, len t);
+}
+
+wordchar(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '\'' || c >= 16rC0;
+}
+
+wordstart(t: string, k: int): int
+{
+	if(k > len t)
+		k = len t;
+	while(k > 0 && wordchar(t[k-1]))
+		k--;
+	return k;
+}
+
+wordend(t: string, k: int): int
+{
+	while(k < len t && wordchar(t[k]))
+		k++;
+	return k;
 }
 
 Session.pageheight(s: self ref Session): int
@@ -1749,8 +2084,7 @@ Session.click(s: self ref Session, n: int): string
 				u := resolve(d.url, d.attr(m, "href"));
 				if(lower(scheme(u)) == "javascript")
 					return "javascript: links need a script engine";
-				navigate(s, u, "GET", nil, nil, Hnew);
-				return nil;
+				return navigate(s, u, "GET", nil, nil, Hnew);
 			}
 		Dom->Tlabel =>
 			# for names an id in the label's own tree: a web
@@ -2451,8 +2785,15 @@ endrealm(s: ref Session)
 # engine and every value the page's scripts made (a sleeper waits
 # forever to tell a realm that is gone: ten visits to bbc.com, 600 MB).
 # Its group goes once it has, through any of them still there.
+#
+# The reaper is a group of its own: it outlives the session's.  Charon
+# closes its session and exits at once, the exit a killgrp of its own
+# group, which was the reaper's: the realm quit, but its sleepers, each
+# stuck telling it of a timer, were never killed, and held the page's
+# heap (130 MB of bbc.com's) for as long as emu ran.
 reap(g: int)
 {
+	sys->pctl(Sys->NEWPGRP, nil);
 	for(i := 0; i < 50 && alive(g); i++)
 		sys->sleep(100);
 	if(alive(g))
@@ -2567,14 +2908,18 @@ realmhelper(r: ref Realm)
 			hist := Hnew;
 			if(rq.replace)
 				hist = Hnone;
+			e: string;
 			if(rq.method == "POST")
-				navigate(s, rq.url, "POST", rq.ctype, rq.body, hist);
+				e = navigate(s, rq.url, "POST", rq.ctype, rq.body, hist);
 			else
-				navigate(s, rq.url, "GET", nil, nil, hist);
+				e = navigate(s, rq.url, "GET", nil, nil, hist);
+			if(e != nil)
+				toconsole(r.pg, "navigation to " + rq.url + " refused: " + e);
 		Scroll =>
 			lock(s);
 			s.scroll = rq.y;
 			unlock(s);
+			lazynear(s, rq.y);
 			event(s, "scroll " + string rq.y);
 		}
 	}
@@ -2608,7 +2953,7 @@ laidout(r: ref Realm)
 		# for (JSTOR's logo, in a header its script makes)
 		us: list of string;
 		{
-			us = claim(r, r.pg.wanted());
+			us = unsent(r.pg, claim(r, r.pg.wanted()));
 		} exception e {
 		"*" =>
 			sys->fprint(sys->fildes(2), "charon: images after a script: %s\n", e);
@@ -2737,8 +3082,21 @@ hbox(id, n: int): (int, int, int, int, int)
 	if(r == nil || n <= 0 || n >= r.pg.doc.n)
 		return (0, 0, 0, 0, 0);
 	laidout(r);
+	# the element's own box, not its ::before's or ::after's (which carry
+	# its node, and came first: Modernizr's test for generated content
+	# measured an inline ::after, 0 high, and said there was none, so
+	# python.org hid its icons); an inline box by its fragments in the
+	# lines, as the box file has it (a span was 0 by 0)
 	for(l := layout->boxes(r.pg.root, n); l != nil; l = tl l) {
 		b := hd l;
+		if(pseudo(r.pg, n, b))
+			continue;
+		if(b.kind == Layout->Kinline && (fr := inlinerects(b)) != nil) {
+			u := hd fr;
+			for(fr = tl fr; fr != nil; fr = tl fr)
+				u = u.combine(hd fr);
+			return (1, cssn(u.min.x), cssn(u.min.y), cssn(u.dx()), cssn(u.dy()));
+		}
 		return (1, cssn(absx(b)), cssn(absy(b)), cssn(b.w), cssn(b.h));
 	}
 	return (0, 0, 0, 0, 0);

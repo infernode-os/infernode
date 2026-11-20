@@ -9,6 +9,18 @@ login := load Login Login->PATH;
 
 login: fn(name, password, addr: string):
 	(string, ref Keyring->Authinfo);
+
+okname:  fn(name: string): string;
+cnsamode: fn(): int;
+cnsaalg:  fn(alg: string): string;
+cnsahash: fn(ha: string): string;
+cnsakey:  fn(info: ref Keyring->Authinfo): string;
+putstring: fn(fd: ref Sys->FD, s: string): string;
+readsecret: fn(io: ref Sys->FD): (array of byte, string);
+zero:     fn(a: array of byte);
+runes:    fn(a: array of byte): int;
+charge:  fn(prog, name: string): (int, string);
+cleared: fn(prog, name: string);
 .EE
 .SH DESCRIPTION
 The
@@ -77,6 +89,134 @@ see
 The password is used by the encrypted
 key exchange protocol to establish
 a secure channel between user and CA.
+.PP
+.B Login
+returns only when the signer has proved that it has the password too,
+and what it returns it has checked:
+the signer's public key and Diffie-Hellman parameters
+.RB ( alpha
+and
+.BR p ,
+which
+.IR security-auth (2)
+uses) come under the session's keys from that signer, and the certificate
+verifies with the signer's key for the key
+.B login
+made.
+The exchange's own Diffie-Hellman group is one of the three in
+.IR login (6),
+which the module holds; nothing is taken from the signer on trust.
+In CNSA mode
+.RB ( /env/cnsamode
+set)
+.B login
+offers only the CNSA suite and refuses a group of fewer than 3072 bits,
+a signer whose key is not ML-DSA-87, a signer's modulus of fewer than 3072 bits,
+and a certificate that is not ML-DSA-87's under SHA-384 or SHA-512.
+.PP
+.B Cnsamode
+reports whether CNSA 2.0 mode is on
+.RB ( /env/cnsamode
+holding anything that does not begin with
+.BR 0 ,
+.B n
+or
+.BR N ).
+The mode is a rule for every key made or taken in it, and these state the rule once:
+.B cnsaalg
+returns nil for the one signature algorithm it takes
+.RB ( mldsa87 ,
+.BR Login->CNSAsig )
+and otherwise the reason;
+.B cnsahash
+the same for a certificate's hash
+.RB ( sha384
+or
+.BR sha512 );
+.B cnsakey
+the same for a whole key file as
+.B Keyring->readauthinfo
+gives it: its keys, its signer's key, its certificate's algorithm and hash, and
+its Diffie-Hellman modulus, which must have
+.B Login->CNSAdhbits
+(3072) bits or more.
+.B Putstring
+sends
+.I s
+as one of Keyring's messages (see
+.IR keyring-getstring (2))
+and returns nil, or sends nothing and returns the reason when
+.I s
+does not fit one:
+.B Keyring->putstring
+cuts such a string short and reports success.
+.PP
+.B Readsecret
+reads a line typed on
+.I io
+with the console's echo off (it writes
+.B rawon
+and then
+.B rawoff
+to
+.BR /dev/consctl )
+and returns its bytes, without the newline, or nil and the reason.
+In raw mode the console edits nothing, so
+.B readsecret
+does: a backspace or delete removes the character before it,
+control-U the line so far, and a carriage return is dropped.
+The secret is never a string, which a Limbo program cannot clear;
+the caller zeroes the array with
+.B zero
+when it is done.
+.B Runes
+counts the characters of UTF-8 in an array.
+.B Login
+itself zeroes the password's bytes and digest, the shared secret's bytes
+and the session's keys before it returns;
+the password it is given is a string, and stays the caller's.
+.PP
+The other functions are for the signer's programs, which share them so
+that there is one of each.
+.B Okname
+returns nil if
+.I name
+is one account name as
+.IR login (6)
+defines it, and otherwise the reason it is not;
+.BR login ,
+.IR logind (8),
+.IR keysrv (4),
+.IR signer (8)
+and
+.IR changelogin (8)
+refuse a name it refuses.
+.B Charge
+and
+.B cleared
+are the count of failed attempts described in
+.IR logind (8),
+kept in
+.BR /keydb/loginfail :
+.B charge
+counts an attempt for
+.I name
+and returns 0, or returns the seconds for which
+.I name
+is still refused (and counts nothing), or an error string if the count cannot be kept;
+.B cleared
+removes the count once the password has been proved.
+.I Prog
+is the caller's name for the console and the audit log.
+The module also exports the pieces of the exchange both ends compute
+.RB ( group ,
+.BR exponent ,
+.BR mask ,
+.BR keys
+and the rest; see
+.B security.m
+and
+.IR login (6)).
 .SH SOURCE
 .B /appl/lib/login.b
 .SH SEE ALSO

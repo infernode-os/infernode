@@ -88,6 +88,41 @@ dispath()
 	bout.putb(byte 0);
 }
 
+#
+# The digests of the signatures, for a loader that compares them: a
+# count, then SIGDLEN bytes for each entry of the link section in its
+# order and each entry of each import table in theirs (dismod's and
+# disldt's loops).  It follows the source path, the last thing a
+# loader that knows nothing of it reads, so such a loader still takes
+# the module.
+#
+dissigs(m: ref Decl, ds: ref Decl)
+{
+	n := 0;
+	for(pass := 0; pass < 2; pass++){
+		if(pass)
+			discon(n);
+		for(id := m.ty.tof.ids; id != nil; id = id.next){
+			if(pass)
+				bout.write(signdigest(id), SIGDLEN);
+			else
+				n++;
+		}
+		for(d := ds; d != nil; d = d.next){
+			if(d.store != Dglobal || d.init == nil)
+				continue;
+			for(id = d.init.decl.ty.ids; id != nil; id = id.next){
+				if(!ldtentry(d.init.decl, id))
+					continue;
+				if(pass)
+					bout.write(signdigest(id), SIGDLEN);
+				else
+					n++;
+			}
+		}
+	}
+}
+
 disentry(e: ref Decl)
 {
 	if(e == nil){

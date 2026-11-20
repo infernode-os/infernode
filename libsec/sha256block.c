@@ -44,7 +44,7 @@ u32int sha256const[] = {
 static u32int
 g32(uchar *p)
 {
-	return p[0]<<24|p[1]<<16|p[2]<<8|p[3]<<0;
+	return (u32int)p[0]<<24|p[1]<<16|p[2]<<8|p[3]<<0;
 }
 
 void

@@ -150,7 +150,7 @@ audio.c:N:	../port/audio-tbls.c
 audio.c:N:	../port/audio.h
 
 srv.$O:			srv.h srvm.h
-srv.h srvm.h:D:		$ROOT/module/srvrunt.b $ROOT/module/srv.m
+srv.h srvm.h:D:		$ROOT/module/srvrunt.b $ROOT/module/srv.m $ROOT/include/interp.h
 	rm -f $alltarget
 	limbo -a -I$ROOT/module $ROOT/module/srvrunt.b >srv.h
 	limbo -t Srv -I$ROOT/module $ROOT/module/srvrunt.b >srvm.h

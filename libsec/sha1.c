@@ -17,8 +17,19 @@ sha1(uchar *p, ulong len, uchar *digest, SHA1state *s)
 	u32int x[16];
 	int i;
 	uchar *e;
+	DigestState own;
 
-	if(s == nil){
+	/*
+	 * Called with no state and a digest wanted, the whole message is
+	 * here: the state is this function's own, on its stack.  It was
+	 * malloc'd, and when there was no memory nil was returned, as
+	 * nil is returned for success, with the digest never written
+	 * (devssl then compared a record's MAC with what its stack held).
+	 */
+	if(s == nil && digest != nil){
+		s = &own;
+		memset(s, 0, sizeof(*s));
+	}else if(s == nil){
 		s = malloc(sizeof(*s));
 		if(s == nil)
 			return nil;
@@ -41,7 +52,8 @@ sha1(uchar *p, ulong len, uchar *digest, SHA1state *s)
 		i = 64 - s->blen;
 		if(len < i)
 			i = len;
-		memmove(s->buf + s->blen, p, i);
+		if(i != 0)
+			memmove(s->buf + s->blen, p, i);
 		len -= i;
 		s->blen += i;
 		p += i;
@@ -78,7 +90,8 @@ sha1(uchar *p, ulong len, uchar *digest, SHA1state *s)
 		p = s->buf;
 		len = s->blen;
 	} else {
-		memmove(buf, p, len);
+		if(len != 0)	/* (p may be nil then) */
+			memmove(buf, p, len);
 		p = buf;
 	}
 	s->len += len;
@@ -102,8 +115,13 @@ sha1(uchar *p, ulong len, uchar *digest, SHA1state *s)
 
 	/* return result and free state */
 	encode(digest, s->state, SHA1dlen);
-	if(s->malloced == 1)
+	/* the state is what was hashed (an HMAC's key, at its start): cleared */
+	if(s->malloced == 1){
+		secureZero(s, sizeof(*s));
 		free(s);
+	}else if(s == &own)
+		secureZero(s, sizeof(*s));
+	secureZero(buf, sizeof(buf));
 	return nil;
 }
 

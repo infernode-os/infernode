@@ -5,7 +5,7 @@ implement ToolCharon;
 #
 # Drives the browser the user sees through its session files at
 # /mnt/charon (charonfs(2)), which tools9p mounts for this tool only.
-# Navigation waits on /mnt/charon/event for the load to finish.
+# Navigation watches /mnt/charon/status until the load has finished.
 #
 # Commands:
 #   navigate <url>              Navigate to URL
@@ -46,6 +46,9 @@ ToolCharon: module {
 
 BROWSER_DIR: con "/mnt/charon";
 WAIT: con 30*1000;	# ms a navigation may take
+POLL: con 50;		# ms between looks at its status
+GRACE: con 300;		# ms a command has to start a load, before it is taken to load nothing
+MAXREAD: con 512*1024;	# bytes of a page's file returned (as webfetch: it is for a model to read)
 
 init(): string
 {
@@ -55,8 +58,13 @@ init(): string
 	str = load String String->PATH;
 	if(str == nil)
 		return "cannot load String";
+	inited = 1;
 	return nil;
 }
+
+# set once init has loaded everything: a call is refused, saying why,
+# rather than made with half of it
+inited := 0;
 
 name(): string
 {
@@ -112,8 +120,8 @@ schema(): string
 
 exec(args: string): string
 {
-	if(sys == nil)
-		init();
+	if(!inited && (ierr := init()) != nil)
+		return "error: charon: " + ierr;
 
 	args = strip(args);
 	if(args == "")
@@ -222,57 +230,50 @@ doctl(cmd: string): string
 	return dostatus();
 }
 
-# Write a command that may start a load, and wait for the load to end.
-# The event file is opened first, so the end cannot be missed; a command
-# that loads nothing (a click on a checkbox) ends with "update" or not
-# at all, and the wait gives up after a moment.
+# Write a command that may start a load, and wait for the load to end,
+# by the session's status: "loading ..." while it loads, then "done" or
+# "error ...".  The browser sets "loading" before it answers the write,
+# so a load is seen unless it is already over, which is as good.  A
+# command that loads nothing (a click on a checkbox) leaves the status
+# as it was, and is given a moment.
+#
+# (It read the event file in a process of its own, with a timer in
+# another, and when it had its answer left both: the reader in a read
+# that nothing would end, its event file open and its queue in the
+# browser growing with every later event, the timer in a send nobody
+# would take.  Two processes for every navigation, for good: a tool's
+# name space has no way to kill one.)
 navwait(cmd: string): string
 {
-	ev := sys->open(BROWSER_DIR + "/event", Sys->OREAD);
-	if(ev == nil)
-		return sys->sprint("error: cannot open %s/event: %r (is charon running? use 'launch charon <url>')", BROWSER_DIR);
+	sfd := sys->open(BROWSER_DIR + "/status", Sys->OREAD);
+	if(sfd == nil)
+		return sys->sprint("error: cannot open %s/status: %r (is charon running? use 'launch charon <url>')", BROWSER_DIR);
+	sfd = nil;
+	before := strip(readfile(BROWSER_DIR + "/status"));
 	err := writefile(BROWSER_DIR + "/ctl", cmd);
 	if(hasprefix(err, "error:"))
 		return err;
-	evc := chan of string;
-	spawn eventreader(ev, evc);
-	timeout := chan of int;
-	spawn timer(timeout, WAIT);
+	t0 := sys->millisec();
 	started := 0;
-	for(;;) alt {
-	e := <-evc =>
-		if(e == nil)
-			return "error: event file closed";
-		if(hasprefix(e, "error"))
-			return "error: " + strip(e[len "error":]);
-		if(hasprefix(e, "loading"))
-			started = 1;
-		if(hasprefix(e, "done") || hasprefix(e, "stopped") || !started && hasprefix(e, "update"))
-			return dostatus();
-	<-timeout =>
-		if(!started)
-			return dostatus();
-		return "error: still loading after 30 seconds\n" + dostatus();
-	}
-}
-
-eventreader(fd: ref Sys->FD, c: chan of string)
-{
-	buf := array[1024] of byte;
 	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0) {
-			c <-= nil;
-			return;
+		sys->sleep(POLL);
+		st := strip(readfile(BROWSER_DIR + "/status"));
+		waited := sys->millisec() - t0;
+		if(hasprefix(st, "error:"))
+			return st;	# the session has gone
+		if(hasprefix(st, "loading")) {
+			started = 1;
+			if(waited >= WAIT)
+				return "error: still loading after 30 seconds\n" + dostatus();
+			continue;
 		}
-		c <-= string buf[0:n];
+		if(st != before)
+			started = 1;
+		if(started && hasprefix(st, "error"))
+			return "error: " + strip(st[len "error":]);
+		if(started || waited >= GRACE)
+			return dostatus();
 	}
-}
-
-timer(c: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	c <-= 1;
 }
 
 doread(args: string): string
@@ -321,15 +322,30 @@ readfile(path: string): string
 	if(fd == nil)
 		return sys->sprint("error: cannot open %s: %r (is charon running?)", path);
 
-	result := "";
+	# as bytes, so that a character cut by a read's end is put together
+	# again; no more than MAXREAD of them (a page is as long as it likes)
+	data := array[0] of byte;
 	buf := array[8192] of byte;
+	more := 0;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
 		if(n <= 0)
 			break;
-		result += string buf[0:n];
+		if(len data + n > MAXREAD) {
+			n = MAXREAD - len data;
+			more = 1;
+		}
+		nd := array[len data + n] of byte;
+		nd[0:] = data;
+		nd[len data:] = buf[0:n];
+		data = nd;
+		if(more)
+			break;
 	}
 	fd = nil;
+	result := string data;
+	if(more)
+		result += "\n[there is more: only the first 512KB were read]";
 	return result;
 }
 

@@ -357,8 +357,13 @@ trap(Ureg *u)
 	 *    in the heap. A fault in the kernel's own C code may hold locks,
 	 *    and unwinding past one would hang the machine later, so those
 	 *    still panic;
-	 *  - the address is a nil reference: -1 (Dis H) or below 512, the
-	 *    same rule as the hosted emulator's isnilref.
+	 *  - the address is a nil reference: -1 (Dis H), or that plus a
+	 *    field's offset, which is up to 65535, the same rule as the
+	 *    hosted emulator's isnilfault. It was "below 512", and a field
+	 *    further into a nil ref than that, in a page that is not
+	 *    mapped, was the panic below. Only an address that faults comes
+	 *    here: where a board maps memory below 64K (the Pis map all but
+	 *    page zero), a far field of a nil ref still reads and writes it.
 	 *
 	 * The frame is on the faulting process's own kernel stack, so the
 	 * error() inside disfault unwinds to the Dis scheduler's label above
@@ -368,7 +373,7 @@ trap(Ureg *u)
 	 * with the interrupt state it faulted in.
 	 */
 	if(ec == 0x25 && up != nil && up->type == Interp && u->pc >= (uintptr)end
-	&& (u->far == ~(u64int)0 || u->far < 512)){
+	&& (u->far == ~(u64int)0 || u->far < 64*1024)){
 		splx((int)(u->psr & 0x3C0));
 		/*
 		 * Compiled code does not keep R.PC current instruction by

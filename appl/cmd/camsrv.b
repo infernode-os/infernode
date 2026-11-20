@@ -9,7 +9,8 @@ implement Camsrv;
 #                               the same for every reader. The last Ring
 #                               frames are kept; a read below them errors
 #                               "frame expired", one past the newest waits
-#                               for it. A live reader starts at the newest
+#                               for it (one further past than the ring is
+#                               long is refused too). A live reader starts at the newest
 #                               (status frames= less one) and skips ahead
 #                               when it falls behind. Numbers run on across
 #                               the sensor going off and on.
@@ -78,6 +79,7 @@ Sw: con 2304;
 Sh: con 1296;
 Black: con 64;
 Maxsample: con 1023;
+Maxexposure: con 65535;	# lines: the register's sixteen bits
 Aetarget: con 180;	# above black, of 959: near a grey card's 18%
 Aeevery: con 4;		# frames: what is written shows two later
 
@@ -88,6 +90,7 @@ Lens: con 16r0C;
 Sim: con 2;		# the simulated sensor's raw is this much smaller
 
 srv: ref Styxserver;		# the connection of the message being served
+user := "camsrv";
 reqc: chan of (ref Styxserver, ref Tmsg);
 sim := 0;
 
@@ -170,7 +173,11 @@ init(nil: ref Draw->Context, args: list of string)
 	(tree, treeop) := nametree->start();
 	tree.create(big Qroot, dir(".", Sys->DMDIR|8r555, Qroot));
 	tree.create(big Qroot, dir("0", Sys->DMDIR|8r555, Qstream));
-	tree.create(big Qstream, dir("ctl", 8r666, Qctl));
+	# ctl is the server's user's to write (the files were "camsrv"'s
+	# whoever ran it, and ctl 666 to make up for it)
+	if((u := readuser()) != nil)
+		user = u;
+	tree.create(big Qstream, dir("ctl", 8r664, Qctl));
 	tree.create(big Qstream, dir("fmt", 8r444, Qfmt));
 	tree.create(big Qstream, dir("frame", 8r444, Qframe));
 	tree.create(big Qstream, dir("raw", 8r444, Qraw));
@@ -212,7 +219,7 @@ dir(name: string, perm, path: int): Sys->Dir
 {
 	d := sys->zerodir;
 	d.name = name;
-	d.uid = d.gid = "camsrv";
+	d.uid = d.gid = user;
 	d.mode = perm;
 	d.qid.path = big path;
 	if(perm & Sys->DMDIR)
@@ -254,74 +261,21 @@ serve(tree: ref Tree)
 {
 	for(;;) alt {
 	(csrv, tmsg) := <-reqc =>
-		srv = csrv;
-		if(tmsg == nil){
-			if(connend(tree))
-				return;
-			break;
+		# A request that raises costs itself, not the camera.  The loop
+		# had no handler: one ctl write or one read (below) broke it,
+		# every reader then waited for ever, and the capture went on
+		# with the sensor powered and nobody to stop it.
+		done := 0;
+		{
+			done = request(tree, csrv, tmsg);
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "camsrv: a request raised: %s\n", e);
+			if(tmsg != nil)
+				csrv.reply(ref Rmsg.Error(tmsg.tag, "camsrv: " + e));
 		}
-		pick tm := tmsg {
-		Readerror =>
-			if(connend(tree))
-				return;
-		Open =>
-			c := srv.getfid(tm.fid);
-			path := -1;
-			if(c != nil)
-				path = int c.path;
-			if((path == Qframe || path == Qraw) && err != "" && users == 0)
-				err = "";
-			if(srv.open(tm) != nil && (path == Qframe || path == Qraw)){
-				sess = ref Fsess(srv, tm.fid, path, seq, nil) :: sess;
-				if(users++ == 0)
-					startcapture();
-			}
-		Clunk =>
-			drop(tm.fid);
-			srv.default(tmsg);
-		Remove =>
-			drop(tm.fid);
-			srv.default(tmsg);
-		Read =>
-			c := srv.getfid(tm.fid);
-			if(c == nil || !c.isopen){
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
-				break;
-			}
-			case int c.path {
-			Qroot or Qstream or Qlayer =>
-				srv.read(tm);
-			Qfmt =>
-				srv.reply(styxservers->readstr(tm, sys->sprint("%d %d i420 %d\n", fw(), fh(), fps)));
-			Qstatus =>
-				srv.reply(styxservers->readstr(tm, status()));
-			Qctl =>
-				srv.reply(styxservers->readstr(tm, settings()));
-			Qframe or Qraw =>
-				s := find(tm.fid);
-				if(s == nil)
-					srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
-				else if(!reply(tm, s))
-					parked = (tm, s) :: parked;
-			* =>
-				srv.reply(ref Rmsg.Error(tm.tag, "camsrv: bad path"));
-			}
-		Write =>
-			c := srv.getfid(tm.fid);
-			if(c == nil || !c.isopen)
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
-			else if(int c.path != Qctl)
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
-			else{
-				e := doctl(string tm.data);
-				if(e != nil)
-					srv.reply(ref Rmsg.Error(tm.tag, e));
-				else
-					srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
-			}
-		* =>
-			srv.default(tmsg);
-		}
+		if(done)
+			return;
 	fr := <-framec =>
 		latest = fr;
 		ring[seq % Ring] = (seq, fr);
@@ -339,6 +293,83 @@ serve(tree: ref Tree)
 		if(wanted && err == "")
 			launch();
 	}
+}
+
+# one request; 1 when the mount has gone and the server with it
+request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
+{
+	srv = csrv;
+	if(tmsg == nil)
+		return connend(tree);
+	pick tm := tmsg {
+	Readerror =>
+		return connend(tree);
+	Open =>
+		c := srv.getfid(tm.fid);
+		path := -1;
+		if(c != nil)
+			path = int c.path;
+		if((path == Qframe || path == Qraw) && err != "" && users == 0)
+			err = "";
+		if(srv.open(tm) != nil && (path == Qframe || path == Qraw)){
+			sess = ref Fsess(srv, tm.fid, path, seq, nil) :: sess;
+			if(users++ == 0)
+				startcapture();
+		}
+	Clunk =>
+		drop(tm.fid);
+		srv.default(tmsg);
+	Remove =>
+		drop(tm.fid);
+		srv.default(tmsg);
+	Read =>
+		(c, cerr) := srv.canread(tm);
+		if(c == nil){
+			srv.reply(ref Rmsg.Error(tm.tag, cerr));
+			break;
+		}
+		case int c.path {
+		Qroot or Qstream or Qlayer =>
+			srv.read(tm);
+		Qfmt or Qstatus or Qctl =>
+			# One open reads one text, as vid9p's: made at a read at
+			# offset 0 and kept with the fid (made at every read and
+			# cut at its offset, a status that moved between two
+			# reads gave the second the newer one's tail).
+			if(tm.offset == big 0 || c.data == nil){
+				case int c.path {
+				Qfmt =>	c.data = array of byte sys->sprint("%d %d i420 %d\n", fw(), fh(), fps);
+				Qstatus =>	c.data = array of byte status();
+				Qctl =>	c.data = array of byte settings();
+				}
+			}
+			srv.reply(styxservers->readbytes(tm, c.data));
+		Qframe or Qraw =>
+			s := find(tm.fid);
+			if(s == nil)
+				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
+			else if(!reply(tm, s))
+				parked = (tm, s) :: parked;
+		* =>
+			srv.reply(ref Rmsg.Error(tm.tag, "camsrv: bad path"));
+		}
+	Write =>
+		(c, cerr) := srv.canwrite(tm);
+		if(c == nil)
+			srv.reply(ref Rmsg.Error(tm.tag, cerr));
+		else if(int c.path != Qctl)
+			srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
+		else{
+			e := doctl(string tm.data);
+			if(e != nil)
+				srv.reply(ref Rmsg.Error(tm.tag, e));
+			else
+				srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+		}
+	* =>
+		srv.default(tmsg);
+	}
+	return 0;
 }
 
 # The mount has gone. The capture process may be in the middle of a frame,
@@ -423,8 +454,20 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		return 1;
 	}
 	if(s.path == Qframe){
-		# frame n, as every reader numbers it
-		n := int (tm.offset / big fs);
+		# Frame n, as every reader numbers it; the offset is the
+		# reader's, any 63 bits, so n is found in 64.  It was cut to
+		# an int: an offset near the frame size times 2^32 gave a
+		# negative n, which indexed the ring before its start, and the
+		# exception ended the serve loop.  A frame further ahead than
+		# the ring is long is not waited for (a reader of one waited
+		# for ever, parked): it is refused as one behind is, in the
+		# words every reader takes to mean "go to the newest".
+		nb := tm.offset / big fs;
+		if(nb >= big seq + big Ring){
+			s.srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
+			return 1;
+		}
+		n := int nb;
 		if(n >= seq)
 			return 0;	# not made yet: wait for it
 		(sn, fr) := ring[n % Ring];
@@ -444,6 +487,8 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		s.fr = lastraw;
 	}
 	n := tm.count;
+	if(foff > len s.fr)
+		foff = len s.fr;
 	if(foff + n > len s.fr)
 		n = len s.fr - foff;
 	s.srv.reply(ref Rmsg.Read(tm.tag, s.fr[foff:foff+n]));
@@ -505,19 +550,38 @@ settings(): string
 		fw(), fh(), fps, exposure, gain, flip, rotate, focus);
 }
 
+# a ctl argument: a whole number of at most six digits, or -1
+arg(s: string): int
+{
+	if(len s == 0 || len s > 6)
+		return -1;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return -1;
+	return int s;
+}
+
+# One ctl write.  The count of words is looked at before any of them:
+# "fps", "gain" and "flip" took the head of their argument first, and
+# written with none ("echo fps > ctl") dereferenced nil in the serve
+# loop.  An argument is a number or is refused ("exposure abc" set 0,
+# which is automatic; "exposure -1" was taken).
 doctl(s: string): string
 {
 	(n, f) := sys->tokenize(s, " \t\n");
 	if(n == 0)
 		return "camsrv: empty ctl";
+	a := -1;
+	if(n >= 2)
+		a = arg(hd tl f);
 	case hd f {
 	"mode" =>
 		if(n != 3)
 			return "camsrv: mode W H";
 		if(users > 0)
 			return "camsrv: in use";
-		w := int hd tl f;
-		h := int hd tl tl f;
+		w := a;
+		h := arg(hd tl tl f);
 		if(rotate%180)
 			(w, h) = (h, w);	# asked as served; merged as the sensor sees
 		rw := Sw/simdivr();
@@ -532,22 +596,20 @@ doctl(s: string): string
 		fsize = framesize();
 		latest = nil;
 	"fps" =>
-		v := int hd tl f;
-		if(n != 2 || v < 1 || v > 56)
+		if(n != 2 || a < 1 || a > 56)
 			return "camsrv: fps 1..56";
 		if(users > 0)
 			return "camsrv: in use";
-		fps = v;
+		fps = a;
 	"exposure" =>
-		if(n != 2)
+		if(n != 2 || a < 0 || a > Maxexposure)
 			return "camsrv: exposure LINES";
-		exposure = int hd tl f;
+		exposure = a;
 		tell("ae");
 	"gain" =>
-		v := int hd tl f;
-		if(n != 2 || v < 0 || v > 960)
+		if(n != 2 || a < 0 || a > 960)
 			return "camsrv: gain 0..960";
-		gain = v;
+		gain = a;
 		tell("ae");
 	"focus" =>
 		if(n != 2)
@@ -557,19 +619,17 @@ doctl(s: string): string
 				return "camsrv: not running";
 			afrun = 1;
 		}else{
-			v := int hd tl f;
-			if(v < 0 || v > 1023)
+			if(a < 0 || a > 1023)
 				return "camsrv: focus 0..1023";
-			focus = v;
+			focus = a;
 			tell("lens");
 		}
 	"flip" =>
-		v := int hd tl f;
-		if(n != 2 || v < 0 || v > 3)
+		if(n != 2 || a < 0 || a > 3)
 			return "camsrv: flip 0..3";
 		if(users > 0)
 			return "camsrv: in use";
-		flip = v;
+		flip = a;
 	"rotate" =>
 		if(n != 2)
 			return "camsrv: rotate 0|90|180|270";
@@ -582,6 +642,18 @@ doctl(s: string): string
 		return "camsrv: unknown ctl " + hd f;
 	}
 	return nil;
+}
+
+readuser(): string
+{
+	fd := sys->open("/dev/user", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
 }
 
 # for the capture process, if there is one; it reads the settings when it starts

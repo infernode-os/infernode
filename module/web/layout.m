@@ -30,6 +30,7 @@ Layout: module
 	# background and list-style images: what a style asks for, and the
 	# decoded images to paint, by absolute URL
 	bgurls:	fn(st: ref Style->St): list of string;
+	listurl:	fn(st: ref Style->St): string;	# its list-style-image's URL, nil for none
 	setbgimage:	fn(url: string, img: ref Draw->Image);
 	setbgsvg:	fn(url: string, data: array of byte);	# an SVG's source: drawn again at each size it is shown
 	clearbgimages:	fn();
@@ -75,6 +76,9 @@ Layout: module
 		imn, imx:	int;	# min- and max-content widths, cached during one layout
 		iex:	int;		# the horizontal edges they include
 		igen:	int;		# the layout they were measured in (0: none)
+		fmx:	real;		# its inline content's max-content width unrounded, when measured in layout fgen: a box as wide as it rounded fits it on one line (layout.b's own)
+		fgen:	int;
+		pfx:	real;		# the fraction of a pixel its text's glyphs go past where it is: a cell's after rounded columns, a float's beside one, a box at its container's end (layout.b's own)
 		seq:	int;		# position in tree order once laid out, for painting
 		# a subgrid: the tracks, line names and gap of its parent's axis it spans, set by the parent each layout
 		subcw, subrh:	array of int;
@@ -128,6 +132,9 @@ Layout: module
 		level:	int;		# bidi embedding level (odd: right to left)
 		tls:	int;		# Ftext: the letter spacing after its last character, trimmed at a line's end
 		hang:	int;		# Ftext: hanging punctuation, 1 an opening mark at the first line's start, 2 a closing one at the last line's end
+		fx:	real;		# Ftext, Fatomic: where on the line it starts less x, a fraction of a pixel
+		wfx:	real;		# Ftext, Fatomic: the same of where the line's run of glyphs begins: its glyphs (an atomic's text) go fx-wfx past x, rounded once (fonts' drawat)
+		fw:	real;		# Ftext: its width unrounded, as w was when set
 	};
 
 	build:	fn(d: ref Dom->Doc, c: ref Style->Computed): ref Box;

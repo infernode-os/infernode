@@ -205,6 +205,9 @@ tktwinchk(Tk *tk, TkTwind *w, Tk *oldsub)
 		if(sub->master != nil || sub->parent != nil)
 			return TkWpack;
 
+		if(tkisinside(tk, sub))	/* the text itself, or what it is in */
+			return TkRecur;
+
 		if (oldsub != nil) {
 			oldsub->parent = nil;
 			oldsub->geom = nil;

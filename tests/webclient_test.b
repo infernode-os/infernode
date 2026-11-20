@@ -125,7 +125,7 @@ testHeaderLookup(t: ref T)
 {
 	hdrs := Header("Content-Type", "text/html") ::
 		Header("X-Custom", "hello") :: nil;
-	resp := ref Response(200, "HTTP/1.1 200 OK", hdrs, nil, nil);
+	resp := ref Response(200, "HTTP/1.1 200 OK", hdrs, nil, nil, 0);
 	t.assertseq(resp.hdrval("Content-Type"), "text/html", "Content-Type");
 	t.assertseq(resp.hdrval("content-type"), "text/html", "case insensitive");
 	t.assertseq(resp.hdrval("X-Custom"), "hello", "custom header");

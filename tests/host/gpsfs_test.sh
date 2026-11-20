@@ -13,6 +13,15 @@
 # position then refused; a second gpsfs finds it served.  The fake
 # feeds are tests/host/gps/fake_feed.py.
 #
+# And what anyone on the network can send to a port gpsfs listens to:
+# an AIS sentence that says it is part 1 of 200000000 (the array for
+# its parts took the heap, and the exception ended the one proc that
+# serves every file), a heading of 1e20 (brought into 0..360 by taking
+# 360 off, for ever, in that same proc), numbers past any field, bytes
+# that are no sentence: gpsfs still answers, with the fix sent beside
+# them, and status counts what it refused.  More than 64 opens of event
+# and nmea are refused.
+#
 set -e
 . "$(dirname "$0")/common.sh"
 set -u
@@ -48,9 +57,12 @@ python3 -I "$F" udpnmea "$UN" 2>"$D/udpnmea.err" &
 PIDS="$PIDS $!"
 python3 -I "$F" udpgdl90 "$UG" 2>"$D/udpgdl90.err" &
 PIDS="$PIDS $!"
+UH=$(python3 -I "$F" port)
+python3 -I "$F" udphostile "$UH" 2>"$D/udphostile.err" &
+PIDS="$PIDS $!"
 
 cd "$ROOT"
-with_timeout 90 "$EMU" -r"$ROOT" /dis/sh.dis /tests/gps/drive.sh "/$T" "$PN" "$PG" "$UN" "$UG" \
+with_timeout 90 "$EMU" -r"$ROOT" /dis/sh.dis /tests/gps/drive.sh "/$T" "$PN" "$PG" "$UN" "$UG" "$UH" \
 	</dev/null >"$D/log" 2>&1 || true
 
 failed=0
@@ -59,7 +71,14 @@ pass() { echo "PASS: $*"; }
 f() { cat "$D/$1" 2>/dev/null || true; }
 has() { f "$1" | grep -q -- "$2"; }
 
-grep -q '^R done' "$D/log" || { fail "the driver did not finish"; tail -20 "$D/log"; exit 1; }
+if ! grep -q '^R done' "$D/log"; then
+	if [ -f "$D/err.hostile" ] && [ ! -s "$D/traffic.hostile" ]; then
+		fail "gpsfs stopped answering after the hostile datagrams: $(grep -i 'broken\|not taken' "$D/log" | head -2 | tr '\n' ' ')"
+	else
+		fail "the driver did not finish"
+	fi
+	tail -20 "$D/log"; exit 1
+fi
 
 [ "$(f ls | tr '\n' ' ')" = "/mnt/gps/ctl /mnt/gps/event /mnt/gps/feed /mnt/gps/fix /mnt/gps/nmea /mnt/gps/position /mnt/gps/satellites /mnt/gps/status /mnt/gps/time /mnt/gps/traffic " ] &&
 	pass "its files" || fail "ls: $(f ls | tr '\n' ' ')"
@@ -145,6 +164,23 @@ has err.feed "bad sentence: checksum mismatch" && pass "a bad sentence written t
 	fail "lost: '$(f position.lost)' '$(f err.lost)'"
 [ "$(f tool.position)" = "error: no fix" ] && pass "the gps tool reaches the posted gpsfs from a name space without the mount" ||
 	fail "tool: '$(f tool.position)'"
+# sentences written to do harm
+[ -z "$(f err.hostile)" ] && has status.hostile "^state=fix link=open source=udp!\*!$UH " &&
+	pass "gpsfs answers after an AIS part 1 of 200000000, headings of 1e20 and bytes that are no sentence" ||
+	fail "after the hostile datagrams: '$(f err.hostile)' status '$(f status.hostile)'"
+bad=$(f status.hostile | sed -n 's/.* bad=\([0-9]*\) .*/\1/p')
+[ -n "$bad" ] && [ "$bad" -ge 2 ] && pass "status counts what was refused (bad=$bad)" ||
+	fail "status after refused sentences: '$(f status.hostile)'"
+f fix.hostile | grep -Eq '^time=[0-9T:.Z-]+ lat=53\.543200 lon=9\.987600 speed=3\.09 course=90\.0 mcourse=88\.0 mode=2d q=gps hdop=0\.8 magvar=2\.0$' &&
+	pass "the fix is the good sentences': no heading, altitude or satellite count from the others" ||
+	fail "fix after the hostile datagrams: '$(f fix.hostile)'"
+[ "$(f traffic.hostile | grep -c .)" = 1 ] && has traffic.hostile '^kind=flarm id=DD8F12 lat=53\.544098 lon=9\.989112 speed=30\.0 climb=-1\.4 cat=glider age=' &&
+	pass "an aircraft with a track of 1e20 is heard, with no course" ||
+	fail "traffic after the hostile datagrams: '$(f traffic.hostile)'"
+n=$(grep -c 'too many opens' "$D/err.opens" 2>/dev/null || true)
+[ "${n:-0}" -ge 8 ] && has status.opens "^state=" && pass "opens of event past 64 are refused ($n of 72), and status reads" ||
+	fail "72 more opens of event: ${n:-0} refused; status '$(f status.opens)'"
+
 has again "served already" && pass "a second gpsfs finds it served" || fail "again: '$(f again)'"
 
 [ $failed = 0 ] && echo "gpsfs_test: PASS"

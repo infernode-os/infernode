@@ -60,6 +60,16 @@ run(name: string)
 			testLongWstatServed(t);
 		"HoleReadsZeros" =>
 			testHoleReadsZeros(t);
+		"WstatOwner" =>
+			testWstatOwner(t);
+		"OpenMode" =>
+			testOpenMode(t);
+		"RemovedWhileOpen" =>
+			testRemovedWhileOpen(t);
+		"WalkAndNames" =>
+			testWalkAndNames(t);
+		"DirectoriesCharged" =>
+			testDirectoriesCharged(t);
 		}
 	} exception e {
 	"fail:fatal" =>
@@ -419,6 +429,276 @@ timer(c: chan of int, ms: int)
 	}
 }
 
+# memfs -s with arguments of the test's choosing
+startmemfsargs(args: list of string): ref Sys->FD
+{
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		return nil;
+	sync := chan of int;
+	spawn serverargs(p[1], args, sync);
+	<-sync;
+	p[1] = nil;
+	return p[0];
+}
+
+serverargs(fd: ref Sys->FD, args: list of string, sync: chan of int)
+{
+	sys->pctl(Sys->NEWFD, fd.fd :: 2 :: nil);
+	sys->dup(fd.fd, 0);
+	fd = nil;
+	m := load Cmd "/dis/memfs.dis";
+	sync <-= 1;
+	if(m != nil)
+		m->init(nil, "memfs" :: "-s" :: args);
+}
+
+# a memfs, spoken to: fid 0 its root for its owner, fid 100 for another user
+OWNER: con 0;
+OTHER: con 100;
+twousers(t: ref T, args: list of string): ref Sys->FD
+{
+	fd := startmemfsargs(args);
+	if(fd == nil)
+		t.fatal(sys->sprint("pipe: %r"));
+	(nil, err) := rpc(fd, ref Tmsg.Version(0, MSIZE, "9P2000"));
+	t.assertseq(err, "", "version");
+	(nil, err) = rpc(fd, ref Tmsg.Attach(0, OWNER, Styx->NOFID, user(), ""));
+	t.assertseq(err, "", "attach as its owner");
+	(nil, err) = rpc(fd, ref Tmsg.Attach(0, OTHER, Styx->NOFID, "mallory", ""));
+	t.assertseq(err, "", "attach as another user");
+	return fd;
+}
+
+# name made in the directory of fid dir, through fid f, which is then clunked
+mk(t: ref T, fd: ref Sys->FD, dir, f: int, name: string, perm: int)
+{
+	(nil, err) := rpc(fd, ref Tmsg.Walk(0, dir, f, nil));
+	t.assertseq(err, "", "a fid for making " + name);
+	mode := Sys->OWRITE;
+	if(perm & Sys->DMDIR)
+		mode = Sys->OREAD;
+	(nil, err) = rpc(fd, ref Tmsg.Create(0, f, name, perm, mode));
+	t.assertseq(err, "", "create " + name);
+	(nil, err) = rpc(fd, ref Tmsg.Clunk(0, f));
+	t.assertseq(err, "", "clunk it");
+}
+
+statof(t: ref T, fd: ref Sys->FD, f: int): Sys->Dir
+{
+	(r, err) := rpc(fd, ref Tmsg.Stat(0, f));
+	if(err != "")
+		t.fatal("stat: " + err);
+	pick x := r {
+	Stat =>
+		return x.stat;
+	}
+	t.fatal("stat: not a stat reply");
+	return sys->zerodir;
+}
+
+# how many names of a walk were found
+walked(fd: ref Sys->FD, ffid, nfid: int, names: array of string): int
+{
+	(r, err) := rpc(fd, ref Tmsg.Walk(0, ffid, nfid, names));
+	if(err != "")
+		return 0;
+	pick x := r {
+	Walk =>
+		if(len x.qids == len names)
+			rpc(fd, ref Tmsg.Clunk(0, nfid));
+		return len x.qids;
+	}
+	return 0;
+}
+
+# A file's owner is not for wstat to change: a wstat that gave a file's
+# own mode and time back, and a new owner, was asked nothing.
+testWstatOwner(t: ref T)
+{
+	fd := twousers(t, nil);
+	mk(t, fd, OWNER, 1, "f", 8r600);
+
+	(nil, err) := rpc(fd, ref Tmsg.Walk(0, OTHER, 101, array[] of {"f"}));
+	t.assertseq(err, "", "another user walks to the file");
+	d := statof(t, fd, 101);
+	t.assertseq(d.uid, user(), "it is its maker's");
+
+	d.uid = "mallory";
+	(nil, err) = rpc(fd, ref Tmsg.Wstat(0, 101, d));
+	t.assertsne(err, "", "another user's wstat of the owner, mode and time as they are, is refused");
+	nd := sys->nulldir;
+	nd.uid = "mallory";
+	(nil, err) = rpc(fd, ref Tmsg.Wstat(0, 101, nd));
+	t.assertsne(err, "", "and of the owner alone");
+	nd = sys->nulldir;
+	nd.mode = 8r666;
+	(nil, err) = rpc(fd, ref Tmsg.Wstat(0, 101, nd));
+	t.assertsne(err, "", "and of the mode");
+	(nil, err) = rpc(fd, ref Tmsg.Open(0, 101, Sys->OREAD));
+	t.assertsne(err, "", "and the file is still not theirs to open");
+	t.assertseq(statof(t, fd, 101).uid, user(), "it is still its maker's");
+
+	# its owner changes its mode and time, and may not give it away
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 2, array[] of {"f"}));
+	t.assertseq(err, "", "its owner walks to it");
+	nd = sys->nulldir;
+	nd.mode = 8r640;
+	(nil, err) = rpc(fd, ref Tmsg.Wstat(0, 2, nd));
+	t.assertseq(err, "", "its owner changes its mode");
+	t.asserteq(statof(t, fd, 2).mode & 8r777, 8r640, "the mode set");
+	(nil, err) = rpc(fd, ref Tmsg.Wstat(0, 2, sys->nulldir));
+	t.assertseq(err, "", "a wstat that changes nothing");
+	nd = sys->nulldir;
+	nd.mode = 8r640 | Sys->DMDIR;
+	(nil, err) = rpc(fd, ref Tmsg.Wstat(0, 2, nd));
+	t.assert((statof(t, fd, 2).mode & Sys->DMDIR) == 0, "a file is not made a directory");
+	nd = sys->nulldir;
+	nd.name = "a/b";
+	(nil, err) = rpc(fd, ref Tmsg.Wstat(0, 2, nd));
+	t.assertsne(err, "", "a file is not renamed to a path");
+}
+
+# A fid reads and writes as it was opened.
+testOpenMode(t: ref T)
+{
+	fd := twousers(t, nil);
+	(nil, err) := rpc(fd, ref Tmsg.Walk(0, OWNER, 1, nil));
+	(nil, err) = rpc(fd, ref Tmsg.Create(0, 1, "g", 8r644, Sys->OWRITE));
+	t.assertseq(err, "", "create g, open to write");
+	(nil, err) = rpc(fd, ref Tmsg.Write(0, 1, big 0, array of byte "hello"));
+	t.assertseq(err, "", "written");
+	(nil, err) = rpc(fd, ref Tmsg.Read(0, 1, big 0, 5));
+	t.assertsne(err, "", "a fid open to write is not read");
+	rpc(fd, ref Tmsg.Clunk(0, 1));
+
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OTHER, 101, array[] of {"g"}));
+	t.assertseq(err, "", "another user walks to it");
+	(nil, err) = rpc(fd, ref Tmsg.Open(0, 101, Sys->OWRITE));
+	t.assertsne(err, "", "and may not open it to write");
+	(nil, err) = rpc(fd, ref Tmsg.Open(0, 101, Sys->OREAD));
+	t.assertseq(err, "", "and opens it to read");
+	(nil, err) = rpc(fd, ref Tmsg.Write(0, 101, big 0, array of byte "HELLO"));
+	t.assertsne(err, "", "a fid open to read is not written");
+	(r, rerr) := rpc(fd, ref Tmsg.Read(0, 101, big 0, 5));
+	t.assertseq(rerr, "", "and is read");
+	pick x := r {
+	Read =>
+		t.assertseq(string x.data, "hello", "what its owner wrote");
+	}
+
+	# an open fid is not walked
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, 101, 101, array[] of {".."}));
+	t.assertsne(err, "", "an open fid is not walked");
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, 101, 102, nil));
+	t.assertsne(err, "", "nor walked to a new one");
+	(nil, err) = rpc(fd, ref Tmsg.Clunk(0, 101));
+	t.assertseq(err, "", "it is clunked where it was");
+
+	# a directory is opened to read only
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 3, nil));
+	(nil, err) = rpc(fd, ref Tmsg.Open(0, 3, Sys->ORDWR));
+	t.assertsne(err, "", "a directory is not opened to read and write");
+}
+
+# A file removed while another fid has it open is in no directory: a
+# wstat or a remove through that fid found nil where its directory was,
+# and the server went.
+testRemovedWhileOpen(t: ref T)
+{
+	fd := twousers(t, nil);
+	(nil, err) := rpc(fd, ref Tmsg.Walk(0, OWNER, 1, nil));
+	(nil, err) = rpc(fd, ref Tmsg.Create(0, 1, "h", 8r644, Sys->ORDWR));
+	t.assertseq(err, "", "create h and keep it open");
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 2, array[] of {"h"}));
+	t.assertseq(err, "", "a second fid on it");
+	(nil, err) = rpc(fd, ref Tmsg.Remove(0, 2));
+	t.assertseq(err, "", "removed through the second");
+
+	(r, werr) := rpc(fd, ref Tmsg.Wstat(0, 1, sys->nulldir));
+	t.assert(r != nil && werr != "eof", "a wstat through the open fid is answered: " + werr);
+	nd := sys->nulldir;
+	nd.name = "again";
+	(r, werr) = rpc(fd, ref Tmsg.Wstat(0, 1, nd));
+	t.assert(r != nil && werr != "" && werr != "eof", "a rename of it is refused: " + werr);
+	(r, werr) = rpc(fd, ref Tmsg.Write(0, 1, big 0, array of byte "still here"));
+	t.assertseq(werr, "", "it is still written through the open fid");
+	(r, werr) = rpc(fd, ref Tmsg.Remove(0, 1));
+	t.assert(r != nil && werr != "" && werr != "eof", "a second remove of it is refused: " + werr);
+	(nil, err) = rpc(fd, ref Tmsg.Stat(0, OWNER));
+	t.assertseq(err, "", "and the server still answers");
+	t.asserteq(walked(fd, OWNER, 5, array[] of {"h"}), 0, "the file is gone");
+
+	# a directory removed is no place to make a file
+	mk(t, fd, OWNER, 6, "d", Sys->DMDIR | 8r777);
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 7, array[] of {"d"}));
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 8, array[] of {"d"}));
+	t.assertseq(err, "", "two fids on a directory");
+	(nil, err) = rpc(fd, ref Tmsg.Remove(0, 7));
+	t.assertseq(err, "", "removed through one");
+	(nil, err) = rpc(fd, ref Tmsg.Create(0, 8, "x", 8r644, Sys->OWRITE));
+	t.assertsne(err, "", "nothing is made in it through the other");
+}
+
+# A directory is searched by those its mode lets, and names are names.
+testWalkAndNames(t: ref T)
+{
+	fd := twousers(t, nil);
+	mk(t, fd, OWNER, 1, "p", Sys->DMDIR | 8r700);
+	(nil, err) := rpc(fd, ref Tmsg.Walk(0, OWNER, 2, array[] of {"p"}));
+	t.assertseq(err, "", "its owner walks into p");
+	mk(t, fd, 2, 3, "f", 8r644);
+	mk(t, fd, OWNER, 4, "plain", 8r644);
+
+	t.asserteq(walked(fd, OWNER, 10, array[] of {"p", "f"}), 2, "its owner walks to p/f");
+	t.asserteq(walked(fd, OTHER, 110, array[] of {"p", "f"}), 1, "another user gets as far as p, of mode 0700");
+	t.asserteq(walked(fd, OTHER, 111, array[] of {"plain"}), 1, "and reaches a file in the root");
+	t.asserteq(walked(fd, OWNER, 11, array[] of {"plain", ".."}), 1, "a file has no ..");
+	t.asserteq(walked(fd, OWNER, 12, array[] of {"plain", "x"}), 1, "nor anything in it");
+
+	bad := array[] of {"", "a/b", "/", ".", ".."};
+	for(i := 0; i < len bad; i++){
+		(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 20, nil));
+		(nil, err) = rpc(fd, ref Tmsg.Create(0, 20, bad[i], 8r644, Sys->OWRITE));
+		t.assertsne(err, "", sys->sprint("a file named %q is not made", bad[i]));
+		rpc(fd, ref Tmsg.Clunk(0, 20));
+	}
+	long := "";
+	for(i = 0; i < 300; i++)
+		long[len long] = 'n';
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 20, nil));
+	(nil, err) = rpc(fd, ref Tmsg.Create(0, 20, long, 8r644, Sys->OWRITE));
+	t.assertsne(err, "", "nor one with a name of 300 bytes");
+	rpc(fd, ref Tmsg.Clunk(0, 20));
+	mk(t, fd, OWNER, 21, long[0:210], 8r644);
+}
+
+# Directories count against the size memfs was given.
+testDirectoriesCharged(t: ref T)
+{
+	fd := twousers(t, "-m" :: "8192" :: nil);
+	made := 0;
+	err := "";
+	for(i := 0; i < 200 && err == ""; i++){
+		(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 1, nil));
+		if(err != "")
+			break;
+		(nil, err) = rpc(fd, ref Tmsg.Create(0, 1, sys->sprint("d%d", i), Sys->DMDIR | 8r777, Sys->OREAD));
+		rpc(fd, ref Tmsg.Clunk(0, 1));
+		if(err == "")
+			made++;
+	}
+	t.assert(made > 0 && made <= 16, sys->sprint("directories made in 8192 bytes: %d (%s)", made, err));
+	# and given back
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 2, array[] of {"d0"}));
+	t.assertseq(err, "", "walk to the first");
+	(nil, err) = rpc(fd, ref Tmsg.Remove(0, 2));
+	t.assertseq(err, "", "remove it");
+	(nil, err) = rpc(fd, ref Tmsg.Walk(0, OWNER, 3, nil));
+	(nil, err) = rpc(fd, ref Tmsg.Create(0, 3, "again", Sys->DMDIR | 8r777, Sys->OREAD));
+	t.assertseq(err, "", "and there is room for another");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -445,6 +725,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("FarOffsetRefused");
 	run("LongWstatServed");
 	run("HoleReadsZeros");
+	run("WstatOwner");
+	run("OpenMode");
+	run("RemovedWhileOpen");
+	run("WalkAndNames");
+	run("DirectoriesCharged");
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

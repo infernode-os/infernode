@@ -53,6 +53,7 @@ typedef struct Alt	Alt;
 typedef struct Channel	Channel;
 typedef struct Progq	Progq;
 typedef struct Import	Import;
+typedef struct Runtab	Runtab;
 typedef struct ILock	ILock;
 typedef struct Inst	Inst;
 typedef struct Module	Module;
@@ -201,12 +202,31 @@ union Linkpc
 	Inst*	pc;
 };
 
+#ifndef SIGDLEN
+#define SIGDLEN		32	/* isa.h's, for the files that include this without it */
+#endif
+
 struct Link
 {
 	int	sig;
 	Type*	frame;
 	Linkpc	u;
 	char	*name;
+	uchar	*dig;		/* SIGDLEN bytes, the digest of the type's text; nil if the module has none */
+};
+
+/*
+ * A builtin module's functions, as limbo -t writes them.
+ */
+struct Runtab
+{
+	char	*name;
+	long	sig;
+	void	(*fn)(void*);
+	int	size;
+	int	np;
+	uchar	map[16];
+	uchar	dig[SIGDLEN];
 };
 
 typedef union	Adr	Adr;
@@ -414,6 +434,7 @@ struct Module
 	ulong*	pctab;	/* dis pc to code pc when compiled */
 	ulong	jitsize;	/* bytes of executable memory at prog when compiled */
 	void*	dlm;		/* dynamic C module */
+	uchar*	sigs;		/* the file's type digests, which ext and ldt point into */
 };
 
 struct Modl
@@ -454,6 +475,7 @@ struct Import
 {
 	int	sig;
 	char*	name;
+	uchar*	dig;		/* as Link's */
 };
 
 struct Except
@@ -494,6 +516,7 @@ extern	void	destroyrestore(Dsave*);
 
 extern	int	bflag;
 extern	int	cflag;
+extern	int	strictlink;
 extern	int	nproc;
 extern	Type	Tarray;
 extern	Type	Tstring;
@@ -526,6 +549,7 @@ extern	void		cmovw(void*, void*);
 extern	Channel*	cnewc(Type*, void (*)(OPARGS), int);
 extern	int		compile(Module*, int, Modlink*);
 extern	void		freejitcode(void*, ulong);
+extern	void		compileabort(void);	/* the 64-bit code generators': a compile that raised gives back what it held */
 /*
  * The detectors in heap.c and the JIT (#622, #635) call panic(). The
  * native kernel declares it in portfns.h and the hosted emulator in its
@@ -538,6 +562,7 @@ extern	void		cqadd(Progq**, Prog*);
 extern	int		cqaddok(Progq**, Prog*);
 extern	void		cqdel(Progq**);
 extern	void		cqdelp(Progq**, Prog*);
+extern	int		cqhas(Progq*, Prog*);
 extern	void		crecv(Channel*, void*);
 extern	void		csend(Channel*, void*);
 extern	int		csendalt(Channel*, void*, Type *, int);
@@ -584,6 +609,7 @@ extern	void		go(Module*);
 extern	int		handler(char*);
 extern	Heap*	heap(Type*);
 extern	Heap*	heaparray(Type*, int);
+extern	Heap*	heaparrayok(Type*, int);
 extern	void		(*heapmonitor)(int, void*, ulong);
 extern	int		heapref(void*);
 extern	Heap*		heapz(Type*);
@@ -626,10 +652,12 @@ extern	void		newmp(void*, void*, Type*);
 extern	Prog*		newprog(Prog*, Modlink*);
 extern	void		newstack(Prog*);
 extern	Heap*		nheap(int);
+extern	Heap*		nheapok(int);
 extern	void		noptrs(Type*, void*);
 extern	int		nprog(void);
 extern	void		opinit(void);
-extern	Module*		parsemod(char*, uchar*, ulong, Dir*);
+extern	Module*		parsemod(char*, uchar*, ulong, Dir*, Module*volatile*);
+extern	void		parsefail(Module*);
 extern	Module*		parsedmod(char*, int, ulong, Qid);
 extern	void		prefabmodinit(void);
 extern	Prog*		progn(int);
@@ -644,7 +672,7 @@ extern	void		releasex(void);
 extern	void		retnstr(char*, int, String**);
 extern	void		retstr(char*, String**);
 extern	void		rungc(Prog*);
-extern	void		runtime(Module*, Link*, char*, int, void(*)(void*), Type*);
+extern	void		runtime(Module*, Link*, char*, int, uchar*, void(*)(void*), Type*);
 extern	void		safemem(void*, Type*, void (*)(void*));
 extern	int		segflush(void *, ulong);
 extern	void		isend(OPARGS);

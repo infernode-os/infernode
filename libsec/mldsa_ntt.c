@@ -19,7 +19,9 @@ enum {
 /*
  * Precomputed zetas for ML-DSA NTT.
  * zeta = 1753 is a primitive 512th root of unity mod q.
- * Table: zetas[i] = 1753^(brv(i)) mod q (NOT in Montgomery form).
+ * Table: zetas[i] = 1753^(brv(i)) * 2^32 mod q, centred: in Montgomery
+ * form, so that a Montgomery reduction of zeta times a coefficient is
+ * their product.
  */
 static const int32 mldsa_zetas[256] = {
 	       0,    25847, -2608894,  -518909,   237124,  -777960,  -876248,   466468,
@@ -118,7 +120,7 @@ mldsa_invntt(int32 r[MLDSA_N])
 {
 	int len, start, j, k;
 	int32 zeta, t;
-	static const int32 f = 41978;	/* Mont(128^{-1}) = 128^{-1} * 2^32 mod q */
+	static const int32 f = 41978;	/* 256^{-1} * 2^64 mod q: 1/256, and the 2^32 a pointwise product is short of */
 
 	k = 256;
 	for(len = 1; len <= 128; len <<= 1){

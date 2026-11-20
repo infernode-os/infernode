@@ -345,9 +345,13 @@ Keyring: module
 	readauthinfo: fn(filename: string): ref Authinfo;
 	writeauthinfo: fn(filename: string, info: ref Authinfo): int;
 
+	# The longest message either set of functions below carries: room for
+	# the text of the largest certificate (SLH-DSA-256s, about 40K).
+	# A longer one is refused by the sender and by the receiver, never cut.
+	Maxmsg:	con 49151;
+
 	# message io on a delimited connection (ssl for example)
-	#  messages > 4096 bytes are truncated
-	#  errors > 64 bytes are truncated
+	#  an error's text may be 4095 bytes
 	# getstring and getbytearray return (result, error).
 	getstring: fn(fd: ref Sys->FD): (string, string);
 	putstring: fn(fd: ref Sys->FD, s: string): int;

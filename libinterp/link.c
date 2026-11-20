@@ -4,22 +4,39 @@
 #include "raise.h"
 #include <kernel.h>
 
+/*
+ * Set, a link either side of which has no type digests is refused: a
+ * module made before the compiler wrote them, or by something that is
+ * not the compiler.  Clear, such a link is checked by the 32 bits
+ * alone, as all were.  The host's owner sets it (emu -L, a write to
+ * #c/strictlink), and nothing clears it while the system runs.
+ */
+int	strictlink;
+
 static void
 newlink(Link *l, char *fn, int sig, Type *t)
 {
-	l->name = malloc(strlen(fn)+1);
+	int n;
+
+	n = strlen(fn)+1;
+	l->name = malloc(n);
 	if(l->name == nil)
 		error(exNomem);
-	strcpy(l->name, fn);
+	memmove(l->name, fn, n);
 	l->sig = sig;
 	l->frame = t;
+	l->dig = nil;
 }
 
+/*
+ * dig is the table's own, which is never freed
+ */
 void
-runtime(Module *m, Link *l, char *fn, int sig, void (*runt)(void*), Type *t)
+runtime(Module *m, Link *l, char *fn, int sig, uchar *dig, void (*runt)(void*), Type *t)
 {
 	USED(m);
 	newlink(l, fn, sig, t);
+	l->dig = dig;
 	l->u.runt = runt;
 }
 
@@ -52,6 +69,27 @@ linkm(Module *m, Modlink *ml, int i, Import *ldt)
 							m->name, ldt->name, l->sig, sig);
 		goto bad;
 	}
+	/*
+	 * Those 32 bits, MD5 of the type's text folded, were the whole
+	 * check, and two function types that differ and fold alike are
+	 * found in a second: a module declaring one and loading a module
+	 * that implements the other linked, and the callee read its frame
+	 * as the wrong types, a ref as an integer or an integer as a ref.
+	 * The compiler now writes SHA-256 of the same text beside each,
+	 * and the two are compared when both modules have them.
+	 */
+	if(l->dig != nil && ldt->dig != nil) {
+		if(memcmp(l->dig, ldt->dig, SIGDLEN) != 0) {
+			snprint(e, sizeof(e), "link typecheck %s->%s() %ux/%ux: type digests differ",
+							m->name, ldt->name, l->sig, sig);
+			goto bad;
+		}
+	}
+	else if(strictlink) {
+		snprint(e, sizeof(e), "link typecheck %s->%s(): %s has no type digests: rebuild it",
+			m->name, ldt->name, l->dig == nil? m->name: "the module importing it");
+		goto bad;
+	}
 
 	ml->links[i].u = l->u;
 	ml->links[i].frame = l->frame;
@@ -64,13 +102,16 @@ bad:
 	return -1;
 }
 
-Modlink*
-mklinkmod(Module *m, int n)
+/* H if there is no memory for it */
+static Modlink*
+mklinkmodok(Module *m, int n)
 {
 	Heap *h;
 	Modlink *ml;
 
-	h = nheap(sizeof(Modlink)+(n-1)*sizeof(ml->links[0]));
+	h = nheapok(sizeof(Modlink)+(n-1)*sizeof(ml->links[0]));
+	if(h == nil)
+		return H;
 	h->t = &Tmodlink;
 	Tmodlink.ref++;
 	ml = H2D(Modlink*, h);
@@ -82,6 +123,17 @@ mklinkmod(Module *m, int n)
 	ml->MP = H;
 	ml->data = nil;
 
+	return ml;
+}
+
+Modlink*
+mklinkmod(Module *m, int n)
+{
+	Modlink *ml;
+
+	ml = mklinkmodok(m, n);
+	if(ml == H)
+		error(exHeap);
 	return ml;
 }
 
@@ -99,7 +151,17 @@ linkmod(Module *m, Import *ldt, int mkmp)
 
 	for(i = 0, l = ldt; l->name != nil; i++, l++)
 		;
-	ml = mklinkmod(m, i);
+	/*
+	 * The caller's reference to m becomes the Modlink's.  With no
+	 * Modlink it is given back here: raised with it kept, a module
+	 * just loaded stayed loaded, with nothing to unload it, for each
+	 * load made with the heap full.
+	 */
+	ml = mklinkmodok(m, i);
+	if(ml == H){
+		unload(m);
+		error(exHeap);
+	}
 
 	if(mkmp){
 		if(mkmp && m->origmp != H && m->ntype > 0) {

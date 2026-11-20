@@ -51,7 +51,12 @@ capwatch(void *a)
 	USED(a);
 	idletime = 0;
 	for(;;){
-		osmillisleep(30*1000);
+		/*
+		 * once a second: the counts below are in seconds, and with
+		 * a look every thirty a capability lasted fifteen of those,
+		 * seven and a half minutes where fifteen seconds is meant
+		 */
+		osmillisleep(1000);
 		qlock(&allcaps.l);
 		for(l = &allcaps.caps; (c = *l) != nil;)
 			if(++c->time > Captimeout){

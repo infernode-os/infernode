@@ -166,15 +166,26 @@ or
 for
 .I t
 so far.
-.B pairwise receive key installed
+.B pairwise receive key accepted
 and
 .B pairwise transmit key installed
 mean the handshake completed;
 .B group key \fIn\fP installed
 follows.
+A key is said to be installed when the radio's firmware has answered
+for it; the pairwise receive key is a write the driver takes and does
+nothing with (the radio has one pairwise key, which the transmit key's
+write sets), so it is only said to be accepted.
 .B bad MIC
 means a frame's integrity check did not match; one on a noisy link is
 unremarkable.
+A frame that is refused (this, a stale replay counter, a descriptor
+version not implemented, a frame cut short) is said once when the
+first of its kind comes, and after that with how many there have been,
+at intervals that double from twenty seconds to ten minutes: anyone in
+range can send such frames, and each was a line.
+The log is also held to 64K: when that much has been written, and
+standard error is a file that has kept it, the file is begun again.
 A wrong passphrase more often gives no diagnostic at all: the access
 point rejects the second message silently and the handshake stops,
 so a handshake that begins and never completes should be read as a

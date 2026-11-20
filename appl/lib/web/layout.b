@@ -119,7 +119,7 @@ placeholder(b: ref B, n: int): int
 newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, nil, nil, nil, 0, 0, 0, 0.0, 0.0, 0.0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
+		0, nil, nil, nil, 0, 0, 0, 0.0, 0.0, 0.0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0.0, 0, 0.0, 0,
 		nil, nil, nil, nil, 0, 0, nil, nil, 0, nil, 0);
 }
 
@@ -760,9 +760,7 @@ firstletter(box: ref Box, st: ref St)
 		j++;
 	if(j >= n || isspacesep(s[j]))
 		return;	# punctuation alone, or a space where the letter would be: no first letter
-	j++;
-	while(j < n && bidi->joining(s[j]) == Bidi->JT)
-		j++;
+	j = clusterend(s, j);
 	while(j < n && bidi->punct(s[j]))
 		j++;
 	ft := newbox(Ktext, 1, t.node, st);
@@ -796,6 +794,38 @@ firstletter(box: ref Box, st: ref St)
 		kids[m++] = hd l;
 	kids[m:] = p.kids[i+1:];
 	p.kids = kids;
+}
+
+# where the grapheme cluster that begins at s[j] ends (UAX #29, as far
+# as a first letter needs): the character, its marks, variation
+# selectors and emoji modifiers, a regional indicator's pair (a flag:
+# WPT's first-letter-flag-001 enlarged half of it), and what a
+# zero-width joiner joins to it
+clusterend(s: string, j: int): int
+{
+	n := len s;
+	if(j >= n)
+		return j;
+	ri := isregional(s[j]);
+	j++;
+	if(ri && j < n && isregional(s[j]))
+		j++;
+	while(j < n) {
+		c := s[j];
+		if(bidi->joining(c) == Bidi->JT || c >= 16rFE00 && c <= 16rFE0F || c >= 16rE0100 && c <= 16rE01EF ||
+		   c >= 16r1F3FB && c <= 16r1F3FF || c >= 16rE0020 && c <= 16rE007F)
+			j++;	# a mark, a variation selector, a skin tone, a tag
+		else if(c == 16r200D && j + 1 < n)
+			j += 2;	# joined to what follows
+		else
+			break;
+	}
+	return j;
+}
+
+isregional(c: int): int
+{
+	return c >= 16r1F1E6 && c <= 16r1F1FF;
 }
 
 # a space separator that is a break opportunity and hangs at a line's
@@ -1118,12 +1148,15 @@ flushtable(parent: ref Box, run, r: list of ref Box): list of ref Box
 }
 
 # end an inline run: wrapped in an anonymous block, unless it is only
-# collapsible white space (and out-of-flow boxes, which stand alone)
+# collapsible white space (and out-of-flow boxes, which stand alone).
+# In a flex or grid container a run of white space is no item even
+# preserved (Flexbox §4, Grid §6.1): a shiki code block is a grid of
+# lines with a newline between each, and every other row was empty
 flushrun(box: ref Box, run, r: list of ref Box): list of ref Box
 {
 	if(run == nil)
 		return r;
-	if(!blankrun(run, 1))
+	if(!blankrun(run, box.kind != Kflex && box.kind != Kgrid))
 		return anonblock(box, rev(run)) :: r;
 	for(l := rev(run); l != nil; l = tl l)
 		if(isoof(hd l))
@@ -1838,7 +1871,12 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 				if(b.d.hasattr(o, "selected"))
 					break;
 			}
-		r.text = squash(sel) + " ▾";
+		# the arrow is the control's own: with appearance: none the
+		# page draws its (DuckDuckGo's chevron, an ::after), and there
+		# were two
+		r.text = squash(sel);
+		if(st.appearance)
+			r.text += " ▾";
 		return r;
 	}
 	return nil;
@@ -1983,6 +2021,7 @@ staticx(b: ref Box): int
 # in the coordinates of the context's root border box.
 Fctx: adt {
 	left, right:	list of Rect;
+	fr:	list of (Rect, real);	# a float's inner edge (a left one's right, a right one's left) less where it is, to the fraction (boxfrac)
 };
 
 Margin: adt {
@@ -2125,7 +2164,7 @@ lay(root: ref Box, width, height: int)
 	l := ref L(width, height, root, nil);
 	edges(root, width);
 	sizew(root, width, height);
-	layblock(l, root, width, height, ref Fctx(nil, nil), root.ml, root.mt);
+	layblock(l, root, width, height, ref Fctx(nil, nil, nil), root.ml, root.mt);
 	root.x = root.ml;
 	root.y = root.mt;
 	# boxes whose containing block is the viewport, in document order
@@ -2563,24 +2602,31 @@ automargins(b: ref Box, cbw: int)
 		b.ml += free;
 	else if(rauto)
 		b.mr += free;
-	else if(free > 0 && incenter(b)) {
-		# <center> centres its block children too (HTML §15.3.3:
-		# text-align: -webkit-center), as pages of its era expect
-		b.ml += free/2;
-		b.mr += free - free/2;
+	else if(free > 0 && (ka := kidalign(b)) != 0) {
+		# <center> and align= place their block children too (HTML
+		# §15.3.3: text-align: -webkit-center and kin), as pages of
+		# their era expect: plan9.io's tables, centred in a <td
+		# align=center>, were at its left
+		case ka {
+		Style->Acenter =>
+			b.ml += free/2;
+			b.mr += free - free/2;
+		Style->Aright =>
+			b.ml += free;
+		* =>
+			b.mr += free;
+		}
 	} else if(free != 0 && b.parent != nil && b.parent.st.dirrtl)
 		b.ml += free;	# over-constrained in a right-to-left block: margin-left gives (§10.3.3)
 }
 
-# is b a block child of <center> (or of its anonymous blocks)?
-incenter(b: ref Box): int
+# where the box's container places its block children, by its
+# text-align (through its anonymous blocks, which have its style)
+kidalign(b: ref Box): int
 {
 	for(p := b.parent; p != nil; p = p.parent) {
-		if(p.node != 0)
-			return curdoc != nil && curdoc.nodes[p.node].tag == Dom->Tcenter &&
-				curdoc.nodes[p.node].ns == Dom->HTML;
-		if(p.kind != Kblock)
-			break;
+		if(p.node != 0 || p.kind != Kblock)
+			return p.st.kidalign;
 	}
 	return 0;
 }
@@ -2795,7 +2841,7 @@ layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Marg
 		ch = cbh;	# the percentage height calculation quirk: through auto-height blocks to the nearest definite one, but not a cell's child
 	bfc := isbfc(b) || b == l.root || fc == nil;	# the root holds the initial formatting context
 	if(bfc) {
-		fc = ref Fctx(nil, nil);
+		fc = ref Fctx(nil, nil, nil);
 		ox = oy = 0;
 	}
 	cx := ox + b.bl + b.pl;	# content box, in fc
@@ -3335,6 +3381,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i = 0; i < len la; i++) {
 		ln := la[i];
 		avail := mainavail;
+		clamped := 0;	# a min-height or max-height gave the column its height
 		if(avail < 0) {
 			# indefinite (a column with auto height): sizes are hypothetical
 			avail = 0;
@@ -3342,7 +3389,9 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				avail += ir(ln.items[j].hyp) + ln.items[j].mm;
 			avail += gapmain * nz(len ln.items - 1);
 			# then the container's min-height and max-height (§9.2 step 4)
-			avail = clamph(b, avail + vextra(b), cbh) - vextra(b);
+			ca := clamph(b, avail + vextra(b), cbh) - vextra(b);
+			clamped = !row && !wrap && ca != avail;
+			avail = ca;
 		}
 		resolveflex(ln.items, real (avail - gapmain * nz(len ln.items - 1)));
 		cross := 0;
@@ -3372,7 +3421,11 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 					(ks.basis.kind == Style->Lpx || ks.basis.kind == Style->Lauto && ks.height.kind == Style->Lpx);
 				outer := imposed;
 				outerh := imposedh;
-				if(ch >= 0 || fixedmain) {
+				# (a column its min-height or max-height sizes: its items are as
+				# tall as they flex to, for their own content too, as Chrome has
+				# it; Vercel's hero, flex-1 columns in a column of min-height:
+				# min(100svh - ..., 1100px), kept their content's height)
+				if(ch >= 0 || fixedmain || clamped) {
 					imposed = k;
 					imposedh = m;
 				}
@@ -3551,17 +3604,73 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				rstart = real freem / real (nit + 1);
 			}
 		}
+		# along a row, each item where the ones before would end
+		# unrounded, as inline-blocks on a line (boxfrac), its text
+		# to the fraction
+		# The free space is less in fact by what the items were rounded
+		# by: shared out as it is (auto margins, justify-content)
 		mp := rstart;
-		for(j = 0; j < nit; j++) {
-			fi := ln.items[j];
-			fi.pos = ir(mp);
-			mp += real (ir(fi.main) + fi.mm) + rgap;
-		}
-		if(rev)
+		acc := 0.0;	# what the items before were rounded by, less the free space's share of it
+		agap := 0.0;	# the share of each gap
+		if(row && !rev) {
+			# (less what the container was rounded by, where it is as
+			# wide as its items: then there is no free space in fact)
+			tot := -fitfrac(b, space);
+			for(j = 0; j < nit; j++)
+				tot += boxfracw(ln.items[j].box, ir(ln.items[j].main));
+			if(autos > 0)
+				;
+			else if(freem > 0 || jc == Style->ALcenter || jc == Style->ALend || jc == Style->ALflowend || jc == Style->ALright)
+				case jc {
+				Style->ALend or Style->ALflowend or Style->ALright =>
+					acc = -tot;
+				Style->ALcenter =>
+					acc = -tot / 2.0;
+				Style->ALbetween =>
+					if(nit > 1)
+						agap = -tot / real (nit - 1);
+				Style->ALaround =>
+					agap = -tot / real nz1(nit);
+					acc = agap / 2.0;
+				Style->ALevenly =>
+					agap = -tot / real (nit + 1);
+					acc = agap;
+				}
+			seen := 0;
+			for(j = 0; j < nit; j++) {
+				fi := ln.items[j];
+				ks := fi.box.st;
+				if(autos > 0 && ks.ml.kind == Style->Lauto)
+					seen++;
+				a := acc - tot * real seen / real nz1(autos);
+				fi.pos = ir(mp + a);
+				fi.box.pfx = mp + a - real fi.pos - (mp - real ir(mp));
+				mw := ir(fi.main);
+				acc += boxfracw(fi.box, mw) + agap;
+				if(autos > 0 && ks.mr.kind == Style->Lauto)
+					seen++;
+				mp += real (mw + fi.mm) + rgap;
+			}
+		} else
+			for(j = 0; j < nit; j++) {
+				fi := ln.items[j];
+				fi.pos = ir(mp);
+				fi.box.pfx = 0.0;
+				mp += real (ir(fi.main) + fi.mm) + rgap;
+			}
+		if(rev) {
+			racc := 0.0;	# packed at the end: what the items from there were rounded by
 			for(j = 0; j < nit; j++) {
 				fi := ln.items[j];
 				fi.pos = space - fi.pos - ir(fi.main) - fi.mm;
+				if(row && autos == 0 && (freem <= 0 || jc == Style->ALstart || jc == Style->ALflowstart || jc == Style->ALnormal)) {
+					racc -= boxfracw(fi.box, ir(fi.main));
+					p := real fi.pos + racc;
+					fi.pos = ir(p);
+					fi.box.pfx = p - real fi.pos;
+				}
 			}
+		}
 		for(j = 0; j < nit; j++) {
 			fi := ln.items[j];
 			k := fi.box;
@@ -3601,10 +3710,14 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				   ks.ml.kind != Style->Lauto && ks.mr.kind != Style->Lauto)
 					k.w = clampw(k, lc - k.ml - k.mr, cw);
 				outer := k.w + k.ml + k.mr;
+				k.pfx = 0.0;
 				if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
 					cpos = (lc - outer)/2;
-				else
+				else {
 					cpos = crossoff(al, lc, outer);
+					if(cpos == lc - outer && cpos > 0)
+						k.pfx = fitfrac(b, cw) - boxfrac(k);	# at the end, the container's unrounded: its text from its unrounded width there, as a right float's
+				}
 				k.x = b.bl + b.pl + ln.pos + cpos + k.ml;
 				k.y = b.bt + b.pt + fi.pos + k.mt;
 			}
@@ -3787,9 +3900,28 @@ Gi: adt {
 };
 
 # the size a track function names, or Tauto if it is not one
+tavail := -1;	# what tracks() lays the template out in: a calc()'s percentages are of it
 tsz(t: ref Tok): (int, Tsz)
 {
 	case t.kind {
+	Css->Kfunction =>
+		case t.s {
+		"calc" or "min" or "max" or "clamp" =>
+			# px and percentages both (style made the rest px):
+			# against the grid's width, or auto where it is not
+			# known yet (Grid 2 §7.2.1)
+			(ok, l) := style->tracklen(t);
+			if(!ok)
+				return (0, Tsz(Tauto, 0.0));
+			if(l.kind == Style->Lpx && l.pct == 0.0)
+				return (1, Tsz(Tfixed, l.px));
+			if(tavail < 0)
+				return (1, Tsz(Tauto, 0.0));
+			v := l.resolve(real tavail);
+			if(v < 0.0)
+				v = 0.0;
+			return (1, Tsz(Tfixed, v));
+		}
 	Css->Kdimension =>
 		if(t.s == "fr")
 			return (1, Tsz(Tfr, t.n));
@@ -3840,8 +3972,11 @@ track(t: ref Tok): ref Track
 			if(hi.kind == Tfixed)
 				hi = Tsz(Tfit, hi.v);
 			return ref Track(Tsz(Tauto, 0.0), hi, 0.0, 0.0, 0, 0);
+		"calc" or "min" or "max" or "clamp" =>
+			;	# a size: below
+		* =>
+			return nil;
 		}
-		return nil;
 	}
 	(ok, sz) := tsz(t);
 	if(!ok)
@@ -3860,6 +3995,16 @@ repsize := 0.0;
 # A track list, with repeat() expanded (auto-fill/auto-fit against
 # avail) and line names collected: names[i] are the names of line i.
 tracks(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list of string)
+{
+	outeravail := tavail;
+	if(avail >= 0)
+		tavail = avail;
+	(a, n) := tracks1(v, avail, gap);
+	tavail = outeravail;
+	return (a, n);
+}
+
+tracks1(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list of string)
 {
 	tlist: list of ref Track;
 	names: list of (int, string);
@@ -4238,6 +4383,20 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		}
 	}
 
+	# a column as wide as its item's text rounded is that much wider or
+	# narrower in fact: the items after it where they would then be,
+	# to the fraction (a table's cfrac)
+	gcf := array[len cols + 1] of {* => 0.0};
+	if(!st.dirrtl) {
+		for(i = 0; i < len items; i++) {
+			g := items[i];
+			k := g.box;
+			if(g.c1 == g.c0 + 1 && gcf[g.c0 + 1] == 0.0 && k.ml + k.w + k.mr == areaw(cols, cpos, g.c0, g.c1, colgap))
+				gcf[g.c0 + 1] = boxfrac(k);
+		}
+		for(i = 1; i <= len cols; i++)
+			gcf[i] += gcf[i-1];
+	}
 	# place each item in its area, aligned
 	for(i = 0; i < len items; i++) {
 		g := items[i];
@@ -4287,6 +4446,16 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 			if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
 				x = cw - ax - aw + (aw - k.w)/2;
 		}
+		# at its area's end: its text from its unrounded width there, as
+		# a right float's
+		pf := 0.0;
+		if(g.c0 < len gcf)
+			pf = gcf[g.c0];
+		if(!st.dirrtl && !(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto) &&
+		   (e := aw - k.w - k.ml - k.mr) > 0 && crossoff(js, aw, k.w + k.ml + k.mr) == e && g.c1 < len gcf)
+			pf = gcf[g.c1] - boxfrac(k);	# from its area's end unrounded
+		x += ir(pf);
+		k.pfx = pf - real ir(pf);
 		y := ay + k.mt + crossoff(as, ah, k.h + k.mt + k.mb);
 		if(ks.mt.kind == Style->Lauto && ks.mb.kind == Style->Lauto)
 			y = ay + (ah - k.h)/2;
@@ -5208,6 +5377,8 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 	ls := newlanes(n, sgap, tol, dense);
 	ext := array[len items] of {* => -1};	# where an item's alignment container ends, if room follows it
 	y := array[len items] of int;
+	lf := array[n] of {* => 0.0};	# what each lane's items so far were rounded by
+	ifr := array[len items] of {* => 0.0};	# and each item's start
 	for(i = 0; i < len items; i++) {
 		g := items[i];
 		(a0, a1) := glines(g, down);
@@ -5233,7 +5404,25 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 			}
 		}
 		y[i] = fitsat(a0, a1, o[i], ls.run, ls.gaps, dense);
+		# along a row of lanes, an item straight after the one before
+		# is where that one ends unrounded, as a flex row's items
+		# (filling in reverse, from the end: its start short by those
+		# after it and its own)
+		fracs := !down && !st.dirrtl;
+		at := 0.0;
+		if(fracs)
+			for(t := a0; t < a1; t++)
+				if(y[i] == ls.run[t])
+					at = lf[t];
 		ls.take(i, a0, a1, y[i], o[i], ext);
+		if(fracs) {
+			bf := boxfrac(g.box);
+			ifr[i] = at;
+			if(fillrev)
+				ifr[i] = -(at + bf);
+			for(t = a0; t < a1; t++)
+				lf[t] = at + bf;
+		}
 	}
 	last := ls.last;
 	# lanes from an auto-fit repeat that nothing landed in collapse,
@@ -5350,6 +5539,31 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 		}
 	}
 
+	# stacked down, a lane as wide as its item's text rounded is that
+	# much wider or narrower in fact: those after it to the fraction,
+	# as a grid's columns (gcf)
+	tcf := array[n + 1] of {* => 0.0};
+	if(down && !st.dirrtl && !trackrev) {
+		# a lane's width unrounded: its items' largest max-content
+		# contribution, unrounded (as a block's fmx)
+		lmx := array[n] of {* => 0.0};
+		for(i = 0; i < len items; i++) {
+			g := items[i];
+			(a0, a1) := glines(g, down);
+			if(a1 != a0 + 1 || a0 < 0 || a0 >= n)
+				continue;
+			(nil, kmx) := contribution(g.box);
+			if((f := real kmx + kidfrac(g.box, kmx)) > lmx[a0])
+				lmx[a0] = f;
+		}
+		for(i = 0; i < n; i++) {
+			aw := areaw(ptr, pos, i, i + 1, tgap);
+			if(ir(lmx[i]) == aw)
+				tcf[i + 1] = lmx[i] - real aw;
+		}
+		for(i = 1; i <= n; i++)
+			tcf[i] += tcf[i-1];
+	}
 	# place each item: its lane, and its position along the stack
 	for(i = 0; i < len items; i++) {
 		g := items[i];
@@ -5381,6 +5595,14 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 				if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
 					x = cw - ax - aw + (aw - k.w)/2;
 			}
+			pf := 0.0;
+			if(p0 < len tcf)
+				pf = tcf[p0];
+			if(!st.dirrtl && !(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto) &&
+			   (e := aw - k.w - k.ml - k.mr) > 0 && crossoff(js, aw, k.w + k.ml + k.mr) == e && p1 < len tcf)
+				pf = tcf[p1] - boxfrac(k);	# at its lane's end unrounded, as a grid item there
+			x += ir(pf);
+			k.pfx = pf - real ir(pf);
 			k.x = b.bl + b.pl + x;
 			k.y = b.bt + b.pt + p + k.mt;
 			ah = o[i];
@@ -5402,7 +5624,9 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 				yy = ay + (ah - k.h)/2;
 			if(st.dirrtl)
 				p = size - p - o[i];
-			k.x = b.bl + b.pl + p + k.ml;
+			pr := real p + ifr[i];
+			k.x = b.bl + b.pl + ir(pr) + k.ml;
+			k.pfx = pr - real ir(pr);
 			k.y = b.bt + b.pt + yy;
 			aw = o[i];
 		}
@@ -7054,6 +7278,21 @@ tableintrinsic(b: ref Box): (int, int)
 		if(cmn > smn)
 			smn = cmn;
 	}
+	# its max-content unrounded: each column's cell's text unrounded
+	# (laytable1's cfrac), so that what holds it measures it as laid out
+	cf := array[t.ncols] of {* => 0.0};
+	for(tl2 := t.cells; tl2 != nil; tl2 = tl tl2) {
+		c := hd tl2;
+		if(c.cs == 1 && cf[c.c] == 0.0)
+			cf[c.c] = kidfrac(c.box, mx[c.c]);
+	}
+	sumf := 0.0;
+	for(i = 0; i < t.ncols; i++)
+		sumf += cf[i];
+	if(sumf != 0.0 && ir(real smx + sumf) == smx) {
+		b.fmx = real smx + sumf;
+		b.fgen = laygen;
+	}
 	return (smn + hextra(b), smx + hextra(b));
 }
 
@@ -7397,6 +7636,33 @@ laytable1(l: ref L, b: ref Box, cbw, cbh: int)
 			row.x = 0;
 			row.y = rowy[r] - g.y;
 		}
+	}
+	# a column as wide as its cell's text rounded is that much narrower
+	# or wider in fact: the cells after it have their text where it
+	# would then be, to the fraction (a cell's text going on from the
+	# one before it as a line's would)
+	cfrac := array[n] of {* => 0.0};
+	for(cl2 = t.cells; cl2 != nil; cl2 = tl cl2) {
+		c := hd cl2;
+		if(c.cs == 1 && cfrac[c.c] == 0.0)
+			cfrac[c.c] = boxfrac(c.box);
+	}
+	for(cl2 = t.cells; cl2 != nil; cl2 = tl cl2) {
+		c := hd cl2;
+		p := 0.0;
+		if(!st.dirrtl)
+			for(i = 0; i < c.c; i++)
+				p += cfrac[i];
+		c.box.pfx = p;
+	}
+	# and the table is as much wider unrounded: what follows it (a
+	# cell after a table nested in one) too
+	sumf := 0.0;
+	for(i = 0; i < n; i++)
+		sumf += cfrac[i];
+	if(autow && sumf != 0.0 && ir(real cw + sumf) == cw) {
+		b.fmx = real cw + sumf;
+		b.fgen = laygen;
 	}
 	for(cl2 = t.cells; cl2 != nil; cl2 = tl cl2) {
 		c := hd cl2;
@@ -7936,6 +8202,11 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		else
 			k.mr = free - k.ml;
 	}
+	# placed by its right edge: its text from its unrounded width there,
+	# as a right float's
+	k.pfx = 0.0;
+	if(lauto && (!rauto || a.rightedge))
+		k.pfx = -boxfrac(k);
 	if(!lauto)
 		x = pr.min.x + left + k.ml;
 	else if(!rauto)
@@ -7971,8 +8242,11 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	h := k.h;
 	if((st.height.kind == Style->Lauto && !truereplaced(k) && !(st.aspect > 0.0) || st.height.kind == Style->Lstretch) && !tauto && !bauto) {
 		# (an auto height with a ratio comes from the width: aspect-ratio/abspos-003)
+		# the insets make it definite: laid out again at it, should its
+		# content care (a flex container's items stretch to it:
+		# web.dev's tabs, a nav at inset: 0, were their text's height)
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
-		k.h = h;
+		imposeh(l, k, h, cbw, cbh);
 	} else if(st.height.kind == Style->Lstretch) {
 		avail := cbh;
 		if(!tauto)
@@ -7982,7 +8256,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		if(tauto && bauto)
 			avail -= sy - pr.min.y;
 		h = clamph(k, avail - k.mt - k.mb, cbh);
-		k.h = h;
+		imposeh(l, k, h, cbw, cbh);
 	} else if(!tauto && !bauto && (st.mt.kind == Style->Lauto || st.mb.kind == Style->Lauto)) {
 		# a definite or intrinsic (fit-content) height: auto margins
 		# auto margins take what the insets and height leave (§10.6.4)
@@ -8061,6 +8335,57 @@ band(fc: ref Fctx, y0, y1, x0, x1: int): (int, int)
 			x1 = r.min.x;
 	}
 	return (x0, x1);
+}
+
+# the fraction of a pixel the left float bounding the band [y0, y1)
+# at x0 ends past its edge: the line beside it starts there
+bandfrac(fc: ref Fctx, y0, y1, x0: int): real
+{
+	if(fc == nil || fc.fr == nil)
+		return 0.0;
+	e: Rect;
+	got := 0;
+	for(l := fc.left; l != nil; l = tl l) {
+		r := hd l;
+		if(r.min.y < y1 && r.max.y > y0 && r.max.x > x0) {
+			x0 = r.max.x;
+			e = r;
+			got = 1;
+		}
+	}
+	if(!got)
+		return 0.0;
+	for(fl := fc.fr; fl != nil; fl = tl fl) {
+		(r, d) := hd fl;
+		if(r.eq(e))
+			return d;
+	}
+	return 0.0;
+}
+
+# the same of the right float bounding the band at x1
+bandfracr(fc: ref Fctx, y0, y1, x1: int): real
+{
+	if(fc == nil || fc.fr == nil)
+		return 0.0;
+	e: Rect;
+	got := 0;
+	for(l := fc.right; l != nil; l = tl l) {
+		r := hd l;
+		if(r.min.y < y1 && r.max.y > y0 && r.min.x < x1) {
+			x1 = r.min.x;
+			e = r;
+			got = 1;
+		}
+	}
+	if(!got)
+		return 0.0;
+	for(fl := fc.fr; fl != nil; fl = tl fl) {
+		(r, d) := hd fl;
+		if(r.eq(e))
+			return d;
+	}
+	return 0.0;
 }
 
 # the lowest float bottom at or below y, above which a band is blocked
@@ -8204,9 +8529,19 @@ placefloat(l: ref L, k: ref Box, fc: ref Fctx, cx, y, cw, ch, ox, oy: int)
 	r: Rect;
 	if(k.st.float == Style->Fleft) {
 		r = Rect((lx, y), (lx + mw, y + mh));
+		# its text from the float before it, unrounded; the next from
+		# its own edge unrounded
+		k.pfx = bandfrac(fc, y, y + nz1(mh), bx0);
+		if((d := k.pfx + boxfrac(k)) != 0.0)
+			fc.fr = (r, d) :: fc.fr;
 		fc.left = r :: fc.left;
 	} else {
 		r = Rect((rx - mw, y), (rx, y + mh));
+		# its unrounded width from the edge, or from the float before it
+		# unrounded: its text that much further
+		k.pfx = bandfracr(fc, y, y + nz1(mh), bx1) - boxfrac(k);
+		if(k.pfx != 0.0)
+			fc.fr = (r, k.pfx) :: fc.fr;
 		fc.right = r :: fc.right;
 	}
 	k.x = r.min.x - ox + k.ml;
@@ -8488,12 +8823,15 @@ imgsrc(d: ref Doc, n: int): string
 	return d.attr(n, "src");
 }
 
-# image types the engine decodes
+# image types the engine decodes: not AVIF, which readavif recognises
+# and refuses (no AV1 decoder), nor ICO, which nothing reads.  A
+# <source> of either was taken and nothing shown: svelte.dev's hero
+# is an AVIF source, then a WebP one
 decodes(t: string): int
 {
 	case lower(trimsp(t)) {
 	"image/png" or "image/jpeg" or "image/jpg" or "image/gif" or "image/webp" or
-	"image/svg+xml" or "image/avif" or "image/x-icon" or "image/vnd.microsoft.icon" =>
+	"image/svg+xml" =>
 		return 1;
 	}
 	return 0;
@@ -9181,21 +9519,47 @@ intrinsic1(b: ref Box): (int, int)
 				spreadspan(cols, cmn, cmx, a0, a0 + span, kmn, kmx, gap);
 				c = (a0 + span) % len cols;
 			}
+			# under a min-content constraint a track is its base size:
+			# its minimum sizing function when that is a length,
+			# whatever its items (minmax(0, 1fr) is 0, and an fr's
+			# flex fraction is zero there, §12.7.1); the items' only
+			# when it is intrinsic.  Tailwind's hero, in an auto
+			# column beside a grid of 30 minmax(0, 1fr) columns
+			# holding a 1536px carousel, was laid out 4017px wide
 			wmn := gap * (len cols - 1) + ex;
 			wmx := wmn;
+			# under a max-content constraint the fr tracks share one
+			# size, the largest of their items' contributions per flex
+			# factor (§12.7.1): Notion's two buttons in 1fr 1fr at
+			# max-content were split their sum, and the wider wrapped
+			fr := 0.0;
 			for(i = 0; i < len cols; i++)
-				if(cols[i].lo.kind == Tfixed && cols[i].hi.kind == Tfixed) {
-					wmn += int cols[i].hi.v;
-					wmx += int cols[i].hi.v;
-				} else {
-					wmn += cmn[i];
-					x := cmx[i];
-					if(cols[i].hi.kind == Tfit && x > int cols[i].hi.v)
-						x = int cols[i].hi.v;	# fit-content: no wider than its argument
-					if(x < cmn[i])
-						x = cmn[i];
-					wmx += x;
+				if(cols[i].hi.kind == Tfr && cols[i].hi.v > 0.0) {
+					f := cols[i].hi.v;
+					if(f < 1.0)
+						f = 1.0;
+					fr = maxr(fr, real cmx[i] / f);
 				}
+			for(i = 0; i < len cols; i++) {
+				tr := cols[i];
+				if(tr.hi.kind == Tfr && fr * tr.hi.v > real cmx[i])
+					cmx[i] = int math->ceil(fr * tr.hi.v);
+				mn := cmn[i];
+				if(tr.lo.kind == Tfixed)
+					mn = int tr.lo.v;
+				x := cmx[i];
+				case tr.hi.kind {
+				Tfixed =>
+					x = int tr.hi.v;	# grown to its limit, and no further
+				Tfit =>
+					if(x > int tr.hi.v)
+						x = int tr.hi.v;	# fit-content: no wider than its argument
+				}
+				if(x < mn)
+					x = mn;
+				wmn += mn;
+				wmx += x;
+			}
 			return (wmn, wmx);
 		}
 	}
@@ -9207,6 +9571,7 @@ intrinsic1(b: ref Box): (int, int)
 		(mn, mx) = inlineintrinsic(b);
 	} else if(b.kind == Kflex && b.st.flexdir < 2 || b.kind == Krow) {
 		# a row: maxima add up, with the gaps between
+		rf := 0.0;	# what they were rounded by
 		if(b.kind == Kflex && b.st.colgap.kind != Style->Lnormal && len b.kids > 1) {
 			g := res(b.st.colgap, 0) * (len b.kids - 1);
 			mx += g;
@@ -9232,6 +9597,12 @@ intrinsic1(b: ref Box): (int, int)
 			} else
 				mn += kmn;
 			mx += kmx;
+			rf += kidfrac(k, kmx);
+		}
+		# unrounded, as the items are placed along it (layflex's acc)
+		if(b.kind == Kflex && rf != 0.0 && ir(real mx + rf) == mx) {
+			b.fmx = real mx + rf;
+			b.fgen = laygen;
 		}
 	} else if(b.kind == Kflex && b.st.flexwrap != 0 && (ph := packh(b)) >= 0) {
 		# a wrapping column flex container of definite height (or a
@@ -9275,6 +9646,7 @@ intrinsic1(b: ref Box): (int, int)
 		}
 		mx += colw;
 	} else {
+		fm := 0.0;	# mx unrounded: the widest child's, as its text has it (fmx)
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
 			if(isabs(k))
@@ -9285,6 +9657,12 @@ intrinsic1(b: ref Box): (int, int)
 				mn = kmn;
 			if(kmx > mx)
 				mx = kmx;
+			if((f := real kmx + kidfrac(k, kmx)) > fm)
+				fm = f;
+		}
+		if(ir(fm) == mx) {
+			b.fmx = fm;
+			b.fgen = laygen;
 		}
 	}
 	pcth = opcth;
@@ -9457,7 +9835,7 @@ inlineintrinsic(b: ref Box): (int, int)
 			(kmn, kmx) := contribution(it.box);
 			if(real kmn > mn)
 				mn = real kmn;
-			line += sp + real kmx;
+			line += sp + real kmx + kidfrac(it.box, kmx);	# as it advances the line (boxfrac)
 			trail = 0.0;
 			sp = 0.0;
 			word = 0.0;
@@ -9484,7 +9862,13 @@ inlineintrinsic(b: ref Box): (int, int)
 	}
 	if(line - trail > mx)
 		mx = line - trail;
-	return (ir(mn + 0.49), ir(mx + 0.49));
+	# rounded to nearest, as an inline box's edges are on the line
+	# (span): a 41.4px line in a 41px box whose 41px background ends
+	# where its text does, as Chromium snaps both of its 41.4 to 41.
+	# The box keeps the fraction, so that its lines fit it (fitslack)
+	b.fmx = mx;
+	b.fgen = laygen;
+	return (ir(mn), ir(mx));
 }
 
 # ---- inline formatting (CSS 2.2 §9.4.2, §10.8; CSS Text 3) ----
@@ -9494,6 +9878,85 @@ inlineintrinsic(b: ref Box): (int, int)
 # lines Chromium wraps (docs.python.org's heading, 0.36px over).  The
 # other fits (preserved spaces, hanging) keep their half pixel.
 FITSLACK: con 0.3;
+
+# How far past the line's end b's lines may reach and still fit: where
+# its width is its own max-content rounded (a float's, a cell's, an
+# inline-block's, shrunk to fit), the fraction it was rounded down by.
+# Its lines are then those of max-content: none breaks.  Not where the
+# width is a length that happens to be that.
+# the fraction of a pixel b's text is wider than its content width cw
+# where cw is its max-content rounded (less where it was rounded up);
+# else 0.  Not where cw is a width it was given that happens to be
+# that: its lines break at it (a 40px box's 40.3px of text wraps)
+fitfrac(b: ref Box, cw: int): real
+{
+	if(b.fgen != laygen || cw != ir(b.fmx))
+		return 0.0;
+	wv := b.st.width;
+	if(wv.kind == Style->Lpx && wv.pct == 0.0) {
+		g := ir(wv.px);
+		if(b.st.borderbox)
+			g -= hextra(b);
+		if(g == cw)
+			return 0.0;
+	} else if(wv.kind != Style->Lauto && wv.kind != Style->Lmax && wv.kind != Style->Lmin && wv.kind != Style->Lfit)
+		return 0.0;	# a percentage, calc(): taken as given
+	return b.fmx - real cw;
+}
+
+fitslack(b: ref Box, cw: int): real
+{
+	d := fitfrac(b, cw);
+	if(d > 0.0)
+		return d + 0.01;
+	return 0.0;
+}
+
+# How much wider b is than its width, unrounded: where its width is
+# its own max-content rounded (fitslack's), the fraction rounded off;
+# else 0.  What follows it is placed that much further, to the
+# fraction (an inline-block's, a float's, a cell's neighbours)
+boxfrac(b: ref Box): real
+{
+	return boxfracw(b, b.w);
+}
+
+# The fraction of a pixel k's max-content contribution kmx was
+# rounded by, where kmx is its text's (no min-width, max-width or
+# width of its own took it): what boxfrac will be at that width.
+kidfrac(k: ref Box, kmx: int): real
+{
+	if(k.fgen != laygen || ir(k.fmx) + hextra(k) + mgs(k) != kmx)
+		return 0.0;
+	return boxfracw(k, kmx - mgs(k));
+}
+
+# boxfrac at border-box width w
+boxfracw(b: ref Box, w: int): real
+{
+	if((d := fitfrac(b, w - hextra(b))) != 0.0)
+		return d;
+	# one box inside that fills it (a table's wrapper, rows, cell): its
+	k: ref Box;
+	for(i := 0; i < len b.kids; i++) {
+		c := b.kids[i];
+		if(isabs(c) || c.st.float != 0)
+			continue;
+		if(k != nil)
+			return 0.0;
+		k = c;
+	}
+	if(k == nil || k.ml + k.w + k.mr != w - hextra(b) || k.kind == Ktext)
+		return 0.0;
+	return boxfrac(k);
+}
+
+rmax(a, b: real): real
+{
+	if(a > b)
+		return a;
+	return b;
+}
 
 Iword, Ispace, Iopen, Iclose, Iatomic, Ibreak, Ifloat, Iabs: con iota;
 
@@ -10494,7 +10957,12 @@ Ln: adt {
 	indent:	real;		# text-indent (the first line only): content starts this far past the left edge
 	floats:	list of ref Box;	# floats met mid-line, placed when the line ends
 	below:	list of ref Abs;	# block-level absolutes met mid-line: their static position is under it
+	brk:	int;		# ended by a break: a <br>, or a preserved newline (a textarea's, a pre's)
+	wstart:	real;		# where the line's run of glyphs began, Nostart before anything is placed (textfrag)
+	phase:	real;		# the fraction of a pixel the line's left edge is past ln.left: a float's (bandfrac)
 };
+
+Nostart: con -1.0e9;
 
 # the inline formatting state of one block container
 Ifc: adt {
@@ -10506,6 +10974,7 @@ Ifc: adt {
 	y:	int;		# top of the next line, in b's border box
 	strut:	int;		# the block's own line height, for float bands
 	ch:	int;		# b's content height if definite, else -1: for floats' percentages
+	slack:	real;		# how far its lines may reach past cw and fit: fitslack
 };
 
 # Set ln's edges from the floats beside the line at f.y.
@@ -10518,6 +10987,7 @@ edgesat(f: ref Ifc, ln: ref Ln)
 	ln.avail = rx - cx;
 	if(ln.x < real ln.left)
 		ln.x = real ln.left;
+	ln.phase = bandfrac(f.fc, ly, ly + nz1(f.strut), cx);
 }
 
 # a line starts past the floats at its left, and its text-indent
@@ -10670,12 +11140,12 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	autospacepass(items);
 	st := b.st;
 	lines: list of ref Line;
-	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch);
+	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch, fitslack(b, cw));
 	x0 := b.bl + b.pl;
 	para := 0;
 	joinruns(items);
 	(items, para) = bidiitems(b, items);
-	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, real res(st.indent, cw), nil, nil);
+	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, real res(st.indent, cw), nil, nil, 0, Nostart, 0.0);
 	linestart(f, ln);
 	first := 1;
 	opened: list of ref Box;	# inline boxes open, outermost last
@@ -10765,13 +11235,13 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				ln.content = 1;
 				continue;
 			}
-			if(it.hang != 2 && ln.content && ln.x + segwidth(il) > cutavail(ln) + FITSLACK && !endhangs(ln, il) && (!it.nowrap || spacebefore(ln, it)) && canbreak(ln, it)) {
+			if(it.hang != 2 && ln.content && ln.x + segwidth(il) > cutavail(ln) + rmax(FITSLACK, f.slack) && !endhangs(ln, il) && (!it.nowrap || spacebefore(ln, it)) && canbreak(ln, it)) {
 				hyphenate(ln);
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
 			}
-			while(!ln.content && ln.x + it.w > real ln.avail + 0.01 && movedown(f, ln))
+			while(!ln.content && ln.x + it.w > real ln.avail + rmax(0.01, f.slack) && movedown(f, ln))
 				;
 			if(!ln.content && ln.x + it.w > real ln.avail && (it.box.st.anywhere || keptall(it)) && len it.text > 1 && !it.nowrap) {
 				# (keep-all is relaxed to normal breaking when the line
@@ -10801,17 +11271,18 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			w := k.ml + k.w + k.mr;
 			ah := k.mt + k.h + k.mb;
 			tallband(f, ln, ah);
-			if(ln.content && ln.x + real w > cutavail(ln) + 0.01 && atomicbreak(ln, k))  {
+			if(ln.content && ln.x + real w > cutavail(ln) + rmax(0.01, f.slack) && atomicbreak(ln, k))  {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
 				tallband(f, ln, ah);
 			}
-			while(!ln.content && ln.x + real w > real ln.avail + 0.01 && movedown(f, ln))
+			while(!ln.content && ln.x + real w > real ln.avail + rmax(0.01, f.slack) && movedown(f, ln))
 				tallband(f, ln, ah);
-			fr := ref Frag(Fatomic, ir(ln.x) + k.ml, 0, k.w, k.h, 0, k, nil, nil, 0, 0, 0, 0, it.level, 0, 0);
+			runstart(ln);
+			fr := ref Frag(Fatomic, ir(ln.x) + k.ml, 0, k.w, k.h, 0, k, nil, nil, 0, 0, 0, 0, it.level, 0, 0, ln.x - real ir(ln.x), ln.wstart - real ir(ln.wstart), 0.0);
 			ln.frags = fr :: ln.frags;
-			ln.x += real w;
+			ln.x += real w + boxfrac(k);	# the fraction it was rounded by goes on
 			ln.content = 1;
 		Ifloat =>
 			tx := ln.x;
@@ -10822,6 +11293,7 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# (CSS 2.2 §9.5.1 rules 4 and 7)
 				oldleft := ln.left;
 				oldx := ln.x;
+				oldphase := ln.phase;
 				placefloat(l, it.box, fc, ox + x0, oy + f.y, cw, f.ch, ox, oy);
 				edgesat(f, ln);
 				if(ln.left > oldleft && !ln.content) {
@@ -10832,10 +11304,16 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 					# a left float: the line's content moves right past it
 					# (edgesat may have put ln.x at the float's edge already,
 					# as for an empty line: floats-placement-vertical-001a)
+					# and its glyphs by the float's fraction too
 					d := ln.left - oldleft;
-					for(fl := ln.frags; fl != nil; fl = tl fl)
+					dp := ln.phase - oldphase;
+					for(fl := ln.frags; fl != nil; fl = tl fl) {
 						(hd fl).x += d;
-					ln.x = oldx + real d;
+						(hd fl).wfx -= dp;
+					}
+					ln.x = oldx + real d + dp;	# (what follows has the fraction in its place)
+					if(ln.wstart > Nostart)
+						ln.wstart += real d;
 					r: list of (ref Box, real, int, int);
 					for(ol := ln.open; ol != nil; ol = tl ol) {
 						(ob, ostart, ofirst, olevel) := hd ol;
@@ -10851,7 +11329,7 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# an inline-level box's static position is where it
 				# would have been on the line: a fragment of no width
 				# marks the place through alignment and reordering
-				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level, 0, 0);
+				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level, 0, 0, 0.0, 0.0, 0.0);
 				ln.frags = mark :: ln.frags;
 				pend(l, ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl, nil, icbof(it.box), 0, 0));
 			} else {
@@ -10864,6 +11342,7 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			}
 		Ibreak =>
 			ln.content = 1;
+			ln.brk = 1;
 			lines = endline(f, ln, x0, first, 1) :: lines;
 			first = 0;
 			ln = newline(f, ln, opened);
@@ -11010,8 +11489,9 @@ hyphenate(ln: ref Ln)
 			continue;
 		if(f.kind == Ftext && f.text == "\u00AD" && f.face != nil) {
 			f.text = hyphenchar(f);
-			f.w = ir(f.face.width(f.text));
-			ln.x += real f.w;
+			f.fw = f.face.width(f.text);
+			f.w = ir(f.fw);
+			ln.x += f.fw;
 		}
 		return;
 	}
@@ -11243,7 +11723,7 @@ removebox(l: list of ref Box, b: ref Box): list of ref Box
 
 newline(f: ref Ifc, old: ref Ln, opened: list of ref Box): ref Ln
 {
-	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0.0, nil, nil);
+	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0.0, nil, nil, 0, Nostart, 0.0);
 	linestart(f, ln);
 	# inline boxes still open continue on the new line
 	r: list of ref Box;
@@ -11311,9 +11791,30 @@ tabw(ln: ref Ln, it: ref Item): real
 	return w;
 }
 
+# A line's glyphs are one run from where the line begins: each is
+# placed by its own position from there, unrounded, and rounded once
+# (fonts' drawat), as Chromium keeps the fraction to 1/64 px and snaps
+# only when painting.  A fragment's x is its start rounded; fx-wfx is
+# how far its glyphs go past that.  So text cut by a float, an inline
+# box or a no-break space is drawn as it would be uncut, and text in
+# a box (an inline-block, a cell, a float) where the line's would be
+# (paintfx, Box.pfx).
 textfrag(ln: ref Ln, it: ref Item): ref Frag
 {
-	return ref Frag(Ftext, ir(ln.x), 0, ir(it.w), 0, 0, it.box, it.text, it.face, 0, 0, it.deco, it.decocolor, it.level, ir(it.tls), it.hang);
+	runstart(ln);
+	return ref Frag(Ftext, ir(ln.x), 0, ir(it.w), 0, 0, it.box, it.text, it.face, 0, 0, it.deco, it.decocolor, it.level, ir(it.tls), it.hang,
+		ln.x - real ir(ln.x), ln.wstart - real ir(ln.wstart), it.w);
+}
+
+# the line's run begins with what is placed first on it: from the
+# line's left edge unrounded (past a float, bandfrac)
+runstart(ln: ref Ln)
+{
+	if(ln.wstart > Nostart)
+		return;
+	ln.wstart = ln.x;
+	if(!ln.content)
+		ln.wstart -= ln.phase;
 }
 
 # close an inline box's fragment on this line
@@ -11335,7 +11836,7 @@ span(ln: ref Ln, b: ref Box, last: int): ref Frag
 	ln.open = nil;
 	for(; r != nil; r = tl r)
 		ln.open = hd r :: ln.open;
-	return ref Frag(Fspan, ir(x), 0, ir(ln.x) - ir(x), 0, 0, b, nil, nil, first, last, 0, 0, level, 0, 0);	# ends where the next content starts
+	return ref Frag(Fspan, ir(x), 0, ir(ln.x) - ir(x), 0, 0, b, nil, nil, first, last, 0, 0, level, 0, 0, 0.0, 0.0, 0.0);	# ends where the next content starts
 }
 
 lineheight(st: ref St, f: ref Typeface): real
@@ -11362,8 +11863,9 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		if(f.kind == Fspan)
 			continue;
 		if(f.kind == Ftext && f.text == " " && collapsible(f.box.st) && hanging == nil) {
-			ln.x -= real f.w;
+			ln.x -= fragw(f);
 			f.w = 0;
+			f.fw = 0.0;
 			continue;
 		}
 		if(f.kind == Ftext && isblankrun(f.text) && f.box.st.whitespace == Style->Wprewrap && !forced ||
@@ -11372,7 +11874,7 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			# so does an ideographic space (Text 3 §4.1.3, other space
 			# separators), and a space among them, which is not at
 			# the line's end and so is not removed (trailing-ideographic-space-002)
-			ln.x -= real f.w;
+			ln.x -= fragw(f);
 			hanging = f :: hanging;
 			continue;
 		}
@@ -11421,8 +11923,14 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	}
 	# the line height calculation quirk: in quirks mode a line with no
 	# text takes no strut, nor do the edgeless inline boxes on it, so a
-	# cell holding only an image is the image's height (Quirks §3.3)
-	quirky := curdoc != nil && curdoc.quirks && !linetext(frags);
+	# cell holding only an image is the image's height (Quirks §3.3).
+	# A line a break ends is not one: a <br> takes the line's height in
+	# browsers in quirks mode too, and a preserved newline is preserved
+	# white space, so <br><br> and the empty lines of a textarea or a
+	# pre keep their height (a wiki's edit form, with no doctype, showed
+	# its paragraphs run together).  A block's last line, with no break,
+	# still has the quirk.
+	quirky := curdoc != nil && curdoc.quirks && !linetext(frags) && !ln.brk;
 	if(quirky) {
 		above = 0.0;
 		below = 0.0;
@@ -11518,12 +12026,13 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 				continue;
 			if(f.kind == Ftext && f.hang == 2 && f.w > 0) {
 				hanglast = f;
-				ln.x -= real f.w;	# measured without it: it hangs past the end edge
+				ln.x -= fragw(f);	# measured without it: it hangs past the end edge
 			}
 			break;
 		}
-	# horizontal alignment
-	extra := real ln.avail - ln.x;
+	# horizontal alignment, in the width unrounded where the block is
+	# as wide as its text rounded: no fraction over or short
+	extra := real ln.avail + fitfrac(b, ln.avail) - ln.x;
 	align := b.st.align;
 	if(forced) {
 		# the last line: text-align-last's, or, under justify, start (Text 3 §7.2; text-align-last-center)
@@ -11543,7 +12052,10 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		if(b.st.dirrtl)
 			off -= ln.indent;	# the indent is at the start, the right
 	Style->Acenter =>
-		off = extra/2.0;
+		# a half pixel left over goes after, as an auto margin's and a
+		# flex item's centring has it (free/2): a box of odd width
+		# centred either way is on the same pixel
+		off = extra/2.0 - 1.0/128.0;
 	Style->Ajustify =>
 		# only the spaces after the last tab expand: the tab stops
 		# before it must stay where they are (CSS Text 3 §7.3)
@@ -11582,7 +12094,13 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		off = extra;
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		f.x += x0 + ir(off);
+		if(f.kind == Ftext) {
+			# its glyphs moved by the offset, unrounded
+			r := real f.x + f.fx + off;
+			f.x = x0 + ir(r);
+			f.fx = r - real ir(r);
+		} else
+			f.x += x0 + ir(off);
 	}
 	relativeinlines(frags, ln.avail);
 	hw := 0;
@@ -11990,6 +12508,7 @@ Vis: adt {
 	logx:	int;		# logical place
 	x, w:	int;		# visual place, and width
 	level:	int;
+	logr, fx:	real;	# the logical place unrounded; the fraction of the visual place (Frag.fx)
 };
 
 reorderline(frags: array of ref Frag, para: int)
@@ -12015,16 +12534,16 @@ reorderline(frags: array of ref Frag, para: int)
 			if(f.level < 0 || !isolating(f.box.st.unicodebidi))
 				continue;
 			if(f.first) {
-				vl = ref Vis(f, 1, f.x, f.x, 0, f.level) :: vl;
+				vl = ref Vis(f, 1, f.x, f.x, 0, f.level, real f.x, 0.0) :: vl;
 				n++;
 			}
 			if(f.last) {
-				vl = ref Vis(f, 2, f.x + f.w, f.x + f.w, 0, f.level) :: vl;
+				vl = ref Vis(f, 2, f.x + f.w, f.x + f.w, 0, f.level, real (f.x + f.w), 0.0) :: vl;
 				n++;
 			}
 			continue;
 		}
-		vl = ref Vis(f, 0, f.x, f.x, f.w, f.level) :: vl;
+		vl = ref Vis(f, 0, f.x, f.x, f.w, f.level, real f.x + f.fx, 0.0) :: vl;
 		n++;
 	}
 	if(n == 0)
@@ -12043,17 +12562,21 @@ reorderline(frags: array of ref Frag, para: int)
 		lev[k] = para;
 	order := bidi->reorder(lev);
 	# each one's room is up to the next one's logical place, less any
-	# edges between: the rounding of the logical positions is kept
-	room := array[n] of int;
+	# edges between, unrounded: each is placed where its run's glyphs
+	# would be, rounded once (Frag.fx), as one run of them drawn whole
+	room := array[n] of real;
 	for(k = 0; k < n; k++) {
-		room[k] = v[k].w;
+		room[k] = fragrw(v[k]);
 		if(k + 1 < n)
-			room[k] = v[k+1].logx - v[k].logx - edgesin(frags, v[k].logx + v[k].w, v[k+1].logx);
+			room[k] = v[k+1].logr - v[k].logr - real edgesin(frags, v[k].logx + v[k].w, v[k+1].logx);
 	}
-	x := x0;
+	x := real x0;
+	if(v[0].logx == x0)
+		x = v[0].logr;
 	for(k = 0; k < n; k++) {
 		e := v[order[k]];
-		e.x = x;
+		e.x = ir(x);
+		e.fx = x - real e.x;
 		x += room[order[k]];
 	}
 	# An inline box covers its content wherever that is now.  Its start
@@ -12089,7 +12612,7 @@ reorderline(frags: array of ref Frag, para: int)
 			for(k = 0; k < n; k++)
 				if(v[k].x >= lo)
 					v[k].x += el;
-			v = append(v, ref Vis(f, 1, f.x, lo, el, 0));
+			v = append(v, ref Vis(f, 1, f.x, lo, el, 0, real f.x, 0.0));
 			n++;
 			hi += el;
 		}
@@ -12097,15 +12620,33 @@ reorderline(frags: array of ref Frag, para: int)
 			for(k = 0; k < n; k++)
 				if(v[k].x >= hi)
 					v[k].x += er;
-			v = append(v, ref Vis(f, 2, f.x + f.w - er, hi, er, 0));
+			v = append(v, ref Vis(f, 2, f.x + f.w - er, hi, er, 0, real (f.x + f.w - er), 0.0));
 			n++;
 		}
 		f.x = lo;
 		f.w = hi + er - lo;
 	}
 	for(k = 0; k < n; k++)
-		if(v[k].edge == 0)
-			v[k].frag.x = v[k].x;
+		if(v[k].edge == 0) {
+			f := v[k].frag;
+			f.x = v[k].x;
+			f.fx = v[k].fx;	# its glyphs where it now is, unrounded
+		}
+}
+
+# a fragment's width unrounded: a text run's as it was measured
+fragrw(e: ref Vis): real
+{
+	if(e.edge != 0)
+		return real e.w;	# a control: as wide as it is, not its box
+	return fragw(e.frag);
+}
+
+fragw(f: ref Frag): real
+{
+	if(f.kind == Ftext && ir(f.fw) == f.w)
+		return f.fw;	# (w changed since, as a split's or a trim's: as it is now)
+	return real f.w;
 }
 
 isolating(ub: int): int
@@ -12499,12 +13040,88 @@ face(st: ref St): ref Typeface
 	Style->FSoblique =>	fstyle = 2;
 	}
 	f := fonts->facevar(st.family, st.weight, fstyle, st.slant, st.stretch, st.fontsize, st.fontvars, st.synth);
-	if(f != nil && st.nokern) {
-		f = ref *f;
-		f.nokern = 1;
-	}
+	if(f != nil && (st.nokern || st.fvlig != nil || st.fvcaps != nil || st.fvnum != nil ||
+	   st.fvea != nil || st.fvpos != nil || st.fvalt != nil || st.ffs != nil || st.langover != nil || spaced(st)))
+		f = fonts->features(f, fontfeats(st), st.nokern, st.langover);
 	faces[h] = (st, f) :: faces[h];
 	return f;
+}
+
+# The OpenType features a style sets (Fonts 4 �7.2): font-variant's,
+# then font-feature-settings', a later setting of a tag winning
+fontfeats(st: ref St): list of (string, int)
+{
+	r: list of (string, int);
+	# letters spaced apart, by letter-spacing or justification between
+	# them, are not joined by the optional ligatures (Text 3 �8.2, �7.3);
+	# font-feature-settings may still turn one on
+	if(spaced(st))
+		r = ("calt", 0) :: ("hlig", 0) :: ("dlig", 0) :: ("clig", 0) :: ("liga", 0) :: nil;
+	for(g := st.fvlig :: st.fvcaps :: st.fvnum :: st.fvea :: st.fvpos :: altfeats(st) :: nil; g != nil; g = tl g)
+		for(l := hd g; l != nil; l = tl l)
+			if(!spaced(st) || !optlig((hd l).t0))
+				r = hd l :: r;
+	for(fl := st.ffs; fl != nil; fl = tl fl)
+		r = hd fl :: r;
+	o: list of (string, int);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+spaced(st: ref St): int
+{
+	return st.letterspacing != 0.0 || st.textjustify == 3 && (st.align == Style->Ajustify || st.alignlast == Style->Ajustify);
+}
+
+optlig(t: string): int
+{
+	return t == "liga" || t == "clig" || t == "dlig" || t == "hlig" || t == "calt";
+}
+
+# font-variant-alternates' functions, through the values
+# @font-feature-values gives their names for the style's families
+# (Fonts 4 �6.8); a name none defines sets nothing
+altfeats(st: ref St): list of (string, int)
+{
+	r: list of (string, int);
+	for(l := st.fvalt; l != nil; l = tl l) {
+		(fun, name) := hd l;
+		if(fun == "historical-forms") {
+			r = ("hist", 1) :: r;
+			continue;
+		}
+		v: array of int;
+		for(fl := st.family; fl != nil && v == nil; fl = tl fl)
+			v = fonts->featurevalues(hd fl, fun, name);
+		if(len v == 0)
+			continue;
+		case fun {
+		"stylistic" =>
+			r = ("salt", v[0]) :: r;
+		"swash" =>
+			r = ("cswh", v[0]) :: ("swsh", v[0]) :: r;
+		"ornaments" =>
+			r = ("ornm", v[0]) :: r;
+		"annotation" =>
+			r = ("nalt", v[0]) :: r;
+		"styleset" =>
+			for(i := 0; i < len v; i++)
+				if(v[i] >= 1 && v[i] <= 20)
+					r = (sys->sprint("ss%02d", v[i]), 1) :: r;
+		"character-variant" =>
+			if(v[0] >= 1 && v[0] <= 99) {
+				n := 1;
+				if(len v > 1)
+					n = v[1];
+				r = (sys->sprint("cv%02d", v[0]), n) :: r;
+			}
+		}
+	}
+	o: list of (string, int);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
 }
 
 # ---- painting (CSS 2.2 Appendix E, simplified to tree order) ----
@@ -12684,6 +13301,7 @@ scrolled: Point;	# how far the document is scrolled in it; fixed boxes do not mo
 
 paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 {
+	paintfault = 0;
 	if(root.doc != nil)
 		curdoc = root.doc;
 	viewport = clip;
@@ -12812,7 +13430,8 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			warp(dst, b, o, clip, canvasbg);
 			return;
 		}
-		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
+		if(st.tfs == nil)	# warped, its translation is in the matrix: its picture is untransformed
+			o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
 		intransform++;
 	}
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
@@ -13193,7 +13812,31 @@ before(a, b: ref Lyr): int
 	return a.box.seq < b.box.seq;
 }
 
+# A box's fault in painting is the box's: it is left out and the
+# rest painted (the draw device refuses a path past 2^20 pixels, and
+# one such box on nodejs.org left the whole page white), and said once
+# a paint
+paintfault := 0;
+
 paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
+{
+	{
+		paintself0(dst, b, r, canvasbg);
+	} exception e {
+	"*" =>
+		if(paintfault++ == 0)
+			sys->fprint(sys->fildes(2), "charon: painting <%s>: %s\n", boxname(b), e);
+	}
+}
+
+boxname(b: ref Box): string
+{
+	if(curdoc == nil || b.node <= 0 || b.node >= curdoc.n)
+		return "anonymous box";
+	return curdoc.nodes[b.node].name;
+}
+
+paintself0(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 {
 	if(textmask)
 		return;	# only text goes into the mask
@@ -13349,6 +13992,17 @@ flowfloats(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 
 flowinline(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
+	if(b.pfx == 0.0 || b == pfxbox)
+		return flowinline1(dst, b, o, clip, canvasbg);
+	(opfx, obox) := (paintfx, pfxbox);
+	paintfx += b.pfx;	# its text where it would be, to the fraction (a cell's)
+	pfxbox = b;
+	flowinline1(dst, b, o, clip, canvasbg);
+	(paintfx, pfxbox) = (opfx, obox);
+}
+
+flowinline1(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
+{
 	if(b.lines != nil) {
 		paintlines(dst, b, o, clip, canvasbg);
 		return;
@@ -13384,6 +14038,17 @@ flowinline(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 
 # a box in normal flow (not a layer): itself and its content
 paintflow(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
+{
+	if(b.pfx == 0.0 || b == pfxbox)
+		return paintflow1(dst, b, o, clip, canvasbg);
+	(opfx, obox) := (paintfx, pfxbox);
+	paintfx += b.pfx;	# as flowinline: whichever way its content is reached
+	pfxbox = b;
+	paintflow1(dst, b, o, clip, canvasbg);
+	(paintfx, pfxbox) = (opfx, obox);
+}
+
+paintflow1(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	st := b.st;
 	if(ownctx(st)) {
@@ -13430,6 +14095,13 @@ rectok(r: Rect): int
 layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+	# what it paints is where its translation takes it (paintctx moves
+	# it inside the layer): Astro's hero glow, a blurred image moved
+	# left by half its width, was cut off at its untranslated box
+	if(b.st.translated && b.st.tfs == nil)
+		r = r.addpt(Point(res(b.st.tx, b.w), res(b.st.ty, b.h)));
+	else if(b.st.translated && b.st.tfs != nil && clip.dx() <= 8192 && clip.dy() <= 8192)
+		r = clip;	# warped inside the layer, to anywhere: all that can show
 	# a blur takes in, and spreads out to, three deviations around
 	spread := 0;
 	for(i := 0; i < len b.st.filter; i++)
@@ -13451,6 +14123,31 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	if(b.st.filter != nil)
 		if(!noeffects)
 			filter(img, b.st.filter);
+	if(b.st.clippoly != nil) {
+		# clip-path: polygon(), its points against the border box
+		# where it is drawn
+		br := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+		if(b.st.translated && b.st.tfs == nil)
+			br = br.addpt(Point(res(b.st.tx, b.w), res(b.st.ty, b.h)));
+		pts := b.st.clippoly;
+		path := Path.new();
+		for(k := 0; k + 1 < len pts; k += 2) {
+			x := real br.min.x + pts[k].resolve(real b.w);
+			y := real br.min.y + pts[k+1].resolve(real b.h);
+			if(k == 0)
+				path.moveto(x, y);
+			else
+				path.lineto(x, y);
+		}
+		path.close();
+		pm := display.newimage(pr, Draw->GREY8, 0, Draw->Black);
+		cut := display.newimage(pr, Draw->RGBA32, 0, Draw->Transparent);
+		if(pm == nil || cut == nil)
+			return;
+		pm.fillpath(path, b.st.clipwind, display.white, (0, 0));
+		cut.draw(pr, img, pm, pr.min);
+		img = cut;
+	}
 	a := int (b.st.opacity * 255.0);
 	mask := display.newimage(Rect((0, 0), (1, 1)), Draw->GREY8, 1, (a << 24) | (a << 16) | (a << 8) | 255);
 	if(hasmask(b.st)) {
@@ -13478,7 +14175,7 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 # painted into a layer of its own: translucent, masked or filtered
 ownlayer(st: ref St): int
 {
-	return st.opacity < 1.0 || hasmask(st) || st.filter != nil;
+	return st.opacity < 1.0 || hasmask(st) || st.filter != nil || st.clippoly != nil;
 }
 
 # a stacking context though not positioned: a layer of its own, or
@@ -14294,6 +14991,23 @@ radii(b: ref Box): (int, int, int, int)
 	r := (res(st.rtl, b.w), res(st.rtr, b.w), res(st.rbr, b.w), res(st.rbl, b.w));
 	if(r.t0 == 0 && r.t1 == 0 && r.t2 == 0 && r.t3 == 0 && (n := nativelook(b)) > 0)
 		return (n, n, n, n);
+	# none larger than the box: they are scaled down to fit it anyway
+	# (Backgrounds 3 §5.5), and two of 2147483647px (calc(infinity *
+	# 1px) as a minifier writes it: nodejs.org's) summed past an int,
+	# the scale went negative and the path past what the draw device
+	# takes, and the whole page was left unpainted
+	m := b.w + b.h;
+	if(m < 1)
+		m = 1;
+	return (radclamp(r.t0, m), radclamp(r.t1, m), radclamp(r.t2, m), radclamp(r.t3, m));
+}
+
+radclamp(r, m: int): int
+{
+	if(r > m)
+		return m;
+	if(r < 0)
+		return 0;
 	return r;
 }
 
@@ -14637,7 +15351,14 @@ svgraster(url: string, data: array of byte, w, h: int): ref Image
 		readsvg->init(bufio);
 		imageremap->init(display);
 	}
-	(raw, err) := readsvg->read(bufio->aopen(svgresize(data, w, h)));
+	raw: ref RImagefile->Rawimage;
+	err: string;
+	{
+		(raw, err) = readsvg->read(bufio->aopen(svgresize(data, w, h)));
+	} exception e {
+	"*" =>
+		err = e;	# a picture that cannot be drawn costs itself, not the page's paint
+	}
 	if(raw == nil || err != nil)
 		return nil;
 	(img, nil) := imageremap->remap(raw, display, 0);
@@ -14669,8 +15390,9 @@ svgroot(s: string): (int, int)
 }
 
 # The SVG with its root element's size set to w by h: the content is
-# then drawn to fit, through a viewBox (one made from the old size if it
-# had none).
+# then drawn to fit, through a viewBox; one made from the old size if it
+# had none, and then stretched to fill, as Chrome draws an SVG with no
+# viewBox in a box not its shape (a raster's fill)
 svgresize(data: array of byte, w, h: int): array of byte
 {
 	s := string data;
@@ -14684,8 +15406,10 @@ svgresize(data: array of byte, w, h: int): array of byte
 	vb := "";
 	if(strindex(tag, "viewBox", 0) < 0 && strindex(tag, "viewbox", 0) < 0) {
 		# "65px" converts as 65; a percentage gives no box to fit
-		if(svglen(ow) > 0 && svglen(oh) > 0)
-			vb = sys->sprint(" viewBox=\"0 0 %d %d\"", svglen(ow), svglen(oh));
+		if(svglen(ow) > 0 && svglen(oh) > 0) {
+			(tag, nil) = dropattr(tag, "preserveAspectRatio");
+			vb = sys->sprint(" viewBox=\"0 0 %d %d\" preserveAspectRatio=\"none\"", svglen(ow), svglen(oh));
+		}
 	}
 	n := s[0:i] + sys->sprint("<svg width=\"%d\" height=\"%d\"%s", w, h, vb) + tag + s[e:];
 	return array of byte n;
@@ -14872,6 +15596,13 @@ bgurl(t: ref Css->Tok): string
 	return nil;
 }
 
+listurl(st: ref St): string
+{
+	if(st == nil || st.listimage == nil)
+		return nil;
+	return bgurl(st.listimage);
+}
+
 bgurls(st: ref St): list of string
 {
 	r: list of string;
@@ -14978,6 +15709,8 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	if(!ok)
 		return;
 	dst.clipr = cr;
+	if(grad)
+		img = gradtile(b, bg, tw, th);	# nil: painted where it falls, a tile at a time
 	for(yl := ys; yl != nil; yl = tl yl)
 		for(xl := xs; xl != nil; xl = tl xl) {
 			x := hd xl;
@@ -14986,12 +15719,73 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			(t, tok) := tile.clip(cr);
 			if(!tok)
 				continue;
-			if(grad)
+			if(grad && img == nil)
 				paintgradient(dst, b, tile, bg);
 			else
 				dst.draw(t, img, nil, img.r.min.add(t.min.sub(Point(x, y))));
 		}
 	dst.clipr = oclip;
+}
+
+# A gradient's tile, drawn once: a gradient is worked out a pixel at a
+# time, and was for every tile of every paint.  Tailwind's gutters are
+# a repeating gradient in 10px tiles, 8800 of them in a screenful, a
+# second a paint; a hero's gradient was worked out again at each step
+# of a scroll.  Kept by the layer, the style it was resolved in (its
+# lengths and currentcolor) and the size, up to GRADKEEP bytes, the
+# least recently used going first; nil for one too large to keep.
+GradTile: adt {
+	bg:	ref Style->Bg;
+	st:	ref St;
+	w, h:	int;
+	img:	ref Image;
+};
+gradtiles: list of ref GradTile;
+gradbytes := 0;
+GRADKEEP: con 32*1024*1024;
+GRADONE: con 8*1024*1024;
+
+gradtile(b: ref Box, bg: ref Style->Bg, w, h: int): ref Image
+{
+	if(4 * w * h > GRADONE)
+		return nil;
+	keep: list of ref GradTile;
+	found: ref GradTile;
+	for(l := gradtiles; l != nil; l = tl l) {
+		g := hd l;
+		if(found == nil && g.bg == bg && g.st == b.st && g.w == w && g.h == h)
+			found = g;
+		else
+			keep = g :: keep;
+	}
+	if(found != nil) {
+		gradtiles = found :: revgt(keep);
+		return found.img;
+	}
+	img := display.newimage(Rect((0, 0), (w, h)), Draw->RGBA32, 0, Draw->Transparent);
+	if(img == nil)
+		return nil;
+	paintgradient(img, b, img.r, bg);
+	gradbytes += 4 * w * h;
+	keep = nil;
+	n := 0;
+	for(l = gradtiles; l != nil; l = tl l) {
+		if(n + 4 * w * h + 4 * (hd l).w * (hd l).h > GRADKEEP)
+			break;
+		n += 4 * (hd l).w * (hd l).h;
+		keep = hd l :: keep;
+	}
+	gradbytes = n + 4 * w * h;
+	gradtiles = ref GradTile(bg, b.st, w, h, img) :: revgt(keep);
+	return img;
+}
+
+revgt(l: list of ref GradTile): list of ref GradTile
+{
+	r: list of ref GradTile;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 # where the tiles of size t go along one axis, the first at p by
@@ -15087,11 +15881,33 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	(gcx, gcy, grx, gry) := (0.0, 0.0, 0.0, 0.0);
 	case kind {
 	Glinear =>
+		# -webkit-linear-gradient is the syntax before the standard's:
+		# its angles start east and go anticlockwise, and a side or
+		# corner is where the gradient starts, not where it goes (Vue's
+		# heading's 315deg ran from blue to green, the wrong way)
+		legacy := t.s == "-webkit-linear-gradient";
+		if(legacy && len a > 0 && a[0].kind == Css->Kident && lower(a[0].s) != "to") {
+			na := array[len a + 1] of ref Css->Tok;
+			na[0] = ref Css->Tok(Css->Kident, "to", 0.0, 0, nil);
+			for(k := 0; k < len a; k++) {
+				na[k+1] = a[k];
+				if(a[k].kind == Css->Kident)
+					case lower(a[k].s) {
+					"left" => na[k+1] = ref Css->Tok(Css->Kident, "right", 0.0, 0, nil);
+					"right" => na[k+1] = ref Css->Tok(Css->Kident, "left", 0.0, 0, nil);
+					"top" => na[k+1] = ref Css->Tok(Css->Kident, "bottom", 0.0, 0, nil);
+					"bottom" => na[k+1] = ref Css->Tok(Css->Kident, "top", 0.0, 0, nil);
+					}
+			}
+			a = na;
+		}
 		if(len a == 1 && (a[0].kind == Css->Kdimension || a[0].kind == Css->Knumber && a[0].n == 0.0)) {
 			(ok, v) := angleof(a[0]);
 			if(!ok)
 				return;
 			angle = v;
+			if(legacy)
+				angle = 90.0 - v;
 		} else if(len a > 1 && a[0].kind == Css->Kident && lower(a[0].s) == "to") {
 			# to a side, or a corner: then the line is at right angles
 			# to the one through the other two corners (Images 3 §3.1.1)
@@ -16085,8 +16901,12 @@ paintlines(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 				if(f.box.st.visibility == Style->Vvisible)
 					painttext(dst, f, o);
 			Fatomic =>
-				if(!islayer(f.box))
+				if(!islayer(f.box)) {
+					opfx := paintfx;
+					paintfx += f.fx - f.wfx;	# its text where the line's glyphs would have it
 					paintflow(dst, f.box, o, clip, canvasbg);
+					paintfx = opfx;
+				}
 			}
 		}
 		linefl = ofl;
@@ -16193,6 +17013,8 @@ maskedspan(dst: ref Image, f: ref Frag, o: Point, ln: ref Line, r: Rect, ck: int
 }
 
 linefl: ref St;	# the ::first-line style of the line being painted, if any
+pfxbox: ref Box;	# the box whose pfx paintfx has last taken in
+paintfx: real;	# how far past where the boxes being painted are their glyphs go, a fraction of a pixel: an inline-block's on its line, a cell's after rounded columns (Box.pfx)
 lineflbase: int;	# and the block's own colour: text of another colour has its own (display-contents-first-line-002)
 
 painttext(dst: ref Image, f: ref Frag, o: Point)
@@ -16209,37 +17031,44 @@ painttext(dst: ref Image, f: ref Frag, o: Point)
 		return paintdeco(dst, f, o);
 	fc := f.face;
 	p := Point(o.x + f.x, o.y + f.base);
+	fx := f.fx - f.wfx + paintfx;
 	text := visual(f);
 	if(textmask) {
 		# into a mask: the glyphs and decorations, whatever the colour
-		drawtext(dst, fc, p, text, display.white, st.letterspacing, f.level % 2);
+		drawtext(dst, fc, p, fx, text, display.white, st.letterspacing, f.level % 2);
 		paintdeco(dst, f, o);
 		return;
 	}
 	for(i := 0; i < len st.textshadows; i++) {
 		s := st.textshadows[i];
 		if(visible(s.color))
-			drawtext(dst, fc, p.add(Point(int s.x, int s.y)), text, colorimg(s.color), st.letterspacing, f.level % 2);
+			drawtext(dst, fc, p.add(Point(int s.x, int s.y)), fx, text, colorimg(s.color), st.letterspacing, f.level % 2);
 	}
-	if(visible(st.color))
-		drawtext(dst, fc, p, text, colorimg(st.color), st.letterspacing, f.level % 2);
+	# the glyphs in -webkit-text-fill-color, which is color unless set
+	# (Vue's gradient heading: transparent, its background clipped to
+	# the text; it was drawn over in its colour)
+	fill := st.color;
+	if(st.textfill != Style->Ccurrent)
+		fill = st.textfill;
+	if(visible(fill))
+		drawtext(dst, fc, p, fx, text, colorimg(fill), st.letterspacing, f.level % 2);
 	paintdeco(dst, f, o);
 }
 
-drawtext(dst: ref Image, fc: ref Typeface, p: Point, s: string, c: ref Image, ls: real, rtl: int)
+drawtext(dst: ref Image, fc: ref Typeface, p: Point, dx: real, s: string, c: ref Image, ls: real, rtl: int)
 {
 	if(ls == 0.0) {
-		fc.draw(dst, p, s, c, rtl);
+		fc.drawat(dst, p, dx, s, c, rtl);
 		return;
 	}
 	# spaced out: one character at a time, the last one leftmost if
 	# rtl, kerned against the next as tw measures it
-	x := real p.x;
+	x := real p.x + dx;
 	for(i := 0; i < len s; i++) {
 		k := i;
 		if(rtl)
 			k = len s - 1 - i;
-		x += fc.draw(dst, Point(int x, p.y), s[k:k+1], c, rtl) + ls;
+		x += fc.drawat(dst, Point(p.x, p.y), x - real p.x, s[k:k+1], c, rtl) + ls;
 		if(i + 1 < len s && !fc.nokern) {
 			if(rtl)
 				x += fc.kernpair(s[k-1], s[k]);

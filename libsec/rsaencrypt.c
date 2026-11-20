@@ -15,6 +15,12 @@
 mpint*
 rsaencrypt(RSApub *rsa, mpint *in, mpint *out)
 {
+	// RFC 8017 5.1.1 and 5.2.2, step 1: a representative is between 0
+	// and n-1, or there is no result (nil).  s+n and s-n verified as s.
+	if(in->sign < 0 || mpcmp(in, rsa->n) >= 0){
+		werrstr("rsaencrypt: representative out of range");
+		return nil;
+	}
 	if(out == nil)
 		out = mpnew(0);
 	mpexp(in, rsa->ek, rsa->n, out);

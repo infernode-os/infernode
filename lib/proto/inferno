@@ -317,9 +317,6 @@ appl
 				factotum.b
 				feedkey.b
 				proto
-					infauth.b
-					keyreps.b
-					keyreps.m
 					mkfile
 					p9any.b
 					pass.b
@@ -840,8 +837,6 @@ appl
 		crypt
 			mkfile
 			pkcs.b
-			ssl3.b
-			sslsession.b
 			x509.b
 		daytime.b
 		db.b
@@ -899,6 +894,7 @@ appl
 		plumbing.b
 		plumbing.m
 		plumbmsg.b
+		mailconn.b
 		pop3.b
 		popup.b
 		powerman.b
@@ -1112,30 +1108,8 @@ appl
 	svc
 		auth.sh
 		httpd
-			alarms.b
-			alarms.m
-			cache.b
-			cache.m
-			cgiparse.b
-			cgiparse.m
-			contents.b
-			contents.m
-			date.b
-			date.m
-			echo.b
 			httpd.b
-			httpd.m
-			httpd.debug
-			httpd.log
-			httpd.rewrite
-			httpd.suff
-			imagemap.b
 			mkfile
-			parser.b
-			parser.m
-			redirect.b
-			redirect.m
-			stats.b
 		mkfile
 		net.sh
 		registry.sh
@@ -1476,6 +1450,7 @@ dis
 		parseman.dis
 		plumbing.dis
 		plumbmsg.dis
+		mailconn.dis
 		pop3.dis
 		popup.dis
 		powerman.dis
@@ -1772,9 +1747,10 @@ keydb
 	signed
 lib
 	legal
-		GPL
-		LGPL
-		LICENCE.liberal
+		NOTICE.app
+		NOTICE.ffal
+		NOTICE.liberal
+		calderalic.pdf
 		lucent
 	acid
 		+
@@ -2074,6 +2050,7 @@ module
 	palmfile.m
 	pkcs.m
 	plumbmsg.m
+	mailconn.m
 	pop3.m
 	popup.m
 	powerman.m
@@ -2102,8 +2079,6 @@ module
 	strokes.m
 	srv.m
 	srvrunt.b
-	ssl3.m
-	sslsession.m
 	string.m
 	strinttab.m
 	styx.m

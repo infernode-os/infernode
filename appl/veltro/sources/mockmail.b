@@ -33,6 +33,8 @@ MockMail: module {
 Message: import MsgSrc;
 Notification: import MsgSrc;
 
+SHIFT: con "/tmp/veltro/mockmail.shift";
+
 init(nil: string): string
 {
 	sys = load Sys Sys->PATH;
@@ -48,7 +50,9 @@ name(): string
 
 capabilities(): int
 {
-	return MsgSrc->CAP_WATCH | MsgSrc->CAP_ENUMERATE | MsgSrc->CAP_FETCH | MsgSrc->CAP_SETFLAG;
+	# reply: captured to a file, never sent (see reply below)
+	return MsgSrc->CAP_WATCH | MsgSrc->CAP_ENUMERATE | MsgSrc->CAP_FETCH |
+		MsgSrc->CAP_REPLY | MsgSrc->CAP_SETFLAG;
 }
 
 # Canned unread inbox.
@@ -76,6 +80,18 @@ msgs(): list of ref Message
 	m1 := ref Message("1", "email", "inbox", "alice@example.com", "you",
 		"Launch date?", "Hi — can we move the launch to Friday? I need your sign-off by end of day.",
 		"2026-06-30T09:05:00Z", "", "", MsgSrc->FUNREAD | MsgSrc->FFLAGGED, "");
+	# A mailbox that numbers its messages by position renumbers them when
+	# one goes. With this file present the first message has gone and
+	# the others have moved up one, as after an expunge: what was "2"
+	# answers to "1". (tests/msg_approval_test.b)
+	(ok, nil) := sys->stat(SHIFT);
+	if(ok >= 0) {
+		m2.id = "1";
+		m3.id = "2";
+		m4.id = "3";
+		m5.id = "4";
+		return m2 :: m3 :: m4 :: m5 :: nil;
+	}
 	return m1 :: m2 :: m3 :: m4 :: m5 :: nil;
 }
 

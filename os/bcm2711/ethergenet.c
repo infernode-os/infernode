@@ -1003,8 +1003,24 @@ rxmode(Ether *edev, int prom)
 	}
 	setmdfaddr(ctlr, 0, edev->nif.bcast);
 	setmdfaddr(ctlr, 1, edev->ea);
-	for(i = 2, na = edev->nif.maddr; na != nil; na = na->next, i++)
-		setmdfaddr(ctlr, i, na->addr);
+	/*
+	 * the addresses that are joined, and no more of them than the
+	 * filter has places: this wrote a pair of registers for every
+	 * entry of the list, joined or not, and the list had no end, so
+	 * the entries after the fifteenth went into the registers after
+	 * the filter's, the receive ring's among them
+	 */
+	i = 2;
+	for(na = edev->nif.maddr; na != nil; na = na->next){
+		if(na->ref <= 0)
+			continue;
+		if(i >= 17){
+			REG(ctlr->regs[UmacMdfCtrl]) = 0;
+			umaccmd(ctlr, CmdProm, 0);
+			return;
+		}
+		setmdfaddr(ctlr, i++, na->addr);
+	}
 	/* the top i of the 17 filter-enable bits; the original shifts a negative int */
 	REG(ctlr->regs[UmacMdfCtrl]) = ((u32int)0xFFFF0000 >> i) & 0x1FFFF;
 	umaccmd(ctlr, 0, CmdProm);

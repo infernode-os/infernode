@@ -166,13 +166,34 @@ exec(args: string): string
 		return roerr;
 
 	# Read file
-	content := readfile(path);
-	if(content == nil)
+	(sok, before) := sys->stat(path);
+	if(sok < 0)
 		return sys->sprint("error: cannot read %s: %r", path);
+	if(before.mode & Sys->DMDIR)
+		return "error: " + path + " is a directory";
+	(content, rerr) := readfile(path);
+	if(rerr != nil)
+		return "error: cannot read " + path + ": " + rerr;
+	# (an empty file was "cannot read", with whatever error was last)
+	if(len content == 0)
+		return "error: " + path + " is empty: there is nothing in it to find (write it with the write tool)";
 
-	(newtext, replaced, loose, err) := apply(string content, changes, path);
+	# The file is rewritten whole from its text.  Bytes that are not
+	# UTF-8 do not survive that: each came back as the replacement
+	# character, in lines the edit never named.
+	text := string content;
+	if(!samebytes(array of byte text, content))
+		return "error: " + path + " holds bytes that are not UTF-8 text, which an edit would change throughout: not edited";
+
+	(newtext, replaced, loose, err) := apply(text, changes, path);
 	if(err != nil)
 		return "error: " + err;
+
+	# Whoever changed the file since it was read would have the change
+	# written over without a word.
+	(sok2, now) := sys->stat(path);
+	if(sok2 < 0 || now.qid.vers != before.qid.vers || now.length != before.length)
+		return "error: " + path + " was changed by something else while it was being edited: nothing written; read it again";
 
 	# Write back
 	fd := sys->create(path, Sys->OWRITE, 8r644);
@@ -182,7 +203,7 @@ exec(args: string): string
 	data := array of byte newtext;
 	n := sys->write(fd, data, len data);
 	if(n != len data)
-		return sys->sprint("error: partial write to %s", path);
+		return sys->sprint("error: the write to %s failed part way (%d of %d bytes): the file now holds only part of the edited text; write it again", path, n, len data);
 
 	r := sys->sprint("replaced %d occurrence(s) in %s", replaced, path);
 	if(loose)
@@ -220,6 +241,10 @@ parsechanges(js: string): (list of ref Change, string)
 		}
 	}
 	if(jv.get("old") != nil) {
+		# (taken as well as edits, it went in front of them, and an
+		# error about edits[1] was about the list's first)
+		if(changes != nil)
+			return (nil, "send old and new, or edits, not both");
 		(c, err) := onechange(jv, -1);
 		if(err != nil)
 			return (nil, err);
@@ -252,6 +277,8 @@ jstr(jv: ref JValue, key: string): string
 		return sv.s;
 	True =>
 		return "true";
+	Null =>
+		return "";	# "new": null is no text, not the word null
 	}
 	return v.text();
 }
@@ -612,43 +639,45 @@ escape(s: string): string
 # Read entire file.
 # Handles synthetic/9P files that report zero stat length by using
 # incremental reads.
-readfile(path: string): array of byte
-{
-	(ok, d) := sys->stat(path);
-	if(ok < 0)
-		return nil;
+# A file's bytes, or why not.  No file an edit is for is this large.
+MAXEDIT: con 8*1024*1024;
 
+readfile(path: string): (array of byte, string)
+{
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return nil;
+		return (nil, sys->sprint("%r"));
 
-	# Synthetic/9P files may report length 0; use incremental reads
-	if(int d.length == 0){
-		CHUNK: con 8192;
-		buf := array[CHUNK] of byte;
-		total := 0;
-		for(;;){
-			if(total >= len buf){
-				nb := array[len buf * 2] of byte;
-				nb[0:] = buf;
-				buf = nb;
-			}
-			n := sys->read(fd, buf[total:], len buf - total);
-			if(n <= 0)
-				break;
-			total += n;
+	# Read to the end whatever length is reported (a synthetic file
+	# says 0), a read error told from the end of the file.
+	buf := array[8192] of byte;
+	total := 0;
+	for(;;) {
+		if(total >= len buf) {
+			nb := array[len buf * 2] of byte;
+			nb[0:] = buf;
+			buf = nb;
 		}
-		if(total == 0)
-			return nil;
-		return buf[0:total];
+		n := sys->read(fd, buf[total:], len buf - total);
+		if(n < 0)
+			return (nil, sys->sprint("%r"));
+		if(n == 0)
+			break;
+		total += n;
+		if(total > MAXEDIT)
+			return (nil, sys->sprint("it is larger than %d bytes, too large to edit", MAXEDIT));
 	}
+	return (buf[0:total], nil);
+}
 
-	data := array[int d.length] of byte;
-	n := sys->read(fd, data, len data);
-	if(n < 0)
-		return nil;
-
-	return data[0:n];
+samebytes(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
 }
 
 # Permit the private workspace or the most-specific explicit rw grant.

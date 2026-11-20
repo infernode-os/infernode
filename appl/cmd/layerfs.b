@@ -44,6 +44,8 @@ Layerfs: module {
 
 Qroot: con 0;
 Keep: con 512;		# the lines kept for readers that have not had them
+Maxline: con 4096;	# a record's bytes; a longer line is none
+Maxdue: con 1024;	# the frame=* records kept, and the newest frame's
 
 File: adt {
 	path:	big;
@@ -64,6 +66,8 @@ Rd: adt {
 	fresh:	int;		# its next read is what is due now
 	part:	string;		# a writer's line not yet ended
 	writer:	int;
+	carry:	array of byte;	# a writer's rune not yet ended
+	rest:	array of byte;	# what a read had no room for
 };
 
 files: list of ref File;
@@ -148,9 +152,9 @@ serve(tc: chan of ref Tmsg)
 				opened(c, f, mode);
 			srv.reply(ref Rmsg.Open(tm.tag, d.qid, srv.iounit()));
 		Read =>
-			c := srv.getfid(tm.fid);
-			if(c == nil || !c.isopen){
-				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
+			(c, rerr) := srv.canread(tm);
+			if(c == nil){
+				srv.reply(ref Rmsg.Error(tm.tag, rerr));
 				break;
 			}
 			if(c.qtype & Sys->QTDIR){
@@ -175,7 +179,23 @@ serve(tc: chan of ref Tmsg)
 				srv.reply(ref Rmsg.Error(tm.tag, "layerfs: removed"));
 				break;
 			}
-			written(r, string tm.data);
+			# A rune may be cut by the end of a write: its bytes wait
+			# for the rest.  Each write was made a string by itself,
+			# so a label that is not ASCII, cut there, came out as
+			# two runes that are none.
+			b := tm.data;
+			if(len r.carry > 0){
+				b = array[len r.carry + len tm.data] of byte;
+				b[0:] = r.carry;
+				b[len r.carry:] = tm.data;
+				r.carry = nil;
+			}
+			nb := sys->utfbytes(b, len b);
+			if(nb < len b && len b - nb < Sys->UTFmax)
+				r.carry = b[nb:];
+			else
+				nb = len b;
+			written(r, string b[0:nb]);
 			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 			wake(r.f);
 		Remove =>
@@ -212,7 +232,7 @@ serve(tc: chan of ref Tmsg)
 
 opened(c: ref Fid, f: ref File, mode: int)
 {
-	r := ref Rd(c.fid, f, f.seq, 1, "", (mode & 3) != Sys->OREAD);
+	r := ref Rd(c.fid, f, f.seq, 1, "", (mode & 3) != Sys->OREAD, nil, nil);
 	rds = r :: rds;
 }
 
@@ -232,6 +252,7 @@ rewrite(f: ref File)
 		if((hd l).f == f){
 			(hd l).pos = 0;
 			(hd l).fresh = 1;
+			(hd l).rest = nil;
 		}
 }
 
@@ -244,10 +265,16 @@ written(r: ref Rd, s: string)
 		while(i < len s && s[i] != '\n')
 			i++;
 		if(i == len s){
+			# a line with no end is not kept for ever: past a
+			# record's length what has come is dropped, and so is
+			# the rest of it when its end comes
+			if(len s > Maxline)
+				s = s[0:Maxline+1];
 			r.part = s;
 			return;
 		}
-		addline(r.f, s[0:i]);
+		if(i <= Maxline)
+			addline(r.f, s[0:i]);
 		s = s[i+1:];
 	}
 }
@@ -257,15 +284,34 @@ addline(f: ref File, line: string)
 	(fr, nil) := layers->parse(line);
 	if(fr == -2)
 		return;		# no record
+	# What is due at an open is bounded.  A frame=* record written
+	# again is the one record (a stream that repeats its standing
+	# records added them each time, for ever, and a new reader was
+	# given every copy), and no more than Maxdue are kept of them or of
+	# one frame's: the oldest go.
 	if(fr == -1)
-		f.star = line :: f.star;
+		f.star = line :: without(f.star, line, Maxdue-1);
 	else if(fr != f.frame){
 		f.frame = fr;
 		f.flines = line :: nil;
 	} else
-		f.flines = line :: f.flines;
+		f.flines = line :: without(f.flines, nil, Maxdue-1);
 	f.log[f.seq % Keep] = (f.seq, line);
 	f.seq++;
+}
+
+# l (newest first) without the lines equal to drop, and no more than
+# max of it
+without(l: list of string, drop: string, max: int): list of string
+{
+	r: list of string;
+	n := 0;
+	for(; l != nil && n < max; l = tl l)
+		if(drop == nil || hd l != drop){
+			r = hd l :: r;
+			n++;
+		}
+	return rev(r);
 }
 
 # 1 if answered
@@ -274,6 +320,18 @@ answer(tm: ref Tmsg.Read, r: ref Rd): int
 	f := r.f;
 	if(f.gone){
 		srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
+		return 1;
+	}
+	# what the read before had no room for comes first: it was cut off
+	# and lost, the reader's place already past it
+	if(len r.rest > 0){
+		b := r.rest;
+		if(len b > tm.count){
+			r.rest = b[tm.count:];
+			b = b[0:tm.count];
+		} else
+			r.rest = nil;
+		srv.reply(ref Rmsg.Read(tm.tag, b));
 		return 1;
 	}
 	text := "";
@@ -299,8 +357,10 @@ answer(tm: ref Tmsg.Read, r: ref Rd): int
 	if(text == nil)
 		return 0;
 	b := array of byte text;
-	if(len b > tm.count)
+	if(len b > tm.count){
+		r.rest = b[tm.count:];
 		b = b[0:tm.count];
+	}
 	srv.reply(ref Rmsg.Read(tm.tag, b));
 	return 1;
 }

@@ -1,11 +1,18 @@
 #include	"lib9.h"
 #include	"fcall.h"
 
+/*
+ * A stat's size and each string's count are 16 bits.  A Dir whose
+ * strings do not fit them was packed all the same, the counts mod
+ * 65536: bytes that are no stat, given as one.  It has no size (0)
+ * and is not packed (0).
+ */
 uint
 sizeD2M(Dir *d)
 {
 	char *sv[4];
 	int i, ns;
+	ulong n;
 
 	sv[0] = d->name;
 	sv[1] = d->uid;
@@ -14,9 +21,16 @@ sizeD2M(Dir *d)
 
 	ns = 0;
 	for(i = 0; i < 4; i++)
-		if(sv[i])
-			ns += strlen(sv[i]);
+		if(sv[i]){
+			n = strlen(sv[i]);
+			if(n > 0xFFFF)
+				return 0;
+			ns += n;
+		}
 
+	/* a stat's size is 16 bits and does not count itself */
+	if(STATFIXLEN + ns - BIT16SZ > 0xFFFF)
+		return 0;
 	return STATFIXLEN + ns;
 }
 
@@ -28,6 +42,8 @@ convD2M(Dir *d, uchar *buf, uint nbuf)
 	int i, ns, nsv[4], ss;
 
 	if(nbuf < BIT16SZ)
+		return 0;
+	if(sizeD2M(d) == 0)
 		return 0;
 
 	p = buf;

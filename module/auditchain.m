@@ -25,6 +25,35 @@ Auditchain: module
 	# the event and the message; canon omits the hash.
 	canon:		fn(seq, t: int, source, event, msg: string): string;
 
+	# The canonical text of a record.  A record is one line of words
+	# separated by single blanks; whatever a writer sent, the server
+	# puts it in this form once, before it hashes, so that what is
+	# hashed, what is stored and what a replay reads back are the same
+	# bytes.  "Blank" here is every character that is no visible mark:
+	# controls (CR, LF, tab, NUL, DEL, C1), the Unicode spaces and line
+	# separators, and the characters that reorder a line on display.
+	#
+	# token is a source or event: one word, each blank an underscore,
+	#	"-" if empty.
+	# text is a message: each blank a space, runs of them one, none at
+	#	either end.
+	# value is one value of a key=value field in a message, when the
+	#	text is not the emitter's own (a name a model, a user or a
+	#	peer chose): blanks, '=' and '%' are written %XX (%uXXXX from
+	#	U+0100), so that the value is one word, holds no key= of its
+	#	own and reads back exactly with unvalue.
+	token:		fn(s: string): string;
+	text:		fn(s: string): string;
+	value:		fn(s: string): string;
+	unvalue:	fn(s: string): string;
+
+	# record renders the stored line (without its newline); parse reads
+	# one back as (seq, time, source, event, hash, msg, ok).  ok is 0
+	# unless the line is exactly what record gives for those fields:
+	# decimal numbers, a 64-digit lowercase hash, single blanks.
+	record:		fn(seq, t: int, source, event, hash, msg: string): string;
+	parse:		fn(line: string): (int, int, string, string, string, string, int);
+
 	# hex renders bytes as lowercase hex (2 chars per byte).
 	hex:		fn(h: array of byte): string;
 

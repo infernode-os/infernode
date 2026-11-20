@@ -120,7 +120,7 @@ switchbranch(repo: ref Repo, gitdir, reporoot, branch: string, force: int)
 	}
 
 	# Update HEAD symref
-	git->writesymref(gitdir, "HEAD", refname);
+	check(git->writesymref(gitdir, "HEAD", refname));
 
 	# Parse target commit and checkout tree
 	(nil, cdata, cerr) := repo.readobj(hash);
@@ -155,10 +155,10 @@ createandswitch(repo: ref Repo, gitdir, nil: string, name: string, nil: int)
 		fail("branch '" + name + "' already exists");
 
 	# Create branch at current HEAD
-	git->writeref(gitdir, newref, hash);
+	check(git->writeref(gitdir, newref, hash));
 
 	# Switch HEAD
-	git->writesymref(gitdir, "HEAD", newref);
+	check(git->writesymref(gitdir, "HEAD", newref));
 
 	sys->print("Switched to a new branch '%s'\n", name);
 }
@@ -167,4 +167,11 @@ fail(msg: string)
 {
 	sys->fprint(stderr, "git/checkout: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+# a ref or pack that was not written is not passed over
+check(err: string)
+{
+	if(err != nil)
+		fail(err);
 }

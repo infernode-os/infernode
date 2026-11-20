@@ -84,6 +84,7 @@ TARG=\
 	imgload.dis\
 	pngload.dis\
 	mailparse.dis\
+	mailconn.dis\
 	inflate.dis\
 	ip.dis\
 	ipattr.dis\
@@ -201,11 +202,13 @@ TARG=\
 	layers.dis\
 	visnet.dis\
 	visrec.dis\
+	mdhtml.dis\
 
 
 MODULES=
 SYSMODULES=\
 	bidi.m\
+	mdhtml.m\
 	jpeg.m\
 	parread.m\
 	layers.m\
@@ -332,8 +335,6 @@ SYSMODULES=\
 	sh.m\
 	smtp.m\
 	sort.m\
-	ssl3.m\
-	sslsession.m\
 	string.m\
 	stripe.m\
 	strinttab.m\
@@ -380,6 +381,7 @@ SYSMODULES=\
 	docreg.m\
 	keyringinst.m\
 	mailparse.m\
+	mailconn.m\
 	mermaid.m\
 	popup.m\
 	publicnet.m\

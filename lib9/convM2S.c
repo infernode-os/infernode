@@ -13,6 +13,12 @@ gstring(uchar *p, uchar *ep, char **s)
 	p += BIT16SZ - 1;
 	if(p+n+1 > ep)
 		return nil;
+	/*
+	 * a string with a NUL in it is two strings: the one C reads, up
+	 * to the NUL, and the one a reader that keeps the count has
+	 */
+	if(n != 0 && memchr(p+1, 0, n) != nil)
+		return nil;
 	/* move it down, on top of count, to make room for '\0' */
 	memmove(p, p + 1, n);
 	p[n] = '\0';

@@ -115,7 +115,8 @@ main(void)
 {
 	Model m;
 	uchar seed[64+16+sizeof want_personal], e[48];
-	int i, calls, before;
+	int i, calls, before, off, k;
+	uvlong since;
 
 	/* no host generator: nothing given, -1, and a seed asked for */
 	hostdry = 1;
@@ -151,8 +152,8 @@ main(void)
 
 	/* reseed after 1M bytes: 48 of the host's, Update(entropy) */
 	while(d.since < (1<<20)){
-		genrandomtry(got, 250000);
-		mfill(&m, want, 250000);
+		genrandomtry(got, 65536);
+		mfill(&m, want, 65536);
 	}
 	before = hostnext;
 	genrandomtry(got, 100);
@@ -200,6 +201,31 @@ main(void)
 	mupdate(&m, e, 48);
 	mfill(&m, want, 64);
 	check(memcmp(got, want, 64) == 0, "and reseeded when it has some again");
+
+	/*
+	 * A request that passes the interval is reseeded within itself:
+	 * the interval was looked at once a call, and one long request
+	 * came from one seed.
+	 */
+	while(d.since + 65536 < (1<<20)){
+		genrandomtry(got, 65536);
+		mfill(&m, want, 65536);
+	}
+	calls = hostcalls;
+	before = hostnext;
+	since = d.since;
+	genrandomtry(got, 200000);
+	for(off = 0; off < 200000; off += k){
+		if(since >= (1<<20)){
+			hostbytes(e, 48, before);
+			mupdate(&m, e, 48);
+			since = 0;
+		}
+		k = 200000 - off < 65536 ? 200000 - off : 65536;
+		mgenerate(&m, want + off, k);
+		since += k;
+	}
+	check(hostcalls == calls+1 && memcmp(got, want, 200000) == 0, "a request that passes 1M bytes is reseeded within itself");
 
 	return fails != 0;
 }

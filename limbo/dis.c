@@ -107,6 +107,45 @@ dispath(void)
 	Bwrite(bout, sp, strlen(sp)+1);
 }
 
+/*
+ * The digests of the signatures, for a loader that compares them: a
+ * count, then SIGDLEN bytes for each entry of the link section in its
+ * order and each entry of each import table in theirs (dismod's and
+ * disldt's loops).  It follows the source path, the last thing a
+ * loader that knows nothing of it reads, so such a loader still takes
+ * the module.
+ */
+void
+dissigs(Decl *m, Decl *ds)
+{
+	int pass, n;
+	Decl *d, *id;
+
+	n = 0;
+	for(pass = 0; pass < 2; pass++){
+		if(pass)
+			discon(n);
+		for(id = m->ty->tof->ids; id != nil; id = id->next){
+			if(pass)
+				Bwrite(bout, signdigest(id), SIGDLEN);
+			else
+				n++;
+		}
+		for(d = ds; d != nil; d = d->next){
+			if(d->store != Dglobal || d->init == nil)
+				continue;
+			for(id = d->init->decl->ty->ids; id != nil; id = id->next){
+				if(!ldtentry(d->init->decl, id))
+					continue;
+				if(pass)
+					Bwrite(bout, signdigest(id), SIGDLEN);
+				else
+					n++;
+			}
+		}
+	}
+}
+
 void
 disentry(Decl *e)
 {

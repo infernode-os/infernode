@@ -90,6 +90,21 @@ estimates (PGRMZ in feet or metres; PGRME, unless GST is sent), AIS
 sentences put together; VDO, a ship's own, is passed over) and FLARM's
 traffic (PFLAA, placed from the fix).
 Other sentences are taken and passed over.
+.PP
+A sentence is bytes from a wire, so each number in one is held to what
+its field can mean, and a field that says otherwise is as one not
+given: a number is at most nine digits before its point; a latitude is
+no more than 90 degrees and a longitude 180; a heading, course or
+track is 0 to 360 and a variation or deviation no more than 180; an
+AIS message or a GSV report is at most nine sentences; a PRN is 1 to
+999.
+What is kept is bounded: 256 satellites used, 36 in view for each
+system, eight AIS messages in parts (the newest; a part waits a minute
+for the rest), and a thousand targets of each kind, the one longest
+unheard going when another comes.
+A target's id, name, call sign and category are printable ASCII: a
+target whose id is not is not kept, and a name that is not is no name.
+.PP
 A receiver sends a burst of sentences for each time it computes a
 position, which ones and in what order varying by receiver.
 A fix is complete when every kind of position sentence the receiver

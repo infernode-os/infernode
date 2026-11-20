@@ -113,7 +113,8 @@ Returns a reference to the same value as
 .TP
 .IB i .bits()
 Returns the number of bits of precision of
-.IR i .
+.IR i ,
+which is 0 for zero.
 .TP
 .IB base .expmod( "exp , mod" )
 Returns
@@ -187,6 +188,62 @@ bitwise ones-complement
 Returns
 .IR i ^ n ,
 bitwise exclusive-OR
+.SS Limits
+A number is at most 2\u\s-226\s0\d bits (8 megabytes) long, however it is made:
+from bytes or text, by a shift, a sum or a product.
+A computation on numbers cannot be interrupted, so that a process killed
+in one is gone only when it ends;
+the operations whose time grows faster than their operands are held to
+an amount of work that ends in seconds:
+.IP \(bu
+.B expmod
+with a modulus: the modulus at most 32768 bits, and the square of its
+length in bits times the exponent's at most
+2\u\s-242\s0\d
+(a modulus and exponent of 16384 bits each), a sixteenth of that when
+the modulus is even or negative or the base negative;
+with no modulus, a result of at most 2\u\s-222\s0\d bits, counted as the base's bits
+for each of the exponent.
+.IP \(bu
+.BR mul :
+the product of the two lengths in 32-bit words at most
+2\u\s-232\s0\d
+(two numbers of two megabits; the longest number by one of 4096 bits).
+.IP \(bu
+.B div
+and
+.BR mod :
+the quotient's length times the divisor's, in 32-bit words, at most
+2\u\s-229\s0\d
+(any number by one of 8192 bits; a megabit by half a megabit).
+.IP \(bu
+.BR invert :
+both numbers at most 65536 bits.
+.IP \(bu
+.B iptostr
+and
+.B strtoip
+in base 10: a number of at most 2\u\s-220\s0\d bits (some 315000 digits);
+the other bases have only the limit on a number's length.
+.IP \(bu
+.BR probably_prime :
+a candidate of at most 65536 bits, as the generators make.
+.PP
+A call that would pass a limit raises the exception
+.BR "IPint: number too large" ;
+a shift that would,
+.BR "IPint: shift too large" .
+.PP
+In base 32 a number is its big-endian bytes, with bytes of zero in front
+to a multiple of five, in the digits
+.BR 23456789abcdefghijkmnpqrstuvwxyz ;
+.B strtoip
+returns nil for text of a length that is no whole number of bytes.
+A zero has no sign:
+.B "strtoip(""-0"", 10)"
+is zero.
+.B mod
+returns the least remainder that is not negative, whatever the signs.
 .SH SOURCE
 .B /libinterp/ipint.c
 .br

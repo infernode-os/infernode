@@ -76,6 +76,39 @@ selpending: ref Field;	# a select pressed on, whose menu the release posts
 layout: Layout;
 hoverurl := "";
 
+# The page's text selection, a drag over it or a word double-clicked:
+# where it began and ends in page coordinates, the text and where it is
+# drawn.  A press is a click when the button comes up where it went
+# down; moved further, it selects.
+Pnone, Ppressed, Pselecting, Pword: con iota;
+pressing := Pnone;
+pressat: Point;	# the press, in the canvas
+selfrom, selto: Point;	# page coordinates
+selwords := 0;
+selall := 0;
+seltext := "";
+selrects: list of Rect;
+menulink := "";	# the link the menu was posted over
+DRAGSLOP: con 4;
+
+# a pointing hand, its fingertip the hot spot, over a link: as wm/wm's
+# own, a 16x16 white mask and the black over it
+HANDCURSOR: con "cursor -5 0 16 32 06000f000f000f000fc00ff86ffeffffffff7ffe7fff3fff3ffe1ffc0ffc0ffc060009000900090009c009386926992588054802400120012002100408040ffc";
+handon := 0;
+
+# a drag held above or below the view scrolls it, a tick at a time,
+# though the pointer does not move (Tk sends no motion then)
+tickc: chan of int;
+ticking := 0;
+dragat: Point;	# the drag's last point, in the canvas
+TICKMS: con 50;
+
+# zoom, as a ratio of the display's own (its $displayscale)
+zooms := array[] of {0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0};
+ZOOM1: con 4;
+zoomi := ZOOM1;
+zoombase := 1.0;
+
 Control: adt {
 	f:	ref Field;
 	w:	string;	# widget path
@@ -142,6 +175,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	(top, wmctl) = tkclient->toplevel(ctxt, sys->sprint("-width %d -height %d", w, h), "Charon", Tkclient->Appl);
 	display = top.display;
 	act := chan[16] of string;
+	tickc = chan of int;
 	tk->namechan(top, act, "act");
 	buildui();
 	themech := chan[1] of int;
@@ -158,6 +192,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	c := <-wmctl or
 	c = <-top.ctxt.ctl or
 	c = <-top.wreq =>
+		if(c == "exit")
+			quit();
 		tkclient->wmctl(top, c);
 		if(c != nil && c[0] == '!')
 			resized();
@@ -167,6 +203,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		tk->pointer(top, *p);
 	a := <-act =>
 		action(a);
+	<-tickc =>
+		autoscroll();
 	<-themech =>
 		retheme();
 	e := <-ev =>
@@ -179,6 +217,7 @@ start(w, h: int, mnt: string)
 	if((err := browser->init(display)) != nil || (err = charonfs->init()) != nil)
 		fatal(err);
 	sess = Session.new(w, h);
+	zoombase = sess.zoom(0.0);
 	if((err = charonfs->serve(browser, sess, display, mnt)) != nil)
 		sys->fprint(stderr, "web: %s\n", err);
 	# for name spaces other than this one, Veltro's included
@@ -217,6 +256,20 @@ runwebfs(webfs: Command, done: chan of string)
 	done <-= nil;
 }
 
+# The browser goes, its page's realm with it. The realm is a process
+# group of its own (browser.b, startrealm), so the exit's killgrp, which
+# takes this group, left it running, with its scripts' timers: a page
+# left open when the browser was closed held its heap and woke for ever
+# (a desktop's, days after: its realm still starting timer processes,
+# and the idle collector going round the heap they kept changing). Quit
+# and ^Q were a bare exit, which left this group as well.
+quit()
+{
+	if(sess != nil)
+		sess.close();
+	tkclient->wmctl(top, "exit");
+}
+
 fatal(s: string)
 {
 	sys->fprint(stderr, "web: %s\n", s);
@@ -252,18 +305,29 @@ buildui()
 		"pack .bar -side top -fill x",
 		"pack .status -side bottom -fill x",
 		"pack .view -side top -fill both -expand 1",
-		"bind .view.c <Button-1> {send act click %x %y %X %Y}",
+		"bind .view.c <Button-1> {send act press %x %y %X %Y}",
+		"bind .view.c <Double-Button-1> {send act word %x %y}",
 		"bind .view.c <ButtonRelease-1> {send act release}",
 		"bind .view.c <Motion> {send act hover %x %y}",
-		"bind .view.c <Button-3> {send act menu %X %Y}",
+		"bind .view.c <Button-3> {send act menu %x %y %X %Y}",
 		"bind .view.c <ButtonPress-4> {send act wheel -1}",
 		"bind .view.c <ButtonPress-5> {send act wheel 1}",
 		"bind .view <Configure> {send act resized}",
 		"menu .ctx",
+		"menu .ctx.hist",
 		".ctx add command -label {Back} -command {send act back}",
 		".ctx add command -label {Forward} -command {send act forward}",
 		".ctx add command -label {Reload} -command {send act reload}",
+		".ctx add cascade -label {History} -menu .ctx.hist",
 		".ctx add command -label {Find...} -command {send act find}",
+		".ctx add separator",
+		".ctx add command -label {Copy} -command {send act copy}",
+		".ctx add command -label {Select all} -command {send act selectall}",
+		".ctx add command -label {Copy link address} -command {send act copylink}",
+		".ctx add separator",
+		".ctx add command -label {Zoom in} -command {send act zoom 1}",
+		".ctx add command -label {Zoom out} -command {send act zoom -1}",
+		".ctx add command -label {Actual size} -command {send act zoom 0}",
 		".ctx add separator",
 		".ctx add command -label {Load images on this page} -command {send act loadimages}",
 		".ctx add checkbutton -label {Load images automatically} -variable autoimages -command {send act setting images}",
@@ -356,8 +420,13 @@ redraw()
 		return;
 	if(hiliting) {
 		r := hilite.subpt(Point(0, scroll));
-		y := display.color(int 16rFFFF0060);
+		y := display.color(int 16r60600060);	# premultiplied: yellow at 3/8
 		pageimg.draw(r, y, nil, (0, 0));
+	}
+	if(selrects != nil) {
+		blue := display.color(int 16r14315560);	# premultiplied: #3584E4 at 3/8
+		for(l := selrects; l != nil; l = tl l)
+			pageimg.draw((hd l).subpt(Point(0, scroll)), blue, nil, (0, 0));
 	}
 	tk->putimage(top, "page", pageimg, nil);
 	tk->cmd(top, ".view.c coords pageitem 0 0");
@@ -426,6 +495,9 @@ event(e: string)
 		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
 		status("Stopped");
 	"update" =>
+		# laid out again (an image came): the selection may have moved
+		if(selrects != nil)
+			(seltext, selrects) = sess.selection(selfrom, selto, selwords, selall);
 		redraw();
 		(got, n) := split(rest);
 		if(n != nil && got != n)
@@ -455,6 +527,9 @@ shown()
 	tkclient->settitle(top, title + " — Charon");
 	shownt = sess.title;
 	hiliting = 0;
+	seltext = "";
+	selrects = nil;
+	pressing = Pnone;
 	scroll = 0;
 	scrollto(sess.scroll);
 	endedit(0);
@@ -480,12 +555,39 @@ action(a: string)
 	"stop" =>
 		sess.stop();
 	"quit" =>
-		exit;
+		quit();
 	"resized" =>
 		resized();
 	"menu" =>
 		syncmenu();	# the settings may have changed from elsewhere (ctl, the file)
-		tk->cmd(top, ".ctx post " + rest);
+		(x, y) := xy(rest);
+		menulink = sess.linkat(x, y + scroll);
+		histmenu();
+		(nil, l) := sys->tokenize(rest, " ");
+		if(len l == 4)
+			tk->cmd(top, ".ctx post " + hd tl tl l + " " + hd tl tl tl l);
+	"zoom" =>
+		case rest {
+		"1" =>
+			zoomto(zoomi + 1);
+		"-1" =>
+			zoomto(zoomi - 1);
+		* =>
+			zoomto(ZOOM1);
+		}
+	"history" =>
+		report(sess.gohistory(int rest));
+	"copy" =>
+		copy();
+	"selectall" =>
+		selectall();
+	"copylink" =>
+		if(menulink == "")
+			status("No link there");
+		else {
+			tkclient->snarfput(menulink);
+			status("Copied " + menulink);
+		}
 	"loadimages" =>
 		sess.images();
 	"setting" =>
@@ -529,7 +631,52 @@ action(a: string)
 				d = int n * (vh - LINE);
 			scrollto(scroll + d);
 		}
+	"press" =>
+		# Tk sends the press again with each motion while the button is held
+		if(pressing != Pnone)
+			return;
+		tk->cmd(top, "focus .view.c");
+		(x, y) := xy(rest);
+		(nil, l) := sys->tokenize(rest, " ");
+		if(len l == 4)	# where the canvas is on the screen, for a menu posted from it
+			(scrx, scry) = (int hd tl tl l - x, int hd tl tl tl l - y);
+		pressat = Point(x, y);
+		pressing = Ppressed;
+	"drag" =>
+		(x, y) := xy(rest);
+		if(pressing == Ppressed && (abs(x - pressat.x) > DRAGSLOP || abs(y - pressat.y) > DRAGSLOP)) {
+			endedit(1);
+			pressing = Pselecting;
+			selfrom = pressat.add(Point(0, scroll));
+			selwords = 0;
+		}
+		if(pressing == Pselecting || pressing == Pword) {
+			dragat = Point(x, y);
+			selto = Point(x, y + scroll);
+			select();
+			if((y < 0 || y >= vh) && !ticking) {
+				ticking = 1;
+				spawn ticker();
+			}
+		}
+	"word" =>
+		(x, y) := xy(rest);
+		endedit(1);
+		pressing = Pword;
+		selfrom = selto = Point(x, y + scroll);
+		selwords = 1;
+		select();
 	"release" =>
+		case pressing {
+		Ppressed =>
+			pressing = Pnone;
+			clearselection();
+			action("click " + string pressat.x + " " + string pressat.y);
+		Pselecting or Pword =>
+			pressing = Pnone;
+			if(seltext != "")
+				status(sys->sprint("%d characters selected   (Ctrl-C: copy)", len seltext));
+		}
 		if((f := selpending) != nil) {
 			selpending = nil;
 			postselect(f);
@@ -537,11 +684,7 @@ action(a: string)
 	"wheel" =>
 		scrollto(scroll + int rest * 2 * LINE);	# the wheel: two lines a notch
 	"click" =>
-		tk->cmd(top, "focus .view.c");
 		(x, y) := xy(rest);
-		(nil, l) := sys->tokenize(rest, " ");
-		if(len l == 4)	# where the canvas is on the screen, for a menu posted from it
-			(scrx, scry) = (int hd tl tl l - x, int hd tl tl tl l - y);
 		n := sess.nodeat(x, y + scroll);
 		endedit(1);
 		if(n != 0) {
@@ -558,7 +701,19 @@ action(a: string)
 		}
 	"hover" =>
 		(x, y) := xy(rest);
+		# Inferno Tk has no <B1-Motion>: a drag is motion while pressed
+		if(pressing != Pnone) {
+			action("drag " + rest);
+			return;
+		}
 		u := sess.linkat(x, y + scroll);
+		if((u != nil) != handon) {
+			handon = u != nil;
+			if(handon)
+				tkclient->wmctl(top, HANDCURSOR);
+			else
+				tkclient->wmctl(top, "cursor");
+		}
 		if(u != hoverurl) {
 			hoverurl = u;
 			if(u != nil)
@@ -645,9 +800,36 @@ key(k: int)
 		findkey(k);
 		return;
 	}
+	focus := tk->cmd(top, "focus");
+	onpage := focus == "" || focus == ".view.c" || focus == ".";
 	case k {
+	'c' & 16r1F =>
+		if(onpage)
+			copy();
+		else
+			widgetcopy(focus, 0);
+		return;
+	'x' & 16r1F =>
+		if(!onpage)
+			widgetcopy(focus, 1);
+		return;
+	'v' & 16r1F =>
+		if(!onpage)
+			paste(focus);
+		return;
+	'a' & 16r1F =>
+		if(onpage) {
+			selectall();
+			return;
+		}
+	'\t' =>
+		# the next text field, from the one being typed into or the view
+		if(onpage || editing != nil && focus == editing.w) {
+			nextfield();
+			return;
+		}
 	'q' & 16r1F =>
-		exit;
+		quit();
 	'l' & 16r1F =>
 		tk->cmd(top, "focus .bar.url");
 		tk->cmd(top, ".bar.url selection range 0 end");
@@ -663,8 +845,7 @@ key(k: int)
 		findnext();
 		return;
 	}
-	focus := tk->cmd(top, "focus");
-	if(focus != "" && focus != ".view.c" && focus != ".") {
+	if(!onpage) {
 		tk->keyboard(top, k);
 		return;
 	}
@@ -677,10 +858,75 @@ key(k: int)
 	Kend =>	scrollto(pageheight());
 	Kbs or Kleft =>	report(sess.goback());
 	Kright =>	report(sess.goforward());
-	Kesc =>	sess.stop();
+	Kesc =>
+		if(selrects != nil)
+			clearselection();
+		else
+			sess.stop();
+	'+' or '=' =>	zoomto(zoomi + 1);
+	'-' =>	zoomto(zoomi - 1);
+	'0' =>	zoomto(ZOOM1);
 	* =>
 		tk->keyboard(top, k);
 	}
+}
+
+zoomto(i: int)
+{
+	if(i < 0 || i >= len zooms)
+		return;
+	endedit(1);
+	h0 := pageheight();
+	zoomi = i;
+	sess.zoom(zoombase * zooms[i]);
+	# the same place in the page, near enough
+	scrollto(int (real scroll * real pageheight() / real h0));
+	if(selrects != nil)
+		(seltext, selrects) = sess.selection(selfrom, selto, selwords, selall);
+	redraw();
+	status(sys->sprint("Zoom %d%%", int (zooms[i] * 100.0)));
+}
+
+# Tab: the text field after the one being typed into, or the first in
+# view (or after it); round to the first
+nextfield()
+{
+	fields := sess.fields();
+	after := -1;
+	if(editing != nil) {
+		for(i := 0; i < len fields; i++)
+			if(fields[i].node == editing.f.node)
+				after = i;
+	}
+	first, inview: ref Field;
+	for(i := 0; i < len fields; i++) {
+		f := fields[i];
+		if(!istext(f.kind) || f.disabled || f.readonly)
+			continue;
+		(ok, r, nil) := fieldbox(f.node);
+		if(!ok || r.dx() == 0 || r.dy() == 0)
+			continue;	# not shown
+		if(first == nil)
+			first = f;
+		if(after >= 0) {
+			if(i > after) {
+				inview = f;
+				break;
+			}
+		} else if(r.max.y > scroll) {
+			inview = f;
+			break;
+		}
+	}
+	if(inview == nil)
+		inview = first;
+	endedit(1);
+	if(inview == nil)
+		return;
+	(nil, r, nil) := fieldbox(inview.node);
+	if(r.min.y < scroll || r.max.y > scroll + vh)
+		scrollto(r.min.y - vh/3);
+	startedit(inview);
 }
 
 findkey(k: int)
@@ -705,6 +951,159 @@ findkey(k: int)
 			status("Find: " + findbuf);
 		}
 	}
+}
+
+# ---- selection, copy and paste ----
+
+select()
+{
+	selall = 0;
+	(seltext, selrects) = sess.selection(selfrom, selto, selwords, 0);
+	redraw();
+}
+
+selectall()
+{
+	pressing = Pnone;
+	selall = 1;
+	(seltext, selrects) = sess.selection((0, 0), (0, 0), 0, 1);
+	status(sys->sprint("%d characters selected   (Ctrl-C: copy)", len seltext));
+	redraw();
+}
+
+clearselection()
+{
+	if(selrects == nil && seltext == "")
+		return;
+	seltext = "";
+	selrects = nil;
+	redraw();
+}
+
+copy()
+{
+	if(seltext == "") {
+		status("Nothing selected");
+		return;
+	}
+	tkclient->snarfput(seltext);
+	status(sys->sprint("Copied %d characters", len seltext));
+}
+
+# Ctrl-C and Ctrl-X in the address bar or a field being typed into:
+# Tk's entry and text have the selection but leave the snarf buffer to
+# the program
+widgetcopy(w: string, cut: int)
+{
+	t := "";
+	if(tk->cmd(top, "winfo class " + w) == "Text") {
+		t = tk->cmd(top, w + " get sel.first sel.last");
+		if(t != "" && t[0] == '!')
+			return;
+	} else {
+		a := tk->cmd(top, w + " index sel.first");
+		b := tk->cmd(top, w + " index sel.last");
+		if(a == "" || a[0] == '!' || b == "" || b[0] == '!')
+			return;
+		v := tk->cmd(top, w + " get");
+		(i, j) := (int a, int b);
+		if(i < 0 || j > len v || i >= j)
+			return;
+		t = v[i:j];
+	}
+	if(t == "")
+		return;
+	tkclient->snarfput(t);
+	if(cut) {
+		tk->cmd(top, w + " delete sel.first sel.last");
+		tk->cmd(top, "update");
+	}
+}
+
+# Ctrl-V: the snarf buffer typed in at the cursor, over the selection;
+# one line in an entry
+paste(w: string)
+{
+	t := tkclient->snarfget();
+	if(t == "")
+		return;
+	if(tk->cmd(top, "winfo class " + w) != "Text") {
+		for(i := 0; i < len t; i++)
+			if(t[i] == '\n' || t[i] == '\r' || t[i] == '\t')
+				t[i] = ' ';
+	}
+	tk->cmd(top, w + " delete sel.first sel.last");
+	tk->cmd(top, w + " insert insert " + tk->quote(t));
+	tk->cmd(top, w + " see insert");
+	tk->cmd(top, "update");
+}
+
+# The History menu: the pages back, nearest first under the furthest,
+# this one (not chosen), the pages forward; as the session has them
+# when the menu is posted
+histmenu()
+{
+	m := ".ctx.hist";
+	tk->cmd(top, m + " delete 0 end");
+	items: list of string;
+	i := -1;
+	for(l := sess.back; l != nil && i >= -HISTMAX; l = tl l)
+		items = histitem(m, (hd l).t0, sys->sprint("send act history %d", i--)) :: items;
+	for(; items != nil; items = tl items)
+		tk->cmd(top, hd items);
+	if(sess.url != "")
+		tk->cmd(top, histitem(m, sess.url, "") + " -state disabled");
+	i = 1;
+	for(l = sess.fwd; l != nil && i <= HISTMAX; l = tl l)
+		tk->cmd(top, histitem(m, (hd l).t0, sys->sprint("send act history %d", i++)));
+}
+
+HISTMAX: con 15;
+
+histitem(m, url, cmd: string): string
+{
+	if(len url > 70)
+		url = url[0:67] + "...";
+	return m + " add command -label " + tk->quote(url) + " -command {" + cmd + "}";
+}
+
+ticker()
+{
+	while(ticking) {
+		sys->sleep(TICKMS);
+		tickc <-= 1;
+	}
+}
+
+# A tick while a drag is held outside the view: scrolled by how far
+# outside (a line at most a tick, as a browser does), the selection
+# taken to the new place.  Inside, or let go, the ticks stop.
+autoscroll()
+{
+	if(pressing != Pselecting && pressing != Pword || dragat.y >= 0 && dragat.y < vh) {
+		ticking = 0;
+		return;
+	}
+	d := dragat.y;
+	if(d >= vh)
+		d -= vh - 1;
+	if(d > LINE)
+		d = LINE;
+	if(d < -LINE)
+		d = -LINE;
+	s0 := scroll;
+	scrollto(scroll + d);
+	if(scroll == s0)
+		return;	# at the top or the end
+	selto = Point(dragat.x, dragat.y + scroll);
+	select();
+}
+
+abs(n: int): int
+{
+	if(n < 0)
+		return -n;
+	return n;
 }
 
 findnext()

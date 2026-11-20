@@ -963,7 +963,7 @@ SBEOF
         case "$(basename "$f")" in
         comp-arm64.c) ;;			# the one we want
         comp-*.c) continue;;			# every other code generator
-        gpu.c|crypt.c) continue;;
+        gpu.c) continue;;
         # ipint.c stays: keyring's public-key paths stand on IPint_*.
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
@@ -981,9 +981,6 @@ SBEOF
     for f in "$ROOT"/libmp/*.c "$ROOT"/libsec/*.c "$ROOT"/libkeyring/*.c; do
         [[ -e "$f" ]] || continue
         case "$(basename "$f")" in
-        # standalone test programs and demo mains, not library members
-        bigtest.c|crttest.c|mtest.c|test.c|egtest.c|hmactest.c|md4test.c|p384ecdhtest.c|rsatest.c|primetest.c) continue;;
-        decodepem.c) continue;;		# wants Plan 9 libc.h; PEM is not a kernel concern
         prng.c) continue;;		# host entropy (getentropy/urandom); the kernel's own random.c stands in
         esac
         o="$BUILD/crypto-$(basename "$f").o"
@@ -6478,7 +6475,8 @@ try:
     m = len(buf)
     typed("load std; for(n in 1 2 3) { vm $n sh -c 'load std; for(i in 1 2 3 4 5 6 7 8){ sleep 0 }; echo CONCSH-ok' & }", 0.5)
     end = time.time() + 60
-    while bytes(buf[m:]).count(b"\nCONCSH-ok") < 3 and time.time() < end:
+    # a shell's "; " prompt can come out ahead of one on its line
+    while len(re.findall(rb"(?m)^(?:; )*CONCSH-ok\r?$", bytes(buf[m:]))) < 3 and time.time() < end:
         time.sleep(0.5)
     time.sleep(1)
     typed("ramfile /chan/vmrf served-from-vm0", 1)
@@ -6526,7 +6524,11 @@ PYEOF
         fail "virt: vm: jitbench2 in VMs 1 and 2 finished $nt time(s), not 2"
     fi
     vcheck "vm: with VM 2, four"                              "vms 4 max 4"
-    nc="$(tr -d '\r' <<<"$OUT" | grep -ac '^CONCSH-ok')"
+    # each on a line of its own, or after the prompts of the shell that
+    # started them: "; CONCSH-ok" was not counted, and three that had
+    # finished were reported as two (the typed command's own echo of
+    # the word is in the middle of its line and never counted)
+    nc="$(tr -d '\r' <<<"$OUT" | grep -acE '^(; )*CONCSH-ok$')"
     if [[ "$nc" -ge 3 ]]; then
         pass "virt: vm: sh started in VMs 1, 2 and 3 at the same instant -- three loads contending for the compiler -- all three run to the end"
     else

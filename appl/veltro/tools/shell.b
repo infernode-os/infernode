@@ -35,6 +35,7 @@ ToolShell: module {
 };
 
 SHELL_ROOT: con "/mnt/shell";
+MAXBODY: con 256*1024;	# bytes of the transcript kept: its end
 
 init(): string
 {
@@ -91,7 +92,7 @@ schema(): string
 
 exec(args: string): string
 {
-	if(sys == nil) {
+	if(sys == nil || str == nil) {
 		err := init();
 		if(err != nil)
 			return "error: " + err;
@@ -119,11 +120,15 @@ exec(args: string): string
 doread(args: string): string
 {
 	target := strip(args);
-	if(target == "" || target == "body") {
-		return readfile(sys->sprint("%s/body", SHELL_ROOT));
-	}
-	if(target == "input") {
-		return readfile(sys->sprint("%s/input", SHELL_ROOT));
+	if(target == "" || target == "body" || target == "input") {
+		if(target == "")
+			target = "body";
+		(text, cut, err) := readfile(sys->sprint("%s/%s", SHELL_ROOT, target));
+		if(err != nil)
+			return err;
+		if(cut)
+			return sys->sprint("[the transcript is long: this is its last %d bytes]\n", MAXBODY) + text;
+		return text;
 	}
 	return "error: read target must be 'body' or 'input'";
 }
@@ -138,9 +143,9 @@ dotail(args: string): string
 			n = v;
 	}
 
-	body := readfile(sys->sprint("%s/body", SHELL_ROOT));
-	if(len body >= 6 && body[0:6] == "error:")
-		return body;
+	(body, nil, berr) := readfile(sys->sprint("%s/body", SHELL_ROOT));
+	if(berr != nil)
+		return berr;
 
 	# Split into lines and take last n
 	alllines: list of string;
@@ -178,36 +183,76 @@ dotail(args: string): string
 
 dostatus(): string
 {
-	body := readfile(sys->sprint("%s/body", SHELL_ROOT));
-	if(len body >= 6 && body[0:6] == "error:")
+	# Whether the file opened is what says the shell is there.  It was
+	# whether the transcript began with "error:", which is whatever was
+	# printed first in the terminal.
+	(body, cut, berr) := readfile(sys->sprint("%s/body", SHELL_ROOT));
+	if(berr != nil)
 		return "shell is not running (not started)";
 	# Count lines
 	count := 1;
 	for(i := 0; i < len body; i++)
 		if(body[i] == '\n')
 			count++;
-	input := readfile(sys->sprint("%s/input", SHELL_ROOT));
-	return sys->sprint("shell is running\ntranscript: %d lines\ncurrent input: %s", count, input);
+	lines := sys->sprint("%d lines", count);
+	if(cut)
+		lines = sys->sprint("more than %d lines", count);
+	(input, nil, ierr) := readfile(sys->sprint("%s/input", SHELL_ROOT));
+	if(ierr != nil)
+		input = "(cannot be read)";
+	return sys->sprint("shell is running\ntranscript: %s\ncurrent input: %s", lines, input);
 }
 
 # --- I/O helpers ---
 
-readfile(path: string): string
+# A file's text, whether only its end was kept, and nil or the error.
+# The error is apart from the text: it was returned in the text's place,
+# and told from it by how the text began.  The bytes are gathered and
+# made text once (made text 8K at a time, a character lying across two
+# reads came out as two wrong ones); only the last MAXBODY bytes are
+# kept, however long the transcript; and a read that fails is an error,
+# not the end of the file.
+readfile(path: string): (string, int, string)
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %r (is the shell running? start it with 'launch shell')", path);
+		return (nil, 0, sys->sprint("error: cannot open %s: %r (is the shell running? start it with 'launch shell')", path));
 
-	result := "";
+	data := array[2*MAXBODY] of byte;
+	have := 0;
+	cut := 0;
 	buf := array[8192] of byte;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
+		if(n < 0)
+			return (nil, 0, sys->sprint("error: cannot read %s: %r", path));
+		if(n == 0)
 			break;
-		result += string buf[0:n];
+		if(have + n > len data) {
+			# keep the end: the newest MAXBODY bytes
+			data[0:] = data[have - MAXBODY:have];
+			have = MAXBODY;
+			cut = 1;
+		}
+		data[have:] = buf[0:n];
+		have += n;
 	}
 	fd = nil;
-	return result;
+	start := 0;
+	if(cut || have > MAXBODY) {
+		if(have > MAXBODY)
+			start = have - MAXBODY;
+		cut = 1;
+		# begin at a character, and at a line if one begins soon
+		while(start < have && (int data[start] & 16rC0) == 16r80)
+			start++;
+		for(k := start; k < have && k < start + 4096; k++)
+			if(data[k] == byte '\n') {
+				start = k + 1;
+				break;
+			}
+	}
+	return (string data[start:have], cut, nil);
 }
 
 # --- String helpers ---

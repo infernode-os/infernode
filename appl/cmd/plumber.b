@@ -231,7 +231,14 @@ receiver(input: ref Input)
 		if(wc == nil)
 			;	# not interested in EOF; leave channel open
 		else{
-			input.inc <-= parse(msg);
+			# A message that is none, or a control message the plumber
+			# has no name for, is refused: both were answered as sent.
+			(in, perr) := parse(msg);
+			if(perr != nil){
+				wc <-= (0, perr);
+				continue;
+			}
+			input.inc <-= in;
 			res := <- input.resc;
 			err := "";
 			if(res == UNKNOWN)
@@ -264,6 +271,12 @@ sender(input: ref Input, output: array of ref Output)
 			NOTSTARTED =>
 				sys->fprint(stderr, "plumb: can't start application\n");
 			* =>
+				# no more than Maxqueue wait for a port's reader: the
+				# oldest goes
+				if(len output[j].queue >= Maxqueue){
+					sys->fprint(stderr, "plumb: %d messages wait for port %s: the oldest is dropped\n", Maxqueue, output[j].name);
+					output[j].queue = tl output[j].queue;
+				}
 				output[j].queue = append(output[j].queue, msg);
 				outputc[j] = output[j].io.read;
 			}
@@ -274,13 +287,17 @@ sender(input: ref Input, output: array of ref Output)
 			if(rc == nil)	# no interest in EOF
 				break;
 			msg := hd output[j].queue;
+			# A message its reader has no room for is gone, with the
+			# error.  It was left at the head of the queue, where the
+			# next read met it again: every later message to the port
+			# waited behind it for good.
+			output[j].queue = tl output[j].queue;
+			if(output[j].queue == nil)
+				outputc[j] = nil;
 			if(nbytes < len msg){
 				rc <-= (nil, "buffer too short for message");
 				break;
 			}
-			output[j].queue = tl output[j].queue;
-			if(output[j].queue == nil)
-				outputc[j] = nil;
 			log("sending \n");
 			rc <-= (msg, nil);
 		}
@@ -333,8 +350,13 @@ updaterules(urules: list of ref Rule): list of ref Rule
 	return urules;
 }
 
+Maxqueue: con 256;	# messages waiting for one port's reader
+Maxrules: con 256*1024;	# bytes of rules
+
 rulesproc(rulesio: ref Sys->FileIO)
 {
+	wfid := -1;	# the fid whose writes are being gathered
+	wtext: array of byte;
 	for(;;){
 		alt{
 		(off, count, nil, rc) := <- rulesio.read =>
@@ -353,11 +375,34 @@ rulesproc(rulesio: ref Sys->FileIO)
 			rc <-= (array of byte data[off:], nil);
 			break;
 			
-		(nil, data, nil, wc) := <-rulesio.write =>
+		(off, data, fid, wc) := <-rulesio.write =>
 			if(wc == nil){
-				break;	# not interested in EOF
+				# its writer has closed it
+				if(fid == wfid){
+					wfid = -1;
+					wtext = nil;
+				}
+				break;
 			}
-			(urules, err) := plumbing->parse("/chan/plumb.rules", string data);
+			# A rule set written in several writes is the writes
+			# together.  Each write was a rule set by itself: of a
+			# file longer than a write, the first piece became the
+			# rules and the second was refused.
+			if(fid == wfid && off == len wtext && off > 0){
+				n := array[len wtext + len data] of byte;
+				n[0:] = wtext;
+				n[len wtext:] = data;
+				wtext = n;
+			}else
+				wtext = data;
+			wfid = fid;
+			if(len wtext > Maxrules){
+				wtext = nil;
+				wfid = -1;
+				wc <-= (0, "rules too long");
+				break;
+			}
+			(urules, err) := plumbing->parse("/chan/plumb.rules", string wtext);
 			if(err != nil){
 				wc <-= (0, err);
 				break;
@@ -369,23 +414,26 @@ rulesproc(rulesio: ref Sys->FileIO)
 	}
 }
 
-parse(a: array of byte): ref Inmesg
+# (the message, nil), (nil, nil) for a control message done, or (nil, why
+# it is refused)
+parse(a: array of byte): (ref Inmesg, string)
 {
 	msg := Msg.unpack(a);
 	if(msg == nil)
-		return nil;
+		return (nil, "not a plumb message");
 	i := ref Inmesg;
 	i.msg = msg;
 	if(msg.dst != nil){
-		if(control(i))
-			return nil;
+		(isctl, cerr) := control(i);
+		if(isctl)
+			return (nil, cerr);
 		toport(i, msg.dst);
 	}else
 		i.port = -1;
 	i.match = array[10] of { * => Match(-1, -1)};
 	i._n = array[10] of string;
 	i.attrs = plumbmsg->string2attrs(i.msg.attr);
-	return i;
+	return (i, nil);
 }
 
 append(l: list of array of byte, a: array of byte): list of array of byte
@@ -403,12 +451,12 @@ shutdown()
 	raise "fail:error";
 }
 
-# Handle control messages
-control(in: ref Inmesg): int
+# Handle control messages: (it was one, why it is refused)
+control(in: ref Inmesg): (int, string)
 {
 	msg := in.msg;
 	if(msg.kind!="text" || msg.dst!="plumb")
-		return 0;
+		return (0, nil);
 	text := string msg.data;
 	case text {
 	"start" =>
@@ -416,9 +464,9 @@ control(in: ref Inmesg): int
 	"stop" =>
 		start(msg.src, -1);
 	* =>
-		sys->fprint(stderr, "plumb: unrecognized control message from %s: %s\n", msg.src, text);
+		return (1, "unrecognized control message");
 	}
-	return 1;
+	return (1, nil);
 }
 
 start(port: string, startstop: int)
@@ -451,13 +499,18 @@ startup(dir, prog: string, args: list of string, wait: chan of int)
 	}
 
 	sys->pctl(Sys->NEWFD|Sys->NEWPGRP|Sys->FORKNS, list of {0, 1, 2});
-	wait <-= 1;
-	wait = nil;
+	# Loaded before the plumber is told it has started.  It was told
+	# first: a program that could not be loaded left its port waiting
+	# for a start that never came, every later message to it queued
+	# for good and nothing ever started for it again.
 	mod := load Command prog;
 	if(mod == nil){
 		sys->fprint(stderr, "plumb: can't load %s: %r\n", prog);
+		wait <-= 0;
 		return;
 	}
+	wait <-= 1;
+	wait = nil;
 	sys->chdir(dir);
 	mod->init(context, prog :: args);
 }
@@ -501,7 +554,10 @@ process(in: ref Inmesg): (int, array of byte)
 		wait := chan of int;
 		output[j].waiting = 1;
 		spawn startup(in.msg.dir, path, args, wait);
-		<-wait;
+		if(<-wait == 0){
+			output[j].waiting = 0;
+			return (NOTSTARTED, nil);
+		}
 		return (HANDLED, nil);
 	}else{
 		if(in.msg.kind != "text")

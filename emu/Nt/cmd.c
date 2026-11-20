@@ -70,8 +70,14 @@ ntquotedcmd(char **argv)
 		/* conservatively calculate length of command;
 		 * backslash expansion can cause growth in dblquote().
 		 */
+	/*
+	 * (twice its length, for each backslash and quote doubled, and
+	 * the two quotes round it and the blank after: without those
+	 * three an argument of one blank, or of nothing, was written
+	 * past the block)
+	 */
 	for(i=0,n=0; argv[i]; i++)
-		n += 2*strlen(argv[i]);
+		n += 2*strlen(argv[i]) + 3;
 	n++;
 	
 	cmd = malloc(n);

@@ -17,10 +17,26 @@ Smtp : module
 	PLAIN, IMPLICIT_TLS, STARTTLS: con iota;
 	authopen: fn(user, password, server : string, mode: int) : (int, string);
 	# send mail - returns (status, error string)
+	# fromwho and each recipient is an address as okaddr has it, and is
+	# refused otherwise before anything is sent.  msg is the message's
+	# text in pieces, each one or more lines (an empty piece an empty
+	# line).  A NUL anywhere in it, or a carriage return inside a header
+	# line, refuses the message; one inside a body line ends that line.
 	sendmail: fn(fromwho: string, 
 		             towho: list of string, 
 		             cc : list of string,
 		             msg: list of string) : (int, string);
+
+	# An address that can stand between < and > in MAIL FROM and RCPT TO:
+	# not empty, no blank, control character, DEL, < or >.
+	okaddr: fn(addr: string): int;
+	# A header's value that stays one header: no CR, LF or NUL.
+	okheader: fn(value: string): int;
+
+	# Every reply is waited for ms milliseconds (30 seconds unless set
+	# here), and so is the connection's making.  After a timeout, a
+	# failed write or a reply that is not SMTP the connection is closed.
+	timeout: fn(ms: int);
 
          # close the connection - returns (status, error string)
          close: fn() : (int, string);

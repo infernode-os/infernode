@@ -6,6 +6,16 @@ implement ToolMemory;
 # Provides persistent key-value storage for agent context.
 # Data persists across sessions in /tmp/veltro/memory/{agentid}/
 #
+# The agent is the activity the tool server serves (/tool/activity), and
+# each has a memory of its own: the main agent's (activity 0) is kept
+# from one session to the next; a task's lasts as long as the task. There
+# was one memory, "default", for every agent and every boot, so a task
+# that had read hostile text could leave it where the main agent would
+# load it as its own, and could list, read and clear what any other
+# agent had kept. Task ids begin again at each boot, so a task's memory
+# is emptied when a new tool server first uses it: a task does not
+# inherit what an earlier boot's task of its number left.
+#
 # Usage:
 #   memory save <key> <value>     # Store a value
 #   memory load <key>             # Retrieve a value
@@ -48,9 +58,12 @@ ToolMemory: module {
 # Agent ID is determined from sandbox path or generated
 MEMORY_BASE: con "/tmp/veltro/memory";
 DEFAULT_AGENT: con "default";
+MAIN_AGENT: con "0";	# the activity whose memory is kept across sessions
 
-# Current agent ID (set on first use)
+# Current agent ID (set at each call: /tool is served to a call, not
+# to the tool server that loads this module)
 agentid: string;
+fresh := 1;	# nothing has been stored or read by this tool server yet
 
 init(): string
 {
@@ -64,7 +77,6 @@ init(): string
 	if(str == nil)
 		return "cannot load String";
 
-	# Try to determine agent ID from environment or sandbox
 	agentid = getagentid();
 
 	return nil;
@@ -86,7 +98,7 @@ doc(): string
 		"  memory clear               # Clear all keys\n" +
 		"  memory append <key> <val>  # Append to existing value\n\n" +
 		"Arguments:\n" +
-		"  key   - Alphanumeric key (a-z, 0-9, _)\n" +
+		"  key   - letters, digits, _ and -, at most 64 characters\n" +
 		"  value - Any string value\n\n" +
 		"Examples:\n" +
 		"  memory save project /home/user/myproject\n" +
@@ -94,14 +106,15 @@ doc(): string
 		"  memory save notes \"Working on auth\"\n" +
 		"  memory append notes \" - added login\"\n" +
 		"  memory list\n\n" +
-		"Data persists across agent sessions.";
+		"Each agent has its own memory. The main agent's persists across\n" +
+		"sessions; a task's lasts as long as the task.";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"memory\"," +
-		"\"description\":\"Persistent key-value storage that survives across agent sessions. Keys are alphanumeric plus underscore.\"," +
+		"\"description\":\"Key-value storage of this agent's own: the main agent's survives across sessions, a task's lasts as long as the task. Keys are letters, digits, underscore and hyphen.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -117,6 +130,13 @@ exec(args: string): string
 {
 	if(sys == nil)
 		init();
+	agentid = getagentid();
+	if(fresh) {
+		fresh = 0;
+		# a task's memory starts empty (see the header)
+		if(agentid != MAIN_AGENT && agentid != DEFAULT_AGENT)
+			clearall();
+	}
 
 	args = strip(args);
 	if(args == "")
@@ -168,13 +188,13 @@ dosave(args: string): string
 		return sys->sprint("error: cannot create %s: %r", path);
 
 	data := array of byte value;
-	if(sys->write(fd, data, len data) < 0) {
+	if(sys->write(fd, data, len data) != len data) {
 		fd = nil;
 		return sys->sprint("error: write failed: %r");
 	}
 	fd = nil;
 
-	return sys->sprint("saved '%s' (%d bytes)", key, len value);
+	return sys->sprint("saved '%s' (%d bytes)", key, len data);
 }
 
 # Load a value by key
@@ -229,7 +249,9 @@ dolist(): string
 			break;
 		for(i := 0; i < n; i++) {
 			name := dirs[i].name;
-			if(name == "." || name == "..")
+			# only what this tool could have stored is a key: a name
+			# put there some other way is not echoed to the model
+			if(!validkey(name))
 				continue;
 			if(result != "")
 				result += "\n";
@@ -248,12 +270,26 @@ dolist(): string
 # Clear all keys
 doclear(): string
 {
+	(ok, nil) := sys->stat(memorypath());
+	if(ok < 0)
+		return "(memory already empty)";
+	(count, left) := clearall();
+	# what is still there is said: it counted every name as cleared,
+	# removed or not
+	if(left > 0)
+		return sys->sprint("error: cleared %d keys, %d could not be removed: %r", count, left);
+	return sys->sprint("cleared %d keys", count);
+}
+
+# Remove every key of this agent's; returns how many went and how many stayed.
+clearall(): (int, int)
+{
 	path := memorypath();
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return "(memory already empty)";
+		return (0, 0);
 
-	count := 0;
+	names: list of string;
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -262,13 +298,20 @@ doclear(): string
 			name := dirs[i].name;
 			if(name == "." || name == "..")
 				continue;
-			sys->remove(path + "/" + name);
-			count++;
+			names = name :: names;
 		}
 	}
 	fd = nil;
 
-	return sys->sprint("cleared %d keys", count);
+	count := 0;
+	left := 0;
+	for(; names != nil; names = tl names) {
+		if(sys->remove(path + "/" + hd names) < 0)
+			left++;
+		else
+			count++;
+	}
+	return (count, left);
 }
 
 # Append to existing value
@@ -283,9 +326,15 @@ doappend(args: string): string
 
 	value = stripquotes(value);
 
-	# Load existing value
+	# Load existing value. One that is there and cannot be read is an
+	# error: read as nothing, the append replaced it.
 	path := keypath(key);
-	(existing, nil) := readfile(path);
+	(existing, rerr) := readfile(path);
+	if(rerr != nil) {
+		(xok, nil) := sys->stat(path);
+		if(xok >= 0)
+			return "error: " + rerr;
+	}
 
 	# Append new value
 	newvalue := existing + value;
@@ -301,21 +350,34 @@ doappend(args: string): string
 		return sys->sprint("error: cannot create %s: %r", path);
 
 	data := array of byte newvalue;
-	if(sys->write(fd, data, len data) < 0) {
+	if(sys->write(fd, data, len data) != len data) {
 		fd = nil;
 		return sys->sprint("error: write failed: %r");
 	}
 	fd = nil;
 
-	return sys->sprint("appended to '%s' (now %d bytes)", key, len newvalue);
+	return sys->sprint("appended to '%s' (now %d bytes)", key, len data);
 }
 
-# Get agent ID from environment or generate default
+# The agent is the activity whose tool server this is: tools9p serves
+# its number to every call as /tool/activity. Loaded with no tool server
+# (a test, a command), the store is "default", which is no activity's.
 getagentid(): string
 {
-	# Try to read from sandbox context
-	# For now, use default
-	return DEFAULT_AGENT;
+	fd := sys->open("/tool/activity", Sys->OREAD);
+	if(fd == nil)
+		return DEFAULT_AGENT;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return DEFAULT_AGENT;
+	id := strip(string buf[0:n]);
+	if(id == "" || len id > 9)
+		return DEFAULT_AGENT;
+	for(i := 0; i < len id; i++)
+		if(id[i] < '0' || id[i] > '9')
+			return DEFAULT_AGENT;
+	return string int id;
 }
 
 # Get memory directory path for current agent

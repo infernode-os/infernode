@@ -33,12 +33,12 @@ statconv(struct stat *s, char *name)
 	dir->uid = dir->gid = dir->muid = nullstring;
 	if(p){
 		dir->uid = n;
-		strcpy(n, p->pw_name);
+		memmove(n, p->pw_name, strlen(p->pw_name)+1);
 		n += strlen(p->pw_name)+1;
 	}
 	if(g){
 		dir->gid = n;
-		strcpy(n, g->gr_name);
+		memmove(n, g->gr_name, strlen(g->gr_name)+1);
 	}
 	dir->qid.type = S_ISDIR(s->st_mode)? QTDIR: QTFILE;
 	dir->qid.path = s->st_ino;

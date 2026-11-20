@@ -17,7 +17,7 @@ RAW = "/mnt/wikia/raw/"
 
 
 def reply(text):
-    if "(from " + RAW + "alpha.md)" in text:
+    if "(from " + RAW + "alpha.md)" in text or "(from " + RAW + "sub/alpha.md)" in text:
         return ("===PAGE===\nTITLE: Project X\nTYPE: entity\nCOMMENT: from alpha\n---\n"
                 "Project X is led by Alice. It started in 2024.\nSee [Alice].\n"
                 "===PAGE===\nTITLE: Alice\nTYPE: entity\n---\n"
@@ -27,6 +27,11 @@ def reply(text):
                 "Project X is led by Bob since 2026, after Alice.\nSee [Alice], [Bob].\n"
                 "===PAGE===\nTITLE: Bob\nTYPE: entity\n---\n"
                 "Bob leads [Project X].\n")
+    # a model that does what a source tells it to: the text between the
+    # source's INJECT<<< and >>> is its reply
+    if "INJECT<<<" in text:
+        a = text.index("INJECT<<<") + 9
+        return text[a:text.index(">>>", a)]
     if "QUESTION:" in text:
         return "Bob leads Project X [Project X]."
     if "Audit this wiki" in text:

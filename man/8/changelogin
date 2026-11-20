@@ -37,20 +37,38 @@ has been started (eg, by
 .BR svc/auth )
 to make the entries visible in the name space.
 .PP
+.I Name
+must be one account name as
+.IR login (6)
+defines it (no
+.B /
+or
+.BR \e ,
+not
+.B .
+or
+.BR .. ,
+no control character): it is the name
+.IR logind (8)
+will be given, and a directory of
+.IR keyfs (4).
 If a password file entry for
 .I name
 exists, it is modified; otherwise, a new entry is created.
 The user is prompted for the following items:
 .TP
 password
-A string at least 8 characters in length. The SHA-1 digest of the entered string is stored in the password file. See
+A string at least 8 characters in length. The SHA-256 digest of the entered string is stored in the password file. See
 .IR keyring-sha1 (2).
 By default, the password for an existing entry is unchanged.
 .TP
 expiration date
 An expiration time in the format
 .IR DDMMYYYY .
-The user input is checked for valid day, month, and year; moreover, the new date must be later than the current time.
+The user input is checked for valid day, month, and year (a day the month has, leap years included);
+moreover, the new date must be later than the current time and no later than 17 January 2038,
+the last day whose end fits the file's time.
+The entry expires at the end of that day.
 By default, the current value, if any, is unchanged for an existing entry and one year from the current time for a new entry.
 .ig
 .TP
@@ -97,6 +115,15 @@ The
 option causes
 .I convpasswd
 to print each user name after it successfully installs it.
+.PP
+The secret is typed with the console's echo off and edited as it is read
+(a backspace removes a character, control-U the line; see
+.B readsecret
+in
+.IR security-login (2)):
+in raw mode the console edits nothing, and a backspace typed to correct a slip
+was once a character of the secret.
+It is kept as bytes and zeroed once its SHA-256 is taken.
 .SH FILES
 .TF /keydb/keys
 .TP

@@ -20,9 +20,23 @@ void	(*tkwiretap)(void*, char*, char*, void*, Rectangle*);
 static void tktopimagedptr(TkTop*, Draw_Image*);
 static char*tkputwinimage(Tk*, Draw_Image*, int);
 
+/*
+ * Only the builtins below take a toplevel's lock, each for one call.
+ * One ended by an exception (the heap full when a string is made to
+ * send to the program, say) leaves with it held, and nothing gives it
+ * back: the Prog's next call waited for itself, and so did whoever
+ * freed the toplevel, which is most often the collector, in its sweep.
+ * A Prog that finds itself the holder had it from such a call, and
+ * goes on with it; its unlock gives it back.
+ */
 static void
 lockctxt(TkCtxt *ctxt)
 {
+	Prog *p;
+
+	p = currun();
+	if(p != nil && libqlowner(ctxt->lock) == p)
+		return;
 	libqlock(ctxt->lock);
 }
 
@@ -176,7 +190,9 @@ Tk_cmd(void *a)
 
 	lockctxt(t->ctxt);
 	val = nil;
+	t->execnest = 0;	/* no script is running: one an exception ended is not counted for ever */
 	e = tkexec(t, arg, &val);
+	tkfreedead(t);
 	unlockctxt(t->ctxt);
 	if(e == TkNomem){
 		free(val);
@@ -214,6 +230,7 @@ Tk_rect(void *fp)
 	TkTop *t;
 	Draw_Rect *ret;
 	Point o;
+	char *name;
 	int bd, flags, w, h;
 	int minx, miny, maxx, maxy;
 
@@ -227,8 +244,9 @@ Tk_rect(void *fp)
 		ret->max.y = 0;
 		return;
 	}
+	name = string2c(f->name);	/* which may raise: before the lock */
 	lockctxt(t->ctxt);
-	tk = tklook(t, string2c(f->name), 0);
+	tk = tklook(t, name, 0);
 	if(tk == nil){
 		ret->min.x = 0;
 		ret->min.y = 0;
@@ -248,12 +266,12 @@ Tk_rect(void *fp)
 		h = tk->act.height;
 		w = tk->act.width;
 	}
+	bd = tk->borderwidth;
 	unlockctxt(t->ctxt);
 	if(w < 0)
 		w = 0;
 	if(h < 0)
 		h = 0;
-	bd = tk->borderwidth;
 	if(bd < 0)
 		bd = 0;
 	if(flags & Tk_Border){
@@ -282,9 +300,11 @@ tkdescendant(Tk *p, Tk *c)
 	if(c == nil || p->env->top != c->env->top)
 		return 0;
 
+	/* .a is not above .ab: the name must end there, or go on with a dot */
 	if (p->name != nil && c->name != nil) {
  		n = strlen(p->name->name);
-		if(strncmp(p->name->name, c->name->name, n) == 0)
+		if(strncmp(p->name->name, c->name->name, n) == 0 &&
+		   (n == 1 || c->name->name[n] == '\0' || c->name->name[n] == '.'))
 			return 1;
 	}
 
@@ -404,6 +424,7 @@ Tk_pointer(void *a)
 		return;
 
 	lockctxt(c);
+	t->execnest = 0;
 //if (f->p.buttons != 0 || c->mstate.b != 0)
 //print("tkmouse %d [%d %d], focused %d[%s], grab %s, entered %s\n",
 //	f->p.buttons, f->p.xy.x, f->p.xy.y, c->focused, tkname(c->mfocus), tkname(c->mgrab), tkname(c->entered));
@@ -536,7 +557,8 @@ Tk_pointer(void *a)
 			if (lastb == 0 && !c->focused) {		/* (some deliver might have grabbed it...) */
 				if (dest == nil)
 					dest = target;
-				if ((dest->flag & Tknograb) == 0) {
+				/* not one its own binding has just destroyed */
+				if ((dest->flag & (Tknograb|Tkdestroy)) == 0) {
 					c->focused = 1;
 					c->mfocus = dest;
 				}
@@ -552,6 +574,12 @@ Tk_pointer(void *a)
 		c->focused = 0;
 		tkenterleave(t);
 	}
+	/*
+	 * A binding run above may have destroyed the widget it was run
+	 * for: target and dest are used after each delivery, so what is
+	 * destroyed is freed only here (tkfreelater).
+	 */
+	tkfreedead(t);
 	unlockctxt(c);
 }
 
@@ -580,8 +608,10 @@ Tk_keyboard(void *a)
 	}
 
 	t = grab->env->top;
+	t->execnest = 0;
 	tkdeliver(grab, TkKey|TKKEY(f->key), nil);
 	tkupdate(t);
+	tkfreedead(t);
 	unlockctxt(c);
 }
 
@@ -589,6 +619,7 @@ TkVar*
 tkmkvar(TkTop *t, char *name, int type)
 {
 	TkVar *v;
+	int n;
 
 	for(v = t->vars; v; v = v->link)
 		if(strcmp(v->name, name) == 0)
@@ -597,10 +628,11 @@ tkmkvar(TkTop *t, char *name, int type)
 	if(type == 0)
 		return nil;
 
-	v = malloc(sizeof(TkVar)+strlen(name)+1);
+	n = strlen(name)+1;
+	v = malloc(sizeof(TkVar)+n);
 	if(v == nil)
 		return nil;
-	strcpy(v->name, name);
+	memmove(v->name, name, n);
 	v->link = t->vars;
 	t->vars = v;
 	v->type = type;
@@ -846,8 +878,9 @@ tkdelpanelimage(TkTop *t, Image *i)
 		destroy(pi->image);
 		if (locked)
 			unlockdisplay(t->display);
-	}
-		
+	} else
+		destroy(pi->image);	/* the reference tkaddpanelimage took: kept, only the collector freed the image */
+
 	free(pi);
 }
 
@@ -857,8 +890,8 @@ Tk_putimage(void *a)
 	TkTop *t;
 	TkImg *tki;
 	Image *i, *m, *oldi, *oldm;
-	int locked, found, reqid, n;
-	char *words[2];
+	int locked, found, reqid, n, len;
+	char wname[Tkmaxitem], *p;
 	Display *d;
 	F_Tk_putimage *f;
 	void *r;
@@ -884,16 +917,37 @@ Tk_putimage(void *a)
 
 	name = string2c(f->name);
 	lockctxt(t->ctxt);
+	t->execnest = 0;
 	e = nil;
 	found = 0;
 	if(name[0] == '.'){
-		n = getfields(name, words, nelem(words), 1, " ");
+		/*
+		 * "name reqid", taken apart without writing on it: the
+		 * bytes are the caller's own String (string2c), and the
+		 * blank became a zero byte in it, and in a literal for good.
+		 */
+		n = 1;
 		reqid = -1;
-		if(n > 1){
-			reqid = atoi(words[1]);
-			name = words[0];
+		p = strchr(name, ' ');
+		if(p == nil)
+			len = strlen(name);
+		else{
+			len = p - name;
+			while(*p == ' ')
+				p++;
+			if(*p != '\0'){
+				n = 2;
+				reqid = atoi(p);	/* Flawfinder: ignore — an id compared with the window's own; one that is none matches nothing */
+			}
 		}
-		if((tk = tklook(t, name, 0)) != nil){
+		tk = nil;
+		if(len < sizeof(wname)){
+			memmove(wname, name, len);
+			wname[len] = '\0';
+			name = wname;
+			tk = tklook(t, name, 0);
+		}
+		if(tk != nil){
 			if(tk->type == TKchoicebutton){
 				tk = tkfindchoicemenu(tk);
 				if(tk == nil)
@@ -947,6 +1001,7 @@ Tk_putimage(void *a)
 		tkimgchanged(t, tki);
 	}
 Error:
+	tkfreedead(t);
 	unlockctxt(t->ctxt);
 	if(e != nil)
 		retstr(e, f->ret);
@@ -1040,15 +1095,29 @@ void
 tkfreetop(Heap *h, int swept)
 {
 	TkTop *t;
-	Tk *f;
+	Tk *f, *next;
 	TkImg *i, *nexti;
 	TkVar *v, *nextv;
-	int wgtype;
+	int wgtype, locked;
 	void *r;
 	TkPanelimage *pi, *nextpi;
 
 	t = H2D(TkTop*, h);
-	lockctxt(t->ctxt);
+	/*
+	 * Tk_toplevel frees a top it could not finish, which has no
+	 * context yet; its lock was taken all the same, through nil, and
+	 * the fault left destroy() with the collector stopped.
+	 *
+	 * A builtin holds the lock only while it has the top as its
+	 * argument, so none can hold it now that nothing refers to the
+	 * top: if it is held, it was left held by an exception
+	 * (lockctxt), and is not waited for.
+	 */
+	locked = 0;
+	if(t->ctxt != nil && libqlowner(t->ctxt->lock) == nil){
+		lockctxt(t->ctxt);
+		locked = 1;
+	}
 
 	if(swept) {
 		t->di = H;
@@ -1059,19 +1128,42 @@ tkfreetop(Heap *h, int swept)
 
 	t->windows = nil;
 
-	for(f = t->root; f; f = f->siblings) {
-		f->flag |= Tkdestroy;
-		tkdeliver(f, TkDestroy, nil);
+	/*
+	 * In the collector's sweep no Destroy binding is run: it is a
+	 * script, and what it names (a channel to send on, a window's
+	 * image by way of destroy) may be a cell the sweep has freed
+	 * already.  Every widget is marked swept before anything is
+	 * done with any of them.
+	 */
+	if(swept){
+		for(f = t->root; f; f = f->siblings)
+			f->flag |= Tkswept;
+		for(f = t->dead; f; f = f->siblings)
+			f->flag |= Tkswept;
+	}
+
+	/*
+	 * Otherwise each widget's binding is run once, and may destroy
+	 * widgets (tkdestroy): the list is read again from its start
+	 * after each.
+	 */
+	for(f = t->root; f; f = next) {
+		next = f->siblings;
+		if(f->flag & Tkdying)
+			continue;
+		f->flag |= Tkdestroy|Tkdying;
+		if(!swept)
+			tkdeliver(f, TkDestroy, nil);
 		if(f->destroyed != nil)
 			f->destroyed(f);
+		next = t->root;
 	}
 
 	for(f = t->root; f; f = t->root) {
 		t->root = f->siblings;
-		if(swept)
-			f->flag |= Tkswept;
 		tkfreeobj(f);
 	}
+	tkfreedead(t);
 
 	for(v = t->vars; v; v = nextv) {
 		nextv = v->link;
@@ -1094,10 +1186,14 @@ tkfreetop(Heap *h, int swept)
 		free(pi);
 	}
 
+	/*
+	 * Every widget has gone, so a count above one is a reference
+	 * some command took and did not give back.  That was an abort(),
+	 * and emu went with the top; the image goes whatever its count.
+	 */
 	for(i = t->imgs; i; i = nexti) {
-		if(i->ref != 1)
-			abort();
 		nexti = i->link;
+		i->ref = 1;
 		tkimgput(i);
 	}
 	/* XXX free images inside widgets */
@@ -1106,7 +1202,8 @@ tkfreetop(Heap *h, int swept)
 		if(t->binds[wgtype])
 			tkfreebind(t->binds[wgtype]);
 
-	unlockctxt(t->ctxt);
+	if(locked)
+		unlockctxt(t->ctxt);
 	/* XXX should we leave it locked for this bit? */
 	tkfreectxt(t->ctxt);
 	if(!swept) {
@@ -1351,7 +1448,10 @@ tkcursorswitch(TkTop *top, Image *i, TkImg *img)
 		}
 		i = img->img;
 	}
-	if(i->depth != 1 || Dx(i->r)*Dy(i->r) > 16000 || Dy(i->r)%8 != 0 || Dy(i->r)%2 != 0)
+	/* an image made with no file has no bits; and it is the width that is sent in bytes */
+	if(i == nil)
+		return TkBadcursor;
+	if(i->depth != 1 || Dx(i->r)*Dy(i->r) > 16000 || Dx(i->r)%8 != 0 || Dy(i->r)%2 != 0)
 		return TkBadcursor;
 	/*
 	 * readjust image, inferring hotspot from origin.
@@ -1373,8 +1473,10 @@ tkcursorswitch(TkTop *top, Image *i, TkImg *img)
 	nb = ci->r.max.x/8 * ci->r.max.y;
 	maxb = 7 + 12*4 + 2*nb + 1;
 	buf = mallocz(maxb, 0);
-	if(buf == nil)
+	if(buf == nil){
+		freeimage(scratch);
 		return TkNomem;
+	}
 	n = sprint(buf, "cursor %d %d %d %d ", i->r.min.x, i->r.min.y, ci->r.max.x, ci->r.max.y);
 	unloadimage(ci, ci->r, (uchar*)buf+n, maxb-n);
 	hexify(buf+n, nb);

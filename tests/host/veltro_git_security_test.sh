@@ -55,7 +55,7 @@ grep -q 'invalid branch name' "$OUT" || {
 	cat "$OUT"
 	exit 1
 }
-grep -q 'error: stat.*/escape:' "$OUT" || {
+grep -q 'error: cannot add escape:' "$OUT" || {
 	echo "FAIL: add followed a host symlink from the repository"
 	cat "$OUT"
 	exit 1

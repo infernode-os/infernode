@@ -11,6 +11,22 @@ static char*	pkattr[] = { "p", "q", "alpha", "key", nil };
 static char*	skattr[] = { "p", "q", "alpha", "key", "!secret", nil };
 static char*	sigattr[] = { "r", "s", nil };
 
+/*
+ * A key in its domain, as far as what uses it goes on to divide by: a p
+ * or q of 0 reached mpdiv (sysfatal).  A secret key's q is tested for a
+ * prime as well: dsasign's answer to a k with no inverse mod q is
+ * sysfatal("pub->q not prime").
+ */
+static int
+dsapubok(DSApub *pub)
+{
+	/* q of a byte at least: probably_prime never ends its search for a witness below 5 */
+	return mpsignif(pub->q) >= 8
+		&& mpcmp(pub->p, pub->q) > 0
+		&& mpcmp(pub->alpha, mpzero) > 0 && mpcmp(pub->alpha, pub->p) < 0
+		&& mpcmp(pub->key, mpzero) > 0 && mpcmp(pub->key, pub->p) < 0;
+}
+
 static void*
 dsa_str2sk(char *str, char **strp)
 {
@@ -26,9 +42,24 @@ dsa_str2sk(char *str, char **strp)
 	if(strp)
 		*strp = p;
 	if(dsa->pub.p == nil || dsa->pub.q == nil ||
-	   dsa->pub.alpha == nil || dsa->pub.key == nil || dsa->secret == nil){
+	   dsa->pub.alpha == nil || dsa->pub.key == nil || dsa->secret == nil
+	|| !dsapubok(&dsa->pub)
+	|| mpcmp(dsa->secret, mpzero) <= 0 || mpcmp(dsa->secret, dsa->pub.p) >= 0
+	|| !probably_prime(dsa->pub.q, 18)){
 		dsaprivfree(dsa);
 		return nil;
+	}
+	/*
+	 * a secret is from 1 to q-1.  dsagen drew it below p, and every
+	 * key it made was refused here: such a key's secret is taken mod
+	 * q, which signs as it did (alpha has order q)
+	 */
+	if(mpcmp(dsa->secret, dsa->pub.q) >= 0){
+		mpmod(dsa->secret, dsa->pub.q, dsa->secret);
+		if(dsa->secret->top == 0){
+			dsaprivfree(dsa);
+			return nil;
+		}
 	}
 	return dsa;
 }
@@ -46,7 +77,7 @@ dsa_str2pk(char *str, char **strp)
 	dsa->key = base64tobig(p, &p);
 	if(strp)
 		*strp = p;
-	if(dsa->p == nil || dsa->q == nil || dsa->alpha == nil || dsa->key == nil){
+	if(dsa->p == nil || dsa->q == nil || dsa->alpha == nil || dsa->key == nil || !dsapubok(dsa)){
 		dsapubfree(dsa);
 		return nil;
 	}
@@ -145,6 +176,9 @@ dsa_gen(int len)
 static void*
 dsa_genfrompk(void *vpub)
 {
+	/* what dsagen would raise for (see dsaparamsok): no key */
+	if(!dsapubok((DSApub*)vpub) || dsaparamsok(((DSApub*)vpub)->p, ((DSApub*)vpub)->q) < 0)
+		return nil;
 	return dsagen((DSApub*)vpub);
 }
 
@@ -207,6 +241,9 @@ dsainit(void)
 	vec->genskfrompk = dsa_genfrompk;
 	vec->sign = dsa_sign;
 	vec->verify = dsa_verify;
+	/* signs a number: a digest's leading zero bytes are not part of it */
+	vec->signb = nil;
+	vec->verifyb = nil;
 
 	vec->skfree = dsa_freepriv;
 	vec->pkfree = dsa_freepub;

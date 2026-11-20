@@ -53,12 +53,14 @@ Link: adt
 	desc:	int;
 	sig:		int;
 	name:	string;
+	dig:		array of byte;
 };
 
 Import: adt
 {
 	sig:	int;
 	name:	string;
+	dig:	array of byte;
 };
 
 Except: adt
@@ -299,6 +301,19 @@ of the type describing the function's stack frame
 .TP
 .B sig
 Integer hash of the function's type signature
+.TP
+.B dig
+The digest of the function's type signature
+.RB ( SIGDLEN
+bytes), or nil if the file has no signature digest section (see
+.IR dis (6)).
+An
+.B Import
+has the same two.
+.B Writeobj
+writes the section, and sets
+.B HASSIGS
+in the header's flags, when every link and import has a digest.
 .PP
 The
 .B Inst

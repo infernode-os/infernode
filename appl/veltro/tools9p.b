@@ -64,6 +64,8 @@ include "tool.m";
 include "nsconstruct.m";
 	nsc: NsConstruct;
 
+include "audit.m";
+
 Tools9p: module {
 	init: fn(nil: ref Draw->Context, nil: list of string);
 	# A child task's tools9p, started by its parent's provisionrun: ready
@@ -74,7 +76,7 @@ Tools9p: module {
 # Qid types for synthetic files
 Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision,
 	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable,
-	Qns, Qevent, Qview: con iota;
+	Qns, Qevent, Qview, Qmetaaudit: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 5;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema, 4=run
 Qtool_dir: con 0;         # Offset: tool directory
@@ -124,8 +126,15 @@ vers: int;
 # Must match SHADOW_BASE in nsconstruct.b
 SHADOW_BASE: con "/tmp/.veltro-ns/shadow";
 
-# Buffered channel for async shadow dir cleanup; asyncexec sends PID when done
-cleanupchan: chan of int;
+# Buffered channel for async shadow dir cleanup; asyncexec sends PID when done.
+# Reclaim, with linger set, waits until the call's process group is empty:
+# a spawn call's subagents live in name spaces built on its shadows.
+Reclaim: adt {
+	pid:	int;
+	linger:	int;
+	ack:	chan of int;	# linger: sent to once the group is watched
+};
+cleanupchan: chan of ref Reclaim;
 # `activity create` plus the following activity-list read is one allocation
 # transaction. The long-lived dispatcher owns its serialization (INFR-362).
 taskcreatelock: chan of int;
@@ -138,6 +147,15 @@ helpresult: array of byte;  # Last help query result (global, not per-fid)
 manifestgate: chan of int;  # Closed startup manifest phase before tool calls
 provready: chan of string;	# a provisioned child's parent, told when it is ready
 evpostc: chan of string;    # events posted by procs other than serveloop
+# A call's answer goes to its caller through the serve loop, which knows
+# whether the caller has flushed it meanwhile.
+Callanswer: adt {
+	tag:	int;
+	r:	ref Rmsg;
+};
+answerc: chan of ref Callanswer;
+serving := 1;
+nextqid := 0;	# the next tool's block of qids; only grows
 
 # Mapping from tool name to .dis path
 # Veltro tools are in /dis/veltro/tools/
@@ -254,7 +272,21 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	sys->pctl(Sys->FORKFD|Sys->NEWPGRP, nil);
+	# Not one of the standard three: every call keeps this descriptor
+	# and takes /dev/null as its descriptor 0.
+	held: list of ref Sys->FD;
 	stderr = sys->fildes(2);
+	for(;;) {
+		if(stderr == nil)
+			stderr = sys->open("/dev/null", Sys->OWRITE);
+		if(stderr == nil || stderr.fd > 2)
+			break;
+		held = stderr :: held;
+		stderr = sys->fildes(2);
+	}
+	held = nil;
+	if(stderr == nil)
+		raise "fail:no standard error";
 
 	styx = load Styx Styx->PATH;
 	if(styx == nil)
@@ -343,13 +375,14 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "tools9p: no valid tools specified\n");
 		raise "fail:no tools";
 	}
-	# Clean shadow dirs left by previous session (crash or kill).
-	# Current-session dirs are cleaned per-invocation via shadowcleanloop.
-	cleanupchan = chan[32] of int;
+	# Shadow dirs left by a previous session (crash or kill) are swept by
+	# shadowcleanloop when it starts; the current session's are cleaned
+	# per invocation by the same proc.
+	cleanupchan = chan[32] of ref Reclaim;
 	taskcreatelock = chan[1] of int;
 	manifestgate = chan[1] of int;
 	evpostc = chan[4] of string;
-	cleanshadows();
+	answerc = chan[64] of ref Callanswer;
 	spawn shadowcleanloop();
 
 	# Write agent name file so the UI can display it.
@@ -453,6 +486,7 @@ inittools(args: list of string)
 		qid += TOOL_STRIDE;
 	}
 
+	nextqid = qid;
 	# Reverse to maintain argument order
 	rev: list of ref ToolInfo;
 	for(t := tools; t != nil; t = tl t)
@@ -557,12 +591,12 @@ ctladd(name: string): string
 		return "unknown tool: " + name;
 	if(ti.mod == nil)
 		return "tool module not loaded: " + name;
-	# Assign new qid block (next stride-aligned slot above max)
-	maxqid := Qtoolbase - TOOL_STRIDE;
-	for(qt := tools; qt != nil; qt = tl qt)
-		if((hd qt).qid > maxqid)
-			maxqid = (hd qt).qid;
-	ti.qid = maxqid + TOOL_STRIDE;
+	# A block of qids no tool has had.  The next above the highest in
+	# use was the block of the tool last removed: a fid opened on that
+	# tool's ctl before it went was then a fid on this one, and a write
+	# to it called a tool its holder was never given.
+	ti.qid = nextqid;
+	nextqid += TOOL_STRIDE;
 	# Remove from alltools
 	newlist: list of ref ToolInfo;
 	for(at := alltools; at != nil; at = tl at)
@@ -583,6 +617,7 @@ ctlremove(name: string)
 		ti := hd t;
 		if(ti.name == lname) {
 			ti.qid = 0;
+			ti.result = nil;
 			alltools = ti :: alltools;
 		} else
 			newlist = hd t :: newlist;
@@ -658,14 +693,31 @@ genpathlist(): string
 	for(ep := extpaths; ep != nil; ep = tl ep) {
 		if(hd ep == "/tmp/veltro/scratch")
 			continue;
-		result += "\n" + hd ep + " ro";
+		result += "\n" + hd ep + " " + effectiveperm(hd ep, "ro");
 	}
 	for(p := boundpaths; p != nil; p = tl p) {
 		bp := hd p;
 		if(bp.path != "/tmp/veltro/scratch")
-			result += "\n" + bp.path + " " + bp.perm;
+			result += "\n" + bp.path + " " + effectiveperm(bp.path, bp.perm);
 	}
 	return result;
+}
+
+# What a grant's permission is in the name space, which is what this
+# list is read for.  A file tree is bound read-only when its grant says
+# ro.  A service under /mnt is not: its files are the service's own
+# protocol (a request is a write), so the bind does not refuse writes,
+# and a grant shown ro there could be written.  It is shown as it is.
+effectiveperm(path, perm: string): string
+{
+	# The message service and the wallet are the exceptions: the name
+	# space narrows each itself, to what an agent may read and the
+	# proposals it may make, whatever the grant's word.
+	if(path == "/mnt/msg" || path == "/mnt/wallet")
+		return perm;
+	if(len path > 5 && path[0:5] == "/mnt/")
+		return "rw";
+	return perm;
 }
 
 # Find a BoundPath by path string, or nil if not found.
@@ -1175,10 +1227,28 @@ exectool(name, args: string): string
 # Namespace restriction is applied HERE (not in serveloop) so each
 # invocation uses the current boundpaths at call time — essential for
 # paths bound via the GUI after the server was already running.
+# What the task tool takes for a create: the verb in any case, or left
+# out before label=, tools= or brief=.  The lock was keyed on the
+# lower-case verb alone, so the other forms ran two creates at once.
 istaskcreate(ti: ref ToolInfo, data: string): int
 {
-	return ti != nil && ti.name == "task" &&
-		(data == "create" || (len data > 7 && data[0:7] == "create "));
+	if(ti == nil || ti.name != "task")
+		return 0;
+	i := 0;
+	while(i < len data && (data[i] == ' ' || data[i] == '\t' || data[i] == '\n'))
+		i++;
+	j := i;
+	while(j < len data && data[j] != ' ' && data[j] != '\t' && data[j] != '\n')
+		j++;
+	word := str->tolower(data[i:j]);
+	if(word == "create")
+		return 1;
+	for(k := 0; k < len word; k++)
+		if(word[k] == '=') {
+			key := word[0:k];
+			return key == "label" || key == "tools" || key == "brief";
+		}
+	return 0;
 }
 
 releasetaskcreate(locked: int)
@@ -1231,24 +1301,57 @@ Callreply: adt {
 	none:	int;			# clunk: no reply
 };
 
-replyerr(srv: ref Styxserver, cr: ref Callreply, e: string)
+# The serve loop sends a call's answer, and only while the call is still
+# waited for.  A caller killed in its call flushes it: the flush is
+# answered at once and the mount then gives the tag to another request,
+# which took the old call's answer when it came (a write "done" before
+# its tool had run).  Sent from the call's own proc, nothing knew.
+answer(cr: ref Callreply, r: ref Rmsg)
 {
-	if(!cr.none)
-		srv.reply(ref Rmsg.Error(cr.tag, e));
+	if(cr.none || !serving)
+		return;
+	answerc <-= ref Callanswer(cr.tag, r);
 }
 
-replydone(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid)
+replyerr(cr: ref Callreply, e: string)
+{
+	answer(cr, ref Rmsg.Error(cr.tag, e));
+}
+
+replydone(cr: ref Callreply, ti: ref ToolInfo, c: ref Fid)
 {
 	if(cr.none)
 		return;
 	if(cr.rd == nil) {
-		srv.reply(ref Rmsg.Write(cr.tag, cr.count));
+		answer(cr, ref Rmsg.Write(cr.tag, cr.count));
 		return;
 	}
 	r := ti.result;
 	if(c != nil && c.data != nil)
 		r = c.data;
-	srv.reply(styxservers->readbytes(cr.rd, r));
+	answer(cr, styxservers->readbytes(cr.rd, r));
+}
+
+# The calls whose answers are awaited, by tag.
+inflight: list of int;
+
+callstart(tag: int)
+{
+	inflight = tag :: inflight;
+}
+
+# Take tag off the list: 1 if it was there.
+callend(tag: int): int
+{
+	found := 0;
+	nl: list of int;
+	for(l := inflight; l != nil; l = tl l)
+		if(hd l == tag && !found)
+			found = 1;
+		else
+			nl = hd l :: nl;
+	inflight = nl;
+	return found;
 }
 
 # A tool's arguments can be longer than one message: the mnt device
@@ -1299,7 +1402,12 @@ argstring(b: array of byte): string
 	return data;
 }
 
-asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, data: string)
+# The call's proc holds nothing of the server's connection (its answer
+# goes by answerc): a call that outlives the server, as a spawn call
+# with a scheduled subagent does, would otherwise keep the server's end
+# of the mount open, and what was mounted on it would wait for ever
+# where it should be told the server has gone.
+asyncexec(cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, data: string)
 {
 	# The trusted startup manifest needs a restricted namespace in which .ns
 	# remains writable. Finish that one-time probe before model-facing workers
@@ -1315,18 +1423,37 @@ asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, 
 		taskcreatelock <-= 1;
 		if(verbose) sys->fprint(stderr, "tools9p: task create acquired transaction lock\n");
 	}
+	# A call's descriptors are its own.  Every call shared the serve
+	# loop's table, so a descriptor one call had open was another's by
+	# number: a command exec started kept whatever was in slot 0 at that
+	# moment (another call's open file or directory, a mount's pipe), and
+	# a tool that redirects its output did it to every call's.  The call
+	# keeps the console and nothing else, with /dev/null as its input.
+	if(sys->pctl(Sys->NEWFD, 1 :: 2 :: stderr.fd :: nil) < 0) {
+		setresult(ti, c, "error: cannot isolate descriptors");
+		replyerr(cr, "cannot isolate tool descriptors");
+		releasetaskcreate(locked);
+		return;
+	}
+	null := sys->open("/dev/null", Sys->OREAD);
+	if(null == nil || (null.fd != 0 && sys->dup(null.fd, 0) < 0)) {
+		setresult(ti, c, "error: cannot isolate descriptors");
+		replyerr(cr, "cannot isolate tool descriptors");
+		releasetaskcreate(locked);
+		return;
+	}
 	mypid := sys->pctl(Sys->FORKNS, nil);
 	if(mypid < 0) {
 		setresult(ti, c, "error: cannot fork namespace");
-		replyerr(srv, cr, "cannot fork namespace");
+		replyerr(cr, "cannot fork namespace");
 		releasetaskcreate(locked);
 		return;
 	}
 	enverr := isolateenv();
 	if(enverr != nil) {
 		setresult(ti, c, "error: " + enverr);
-		replyerr(srv, cr, "cannot isolate tool environment");
-		cleanupchan <-= mypid;
+		replyerr(cr, "cannot isolate tool environment");
+		cleanupchan <-= ref Reclaim(mypid, 0, nil);
 		releasetaskcreate(locked);
 		return;
 	}
@@ -1347,7 +1474,8 @@ asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, 
 	# applies NODEVS before parsing or running model-supplied shell text.
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
 		setresult(ti, c, "error: cannot disable device attachment");
-		replyerr(srv, cr, "cannot disable device attachment");
+		replyerr(cr, "cannot disable device attachment");
+		cleanupchan <-= ref Reclaim(mypid, 0, nil);
 		releasetaskcreate(locked);
 		return;
 	}
@@ -1360,24 +1488,40 @@ asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, 
 	# /tool pointing to the parent instance (wrong activity ID).
 	if(mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0) {
 		setresult(ti, c, "error: cannot bind activity tool service");
-		replyerr(srv, cr, "cannot bind activity tool service");
+		replyerr(cr, "cannot bind activity tool service");
+		cleanupchan <-= ref Reclaim(mypid, 0, nil);
 		releasetaskcreate(locked);
 		return;
 	}
-	nserr: string;
-	if(!locked)
-		nserr = applynsrestriction(ti.name);
+	# Every call is restricted.  A task create was not: it ran with the
+	# server's own name space (the host's root, every device's files, the
+	# control tree) on arguments the model wrote, and nothing it does
+	# needs that: the UI's ctl, the provision file and the task files are
+	# the task tool's grants.
+	nserr := applynsrestriction(ti.name);
 	if(nserr != nil) {
 		setresult(ti, c, "error: namespace restriction failed: " + nserr);
-		replyerr(srv, cr, "namespace restriction failed");
-		cleanupchan <-= mypid;
+		replyerr(cr, "namespace restriction failed");
+		cleanupchan <-= ref Reclaim(mypid, 0, nil);
+		releasetaskcreate(locked);
+		return;
+	}
+	# A spawn call is the parent of the subagents it starts: they, and
+	# all they start, are in process groups below this one, made here
+	# once the call's own servers (its scratch and overlays, which must
+	# outlive them) have been started in the server's.
+	linger := ti.name == "spawn";
+	if(linger && sys->pctl(Sys->NEWPGRP, nil) < 0) {
+		setresult(ti, c, "error: cannot create process group");
+		replyerr(cr, "cannot create process group");
+		cleanupchan <-= ref Reclaim(mypid, 0, nil);
 		releasetaskcreate(locked);
 		return;
 	}
 	result := exectool(ti.name, data);
 	# Assign result before replying so it is visible for subsequent reads.
 	setresult(ti, c, result);
-	replydone(srv, cr, ti, c);
+	replydone(cr, ti, c);
 	releasetaskcreate(locked);
 	# Hand this invocation's shadow dirs to the cleanup goroutine.
 	#
@@ -1387,7 +1531,17 @@ asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, 
 	# leak: nothing else knows those directories exist, and the startup
 	# sweep only runs on the next process.  The client has already been
 	# replied to above, so blocking here delays only this proc's exit.
-	cleanupchan <-= mypid;
+	#
+	# A spawn call's are kept while anything of the call is left: a
+	# subagent it scheduled runs in a name space built on them, and with
+	# them gone had no file it could name.  The cleanup proc watches the
+	# call's group and reclaims when its last process has gone.
+	if(linger) {
+		ack := chan of int;
+		cleanupchan <-= ref Reclaim(mypid, 1, ack);
+		<-ack;
+	} else
+		cleanupchan <-= ref Reclaim(mypid, 0, nil);
 }
 
 rf(f: string): string
@@ -1522,12 +1676,39 @@ shadowowneralive(name: string): int
 # reach SHADOW_BASE regardless of what child goroutines have restricted.
 shadowcleanloop()
 {
+	# The sweep of an earlier session's leftovers, here and not before
+	# the server is mounted: it looks at every directory left, and with
+	# thousands of them (a test suite's, say) the server was seconds
+	# late, and whoever started it and then used it found no /tool.
+	cleanshadows();
 	for(;;) {
-		pid := <-cleanupchan;
-		if(pid < 0)
+		r := <-cleanupchan;
+		if(r == nil)
 			break;
-		removepidshadows(pid);
+		# A fork that failed gave no pid: nothing was made to remove.
+		# (It was sent as it came, -1, which ended this loop: no
+		# shadow was reclaimed again.)
+		if(r.pid <= 0)
+			continue;
+		if(r.linger)
+			spawn reclaimwhengone(r);
+		else
+			removepidshadows(r.pid);
 	}
+}
+
+# Reclaim a call's shadows once its process group has no process left
+# (prog(3)'s grpwait).  The call waits for ack: the file must be open
+# before the group's leader has gone.
+reclaimwhengone(r: ref Reclaim)
+{
+	fd := sys->open(sys->sprint("/prog/%d/grpwait", r.pid), Sys->OREAD);
+	r.ack <-= 1;
+	if(fd != nil) {
+		buf := array[64] of byte;
+		sys->read(fd, buf, len buf);
+	}
+	removepidshadows(r.pid);
 }
 
 # Ensure a directory exists
@@ -1703,6 +1884,17 @@ provisionparse(args: string): (int, string, list of string, string)
 	return (id, mpt, rargs, nil);
 }
 
+# An activity being provisioned, or with its agent running, is not
+# provisioned again: that emptied its scratch and mounted a second tool
+# server over the one its agent was using.
+provisionbusy(id: int): string
+{
+	st := getprovisionstate(id);
+	if(st == "starting" || st == "ready")
+		return sys->sprint("activity %d is already provisioned", id);
+	return nil;
+}
+
 setprovisionstate(id: int, state: string)
 {
 	for(ps := provisionstates; ps != nil; ps = tl ps)
@@ -1738,6 +1930,14 @@ provisionstatus(id: int, status: string)
 	sys->write(fd, b, len b);
 }
 
+# A task's memory and plans (memory/<id>, plans/a<id>) go when the task
+# is made and when it is closed: its number is given to a later task.
+removetaskstores(id: int)
+{
+	removeshadowdir(sys->sprint("/tmp/veltro/memory/%d", id));
+	removeshadowdir(sys->sprint("/tmp/veltro/plans/a%d", id));
+}
+
 provisioncleanup(mpt: string)
 {
 	sys->unmount(nil, controlmount(mpt));
@@ -1758,12 +1958,16 @@ runprovisionedagent(lb: ShCommand, id: int, lbargs: list of string)
 	# the unmount below must happen in this one, where the mount is.
 	done := chan of int;
 	spawn runlucibridge(lb, id, lbargs, done);
-	if(!<-done)
-		return;	# it failed: left as it was, its status says so
+	if(!<-done) {
+		# it failed: its status says so, and it may be provisioned again
+		setprovisionstate(id, "failed: task agent exited");
+		return;
+	}
 	# The task's agent is done, its activity closed: its tool server goes
 	# too, unmounted here, its last reference.
 	setprovisionstate(id, "closed");
 	provisioncleanup("/tool." + string id);
+	removetaskstores(id);
 	if(verbose)
 		sys->fprint(stderr, "tools9p: activity %d closed\n", id);
 }
@@ -1805,6 +2009,10 @@ provisionstart(id: int, mpt: string, rargs: list of string): string
 	# at 1 every session and /tmp persists, so task 1 found the files of
 	# every earlier session's task 1 there, and reported them as its own.
 	removeshadowdir(sys->sprint("/tmp/veltro/scratch/%d", id));
+	# And with no memory and no plans: the stores of an earlier task of
+	# this number.  Done here, where they can be named: the task tool's
+	# own call sees none of the memory and plan directories.
+	removetaskstores(id);
 
 	t9p := load Tools9p "/dis/veltro/tools9p.dis";
 	if(t9p == nil) {
@@ -1903,7 +2111,14 @@ emitmanifestnow(mpath: string, ready: chan of int)
 		return;
 	}
 	nsconstruct->init();
-	sys->pctl(Sys->FORKNS, nil);
+	if(sys->pctl(Sys->FORKNS, nil) < 0) {
+		# not restricted here: it would be the server's own name space
+		sys->fprint(stderr, "tools9p: manifest: cannot fork the name space: %r\n");
+		ready <-= 1;
+		if(provready != nil)
+			provready <-= "cannot fork the name space";
+		return;
+	}
 
 	hasxenith := 0;
 	if(findtool("xenith") != nil)
@@ -1926,21 +2141,27 @@ emitmanifestnow(mpath: string, ready: chan of int)
 	caps := ref NsConstruct->Capabilities(
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
 	, nil);
+	# Why the first name space could not be made, for the parent that
+	# provisioned this server: told "", it reported the child confined
+	# and ready when no call of it would run.
+	why := "";
 	{
 		mfd := nsconstruct->openmanifest(mpath);
 		nserr := nsconstruct->restrictns(caps);
-		if(nserr != nil)
+		if(nserr != nil) {
 			sys->fprint(stderr, "tools9p: manifest restrictns failed: %s\n", nserr);
-		else {
+			why = "namespace restriction failed: " + nserr;
+		} else {
 			nsconstruct->emitmanifest(caps, mfd);
 		}
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "tools9p: manifest exception: %s\n", e);
+		why = "namespace restriction failed: " + e;
 	}
 	ready <-= 1;
 	if(provready != nil)
-		provready <-= "";
+		provready <-= why;
 	# the first name space is made: a reader of event (lucictx) reads
 	# the manifest now rather than looking for it
 	evpostc <-= "paths";
@@ -1999,6 +2220,12 @@ applynsrestriction(invokedtool: string): string
 			allpaths = "/mnt/wallet" :: allpaths;
 	for(tn := toolnames; tn != nil; tn = tl tn)
 		allpaths = addtoolpaths(allpaths, hd tn);
+	# The install's audit sink, for the spawn tool to hand to each
+	# subagent: the append file alone.  Seen from here it can be found;
+	# from inside the call's name space it could not, so a subagent's
+	# work was never recorded, required or not.
+	if(invokedtool == "spawn" && sys->stat(Audit->LOGFILE).t0 >= 0)
+		allpaths = addpath(allpaths, Audit->LOGFILE);
 	writepaths := genwritepaths();
 	if(invokedtool == "exec")
 		writepaths = execwritepaths();
@@ -2059,7 +2286,10 @@ addpath(paths: list of string, path: string): list of string
 
 serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navops: chan of ref Navop, mounted: chan of int)
 {
-	pidc <-= sys->pctl(Sys->NEWFD, 1::2::srv.fd.fd::nil);
+	# stderr keeps its number: it is used by every proc of the server,
+	# whichever descriptor table that proc has.  (Left out, its number
+	# named whatever a call later opened there.)
+	pidc <-= sys->pctl(Sys->NEWFD, 1::2::stderr.fd::srv.fd.fd::nil);
 
 	restricted := 0;
 
@@ -2071,6 +2301,11 @@ Serve:
 			;
 		w := <-evpostc =>
 			postevent(srv, w);
+			continue;
+		a := <-answerc =>
+			# not if its caller flushed it
+			if(callend(a.tag))
+				srv.reply(a.r);
 			continue;
 		}
 		if(gm == nil)
@@ -2205,6 +2440,15 @@ Serve:
 			Qmetanodevs =>
 				srv.reply(styxservers->readbytes(m, array of byte (agentnodevs + "\n")));
 
+			Qmetaaudit =>
+				# Whether this install requires auditing (Audit->ONFILE,
+				# a file of the host's), for the spawn tool, whose name
+				# space has no /usr to look in.
+				av := "off";
+				if(sys->stat(Audit->ONFILE).t0 >= 0)
+					av = "required";
+				srv.reply(styxservers->readbytes(m, array of byte (av + "\n")));
+
 			* =>
 				# Tool directory/subfile reads
 				if(qtype >= Qtoolbase) {
@@ -2218,9 +2462,10 @@ Serve:
 					Qtool_dir =>
 						srv.read(m);  # directory read via navigator
 					Qtool_ctl or Qtool_run =>
-						if((args := takeargs(c.fid)) != nil)
-							spawn asyncexec(srv, ref Callreply(m.tag, 0, m, 0), ti, c, argstring(args));
-						else if(c.data != nil)
+						if((args := takeargs(c.fid)) != nil) {
+							callstart(m.tag);
+							spawn asyncexec(ref Callreply(m.tag, 0, m, 0), ti, c, argstring(args));
+						} else if(c.data != nil)
 							srv.reply(styxservers->readbytes(m, c.data));
 						else {
 							if(ti.result == nil)
@@ -2354,7 +2599,9 @@ Serve:
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					postevent(srv, "budget");
 				} else if(len data > 14 && data[0:14] == "budget-remove ") {
-					bname := data[14:];
+					# in lower case, as budget-add keeps it: "Exec"
+					# matched nothing, and the revocation was reported done
+					bname := str->tolower(data[14:]);
 					nbl: list of string;
 					for(bbl := budget; bbl != nil; bbl = tl bbl)
 						if(hd bbl != bname)
@@ -2369,6 +2616,8 @@ Serve:
 					# it launches in the UNRESTRICTED parent namespace
 					# (serveloop runs before any restrictns).
 					(pid0, pmpt, prargs, perr0) := provisionparse(data[10:]);
+					if(perr0 == nil)
+						perr0 = provisionbusy(pid0);
 					if(perr0 != nil) {
 						sys->fprint(stderr, "tools9p: provision: %s\n", perr0);
 						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + perr0));
@@ -2392,6 +2641,11 @@ Serve:
 					(cid, cerr) := parseactivityid(data[7:]);
 					if(cerr != nil) {
 						srv.reply(ref Rmsg.Error(m.tag, "invalid cancellation: " + cerr));
+					} else if(getprovisionstate(cid) != "starting") {
+						# Only a provisioning under way is cancelled: for
+						# any other id this took a running task's tool
+						# server away, or marked one never asked for.
+						srv.reply(ref Rmsg.Error(m.tag, sys->sprint("activity %d is not being provisioned", cid)));
 					} else {
 						setprovisionstate(cid, "cancelled");
 						provisionstatus(cid, "failed: provisioning cancelled");
@@ -2400,6 +2654,8 @@ Serve:
 					}
 				} else {
 					(qid0, qmpt, qrargs, qerr) := provisionparse(data);
+					if(qerr == nil)
+						qerr = provisionbusy(qid0);
 					if(qerr != nil) {
 						sys->fprint(stderr, "tools9p: provision: %s\n", qerr);
 						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + qerr));
@@ -2438,7 +2694,8 @@ Serve:
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 						break;
 					}
-					spawn asyncexec(srv, ref Callreply(m.tag, len m.data, nil, 0), ti, c, argstring(args));
+					callstart(m.tag);
+					spawn asyncexec(ref Callreply(m.tag, len m.data, nil, 0), ti, c, argstring(args));
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				}
@@ -2448,16 +2705,24 @@ Serve:
 			if((args := takeargs(m.fid)) != nil) {
 				f := srv.getfid(m.fid);
 				if(f != nil && (ti := findtoolbyqid(TYPE(f.path))) != nil)
-					spawn asyncexec(srv, ref Callreply(m.tag, 0, nil, 1), ti, nil, argstring(args));
+					spawn asyncexec(ref Callreply(m.tag, 0, nil, 1), ti, nil, argstring(args));
 			}
 			evclunk(m.fid);
 			viewclunk(m.fid);
 			srv.clunk(m);
 
 		Remove =>
+			# as a clunk, without the call: what the fid held (arguments
+			# not yet run, an event queue, a view's proc and name space)
+			# was kept for the server's life
+			takeargs(m.fid);
+			evclunk(m.fid);
+			viewclunk(m.fid);
 			srv.remove(m);
 
 		Flush =>
+			# a flushed call's answer is not sent when it comes
+			callend(m.oldtag);
 			evflush(m.oldtag);
 			for(vl := views; vl != nil; vl = tl vl)
 				alt {
@@ -2472,6 +2737,7 @@ Serve:
 			srv.default(gm);
 		}
 	}
+	serving = 0;
 	navops <-= nil;  # shut down navigator
 }
 
@@ -2571,7 +2837,14 @@ nsview(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 {
 	<-manifestgate;
 	manifestgate <-= 1;
+	# A fork that fails leaves this proc in the server's own name space:
+	# nothing more is done in it (NODEVS and the restriction would have
+	# been the server's from then on).
 	mypid := sys->pctl(Sys->FORKNS, nil);
+	if(mypid < 0) {
+		srv.reply(ref Rmsg.Error(m.tag, sys->sprint("cannot fork the name space: %r")));
+		return;
+	}
 	err := isolateenv();
 	if(err == nil && sys->pctl(Sys->NODEVS, nil) < 0)
 		err = sys->sprint("cannot disable device attachment: %r");
@@ -2591,7 +2864,7 @@ nsview(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		c.data = array of byte ns;
 		srv.reply(styxservers->readbytes(m, c.data));
 	}
-	cleanupchan <-= mypid;
+	cleanupchan <-= ref Reclaim(mypid, 0, nil);
 }
 
 #
@@ -2639,7 +2912,11 @@ viewproc(srv: ref Styxserver, v: ref View)
 	manifestgate <-= 1;
 	sys->pctl(Sys->NEWPGRP, nil);
 	mypid := sys->pctl(Sys->FORKNS, nil);
-	err := isolateenv();
+	err: string;
+	if(mypid < 0)
+		err = sys->sprint("cannot fork the name space: %r");
+	if(err == nil)
+		err = isolateenv();
 	if(err == nil && sys->pctl(Sys->NODEVS, nil) < 0)
 		err = sys->sprint("cannot disable device attachment: %r");
 	if(err == nil && mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0)
@@ -2669,6 +2946,15 @@ Loop:
 		b := <-v.wc =>
 			if(dead)
 				break;
+			# A message is at most MAXRPC bytes: more than that with
+			# none whole in it is not 9P, and was kept without bound.
+			if(len cin + len b > 2*Styx->MAXRPC) {
+				dead = 1;
+				cin = nil;
+				if(err == nil)
+					err = "view: not a 9P message";
+				break;
+			}
 			cin = catbytes(cin, b);
 			while(len cin > 0) {
 				(n, t) := Tmsg.unpack(cin);
@@ -2750,7 +3036,9 @@ Loop:
 			rd = nil;
 		}
 	}
-	cleanupchan <-= mypid;
+	if(mypid < 0)
+		return;
+	cleanupchan <-= ref Reclaim(mypid, 0, nil);
 	# the pipe's reader and this proc: the export hangs up when they go
 	fd := sys->open(sys->sprint("/prog/%d/ctl", mypid), Sys->OWRITE);
 	if(fd != nil)
@@ -2876,6 +3164,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "actid", big 0, 8r444), nil);
 	Qmetanodevs =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "nodevs", big 0, 8r444), nil);
+	Qmetaaudit =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "audit", big 0, 8r444), nil);
 
 	Qns =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "ns", big 0, 8r444), nil);
@@ -2977,6 +3267,8 @@ navigator(navops: chan of ref Navop)
 					n.path = big Qmetaactid;
 				"nodevs" =>
 					n.path = big Qmetanodevs;
+				"audit" =>
+					n.path = big Qmetaaudit;
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -3143,6 +3435,11 @@ navigator(navops: chan of ref Navop)
 				}
 				if(i <= 3 && count > 0) {
 					n.reply <-= dirgen(big Qmetanodevs);
+					count--;
+					i++;
+				}
+				if(i <= 4 && count > 0) {
+					n.reply <-= dirgen(big Qmetaaudit);
 					count--;
 				}
 				n.reply <-= (nil, nil);

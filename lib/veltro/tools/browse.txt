@@ -9,8 +9,11 @@ Usage:
   browse <url>            Fetch and display a web page
 
 The URL must start with http:// or https://. On success the tool
-returns "<window-id> <page-title>". HTTP errors (status 400 and
-above) and empty responses are reported as errors.
+returns "<window-id> <page-title> [<address>]", the address being
+where the page came from after any redirects. HTTP errors (status 400
+and above) and empty responses are reported as errors. Requests to
+internal/private network addresses are blocked; a fetch is given 30s
+and only the first 2MB of a page are read.
 
 Examples:
   browse https://example.com

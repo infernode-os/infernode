@@ -17,5 +17,8 @@ webfetch is your primary tool for reading web content. Use it liberally —
 read multiple sources, follow references mentioned in articles, and
 cross-reference claims. A single source may be wrong or incomplete.
 
-For pages that are too large, content is truncated at 512KB.
+The result begins with the address the page came from, in brackets
+(after any redirects), then the text. A failure begins "error:".
+For pages that are too large, content is truncated at 512KB, and the
+result ends with a note saying so. A fetch is given 30 seconds.
 Non-HTML content (JSON, plain text, etc.) is returned as-is.

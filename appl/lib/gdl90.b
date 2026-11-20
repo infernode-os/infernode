@@ -227,8 +227,22 @@ report(b: array of byte): ref Report
 	r.fpm = vv * 64;
 	r.track = real int b[16] * 360.0 / 256.0;
 	r.emitter = int b[17];
-	cs := string b[18:26];
-	while(len cs > 0 && (cs[len cs-1] == ' ' || cs[len cs-1] == 0))
+	# A call sign is eight of 0-9, A-Z and blank (the specification's
+	# 3.5.1.11); anything else is not one.  The eight bytes were taken
+	# as they came: a newline among them made a second line of the
+	# sender's choosing in gpsfs's traffic file.
+	cs := "";
+	for(i := 18; i < 26; i++) {
+		c := int b[i];
+		if(c == 0)
+			c = ' ';
+		if(!(c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c == ' ')) {
+			cs = "";
+			break;
+		}
+		cs[len cs] = c;
+	}
+	while(len cs > 0 && cs[len cs-1] == ' ')
 		cs = cs[0:len cs-1];
 	r.callsign = cs;
 	return r;

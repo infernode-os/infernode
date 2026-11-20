@@ -2,6 +2,14 @@
 #include <mp.h>
 #include "dat.h"
 
+// The comparisons here and in mpveccmp.c stop at the first digit that
+// differs, and take longer the more two numbers have in common.  They
+// are for public numbers.  Where one is a secret the caller has seen
+// to it: a nonce's range is checked on its bytes with every byte
+// looked at (libsec/mpnonce.c), the private arithmetic is mpexp's,
+// mpexpcrt's and mpmuladdmod's, which compare nothing, and what
+// rsadecrypt compares is a result with the input it must equal.
+
 // return neg, 0, pos as abs(b1)-abs(b2) is neg, 0, pos
 int
 mpmagcmp(mpint *b1, mpint *b2)

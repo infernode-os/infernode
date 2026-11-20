@@ -33,6 +33,7 @@ Every tagged release ships signed binaries for macOS, Linux, and Windows on the 
   ```bash
   docker run -it ghcr.io/infernode-os/infernode:latest
   ```
+- **Raspberry Pi (bare metal)** — `infernode-*-rpi3bplus.img.xz`, `infernode-*-rpi4b.img.xz` and `infernode-*-rpi5.img.xz` are SD-card images of InferNode as the operating system, with nothing underneath. The 3B+ and 4B images are in Raspberry Pi Imager's format (the release attaches `os_list_infernode.json`); the Pi 5 image is a preview, written by hand. See [docs/BAREMETAL.md](docs/BAREMETAL.md#4-putting-it-on-a-raspberry-pi-3b).
 
 ```bash
 tar xzf infernode-*-linux-*-gui.tar.gz
@@ -95,7 +96,8 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 - **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucia) or by agents through `/mnt/matrix/ctl`.
 - **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending with a trusted approval queue. Signing is cross-validated against go-ethereum; see the [security model](docs/WALLET-AND-PAYMENTS.md#status-and-security-model).
 - **Formal methods** — the namespace copy (`pgrpcpy`) is specified in TLA+ and model-checked exhaustively at small scale, its deep-copy structure is bounded-checked in CBMC on the C, and three fixed name-space races are confirmed in SPIN. These are checks of a model and of one function, not a proof of isolation; see [formal-verification/README.md](formal-verification/README.md#what-this-does-and-does-not-establish).
-- **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205).
+- **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205); node-to-node authentication is hybrid Diffie-Hellman + ML-KEM, and every encrypted 9P connection is AES-256-GCM. A CNSA 2.0 mode (`CNSAMODE`) holds login and node authentication to what CNSA admits (ML-KEM-1024, ML-DSA-87, AES-256-GCM); `CNSATLS` does the same for TLS. See [docs/CRYPTO-MODERNIZATION.md](docs/CRYPTO-MODERNIZATION.md).
+- **Sensors as files** — cameras (`camsrv`), object detection (`vision(4)` at `/mnt/vision`, on the CPU or a Jetson's GPU and DLAs), drawn overlays composed by the name space (`layerfs`), GPS (`gpsfs` at `/mnt/gps`) and software-defined radio (`sdrfs`), each a 9P service an agent can be granted or denied like any other.
 - **Complete** — 1,100+ Limbo source files, a full shell, TCP/IP, 9P, and over 1,000 compiled Dis modules.
 
 ## Platforms
@@ -127,7 +129,8 @@ serial console, with the full namespace and the network up.
 |-------|-------|
 | **Raspberry Pi 3B+** (`os/bcm2837`) | Runs on the real board, and on QEMU's `raspi3b`. Ethernet (LAN7515 over USB), Wi-Fi (CYW43455), Bluetooth, SD card, HDMI/DSI, USB keyboard and mouse, touch, GPIO, audio, A/B kernel update, boot watchdog. |
 | **QEMU `virt`** (`os/virt`) | GICv2 and virtio (net, blk, keyboard, tablet, ramfb) — the kernel anywhere QEMU runs, which is what CI boots. |
-| **Raspberry Pi 4B** (`os/bcm2711`) | Boots to the desktop under QEMU's `raspi4b`; has never run on a board. [os/bcm2711/README.md](os/bcm2711/README.md) says what that does and does not establish. |
+| **Raspberry Pi 4B** (`os/bcm2711`) | Runs on the real board (a 4B rev 1.5, since 2026-10-15) and on QEMU's `raspi4b`: SD card, gigabit Ethernet, Wi-Fi and Bluetooth, USB, the 7" panel and touch, the camera, the headphone jack, all four cores. [os/bcm2711/README.md](os/bcm2711/README.md) says what was proved on the board. |
+| **Raspberry Pi 5** (`os/bcm2712`) | Runs on one board (a Pi 5 8GB rev 1.0, since 2026-10-31) and on nothing else, as no emulator models a Pi 5: all four cores, gigabit Ethernet, USB through RP1, Wi-Fi, Bluetooth, GPIO, I2C, SPI, PWM, the real-time clock, NVMe, the desktop on either HDMI port. Not yet: two screens at once, DSI and CSI. [os/bcm2712/README.md](os/bcm2712/README.md); [INVENTORY.md](os/bcm2712/INVENTORY.md) says what is proved, feature by feature. |
 | **QEMU RISC-V `virt`** (`os/riscvvirt`) | RV64GC under OpenSBI with the RISC-V Dis JIT: 4 harts, PLIC, virtio (net, blk, keyboard, tablet), ramfb to the graphical logon, and U-Boot `booti`/`boot.scr`. [os/riscv64/README.md](os/riscv64/README.md). |
 | **PolarFire SoC: BeagleV-Fire, Icicle Kit** (`os/mpfs`) | Boots under QEMU's `microchip-icicle-kit`: SD card (Cadence SD4HC), Gigabit Ethernet (Cadence GEM, PHY over MDIO), the system controller's TRNG service, `/reserved-memory`. It has never run on a board. |
 
@@ -140,7 +143,8 @@ BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
 ```
 
 CI builds, boots and tests QEMU `virt`, the Pi 3B+ and Pi 4B models, and both
-RISC-V machines on every pull request that touches the kernel. Full manual —
+RISC-V machines on every pull request that touches the kernel; it builds the
+Pi 5 kernel but cannot boot it. Full manual —
 running it, the card image, the QEMU flags that fail silently, what controls it: [docs/BAREMETAL.md](docs/BAREMETAL.md).
 
 ## Documentation
@@ -148,7 +152,7 @@ running it, the card image, the QEMU flags that fail silently, what controls it:
 - [QUICKSTART.md](QUICKSTART.md) — running in under a minute
 - [docs/USER-MANUAL.md](docs/USER-MANUAL.md) — namespaces, devices, host integration
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
-- [docs/BAREMETAL.md](docs/BAREMETAL.md) — running InferNode as the operating system, on Raspberry Pi and QEMU
+- [docs/BAREMETAL.md](docs/BAREMETAL.md) — running InferNode as the operating system, on Raspberry Pi 3B+, 4B and 5, and QEMU
 - [docs/XENITH.md](docs/XENITH.md) — AI-native text environment
 - [docs/matrix-architecture.md](docs/matrix-architecture.md) — Matrix compositional module runtime
 - [docs/WALLET-AND-PAYMENTS.md](docs/WALLET-AND-PAYMENTS.md) — wallet, x402, secstore, key management

@@ -310,6 +310,32 @@ pagetext(name: string): string
 	return out;
 }
 
+# The current version of the page titled title (its "current" file's D
+# line), or 0 if there is no such page
+wikiversion(title: string): int
+{
+	name := "";
+	for(i := 0; i < len title; i++)
+		if(title[i] == ' ')
+			name[len name] = '_';
+		else
+			name[len name] = title[i];
+	fd := sys->open(wikidir + "/" + name + "/current", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	if(lines == nil || tl lines == nil)
+		return 0;
+	v := hd tl lines;
+	if(len v < 2 || v[0] != 'D')
+		return 0;
+	return int v[1:];
+}
+
 # Write a new wiki page (or update existing) via wikifs /new protocol
 wikiwrite(title, comment, content: string): int
 {
@@ -319,10 +345,11 @@ wikiwrite(title, comment, content: string): int
 		return -1;
 	}
 
-	# Write header: title, metadata, then content
-	# D0 = new page (wikifs uses this for version tracking)
+	# Write header: title, metadata, then content.  D is the version
+	# this replaces (0: a new page); wikifs refuses an edit of a
+	# version that is not the current one, as an update conflict
 	hdr := title + "\n";
-	hdr += "D0\n";
+	hdr += "D" + string wikiversion(title) + "\n";
 	hdr += "A" + author + "\n";
 	if(comment != nil)
 		hdr += "C" + comment + "\n";
@@ -391,7 +418,13 @@ doingest(path: string): string
 			curstate = IDLE;
 			return "error: " + err;
 		}
-		sources = path :: nil;
+		# a directory is its files (it was read as one source, and
+		# "ingested 1 sources, created/updated 0 pages" was the answer)
+		(ok, d) := sys->stat(path);
+		if(ok >= 0 && (d.mode & Sys->DMDIR))
+			sources = listsources(path);
+		else
+			sources = path :: nil;
 	}
 
 	if(sources == nil) {
@@ -402,6 +435,7 @@ doingest(path: string): string
 	nsrc := 0;
 	npages := 0;
 	errors := "";
+	notes := "";
 
 	# Get current wiki state for context
 	wikicontext := buildwikicontext();
@@ -429,11 +463,16 @@ doingest(path: string): string
 		}
 
 		# Parse LLM response and write pages to wikifs
-		n := writepages(resp, src);
+		(n, took) := writepages(resp, src);
 		npages += n;
 		nsrc++;
 
 		appendlog("ingest", sys->sprint("created %d pages from %s", n, src));
+		# pages of another source's that this one rewrote are named
+		for(; took != nil; took = tl took) {
+			appendlog("ingest", hd took);
+			notes += hd took + "\n";
+		}
 
 		# Update context for next source (pages compound)
 		wikicontext = buildwikicontext();
@@ -443,6 +482,8 @@ doingest(path: string): string
 	curstate = IDLE;
 
 	result := sys->sprint("ingested %d sources, created/updated %d pages", nsrc, npages);
+	if(notes != "")
+		result += "\nnote:\n" + notes;
 	if(errors != "")
 		result += "\nerrors:\n" + errors;
 
@@ -482,17 +523,40 @@ buildwikicontext(): string
 	return context;
 }
 
-# Parse LLM response into page operations and write to wikifs
-writepages(resp, source: string): int
+MAXSRCPAGES: con 32;	# pages one source's reply may write
+MAXTITLE: con 128;	# characters of a page's title
+MAXCOMMENT: con 120;	# characters of the model's comment kept
+
+# Parse LLM response into page operations and write to wikifs.
+#
+# The reply is the model's reading of a source, and a source can tell it
+# what to say. So each page's history line is in wiki9p's words first:
+# "Ingested from <source>", then the model's comment, bounded. It was the
+# model's comment alone (the source recorded only when there was none),
+# so a hostile source replaced a page another source had made under a
+# line of its own wording, "routine formatting fix", with nothing naming
+# it. A page that is rewritten when its last version came from another
+# source, or from no ingest at all, says that in its history line too,
+# and is returned in the second result for the log and the command's
+# answer: updating existing pages is what ingest is for, so it is not
+# refused, and it is not silent.
+writepages(resp, source: string): (int, list of string)
 {
 	count := 0;
+	took: list of string;
+	srcname := sourcename(source);
 	# Split on ===PAGE=== markers
 	rest := resp;
-	for(;;) {
+	for(npage := 0;; npage++) {
 		idx := strindex(rest, "===PAGE===");
 		if(idx < 0)
 			break;
 		rest = rest[idx + 10:];
+		if(npage >= MAXSRCPAGES) {
+			took = sys->sprint("%s: more than %d pages in one reply; the rest were not written",
+				srcname, MAXSRCPAGES) :: took;
+			break;
+		}
 
 		# Parse header
 		title := "";
@@ -511,7 +575,7 @@ writepages(resp, source: string): int
 			} else if(line == "---") {
 				inbody = 1;
 			} else if(hasprefix(line, "TITLE: ")) {
-				title = line[7:];
+				title = strip(line[7:]);
 			} else if(hasprefix(line, "COMMENT: ")) {
 				comment = line[9:];
 			}
@@ -519,13 +583,97 @@ writepages(resp, source: string): int
 		}
 
 		if(title != "" && content != "") {
-			if(comment == "")
-				comment = "Ingested from " + source;
-			if(wikiwrite(title, comment, content) >= 0)
+			if(badtitle(title)) {
+				took = sys->sprint("%s: a page with an unusable title was not written", srcname) :: took;
+				continue;
+			}
+			prior := lastwriter(title);
+			hist := "Ingested from " + srcname;
+			if(prior != nil && prior != srcname) {
+				hist += " (replacing a version from " + prior + ")";
+				took = sys->sprint("%s rewrote page '%s', last written from %s",
+					srcname, title, prior) :: took;
+			}
+			comment = oneline(comment, MAXCOMMENT);
+			if(comment != "")
+				hist += ": " + comment;
+			if(wikiwrite(title, hist, content) >= 0)
 				count++;
 		}
 	}
-	return count;
+	rev: list of string;
+	for(; took != nil; took = tl took)
+		rev = hd took :: rev;
+	return (count, rev);
+}
+
+# A source's name for a history line: its path under raw/, on one line.
+sourcename(source: string): string
+{
+	rawroot := mountpt + "/raw/";
+	if(hasprefix(source, rawroot))
+		source = source[len rawroot:];
+	return oneline(source, MAXTITLE);
+}
+
+# s as one bounded line: control characters are blanks.
+oneline(s: string, max: int): string
+{
+	o := "";
+	for(i := 0; i < len s && i < max; i++) {
+		if(s[i] < ' ' || s[i] == 16r7f)
+			o[len o] = ' ';
+		else
+			o[len o] = s[i];
+	}
+	return strip(o);
+}
+
+badtitle(title: string): int
+{
+	if(title == "" || len title > MAXTITLE || title == "." || title == "..")
+		return 1;
+	for(i := 0; i < len title; i++)
+		if(title[i] < ' ' || title[i] == 16r7f || title[i] == '/')
+			return 1;
+	return 0;
+}
+
+# Where the current version of the page titled title came from: the
+# source its history line names, "another writer" if it names none, or
+# nil if there is no such page.
+lastwriter(title: string): string
+{
+	name := "";
+	for(i := 0; i < len title; i++)
+		if(title[i] == ' ')
+			name[len name] = '_';
+		else
+			name[len name] = title[i];
+	raw := rf(wikidir + "/" + name + "/current");
+	if(raw == nil)
+		return nil;
+	(nil, lines) := sys->tokenize(raw, "\n");
+	# the header: title, then D, A and C lines, to the first text line
+	if(lines != nil)
+		lines = tl lines;
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		if(line == "" || line[0] == '#')
+			break;
+		if(line[0] != 'C')
+			continue;
+		c := line[1:];
+		pre := "Ingested from ";
+		if(!hasprefix(c, pre))
+			break;
+		c = c[len pre:];
+		for(e := 0; e < len c; e++)
+			if(c[e] == ':' || (c[e] == ' ' && e + 1 < len c && c[e+1] == '('))
+				break;
+		return strip(c[0:e]);
+	}
+	return "another writer";
 }
 
 validateingestpath(path: string): string
@@ -591,7 +739,10 @@ doquery(question: string): string
 	llmclose();
 	curstate = IDLE;
 
-	appendlog("query", question);
+	if(hasprefix(resp, "error:"))
+		appendlog("query", "failed: " + resp);
+	else
+		appendlog("query", question);
 	return resp;
 }
 
@@ -632,19 +783,31 @@ dolint(): string
 	curstate = LINTING;
 
 	context := buildwikifullcontext();
-	if(context == "")
+	if(context == "") {
+		curstate = IDLE;	# it was left "linting" for good
 		return "wiki is empty, nothing to lint";
+	}
 
 	prompt := "WIKI CONTENTS:\n" + context + "\n\n" +
 		"Audit this wiki. Report all issues found.";
 
 	resp := llmask(LINT_SYSTEM_PROMPT, prompt);
 
-	# Write lint report as a wiki page
-	wikiwrite("Wiki Lint Report", "Automated lint check", resp);
-
 	llmclose();
 	curstate = IDLE;
+
+	# No report, no page: the model's error was written into the wiki
+	# as the lint report, and logged "completed".
+	if(hasprefix(resp, "error:")) {
+		appendlog("lint", "failed: " + resp);
+		return resp;
+	}
+
+	# Write lint report as a wiki page
+	if(wikiwrite("Wiki Lint Report", "Automated lint check", resp) < 0) {
+		appendlog("lint", "completed; the report could not be written to the wiki");
+		return resp + "\nerror: the report could not be written to the wiki";
+	}
 
 	appendlog("lint", "completed");
 	return resp;
@@ -721,7 +884,10 @@ DOCTEXT: con
 	"             {echo lint >[1=0]; cat} <>[0] /mnt/wikia/ctl\n" +
 	"           Commands:\n" +
 	"             ingest          Ingest all sources at /mnt/wikia/raw\n" +
-	"             ingest <path>   Ingest a specific file\n" +
+	"             ingest <path>   Ingest a specific file, or a directory's\n" +
+	"           Each page's history line names the source it was ingested\n" +
+	"           from, and says when it replaces another source's version;\n" +
+	"           such rewrites are in the answer and in log.\n" +
 	"             lint            Run wiki health check\n" +
 	"             reset           Close LLM session\n" +
 	"\n" +
@@ -747,8 +913,9 @@ DOCTEXT: con
 	"  /mnt/wiki   wikifs must be mounted (page storage)\n" +
 	"  /mnt/llm      LLM service must be available\n" +
 	"\n" +
-	"The wiki is browsable via Charon at the httpd URL\n" +
-	"serving wikifs.  wiki9p provides the intelligence;\n" +
+	"The wiki is browsed and edited on the web through\n" +
+	"svc/httpd/httpd -w /wiki, wikifs mounted at wiki/ in\n" +
+	"its site (httpd(8)).  wiki9p provides the intelligence;\n" +
 	"wikifs provides the storage and web presentation.\n";
 
 # ===================================================================
@@ -757,7 +924,10 @@ DOCTEXT: con
 
 appendlog(op, msg: string)
 {
+	# An entry is one line, whatever it is given: a question with a
+	# newline in it was a second entry, in the log's own form.
 	now := daytime->now();
+	msg = oneline(msg, 400);
 	entry := sys->sprint("[%d] %s: %s\n", now, op, msg);
 	logbuf += entry;
 
@@ -1013,17 +1183,23 @@ Serve:
 				j := ref Job(fs, path == Qquery, string m.data);
 				if(j.query)
 					j.arg = strip(j.arg);
+				# The last result is cleared before the worker has the
+				# job: cleared after, a job that finished at once (a lint
+				# with no model) had its answer erased, and the read got
+				# nothing.
+				(oreq, oqresp, ocresp, orpos) := (fs.queryreq, fs.queryresp, fs.ctlresp, fs.rpos);
+				if(j.query) {
+					fs.queryreq = j.arg;
+					fs.queryresp = nil;
+				} else
+					fs.ctlresp = nil;
+				fs.rpos = 0;
 				alt {
 				jobs <-= j =>
 					fs.busy++;
-					if(j.query) {
-						fs.queryreq = j.arg;
-						fs.queryresp = nil;
-					} else
-						fs.ctlresp = nil;
-					fs.rpos = 0;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				* =>
+					(fs.queryreq, fs.queryresp, fs.ctlresp, fs.rpos) = (oreq, oqresp, ocresp, orpos);
 					srv.reply(ref Rmsg.Error(m.tag, "too many operations queued"));
 				}
 			* =>

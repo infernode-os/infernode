@@ -281,16 +281,67 @@ pushevent(msg: string)
 	while(p != nil) {
 		next := p.next;
 		if(p.ft == Qevent) {
-			data := array of byte (msg + "\n");
-			srv_g.reply(styxservers->readbytes(p.m, data));
+			srv_g.reply(evreply(p.m, msg));
 			delivered = 1;
 		} else
 			kept = ref PendingRead(p.fid, p.tag, p.m, p.ft, kept);
 		p = next;
 	}
 	pending = kept;
-	if(!delivered)
-		eventbuf = msg :: eventbuf;
+	if(!delivered) {
+		# oldest first, and no more than MAXEVENTS of them
+		eventbuf = appendev(eventbuf, msg);
+		if(nevents >= MAXEVENTS)
+			eventbuf = tl eventbuf;
+		else
+			nevents++;
+	}
+}
+
+MAXEVENTS: con 256;
+nevents := 0;
+
+appendev(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendev(tl l, s);
+}
+
+# An event for a reader: the file is a stream, so each read is the next
+# event whatever its offset (answered by offset, the second read on a
+# descriptor got nothing and its event was gone).
+evreply(m: ref Tmsg.Read, msg: string): ref Rmsg
+{
+	data := array of byte (msg + "\n");
+	if(len data > m.count)
+		data = data[0:m.count];
+	return ref Rmsg.Read(m.tag, data);
+}
+
+# A field shown in the summary or carried in an event is one line: a
+# newline in a synopsis or category was a heading or a task's line of
+# the writer's making, and in an event a second event.
+oneline(s: string): string
+{
+	o := "";
+	for(i := 0; i < len s; i++) {
+		if(s[i] < ' ' || s[i] == 16r7f)
+			o[len o] = ' ';
+		else
+			o[len o] = s[i];
+	}
+	return o;
+}
+
+# the reads that waited on a fid, or were flushed, wait no longer
+droppending(fid, tag: int)
+{
+	kept: ref PendingRead;
+	for(p := pending; p != nil; p = p.next)
+		if(p.fid != fid && p.tag != tag)
+			kept = ref PendingRead(p.fid, p.tag, p.m, p.ft, kept);
+	pending = kept;
 }
 
 addpending(fid, tag, ft: int, m: ref Tmsg.Read)
@@ -309,7 +360,7 @@ rendersummary()
 		te := hd t;
 		if(te.hidden)
 			continue;
-		cat := te.category;
+		cat := oneline(te.category);
 		if(cat == "")
 			cat = "Uncategorized";
 		if(!listcontains(categories, cat))
@@ -331,17 +382,17 @@ rendersummary()
 			te := hd t;
 			if(te.hidden)
 				continue;
-			tcat := te.category;
+			tcat := oneline(te.category);
 			if(tcat == "")
 				tcat = "Uncategorized";
 			if(tcat != cat)
 				continue;
-			line := sys->sprint("- **[%d] %s**", te.id, te.label);
-			line += " — " + te.status;
+			line := sys->sprint("- **[%d] %s**", te.id, oneline(te.label));
+			line += " — " + oneline(te.status);
 			if(te.progress != "")
-				line += " (" + te.progress + ")";
+				line += " (" + oneline(te.progress) + ")";
 			if(te.synopsis != "")
-				line += " — " + te.synopsis;
+				line += " — " + oneline(te.synopsis);
 			result += line + "\n";
 		}
 	}
@@ -472,9 +523,9 @@ handlectl(data: string): string
 		te := findtask(id);
 		if(te == nil)
 			return "unknown task";
-		te.category = tail;
+		te.category = oneline(tail);
 		rendersummary();
-		pushevent(sys->sprint("task %d category %s", id, tail));
+		pushevent(sys->sprint("task %d category %s", id, te.category));
 		return nil;
 	}
 	if(hasprefix(data, "progress ")) {
@@ -485,9 +536,9 @@ handlectl(data: string): string
 		te := findtask(id);
 		if(te == nil)
 			return "unknown task";
-		te.progress = tail;
+		te.progress = oneline(tail);
 		rendersummary();
-		pushevent(sys->sprint("task %d progress %s", id, tail));
+		pushevent(sys->sprint("task %d progress %s", id, te.progress));
 		return nil;
 	}
 	if(hasprefix(data, "order ")) {
@@ -498,7 +549,9 @@ handlectl(data: string): string
 		te := findtask(id);
 		if(te == nil)
 			return "unknown task";
-		(v, nil) := str->toint(tail, 10);
+		(v, ok) := ordernum(tail);
+		if(!ok)
+			return "order: want a number";
 		te.order = v;
 		rendersummary();
 		pushevent(sys->sprint("task %d order %d", id, v));
@@ -518,6 +571,18 @@ handlectl(data: string): string
 		return nil;
 	}
 	return "usage: synopsis|categorize|progress|order|instructions {id} {text}";
+}
+
+# An order is a number and nothing else ("abc" was taken, as 0).
+ordernum(s: string): (int, int)
+{
+	s = strip(s);
+	if(s == "" || len s > 9)
+		return (0, 0);
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return (0, 0);
+	return (int s, 1);
 }
 
 # Parse "<id> <rest>" from a string
@@ -559,6 +624,15 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 				break;
 			}
 
+			# A directory is read as one. It was looked up among the
+			# files: listing the root or tasks/ was "file does not
+			# exist", and a task's directory was answered twice, an
+			# error and then data, which ended the mount.
+			if(c.qtype & Sys->QTDIR) {
+				srv.read(m);
+				break;
+			}
+
 			qtype := TYPE(c.path);
 
 			case qtype {
@@ -566,21 +640,14 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 				srv.reply(styxservers->readstr(m, ""));
 
 			Qevent =>
-				# Blocking read — check buffered events first
+				# Blocking read — buffered events first, oldest first,
+				# each given once (the buffer was never emptied: the
+				# same events came round for ever)
 				if(eventbuf != nil) {
-					# Reverse and take first
-					rev: list of string;
-					for(eb := eventbuf; eb != nil; eb = tl eb)
-						rev = hd eb :: rev;
-					msg := hd rev;
-					# Remove from buffer
-					newbuf: list of string;
-					for(eb = eventbuf; eb != nil; eb = tl eb)
-						if(hd eb != msg || newbuf != nil)
-							newbuf = hd eb :: newbuf;
-					eventbuf = newbuf;
-					data := array of byte (msg + "\n");
-					srv.reply(styxservers->readbytes(m, data));
+					msg := hd eventbuf;
+					eventbuf = tl eventbuf;
+					nevents--;
+					srv.reply(evreply(m, msg));
 				} else {
 					addpending(c.fid, m.tag, Qevent, m);
 				}
@@ -596,6 +663,7 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 						break;
 					}
 					val := "";
+					found := 1;
 					case suboff {
 					Qt_label =>        val = te.label;
 					Qt_status =>       val = te.status;
@@ -606,10 +674,13 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 					Qt_progress =>     val = te.progress;
 					Qt_order =>        val = string te.order;
 					* =>
-						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-						break;
+						found = 0;
 					}
-					srv.reply(styxservers->readstr(m, val));
+					# one answer to a request
+					if(found)
+						srv.reply(styxservers->readstr(m, val));
+					else
+						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 				}
@@ -649,9 +720,9 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 						pushevent(sys->sprint("task %d synopsis", te.id));
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					Qt_category =>
-						te.category = data;
+						te.category = oneline(data);
 						rendersummary();
-						pushevent(sys->sprint("task %d category %s", te.id, data));
+						pushevent(sys->sprint("task %d category %s", te.id, te.category));
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					Qt_instructions =>
 						te.instructions = data;
@@ -659,12 +730,16 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 						pushevent(sys->sprint("task %d instructions", te.id));
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					Qt_progress =>
-						te.progress = data;
+						te.progress = oneline(data);
 						rendersummary();
-						pushevent(sys->sprint("task %d progress %s", te.id, data));
+						pushevent(sys->sprint("task %d progress %s", te.id, te.progress));
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					Qt_order =>
-						(v, nil) := str->toint(data, 10);
+						(v, ok) := ordernum(data);
+						if(!ok) {
+							srv.reply(ref Rmsg.Error(m.tag, "order: want a number"));
+							break;
+						}
 						te.order = v;
 						rendersummary();
 						pushevent(sys->sprint("task %d order %d", te.id, v));
@@ -678,7 +753,13 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 			}
 
 		Clunk =>
+			# a reader that has gone is not waiting for an event
+			droppending(m.fid, -1);
 			srv.clunk(m);
+
+		Flush =>
+			droppending(-1, m.oldtag);
+			srv.default(gm);
 
 		Remove =>
 			srv.remove(m);

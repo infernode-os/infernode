@@ -28,6 +28,10 @@ AgentLib: module {
 	# Prompt building
 	discovernamespace: fn(): string;
 	buildsystemprompt: fn(ns, persona: string): string;
+	# The same in at most max bytes (and never more than buildsystemprompt's
+	# own limit): the folders' instructions give way first, then the tools'
+	# long documentation; the policies, namespace and reminders stay.
+	buildsystempromptmax: fn(ns, persona: string, max: int): string;
 	loadreminders: fn(toollist: list of string): string;
 	loadtooldocs: fn(toollist: list of string): string;
 	defaultsystemprompt: fn(): string;
@@ -50,6 +54,12 @@ AgentLib: module {
 
 	# Tool execution (9P)
 	calltool: fn(tool, args: string): string;
+	# callraw: call a tool with arguments already in the form it takes
+	# (toolargs' result), so a caller that looked at that form sends
+	# exactly it.  toolname: a tool's name as a name under the tool mount
+	# (lower case; letters, digits, _ and -), nil for anything else.
+	callraw: fn(tool, args: string): string;
+	toolname: fn(tool: string): string;
 	extracttoolargs: fn(inputjson: string): string;
 	toolargs: fn(tool, inputjson: string): string;
 	writescratch: fn(content: string, step: int): string;

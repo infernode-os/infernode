@@ -429,7 +429,22 @@ randominit(void)
 ulong
 randomread(void *xp, ulong n)
 {
-	generate(xp, n, Forpool);
+	uchar *p;
+	ulong m, left;
+
+	/*
+	 * in pieces, the generator's lock let go between them: one large
+	 * read held it for its whole fill, and a key being made in a
+	 * builtin waits for that lock holding its Dis VM
+	 */
+	p = xp;
+	for(left = n; left > 0; left -= m){
+		m = left;
+		if(m > 64*1024)
+			m = 64*1024;
+		generate(p, m, Forpool);
+		p += m;
+	}
 	return n;
 }
 

@@ -70,4 +70,25 @@ Sdrdsp: module
 
 	# a rate as sdrfs's ctl takes it: 2.4M, 240k, 2048000; 0 if not
 	rate:	fn(s: string): int;
+
+	# A stream's header, as audio(6)'s: lines of text, each a command
+	# its device's ctl takes (rate first), then an empty line, the
+	# whole a multiple of 4 bytes, padded with a line of blanks.
+	# sdrfs(4)'s iq starts with one (rate, enc cu8, freq), and so does
+	# the sound sdr(1)'s demodulators make (rate, chans, bits, enc), so
+	# a stream says its own format and nothing is told it twice.
+	Maxheader:	con 1024;
+
+	# the header at the front of b[0:n]: its length in bytes and its
+	# lines' words, blank lines left out; a length of 0 if b does not
+	# hold all of it yet, and an error if it is not a header
+	header:	fn(b: array of byte, n: int): (int, list of list of string, string);
+	# a header of these lines, each without its newline
+	mkheader:	fn(lines: list of string): array of byte;
+	# the value of a line verb value in h; nil if there is none
+	hdrval:	fn(h: list of list of string, verb: string): string;
+	# the format of samples as sdrfs(4)'s iq gives them, from their
+	# header: the rate, the frequency (-1 if it does not say), or why
+	# they are not samples this module can take
+	iqformat:	fn(h: list of list of string): (int, big, string);
 };

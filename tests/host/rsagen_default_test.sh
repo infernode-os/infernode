@@ -12,7 +12,7 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 src = (root / "appl" / "cmd" / "auth" / "rsagen.b").read_text()
-manual = (root / "man" / "8" / "ai2key").read_text()
+manual = (root / "man" / "8" / "rsagen").read_text()
 
 match = re.search(r"nbits\s*:=\s*(\d+)\s*;", src)
 if not match:

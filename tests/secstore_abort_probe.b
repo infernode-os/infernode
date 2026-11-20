@@ -28,6 +28,18 @@ init(nil: ref Draw->Context, args: list of string)
 	secstore->init();
 
 	args = tl args;
+	# -m value: send that for m in one hello, and print how the reply
+	# begins (a server must refuse an m that is not in the group)
+	if(args != nil && hd args == "-m"){
+		args = tl args;
+		if(args == nil || tl args == nil)
+			usage();
+		maddr := "tcp!localhost!5356";
+		if(tl tl args != nil)
+			maddr = hd tl tl args;
+		mprobe(hd args, hd tl args, maddr);
+		return;
+	}
 	if(args == nil)
 		usage();
 	user := hd args;
@@ -44,7 +56,7 @@ init(nil: ref Draw->Context, args: list of string)
 		conn := secstore->dial(addr);
 		if(conn == nil)
 			fail(sys->sprint("dial %s failed: %r", addr));
-		if(sys->fprint(conn.dfd, "secstore3\tPAK\nC=%s\nm=1\n", user) < 0)
+		if(sys->fprint(conn.dfd, "secstore4\tPAK\nC=%s\nm=AQ==\n", user) < 0)
 			fail(sys->sprint("hello write failed: %r"));
 		buf := array[4096] of byte;
 		n := sys->read(conn.dfd, buf, len buf);
@@ -62,9 +74,27 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("abort-probe: %d aborts sent for %s\n", count, user);
 }
 
+mprobe(m, user, addr: string)
+{
+	conn := secstore->dial(addr);
+	if(conn == nil)
+		fail(sys->sprint("dial failed: %r"));
+	if(sys->fprint(conn.dfd, "secstore4\tPAK\nC=%s\nm=%s\n", user, m) < 0)
+		fail(sys->sprint("hello write failed: %r"));
+	buf := array[4096] of byte;
+	n := sys->read(conn.dfd, buf, len buf);
+	reply := "(nothing)";
+	if(n > 0)
+		reply = string buf[0:n];
+	if(len reply > 12)
+		reply = reply[0:12];
+	sys->print("m-probe %s: reply begins %q\n", m, reply);
+}
+
 usage()
 {
 	sys->fprint(sys->fildes(2), "usage: secstore_abort_probe user count [addr]\n");
+	sys->fprint(sys->fildes(2), "       secstore_abort_probe -m value user [addr]\n");
 	raise "fail:usage";
 }
 

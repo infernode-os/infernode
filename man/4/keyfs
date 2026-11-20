@@ -44,6 +44,18 @@ and serves files representing the contents at
 .I mountpoint
 in the name space (default:
 .BR /mnt/keys ).
+.I Keyfs
+does not make
+.IR keyfile :
+an administrator creates it, empty.
+An empty file is a store not yet begun:
+.I keyfs
+says so, asks for the master key a second time to confirm it
+(unless it comes from
+.BR -n ),
+and the file is written under that key at the first change.
+A file that is not empty and does not open under the key given is refused,
+and nothing is served.
 .PP
 Each
 .I user
@@ -61,6 +73,7 @@ Writing
 to the file increments the count; writing
 .B good
 resets it to 0.
+The count stops at 255.
 When the count reaches some implementation-defined limit,
 the account status is set to
 .B disabled
@@ -75,7 +88,8 @@ or the text
 if it has no expiration time.
 The string
 .B never
-or a number can be written to the file to set a new expiry time.
+or a number can be written to the file to set a new expiry time;
+a number greater than 2147483647 is refused.
 .TP
 .B secret
 The secret (supposedly) known only to the user and the authentication service.
@@ -100,11 +114,78 @@ To add a new account, make a directory with that name in
 It must not already exist.
 To remove an account, remove the corresponding directory;
 to rename an account, rename the directory.
+A user's name is at most 255 bytes of
+.SM UTF-8.
 .PP
 All changes made via file system operations in
 .I mountpoint
 result in appropriate changes to
 .IR keyfile .
+Each change writes the whole file anew as
+.IB keyfile .new
+and renames that to
+.IR keyfile ,
+so that a crash leaves either the old file or the new one, never a part of one.
+Where the file server will not rename a file to a name in use, the old file is removed first;
+if
+.I keyfs
+finds only
+.IB keyfile .new
+when it starts, it takes that, saying so, and renames it.
+.PP
+.I Keyfile
+is made mode 600 whenever it is written.
+If
+.I keyfs
+finds it open to users other than its owner when it starts
+(it keeps the mode it was created with until its first change),
+it sets the mode to 600 and says that it did:
+whoever could read the file could have copied it,
+and then the master key and the users' secrets should be changed.
+.SS "File format"
+.I Keyfile
+is, in order: the eight bytes
+.RB ` "keyfs 2\en" ';
+a count of iterations, four bytes, most significant first;
+a random salt of 16 bytes, made when the file is first written;
+a random nonce of 12 bytes, new each time the file is written;
+the entries encrypted by AES-256 in Galois/Counter Mode (SP 800-38D)
+under that nonce, with the 40 bytes before them as associated data;
+and the 16-byte tag.
+The key is the first 32 bytes of PBKDF2 (RFC 8018) with HMAC-SHA-384
+of the master key, the salt and the count of iterations (200000 for a new file).
+What is encrypted is the number of entries, four bytes, most significant first,
+then each entry:
+a status byte (0 ok, 1 disabled),
+the count of failed attempts (one byte),
+the expiry time (four bytes, least significant first; 0 is never),
+the length of the name and the name,
+the length of the secret and the secret.
+A changed, missing or added byte anywhere in the file makes
+.I keyfs
+refuse it.
+An entry that is not well formed is refused too, with the entry's number.
+.PP
+Until this format the file was that of Plan 9's
+.IR aescbc :
+a 16-byte initialisation vector, then the entries and sixteen
+.RB ` X 's
+encrypted by AES-128 in CBC mode under the first 16 bytes of the SHA-1 of
+.RB ` "aescbc file" '
+and the master key.
+It had no check of its integrity beyond those sixteen bytes,
+and a copy of it tested a guess at the master key with one hash.
+.I Keyfs
+still reads a file in that format, and writes it in the new format at once,
+as it starts (beside the old file and renamed over it, as every change is),
+saying that it has; a copy of the file made before then is still in the old format.
+(The file was once left until its next change, and a store nobody changed stayed
+one SHA-1 from its master key.)
+If the file cannot be rewritten (the store cannot be written),
+.I keyfs
+serves it as it is and prints a warning that it is in the old format at every start,
+until it can.
+Nothing writes the old format.
 .PD
 .PP
 If the
@@ -114,13 +195,51 @@ option is given, instead of prompting for the master key,
 will read it from the file
 .IR nvram .
 Obviously that file should be well-protected from ordinary observers.
+The key is the file's bytes (at most 256) less one final newline,
+and a carriage return before it, if there is one:
+a file made by
+.IR echo (1)
+holds the key that is typed at the prompt.
+(The newline was once part of the key, so the same password typed and kept in a file
+were two keys.)
+A store that was made under the key with its newline is opened by trying
+that key second, and is then put under the key without it,
+.I keyfs
+saying so; if it cannot be rewritten it is served, with a warning at every start.
+.PP
+.I Keyfs
+serves one user, the one that started it, which mounts it once:
+an attach in another name is refused,
+and so is a remove or a rename (wstat) by any other.
+The files' modes say what each file is (a user's directory holds its four files and no others,
+so it is not writable), not who may do what:
+whoever reaches the mount point acts as that user, for every file.
+The protection is the name space
+.I keyfs
+is mounted in, which a signer keeps to its own authentication services (see
+.IR svc (8)).
+.PP
+.I Keyfs
+does not start where it cannot read the time
+.RB ( /dev/time ):
+no account would expire.
 .PP
 The
 .B -D
 option enables tracing of the file service protocol, for debugging.
+.SH FILES
+.TF /keydb/keys.new
+.TP
+.B /keydb/keys
+the default
+.I keyfile
+.TP
+.B /keydb/keys.new
+the file a change is written to before it is renamed
 .SH SOURCE
 .B /appl/cmd/auth/keyfs.b
 .SH SEE ALSO
+.IR keys (6),
 .IR changelogin (8),
 .IR logind (8),
 .IR signer (8)

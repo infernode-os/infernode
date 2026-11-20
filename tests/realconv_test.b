@@ -131,6 +131,41 @@ testLongDigits(t: ref T)
 	t.assertseq(bits(real "1e99999999999"), "7ff0000000000000", "1e99999999999");
 }
 
+# %f writes every digit before the point: 309 for the largest real.
+# gfltconv formatted into 64 bytes on the emulator's stack and wrote the
+# rest past them (sprint("%f", 1e300) ended emu: "stack smashing
+# detected"; where nothing detects it, digits over the C stack).  Each
+# expected string is Python's.
+testLargeF(t: ref T)
+{
+	t.assertseq(sys->sprint("%f", 1e300), "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160.000000", "%f of 1e300");
+	t.assertseq(sys->sprint("%f", -1.5e300), "-1500000000000000078757140382806630373056702871662238732373781173267703686983362293679557062620671796065556665749325817265413784853040645863467188277180060474272580801389863705606745350692182135089053429852456199917621678558451461320111979114170213741868888183230085264257173504208294580298189100810240.000000", "%f of -1.5e300");
+	t.assertseq(sys->sprint("%.20f", 1.7976931348623157e308), "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.00000000000000000000", "%.20f of 1.7976931348623157e308");
+	t.assertseq(sys->sprint("%.3f", 123456789012345678901234567890.0), "123456789012345677877719597056.000", "%.3f of 123456789012345678901234567890.0");
+	t.assertseq(sys->sprint("%.0f", 1e23), "99999999999999991611392", "%.0f of 1e23");
+	t.assertseq(sys->sprint("%f", 0.5), "0.500000", "%f of 0.5");
+	t.assertseq(sys->sprint("%f", 1e-300), "0.000000", "%f of 1e-300");
+	# with a width and flags: still the whole number
+	s := sys->sprint("%+400.2f|%-330f|", 1e300, 1e300);
+	t.asserteq(len s, 400 + 1 + 330 + 1, "padded to its width");
+	# in the middle of other things, and many times over
+	for(i := 0; i < 200; i++){
+		x := 1e300 / real (i + 1);
+		u := sys->sprint("a%fb%.20fc", x, -x);
+		if(len u < 600 || u[0] != 'a' || u[len u - 1] != 'c'){
+			t.error(sys->sprint("1e300/%d: %d bytes", i + 1, len u));
+			break;
+		}
+		if(real sys->sprint("%.3f", x) != x){
+			t.error(sys->sprint("1e300/%d printed with %%f does not read back", i + 1));
+			break;
+		}
+	}
+	# through the other verbs, as before
+	t.assertseq(sys->sprint("%g %e %.3e %.10g", 1e300, 1e300, 1.5e300, 1e300), "1e+300 1.000000e+300 1.500e+300 1e+300", "%g and %e of 1e300");
+	t.assertseq(sys->sprint("%f %g %.2f", real "1e999", -real "1e999", real "1e999" - real "1e999"), "Infinity -Infinity NaN", "what is no number, by name");
+}
+
 worker(id, n: int, done: chan of int)
 {
 	bad := 0;
@@ -192,6 +227,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Convert", testConvert);
 	run("LongDigits", testLongDigits);
+	run("LargeF", testLargeF);
 	run("Concurrent", testConcurrent);
 
 	if(testing->summary(passed, failed, skipped) > 0)

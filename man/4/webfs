@@ -51,6 +51,38 @@ Writing lines in the same form adds or replaces cookies; writing
 empties the jar.
 Responses' Set-Cookie headers fill it, and requests send the cookies
 that match them, across redirects as well.
+.IP
+What a response may set follows RFC 6265 as its revision (6265bis)
+tightens it.
+A cookie's
+.B Domain
+must be the host or a name the host ends in, and not a name that sites
+are registered under: a
+.B Domain
+of
+.B com
+or
+.B co.uk
+is taken only from the host of that very name, as a cookie for that
+host alone.
+A header with a control character in it, or with a name and value
+longer than 4096 characters, is ignored.
+A response not over HTTPS can set no
+.B Secure
+cookie, and none that would replace, delete or be sent beside a
+.B Secure
+cookie of the same name; a
+.B Secure
+cookie is sent only over HTTPS.
+Names beginning
+.B __Secure-
+and
+.B __Host-
+are held to what those prefixes promise.
+A cookie is kept 400 days at most, and the jar holds 180 for a domain
+and 3000 in all, the oldest going first.
+A line written here for a name sites are registered under makes a
+cookie for that host alone.
 .PP
 A connection directory
 .I N
@@ -101,7 +133,14 @@ Opening it for reading, or reading
 or
 .BR header ,
 makes the request; each waits until it completes.
-A body sent with a gzip or deflate Content-Encoding is decoded.
+A request is given up as
+.B "request timed out"
+when no byte has moved on its connection for five minutes, or when an
+hour has passed since it began; its connection is then hung up.
+A body that ends before its length or its last chunk is an error, not
+a short body.
+A body sent with a gzip or deflate Content-Encoding is decoded; one
+that does not decode, or decodes to more than 64 megabytes, is an error.
 .TP
 .B status
 The status code and line, or
@@ -164,5 +203,20 @@ with separate opens.
 .IR charon (1)
 .SH BUGS
 There is no HTTP cache yet.
+.br
+There is no Public Suffix List: the names sites are registered under
+are taken to be those of one label, a registry's usual second-level
+label under a country's two-letter domain
+.RB ( co.uk ,
+.BR com.au ,
+.BR ac.jp ),
+and a short list of others and of hosting services
+.RB ( github.io ,
+.BR herokuapp.com )
+kept in
+.BR webclient.b .
+Under a registry not among them
+.RB ( k12.ca.us )
+one customer can still set a cookie for the others.
 .br
 A response body is held in memory, up to 64 megabytes.

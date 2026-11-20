@@ -1,0 +1,10 @@
+<!doctype html><title>a border radius past an int's half, as minifiers write calc(infinity * 1px)</title>
+<style>
+body{margin:0}
+/* a green box under a green pill with 2147483647px corners: the pill's
+   corners summed past an int, its path past what the draw device takes,
+   and the page was left unpainted (white, not green) */
+.r{width:100px;height:100px;background:green;position:relative}
+.g{position:absolute;inset:0;background:green;border:4px solid green;border-radius:2147483647px}
+</style>
+<div class=r><div class=g></div></div>

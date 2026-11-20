@@ -93,6 +93,12 @@ should be
 .B AESbsize
 bytes of random data: random enough to be unlikely to be reused but
 not cryptographically strongly unpredictable.
+The cipher takes the same time whatever the key and the data
+(it uses the processor's AES instructions where there are any,
+and otherwise indexes no table by them);
+without the instructions that costs speed, most of all in
+.BR aescbc 's
+encryption.
 .TP
 .B blowfish
 Bruce Schneier's symmetric block cipher.

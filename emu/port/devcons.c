@@ -9,6 +9,7 @@
 extern char*	heapaudittext(void);	/* libinterp/heapaudit.c */
 
 extern int cflag;
+extern int strictlink;	/* libinterp/link.c */
 int	exdebug;
 extern int keepbroken;
 
@@ -38,7 +39,8 @@ enum
 	Qsysctl,
 	Qsysname,
 	Qtime,
-	Quser
+	Quser,
+	Qstrictlink
 };
 
 Dirtab contab[] =
@@ -64,6 +66,7 @@ Dirtab contab[] =
 	"null",		{Qnull},	0,	0666,
 	"random",	{Qrandom},	0,	0444,
 	"scancode",	{Qscancode},	0,	0444,
+	"strictlink",	{Qstrictlink},	0,	0644,
 	"sysctl",	{Qsysctl},	0,	0644,
 	"sysname",	{Qsysname},	0,	0644,
 	"time",		{Qtime},	0,	0644,
@@ -582,6 +585,10 @@ consread(Chan *c, void *va, long n, vlong offset)
 		snprint(buf, sizeof(buf), "%d", cflag);
 		return readstr(offset, va, n, buf);
 
+	case Qstrictlink:
+		snprint(buf, sizeof(buf), "%d", strictlink);
+		return readstr(offset, va, n, buf);
+
 	case Qtime:
 		snprint(buf, sizeof(buf), "%.lld", timeoffset + osusectime());
 		return readstr(offset, va, n, buf);
@@ -935,6 +942,24 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		if(x < 0 || x > 9)
 			error(Ebadarg);
 		cflag = x;
+		break;
+
+	case Qstrictlink:
+		/*
+		 * Modules are linked by their type digests alone from now on
+		 * (libinterp/link.c).  One way: a boot script sets it once it
+		 * has loaded whatever old module it needs, and nothing that
+		 * runs later can take it back.
+		 */
+		if(!iseve())
+			error(Eperm);
+		if(n >= sizeof(buf))
+			n = sizeof(buf)-1;
+		strncpy(buf, va, n);
+		buf[n] = '\0';
+		if(buf[0] != '1' || (buf[1] != '\0' && buf[1] != '\n'))
+			error("strictlink: only 1; it stays set until the system restarts");
+		strictlink = 1;
 		break;
 
 	case Qsysname:

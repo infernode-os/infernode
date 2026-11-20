@@ -12,6 +12,9 @@
 #     and the second ClientHello carries the share (checked in OpenSSL's
 #     trace: an HRR sent, a key_share of the group's length after it)
 #   - TLS 1.2 with ECDHE over P-256, and with RSA key exchange
+#   - a server of either version that asks for a client certificate and
+#     does not insist (-verify 1): the client has none and says so, with
+#     an empty Certificate (RFC 5246 7.4.6, RFC 8446 4.4.2)
 #   - ECDSA certificates: a P-256 server key under an RSA root, and a
 #     P-384 chain (root and server), over TLS 1.3 and 1.2
 #   - refused: a certificate for another name, one from a root not trusted,
@@ -116,6 +119,10 @@ run tls13-p256-hrr		rsa	rsa	OK 71	-tls1_3 -groups P-256
 run tls13-p384-hrr		rsa	rsa	OK 103	-tls1_3 -groups P-384
 run tls12-ecdhe-p256		rsa	rsa	OK -	-tls1_2 -groups P-256
 run tls12-rsa-kx		rsa	rsa	OK -	-tls1_2 -cipher AES128-GCM-SHA256
+# a TLS 1.2 server that asks for a client certificate and does not insist:
+# the client has none and says so (it said nothing, and was refused)
+run tls12-asks-client-cert	rsa	rsa	OK -	-tls1_2 -verify 1
+run tls13-asks-client-cert	rsa	rsa	OK -	-tls1_3 -verify 1
 run tls13-ecdsa-p256-cert	ec256	ec256	OK -	-tls1_3
 run tls12-ecdsa-p256-cert	ec256	ec256	OK -	-tls1_2 -cipher ECDHE-ECDSA-AES128-GCM-SHA256
 run tls13-ecdsa-p384-chain	ec384	ec384	OK 103	-tls1_3 -groups P-384

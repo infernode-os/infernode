@@ -30,6 +30,7 @@ dialaddr(host, port: string): (string, string)
 		return (nil, "public net: destination denied (non-IPv4 resolution)");
 	if(publicipv4(resolved) == 0)
 		return (nil, "public net: private or reserved destination denied");
+	# (resolved is in the form publicipv4 takes: what is dialled is what was checked)
 	return ("tcp!" + resolved + "!" + port, nil);
 }
 
@@ -55,6 +56,14 @@ resolveaddr(host, port: string): string
 	return nil;
 }
 
+#
+# An address in the one form this check and the kernel read alike: four
+# decimal numbers of one to three digits, none with a leading zero.  The
+# kernel's parser (ipaux.c) takes each number in C's bases, so 0177.0.0.1
+# is 127.0.0.1 there; read as decimal here it was 177.0.0.1, public, and
+# what was dialled was the string as given: loopback, from any fetch tool
+# or a redirect.  Anything else is no address (-1), and is refused.
+#
 publicipv4(s: string): int
 {
 	oct := array[4] of int;
@@ -63,7 +72,9 @@ publicipv4(s: string): int
 	for(i := 0; i <= len s; i++) {
 		if(i < len s && s[i] != '.')
 			continue;
-		if(part >= 4 || i == start)
+		if(part >= 4 || i == start || i - start > 3)
+			return -1;
+		if(i - start > 1 && s[start] == '0')
 			return -1;
 		v := 0;
 		for(j := start; j < i; j++) {
@@ -98,6 +109,8 @@ publicipv4(s: string): int
 
 transitionallowed(initiator, targetscheme: string): int
 {
+	if(sys == nil || str == nil)
+		init();		# networkscheme folds case with it: HTTP://... was no network scheme before
 	if(initiator == nil || initiator == "")
 		return 1;
 	is := schemestr(initiator);
@@ -193,9 +206,12 @@ hostblocked(host: string): int
 	if(hasprefix(host, "localhost."))
 		return 1;
 
-	# IPv6: loopback, unspecified, unique-local (fc00::/7), link-local
-	if(hasprefix(host, "::") || hasprefix(host, "fc") ||
-	   hasprefix(host, "fd") || hasprefix(host, "fe80"))
+	# IPv6: loopback, unspecified, unique-local (fc00::/7), link-local.
+	# (Only of an IPv6 literal: fdroid.org and fcc.gov are names.)
+	if(hasprefix(host, "::"))
+		return 1;
+	if(hascolon(host) && (hasprefix(host, "fc") ||
+	   hasprefix(host, "fd") || hasprefix(host, "fe80")))
 		return 1;
 	if(host == "0:0:0:0:0:0:0:1" ||
 	   host == "0000:0000:0000:0000:0000:0000:0000:0001")
@@ -207,6 +223,44 @@ hostblocked(host: string): int
 	if(ok)
 		return publicipv4(dotted(v)) != 1;
 
+	# A host made of numbers that is no address this reads: refused.
+	# It was let by, and 0177.0.0.018 is such a one: no octal number
+	# here, and 127.0.0.1 to a parser that stops at the 8.
+	if(numeric(host))
+		return 1;
+
+	return 0;
+}
+
+# every label a decimal, octal or hex number (no name's last label is)
+numeric(s: string): int
+{
+	start := 0;
+	for(i := 0; i <= len s; i++) {
+		if(i < len s && s[i] != '.')
+			continue;
+		if(i == start)
+			return 0;
+		lab := s[start:i];
+		hex := len lab > 1 && lab[0] == '0' && (lab[1] == 'x' || lab[1] == 'X');
+		for(j := 0; j < len lab; j++) {
+			c := lab[j];
+			if(c >= '0' && c <= '9')
+				continue;
+			if(hex && (j == 1 || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+				continue;
+			return 0;
+		}
+		start = i + 1;
+	}
+	return 1;
+}
+
+hascolon(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == ':')
+			return 1;
 	return 0;
 }
 

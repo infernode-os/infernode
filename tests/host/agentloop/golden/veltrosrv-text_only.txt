@@ -16,7 +16,5 @@ tools: list read write
   | stream: done (1 chunks, 20 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 35 bytes
-  | llm: STOP:end_turn
-  | Hello from the mock.
-  | 
+  | llm: STOP:end_turn\nHello from the mock.\n
   | turn done stop=end_turn steps=1

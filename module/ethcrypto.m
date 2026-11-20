@@ -10,7 +10,9 @@ Ethcrypto: module {
 	# Hex-encode an address with EIP-55 mixed-case checksum
 	addrtostr:	fn(addr: array of byte): string;
 
-	# Parse a hex address string (with or without 0x prefix) to 20 bytes
+	# Parse an address, exactly "0x" and 40 hex digits, to 20 bytes;
+	# nil for anything else, and for letters of both cases whose
+	# EIP-55 checksum is wrong (all lower and all upper are taken)
 	strtoaddr:	fn(s: string): array of byte;
 
 	# RLP encoding (go-ethereum: rlp/encode.go)

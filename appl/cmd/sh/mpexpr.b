@@ -336,6 +336,8 @@ iptostr(n: Big, radix: int): string
 		b := n.iptobebytes();
 		rbits := log2(radix);
 		bits := roundup(n.bits(), rbits);
+		if(bits == 0)
+			bits = rbits;	# zero has no bits, and one digit
 		for(i := bits - rbits; i >= 0; i -= rbits){
 			d := 0;
 			for(j := 0; j < rbits; j++)

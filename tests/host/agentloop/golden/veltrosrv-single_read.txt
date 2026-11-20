@@ -22,19 +22,14 @@ tool-result call_single_read_0_0:
   | stream: done (0 chunks, 0 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 79 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_single_read_0_0:read:{"args"\: "/usr/agentloop/a.txt"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_single_read_0_0:read:{"args"\: "/usr/agentloop/a.txt"}\n
   | tool read: args {"args": "/usr/agentloop/a.txt"}
   | tool read: calling with 32 bytes
-  | tool read: done,     1	alpha
-  | 
+  | tool read: done,     1	alpha\n
   | step 2: writing 51 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (1 chunks, 8 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 23 bytes
-  | llm: STOP:end_turn
-  | Read it.
-  | 
+  | llm: STOP:end_turn\nRead it.\n
   | turn done stop=end_turn steps=2

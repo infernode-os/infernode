@@ -35,36 +35,28 @@ user:
   | stream: done (1 chunks, 21 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 36 bytes
-  | llm: STOP:end_turn
-  | Let me read the file:
-  | 
+  | llm: STOP:end_turn\nLet me read the file:\n
   | harness: nudge: [harness: you said what you would do next, but made no tool call, so nothing was...
   | step 2: writing 172 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (0 chunks, 0 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 76 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_announce_1_0:read:{"args"\: "/usr/agentloop/a.txt"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_announce_1_0:read:{"args"\: "/usr/agentloop/a.txt"}\n
   | tool read: args {"args": "/usr/agentloop/a.txt"}
   | tool read: calling with 32 bytes
-  | tool read: done,     1	alpha
-  | 
+  | tool read: done,     1	alpha\n
   | step 3: writing 48 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (0 chunks, 0 bytes)
   | step 3: waiting for LLM response...
   | step 3: LLM response 14 bytes
-  | llm: STOP:end_turn
-  | 
+  | llm: STOP:end_turn\n
   | harness: nudge: [harness: your reply was empty.  Answer the user, or make the tool call you mean...
   | step 4: writing 91 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (1 chunks, 14 bytes)
   | step 4: waiting for LLM response...
   | step 4: LLM response 29 bytes
-  | llm: STOP:end_turn
-  | It says alpha.
-  | 
+  | llm: STOP:end_turn\nIt says alpha.\n
   | turn done stop=end_turn steps=4

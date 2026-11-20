@@ -120,12 +120,16 @@ This flag may be set to allow debugging or to save memory.
 .BR  SHAREMP " (1<<2)"
 Each instance of the module should use the same module data for all instances of the module. There is no implicit synchronisation between threads using the shared data.
 .TP
-.BR  HASLDT " (1<<4)"
+.BR  HASLDT " (1<<6)"
 The dis file contains a separate import section. On older versions of the system,
 this section was within the data section.
 .TP
 .BR  HASEXCEPT " (1<<5)"
 The dis file contains an exception handler section.
+.TP
+.BR  HASSIGS " (1<<7)"
+The dis file ends with a signature digest section, which follows the
+source path.
 .RE
 .PP
 .IR Stack-extent ,
@@ -446,7 +450,13 @@ is the instruction number of its entry point.
 is an index value that selects a type descriptor in the type section,
 which gives the type of the function's stack frame.
 .I Sig
-is an integer hash of the type signature of the function, used in type checking.
+is an integer hash of the type signature of the function, used in type checking:
+MD5 of the signature's text, its four 32-bit words (least significant byte first)
+exclusive-ored together.
+Two different types can have the same hash, and such pairs are easily found;
+see
+.B "Signature Digest Section"
+below.
 .SS Import Section
 The optional import section lists all those functions imported from other
 modules. This allows type checking at load time. The size of the section in
@@ -479,6 +489,71 @@ exceptions in the handler and then the exception table itself. The latter consis
 of a list of exception names and the corresponding pc to jump to when this
 exception is raised. This is then followed by the pc to jump to in any wildcard (*) case
 or -1 if this is not applicable.
+.SS Source path
+The path of the module's source file, a string, follows the last of the
+sections above.
+The loader does not read it.
+.SS Signature Digest Section
+When
+.B HASSIGS
+is set, the source path is followed by the digests of the type signatures:
+.IP
+.EX
+.ft I
+digest-section:
+	count digest ...
+count:
+	operand
+digest:
+	byte ...	\fR(32 bytes)\fP
+.ft R
+.EE
+.PP
+.I Count
+is the number of digests: one for each item of the link section, in its order,
+then one for each function of each table of the import section, in theirs.
+Each
+.I digest
+is SHA-256 of the text of the type signature whose 32-bit hash the
+corresponding
+.I sig
+is.
+.PP
+When a module is loaded, each function it imports is matched by name with a
+link item of the module that implements it, and the two
+.I sig
+values must be equal.
+When both modules have digests, the two digests must be equal as well;
+otherwise the load fails with a
+.L "link typecheck"
+error.
+A module with no digest section (one made by an older compiler, or by
+something other than the compiler) is linked on the 32-bit values alone,
+unless the system has been told to refuse it (see
+.B strictlink
+in
+.IR cons (3)
+and
+.B \-L
+in
+.IR emu (1)).
+The built-in modules carry the digests of their functions in the tables
+.B "limbo -t"
+generates.
+.PP
+A loader that takes
+.I count
+from the file must check it:
+.IR load 's
+refuses a section whose count is not the number of link items and imports,
+or that is shorter than its count says.
+A loader that does not know the flag reads nothing past the handler section,
+and so loads the module as it would one without the section.
+.PP
+The digests make the type check between modules a check of the types.
+They do not make a module file safe to load: Dis has no verifier, and
+the instructions of a file that did not come from the compiler are
+trusted as far as the file is loaded.
 .SH SEE ALSO
 .IR asm (1),
 .IR dis (2),

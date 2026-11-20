@@ -91,29 +91,64 @@ nprog(void)
  * page laid out) took a core to do it, over and over, for as long as
  * the emulator sat idle.
  *
- * Going round is counted over however many idle moments it takes, while
- * the heap does not change between them (idlemark, idlefrom): a program
- * that wakes now and then to do nothing (Charon's) cuts each moment
- * short, and counted afresh in each one the three colours were never
- * reached, so the collector went round for ever.
+ * A round (three colours) is counted from where it began, over however
+ * many idle moments it takes, however the heap changes meanwhile
+ * (idleround, idlefrom).  Counted from the heap's last change instead,
+ * a program that wakes and allocates a little (lib/layers' watcher
+ * lists a directory twice a second) restarted the count at every idle
+ * moment: the round never ended, and a desktop left with two such
+ * watchers and a page's timers spent three days going round a heap of
+ * two million objects, 600,000 passes a second, a core for all of it.
+ * The native kernel met this first (os/port/dis.c, idlegc).
+ *
+ * Nor does a round follow a round at once when the last found nothing
+ * to free after a small change: a desktop is never still, so "the heap
+ * has changed" is always true, and rounds back to back are a core.  The
+ * collector rests (idlegap), from Idlegcmin doubling to Idlegcmax while
+ * rounds find nothing.  A round that freed something (a page left, a
+ * shell ended: cycles), or that followed a change of more than a
+ * quarter of the heap's objects (a page loaded), is followed as before,
+ * at the next change: what real work leaves is freed at once, and only
+ * a trickle that leaves nothing waits, Idlegcmax at most.  The kernel
+ * rests Idlegcgap after every round; emu frees a page left in seconds
+ * (web_browser_test's testLeftPageFreed), so rests only when it finds
+ * nothing.
  */
+#ifndef Idlegcmin
+#define Idlegcmin 1000
+#endif
+#ifndef Idlegcmax
+#define Idlegcmax 60000
+#endif
 static ulong idleseen;
 static int idleknown;
-static ulong idlemark;	/* the heap's activity when idlefrom was taken */
-static int idlefrom;	/* gccolor then */
+static int idleround;		/* a round under way */
+static int idlefrom;		/* gccolor when it began */
+static uvlong idledestroys;	/* gcdestroys then */
+static int idlebig;		/* it began after a large change */
+static long idlegap;		/* the rest after the last round, ms */
+static long idlenext;		/* osmillisec() when that rest ends */
 
 static void
 execatidle(void)
 {
 	int done;
+	long d;
 
 	if(tready(nil))
 		return;
 	if(idleknown && heapactivity() == idleseen)
 		return;
-	if(heapactivity() != idlemark) {
-		idlemark = heapactivity();
+	if(!idleround) {
+		idlebig = !idleknown || heapactivity() - idleseen > heaplive()/4;
+		if(idleknown && !idlebig) {
+			d = idlenext - osmillisec();
+			if(d > 0 && d <= Idlegcmax)	/* resting (a clock gone back ends it) */
+				return;
+		}
+		idleround = 1;
 		idlefrom = gccolor;
+		idledestroys = gcdestroys;
 	}
 
 	gcidle++;
@@ -131,11 +166,20 @@ execatidle(void)
 		if(((ulong)gcidlepass&0xFF) == 0)
 			osyield();
 	}
-	if(gccolor >= done) {	/* all the way round since the heap last changed */
+	if(gccolor >= done) {	/* three colours: what was garbage when it began is freed */
+		idleround = 0;
 		idleseen = heapactivity();
 		idleknown = 1;
+		if(idlebig || gcdestroys != idledestroys)
+			idlegap = 0;
+		else if(idlegap < Idlegcmin)
+			idlegap = Idlegcmin;
+		else if(idlegap < Idlegcmax/2)
+			idlegap *= 2;
+		else
+			idlegap = Idlegcmax;
+		idlenext = osmillisec() + idlegap;
 	}
-	idlemark = heapactivity();	/* what this pass freed is not a change */
 	up->type = Interp;
 	delrunq(up->prog);
 }

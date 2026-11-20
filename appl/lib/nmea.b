@@ -47,6 +47,26 @@ Knot: con 1852.0 / 3600.0;	# metres a second
 Foot: con 0.3048;	# metres
 M: con 111320.0;	# metres a degree of latitude, near enough
 
+#
+# What a sentence may say.  A sentence is bytes from a wire (a serial
+# line, a datagram from anyone, a log), so every number in one is held
+# to what its field can mean before it is used: a count before it sizes
+# anything, an angle before it is turned, a table before it grows.
+#
+Maxwhole: con 9;	# digits before a number's point: it fits an int
+Maxnum: con 24;	# characters in a number
+Maxalt: con 1.0e7;	# metres, either way
+Maxspeed: con 1.0e5;	# knots (or km/h)
+Maxerr: con 1.0e6;	# metres of error, or a dilution
+Maxprn: con 999;
+Maxused: con 256;	# satellites used, all systems
+Maxgsv: con 9;	# sentences in one GSV report; four satellites each
+Maxvdm: con 9;	# sentences in one AIS message
+Maxaispend: con 8;	# AIS messages in parts at once
+Aishold: con 60*1000;	# ms a part waits for the rest
+Maxid: con 32;	# a target's id
+Maxname: con 64;	# a target's name, call sign, category
+
 init()
 {
 	sys = load Sys Sys->PATH;
@@ -167,13 +187,17 @@ Parser.forget(p: self ref Parser)
 	p.suspect = 0;
 }
 
-# an angle into 0 <= a < 360
+# an angle into 0 <= a < 360.  By division: it was by subtracting 360
+# until it fitted, which for a heading of 1e13 is 2.7e10 turns of the
+# loop and for 1e17 never ends (a - 360 is a), in the proc that owns
+# every file of gpsfs.
 degrees(a: real): real
 {
-	while(a < 0.0)
-		a += 360.0;
-	while(a >= 360.0)
-		a -= 360.0;
+	if(!(a > -1.0e9 && a < 1.0e9))	# a NaN too
+		return 0.0;
+	a -= 360.0 * math->floor(a / 360.0);
+	if(!(a >= 0.0 && a < 360.0))
+		a = 0.0;
 	return a;
 }
 
@@ -243,19 +267,25 @@ fld(a: array of string, i: int): string
 	return "";
 }
 
+# a sign, digits, a point, digits; no more before the point than an
+# int holds (it took a thousand: 1e999 is Infinity, and int of it
+# whatever the processor gives)
 isnum(s: string): int
 {
-	if(s == nil)
+	if(s == nil || len s > Maxnum)
 		return 0;
 	i := 0;
 	if(s[0] == '-' || s[0] == '+')
 		i++;
 	digits := 0;
+	whole := 0;
 	dot := 0;
 	for(; i < len s; i++)
-		if(s[i] >= '0' && s[i] <= '9')
+		if(s[i] >= '0' && s[i] <= '9') {
 			digits++;
-		else if(s[i] == '.' && !dot)
+			if(!dot && ++whole > Maxwhole)
+				return 0;
+		} else if(s[i] == '.' && !dot)
 			dot = 1;
 		else
 			return 0;
@@ -277,6 +307,24 @@ inum(s: string): int
 	return int real s;
 }
 
+# a number no less than lo and no more than hi: (value, ok)
+numin(s: string, lo, hi: real): (real, int)
+{
+	(v, ok) := num(s);
+	if(!ok || !(v >= lo && v <= hi))
+		return (0.0, 0);
+	return (v, 1);
+}
+
+# a whole number no less than lo and no more than hi, or -1
+inumin(s: string, lo, hi: int): int
+{
+	n := inum(s);
+	if(n < lo || n > hi)
+		return -1;
+	return n;
+}
+
 # ddmm.mmmm (or dddmm.mmmm) and a hemisphere, as degrees
 angle(v, h: string, pos, neg: int): (real, int)
 {
@@ -292,6 +340,13 @@ angle(v, h: string, pos, neg: int): (real, int)
 	if(min >= 60.0)
 		return (0.0, 0);
 	d := deg + min/60.0;
+	# a latitude is no more than 90, a longitude than 180 (9999 degrees
+	# north was a fix, and written back as NMEA its minutes wrapped an int)
+	lim := 180.0;
+	if(pos == 'N')
+		lim = 90.0;
+	if(!(d <= lim))
+		return (0.0, 0);
 	if(h[0] == neg)
 		d = -d;
 	else if(h[0] != pos)
@@ -617,14 +672,14 @@ rmc(p: ref Parser, a: array of string)
 		f.lat = lat;
 		f.lon = lon;
 	}
-	(v, vok) := num(fld(a, 7));
+	(v, vok) := numin(fld(a, 7), 0.0, Maxspeed);
 	f.hasspeed = vok;
 	if(vok)
 		f.speed = v * Knot;
-	(c, cok) := num(fld(a, 8));
+	(c, cok) := numin(fld(a, 8), 0.0, 360.0);
 	f.hascourse = cok;
 	if(cok)
-		f.course = c;
+		f.course = degrees(c);
 	if((d := rmcdate(fld(a, 9))) != nil)
 		f.date = d;
 	(mv, mvok) := hemi(fld(a, 10), fld(a, 11), 'E', 'W');
@@ -637,7 +692,7 @@ rmc(p: ref Parser, a: array of string)
 # a value and its hemisphere letter, as a signed number
 hemi(v, h: string, pos, neg: int): (real, int)
 {
-	(x, ok) := num(v);
+	(x, ok) := numin(v, 0.0, 180.0);	# a variation or a deviation
 	if(!ok || len h != 1 || h[0] != pos && h[0] != neg)
 		return (0.0, 0);
 	if(h[0] == neg)
@@ -659,12 +714,12 @@ gga(p: ref Parser, a: array of string)
 		f.lat = lat;
 		f.lon = lon;
 	}
-	if((n := inum(fld(a, 7))) >= 0)
+	if((n := inumin(fld(a, 7), 0, Maxprn)) >= 0)
 		f.sats = n;
-	(h, hok) := num(fld(a, 8));
+	(h, hok) := numin(fld(a, 8), 0.0, Maxerr);
 	if(hok)
 		f.hdop = h;
-	(height, aok) := num(fld(a, 9));
+	(height, aok) := numin(fld(a, 9), -Maxalt, Maxalt);
 	f.hasalt = aok && fld(a, 10) == "M";
 	if(f.hasalt)
 		f.altitude = height;
@@ -699,13 +754,13 @@ gsa(p: ref Parser, a: array of string, talker: string)
 	"3" =>
 		f.mode = M3d;
 	}
-	(v, ok) := num(fld(a, 15));
+	(v, ok) := numin(fld(a, 15), 0.0, Maxerr);
 	if(ok)
 		f.pdop = v;
-	(v, ok) = num(fld(a, 16));
+	(v, ok) = numin(fld(a, 16), 0.0, Maxerr);
 	if(ok)
 		f.hdop = v;
-	(v, ok) = num(fld(a, 17));
+	(v, ok) = numin(fld(a, 17), 0.0, Maxerr);
 	if(ok)
 		f.vdop = v;
 	# a receiver sends a GSA for each system for each time: the
@@ -714,15 +769,21 @@ gsa(p: ref Parser, a: array of string, talker: string)
 		p.used = nil;
 		p.usedepoch = p.epoch;
 	}
+	# no more than the systems have between them: with no position
+	# sentence to begin a new time the list grew by twelve a sentence,
+	# for ever
 	sysid := fld(a, 18);
-	for(i := 3; i <= 14; i++)
-		if((prn := inum(fld(a, i))) > 0)
+	nused := len p.used;
+	for(i := 3; i <= 14 && nused < Maxused; i++)
+		if((prn := inumin(fld(a, i), 1, Maxprn)) > 0) {
 			p.used = (sysof(talker, sysid, prn), prn) :: p.used;
+			nused++;
+		}
 }
 
 gsv(p: ref Parser, a: array of string, talker: string)
 {
-	total := inum(fld(a, 1));
+	total := inumin(fld(a, 1), 1, Maxgsv);
 	msg := inum(fld(a, 2));
 	if(total < 1 || msg < 1 || msg > total)
 		return;
@@ -733,19 +794,24 @@ gsv(p: ref Parser, a: array of string, talker: string)
 		n--;
 	l: list of ref Sat;
 	for(i := 0; i+3 < n; i += 4) {
-		prn := inum(fld(a, 4+i));
+		prn := inumin(fld(a, 4+i), 1, Maxprn);
 		if(prn <= 0)
 			continue;
 		l = ref Sat(sysof(talker, "", prn), prn,
-			inum(fld(a, 5+i)), inum(fld(a, 6+i)), inum(fld(a, 7+i))) :: l;
+			inumin(fld(a, 5+i), 0, 90), inumin(fld(a, 6+i), 0, 360), inumin(fld(a, 7+i), 0, 999)) :: l;
 	}
 	# the sentences of one report are kept together by the talker's
 	# system: SBAS satellites come under GP, so key on the talker
 	key := sysindex(sysof(talker, "", 1));
 	if(msg == 1)
 		p.pending[key] = nil;
-	for(; l != nil; l = tl l)
+	# a report is at most Maxgsv sentences of four: one whose first
+	# sentence never comes again (2 of 9, for ever) grew without end
+	room := 4*Maxgsv - len p.pending[key];
+	for(; l != nil && room > 0; l = tl l) {
 		p.pending[key] = hd l :: p.pending[key];
+		room--;
+	}
 	if(msg == total) {
 		p.inview[key] = p.pending[key];
 		p.pending[key] = nil;
@@ -755,11 +821,11 @@ gsv(p: ref Parser, a: array of string, talker: string)
 gst(p: ref Parser, a: array of string)
 {
 	f := p.cur;
-	(la, laok) := num(fld(a, 6));
-	(lo, look) := num(fld(a, 7));
+	(la, laok) := numin(fld(a, 6), 0.0, Maxerr);
+	(lo, look) := numin(fld(a, 7), 0.0, Maxerr);
 	if(laok && look)
 		f.err = math->sqrt(la*la + lo*lo);
-	(al, alok) := num(fld(a, 8));
+	(al, alok) := numin(fld(a, 8), 0.0, Maxerr);
 	if(alok)
 		f.verr = al;
 	p.gstseen = 1;
@@ -768,7 +834,7 @@ gst(p: ref Parser, a: array of string)
 # heading, true: HDT,x.x,T
 hdt(p: ref Parser, a: array of string)
 {
-	(h, ok) := num(fld(a, 1));
+	(h, ok) := numin(fld(a, 1), 0.0, 360.0);
 	if(ok && fld(a, 2) == "T") {
 		p.cur.heading = degrees(h);
 		p.cur.hasheading = 1;
@@ -780,7 +846,7 @@ hdt(p: ref Parser, a: array of string)
 hdg(p: ref Parser, a: array of string)
 {
 	f := p.cur;
-	(h, ok) := num(fld(a, 1));
+	(h, ok) := numin(fld(a, 1), 0.0, 360.0);
 	if(!ok)
 		return;
 	(dev, devok) := hemi(fld(a, 2), fld(a, 3), 'E', 'W');
@@ -801,7 +867,7 @@ hdg(p: ref Parser, a: array of string)
 hdm(p: ref Parser, a: array of string)
 {
 	f := p.cur;
-	(h, ok) := num(fld(a, 1));
+	(h, ok) := numin(fld(a, 1), 0.0, 360.0);
 	if(ok && fld(a, 2) == "M" && f.hasmagvar) {
 		f.heading = degrees(h + f.magvar);
 		f.hasheading = 1;
@@ -824,6 +890,8 @@ pgrmz(p: ref Parser, a: array of string)
 	* =>
 		return;
 	}
+	if(!(v >= -Maxalt && v <= Maxalt))
+		return;
 	p.cur.baroalt = v;
 	p.cur.hasbaro = 1;
 }
@@ -833,10 +901,10 @@ pgrme(p: ref Parser, a: array of string)
 {
 	if(p.gstseen)
 		return;
-	(h, hok) := num(fld(a, 1));
+	(h, hok) := numin(fld(a, 1), 0.0, Maxerr);
 	if(hok && fld(a, 2) == "M")
 		p.cur.err = h;
-	(v, vok) := num(fld(a, 3));
+	(v, vok) := numin(fld(a, 3), 0.0, Maxerr);
 	if(vok && fld(a, 4) == "M")
 		p.cur.verr = v;
 }
@@ -856,8 +924,10 @@ pflaa(p: ref Parser, a: array of string)
 		own = p.last;
 	if(own == nil || !own.valid || !own.haspos)
 		return;
-	(n, nok) := num(fld(a, 2));
-	(e, eok) := num(fld(a, 3));
+	# the data port's ranges: metres north and east to 20000000, up to
+	# 32767, a track of 0 to 359, a speed to 32767 m/s
+	(n, nok) := numin(fld(a, 2), -2.0e7, 2.0e7);
+	(e, eok) := numin(fld(a, 3), -2.0e7, 2.0e7);
 	id := fld(a, 6);
 	if(!nok || !eok || id == "")
 		return;
@@ -865,22 +935,28 @@ pflaa(p: ref Parser, a: array of string)
 	t.haspos = 1;
 	t.lat = own.lat + n / M;
 	t.lon = own.lon + e / (M * coslat(own.lat));
-	(v, vok) := num(fld(a, 4));
+	if(t.lon > 180.0)
+		t.lon -= 360.0;
+	else if(t.lon < -180.0)
+		t.lon += 360.0;
+	if(!(t.lat >= -90.0 && t.lat <= 90.0 && t.lon >= -180.0 && t.lon <= 180.0))
+		return;	# nowhere on the earth
+	(v, vok) := numin(fld(a, 4), -32768.0, 32767.0);
 	if(vok && own.hasalt) {
 		t.altitude = own.altitude + v;
 		t.hasalt = 1;
 	}
-	(c, cok) := num(fld(a, 7));
+	(c, cok) := numin(fld(a, 7), 0.0, 360.0);
 	if(cok) {
 		t.course = degrees(c);
 		t.hascourse = 1;
 	}
-	(sp, sok) := num(fld(a, 9));
+	(sp, sok) := numin(fld(a, 9), 0.0, 32767.0);
 	if(sok) {
 		t.speed = sp;
 		t.hasspeed = 1;
 	}
-	(cl, clok) := num(fld(a, 10));
+	(cl, clok) := numin(fld(a, 10), -1000.0, 1000.0);
 	if(clok) {
 		t.climb = cl;
 		t.hasclimb = 1;
@@ -907,17 +983,17 @@ vtg(p: ref Parser, a: array of string)
 	f := p.cur;
 	if(fld(a, 9) == "N")
 		return;
-	(c, cok) := num(fld(a, 1));
+	(c, cok) := numin(fld(a, 1), 0.0, 360.0);
 	if(cok && fld(a, 2) == "T") {
-		f.course = c;
+		f.course = degrees(c);
 		f.hascourse = 1;
 	}
-	(k, kok) := num(fld(a, 7));
+	(k, kok) := numin(fld(a, 7), 0.0, Maxspeed);
 	if(kok) {
 		f.speed = k / 3.6;
 		f.hasspeed = 1;
 	} else {
-		(n, nok) := num(fld(a, 5));
+		(n, nok) := numin(fld(a, 5), 0.0, Maxspeed);
 		if(nok) {
 			f.speed = n * Knot;
 			f.hasspeed = 1;
@@ -977,11 +1053,18 @@ unk(n: int): string
 #
 vdm(p: ref Parser, a: array of string)
 {
-	count := inum(fld(a, 1));
+	# The count is one digit: no message is more than five sentences.
+	# It was any number, and sized the array the parts are kept in: a
+	# count of 200000000 asked the heap for 1.6GB, and the exception
+	# ended whoever was parsing (gpsfs's one server proc).
+	count := inumin(fld(a, 1), 1, Maxvdm);
 	num := inum(fld(a, 2));
+	seq := fld(a, 3);
+	channel := fld(a, 4);
 	payload := fld(a, 5);
 	fill := inum(fld(a, 6));
-	if(count < 1 || num < 1 || num > count || payload == "")
+	if(count < 1 || num < 1 || num > count || payload == "" ||
+	   len seq > 2 || len channel > 2 || fill > 5)
 		return;
 	if(fill < 0)
 		fill = 0;
@@ -989,34 +1072,38 @@ vdm(p: ref Parser, a: array of string)
 		aismsg(p, payload, fill);
 		return;
 	}
-	key := a[0][0:2] + "/" + fld(a, 3) + "/" + fld(a, 4);
+	now := sys->millisec();
+	key := a[0][0:2] + "/" + seq + "/" + channel;
 	parts: array of string;
-	rest: list of (string, array of string, int);
+	# the other messages in parts, oldest first, less those whose rest
+	# never came
+	rest: list of (string, array of string, int, int);
+	nrest := 0;
 	for(l := p.aispend; l != nil; l = tl l) {
-		(k, pa, nil) := hd l;
-		if(k == key && len pa == count && num != 1)
-			parts = pa;
-		else if(k != key)
+		(k, pa, nil, when) := hd l;
+		if(k == key) {
+			if(len pa == count && num != 1)
+				parts = pa;
+		} else if(now - when < Aishold) {
 			rest = hd l :: rest;
+			nrest++;
+		}
 	}
-	if(parts == nil) {
-		if(num != 1)
-			return;	# its first part was lost
+	if(parts == nil && num != 1) {
+		p.aispend = newest(rest, nrest, Maxaispend);
+		return;	# its first part was lost
+	}
+	if(parts == nil)
 		parts = array[count] of string;
-	}
 	parts[num-1] = payload;
 	if(num < count) {
-		# no more than a few messages in parts at once
-		n := 0;
-		kept: list of (string, array of string, int);
-		for(; rest != nil && n < 8; rest = tl rest) {
-			kept = hd rest :: kept;
-			n++;
-		}
-		p.aispend = (key, parts, fill) :: kept;
+		# no more than a few messages in parts at once, and those the
+		# newest: it kept the eight oldest, so eight first parts whose
+		# rest never came shut out every message after them
+		p.aispend = (key, parts, fill, now) :: newest(rest, nrest, Maxaispend-1);
 		return;
 	}
-	p.aispend = rest;
+	p.aispend = newest(rest, nrest, Maxaispend);
 	whole := "";
 	for(i := 0; i < count; i++) {
 		if(parts[i] == nil)
@@ -1024,6 +1111,17 @@ vdm(p: ref Parser, a: array of string)
 		whole += parts[i];
 	}
 	aismsg(p, whole, fill);
+}
+
+# the newest max of n messages in parts given oldest first, newest first
+newest(l: list of (string, array of string, int, int), n, max: int): list of (string, array of string, int, int)
+{
+	for(; n > max; n--)
+		l = tl l;
+	r: list of (string, array of string, int, int);
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 # the payload's six-bit characters as numbers; the count of bits
@@ -1191,17 +1289,44 @@ Target.new(kind, id: string): ref Target
 		nil, nil, nil, 0);
 }
 
-Maxtargets: con 1000;
+Maxtargets: con 1000;	# of each kind
 Forget: con 10*60*1000;	# ms
+
+# text that becomes part of a line of the traffic file: printable, and
+# no longer than such a thing is
+plain(s: string, max: int): int
+{
+	if(len s > max)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < ' ' || s[i] > '~')
+			return 0;
+	return 1;
+}
 
 Parser.target(p: self ref Parser, t: ref Target)
 {
+	# A target is a line of the traffic file, which programs read a
+	# line a craft: a name with a newline in it (a GDL 90 callsign is
+	# eight bytes of the sender's) made a second line of its own
+	# choosing.  A target without an id that can be a word is not one;
+	# a name that cannot be shown is no name.
+	if(t == nil || t.id == nil || !plain(t.id, Maxid) || t.kind == nil || !plain(t.kind, Maxid))
+		return;
+	if(!plain(t.name, Maxname))
+		t.name = nil;
+	if(!plain(t.callsign, Maxname))
+		t.callsign = nil;
+	if(!plain(t.category, Maxname))
+		t.category = nil;
 	t.seen = sys->millisec();
 	n := 0;
 	for(l := p.targets; l != nil; l = tl l) {
 		o := hd l;
+		if(o.kind != t.kind)
+			continue;
 		n++;
-		if(o.kind != t.kind || o.id != t.id)
+		if(o.id != t.id)
 			continue;
 		if(t.haspos) {
 			o.haspos = 1;
@@ -1237,35 +1362,48 @@ Parser.target(p: self ref Parser, t: ref Target)
 		o.seen = t.seen;
 		return;
 	}
-	p.targets = t :: p.targets;
-	if(n >= Maxtargets)
-		p.traffic(t.seen);	# forget the old; the list is short again
-	if(len p.targets > Maxtargets) {
-		# the oldest heard go
-		a := array[len p.targets] of ref Target;
-		i := 0;
+	# A kind's table full: the old are forgotten, then the one of the
+	# kind longest unheard.  The tables are apart so that a thousand
+	# invented ships do not take the aircraft off the list, and nothing
+	# is formatted or sorted to make room (each new ship past the
+	# thousandth cost 19 ms of the proc that serves every file).
+	if(n >= Maxtargets) {
+		expire(p, t.seen);
+		n = 0;
+		oldest: ref Target;
 		for(l = p.targets; l != nil; l = tl l)
-			a[i++] = hd l;
-		sortby(a, nil);
-		p.targets = nil;
-		for(i = Maxtargets - 1; i >= 0; i--)
-			p.targets = a[i] :: p.targets;
+			if((hd l).kind == t.kind) {
+				n++;
+				if(oldest == nil || (hd l).seen - oldest.seen < 0)
+					oldest = hd l;
+			}
+		if(n >= Maxtargets) {
+			kept: list of ref Target;
+			for(l = p.targets; l != nil; l = tl l)
+				if(hd l != oldest)
+					kept = hd l :: kept;
+			p.targets = kept;
+		}
 	}
+	p.targets = t :: p.targets;
+}
+
+# forget the targets not heard for ten minutes
+expire(p: ref Parser, now: int)
+{
+	kept: list of ref Target;
+	for(l := p.targets; l != nil; l = tl l)
+		if(now - (hd l).seen < Forget)
+			kept = hd l :: kept;
+	p.targets = kept;
 }
 
 Parser.traffic(p: self ref Parser, now: int): string
 {
-	kept: list of ref Target;
-	n := 0;
-	for(l := p.targets; l != nil; l = tl l)
-		if(now - (hd l).seen < Forget) {
-			kept = hd l :: kept;
-			n++;
-		}
-	p.targets = kept;
-	a := array[n] of ref Target;
+	expire(p, now);
+	a := array[len p.targets] of ref Target;
 	i := 0;
-	for(l = kept; l != nil; l = tl l)
+	for(l := p.targets; l != nil; l = tl l)
 		a[i++] = hd l;
 	own := p.last;
 	if(own == nil || !own.valid || !own.haspos)
@@ -1355,12 +1493,15 @@ sentences(f: ref Fix): string
 	dmy := "";
 	if(f.date != nil && len f.date == 10)
 		dmy = f.date[8:10] + f.date[5:7] + f.date[2:4];
+	# a fix from a decoder is whatever the decoder was sent: a position
+	# off the earth is none (its minutes do not fit latlon's int)
+	haspos := f.haspos && f.lat >= -90.0 && f.lat <= 90.0 && f.lon >= -180.0 && f.lon <= 180.0;
 	pos := ",,,";
-	if(f.haspos)
+	if(haspos)
 		pos = latlon(f.lat, 2, 'N', 'S') + "," + latlon(f.lon, 3, 'E', 'W');
 	status := "V";
 	mode := "N";
-	if(f.valid && f.haspos) {
+	if(f.valid && haspos) {
 		status = "A";
 		mode = "A";
 	}
@@ -1390,7 +1531,7 @@ sentences(f: ref Fix): string
 			b += sys->sprint("%.1f", f.verr);
 		s += cksum(b);
 	}
-	if(f.haspos) {
+	if(haspos) {
 		q := "0";
 		if(f.valid)
 			q = "1";
@@ -1407,7 +1548,7 @@ sentences(f: ref Fix): string
 	}
 	if(f.hasheading)
 		s += cksum(sys->sprint("GPHDT,%.1f,T", f.heading));
-	if(f.hasbaro) {
+	if(f.hasbaro && f.baroalt >= -Maxalt && f.baroalt <= Maxalt) {
 		d := "2";
 		if(f.hasalt)
 			d = "3";

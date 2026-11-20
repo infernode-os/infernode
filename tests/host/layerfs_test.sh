@@ -14,6 +14,12 @@
 #   - a reader waits for what is written after it opened, and gets it
 #   - a line that is no record is not kept
 #   - a file removed is gone, and its waiting reader ends
+#   - a frame=* record written again and again is one record (each was
+#     kept, for ever, and given to every new reader)
+#   - what is due at an open, longer than the reads asking for it, is
+#     read whole in pieces (the first piece was given and the rest lost)
+#   - a rune cut by the end of a write is the rune (it was two that are
+#     none)
 #   - over a feed's layer/ (vid9p), a file written there is listed among
 #     its layers, and vidplay9p draws it, by pixel (with the SDL
 #     emulator; skipped with a headless one)
@@ -35,6 +41,9 @@ mkdir -p "$W"
 trap 'rm -rf "$W"' EXIT
 E=/tmp/layerfs_test.$$
 
+# a record whose label's last rune is cut between two files
+printf 'frame=* text x=1 y=1 label=caf\303' > "$W/rune.1"
+printf '\251\n' > "$W/rune.2"
 cat > "$W/run.sh" <<'RUN'
 load std
 mkdir -p /tmp/L
@@ -60,9 +69,19 @@ echo '-- waits'; { read 8192; echo '-- then'; read 8192 } < /tmp/L/people
 { sleep 2; rm /tmp/L/people } &
 echo '-- removed'; { read 8192; read 8192; echo READ-$status } < /tmp/L/people
 echo '-- ls'; ls /tmp/L
+for i in 0 1 2 3 4 5 6 7 8 9 { for j in 0 1 2 3 4 { echo 'frame=* text x=1 y=1 label=standing' >> /tmp/L/again } }
+echo 'frame=* point x=2 y=2' >> /tmp/L/again
+echo '-- again'; read 8192 < /tmp/L/again
+for i in 0 1 2 3 4 5 6 7 8 9 { for j in 0 1 2 3 { echo 'frame=* box x0='^$i^' y0='^$j^' x1=50 y1=50 label=region-'^$i^$j >> /tmp/L/many } }
+{ read 300; read 300; read 300; read 300; read 300; read 300; read 300; read 300; read 300 } < /tmp/L/many > /tmp/L.many &
+sleep 2
+echo '-- pieces'; cat /tmp/L.many; echo
+cat EDIR/rune.1 EDIR/rune.2 > /tmp/L/rune
+echo '-- rune'; read 8192 < /tmp/L/rune
 echo LAYERFS-DONE
 echo halt > '#c/sysctl'
 RUN
+sed -i "s|EDIR|$E|g" "$W/run.sh"
 with_timeout 60 "$EMU" -c1 -r"$ROOT" /dis/sh.dis "$E/run.sh" > "$W/log" 2>&1 < /dev/null
 fail=0
 ok()  { echo "PASS: $1"; }
@@ -81,6 +100,11 @@ part stream | grep -q hello && bad "a line that is no record was kept" || ok "a 
 part removed | grep -q '^READ-' && ok "removed: its waiting reader ends" || bad "removed: $(part removed | tr '\n' '|')"
 part ls | grep -q people && bad "removed: still listed: $(part ls | tr '\n' ' ')" || ok "removed: gone from the directory"
 
+[ "$(part again | tr '\n' '|')" = "frame=* text x=1 y=1 label=standing|frame=* point x=2 y=2|" ] && ok "a frame=* record written fifty times is one record" || bad "again: $(part again | grep -c .) lines"
+n=$(part pieces | grep -c 'label=region-')
+[ "$n" = 40 ] && [ "$(part pieces | grep -c '^frame=\* box x0=[0-9] y0=[0-3] x1=50 y1=50 label=region-[0-9][0-3]$')" = 40 ] &&
+	ok "what is due at an open is read whole in pieces of 300 bytes (40 records)" || bad "pieces: $n records whole of 40: $(part pieces | tail -2 | tr '\n' '|')"
+[ "$(part rune | head -1)" = "frame=* text x=1 y=1 label=café" ] && ok "a rune cut by the end of a write is the rune" || bad "rune: $(part rune)"
 # over a feed's layer/, drawn: vidplay9p under wm/wm, by pixel
 if [ -f "$ROOT/dis/mpeg/vidplay9p.dis" ] && [ -f "$ROOT/dis/scap.dis" ] && command -v python3 >/dev/null 2>&1; then
 	python3 - "$W/grey.y4m" <<'PY'

@@ -688,7 +688,9 @@ getfullreply(echo: int): (int, int, string)
 			if(len s < 3)
 				return (Syntax, 0, nil);
 			code = int s[0:3];
-			if(s[3] != '-')
+			# (a reply of the code alone, "250", was indexed past
+			# its end, and the server ended)
+			if(len s < 4 || s[3] != '-')
 				break;
 		}
 	}while(len s < 4 || int s[0:3] != code || s[3] != ' ');
@@ -739,17 +741,59 @@ sendfail(s: int)
 	exit;
 }
 
+# The address a PASV reply gives for the data connection: its port, at
+# the server's own address.  The reply's four address numbers were
+# dialled as they came, so a server (or whoever answered for it: FTP is
+# in clear) had the client connect wherever it named, a machine of the
+# client's own network among them, and send a file's bytes there.  The
+# control connection's other end is the server; the port is all that
+# is taken from the reply, as other clients have it.
 dataport(l: list of string): string
 {
-	s := "tcp!" + hd l;
-	l = tl l;
-	s = s + "." + hd l;
-	l = tl l;
-	s = s + "." + hd l;
-	l = tl l;
-	s = s + "." + hd l;
-	l = tl l;
-	return s + "!" + string ((int hd l * 256) + (int hd tl l));
+	for(i := 0; i < 4; i++){
+		if(pasvnum(hd l) < 0)
+			return nil;
+		l = tl l;
+	}
+	hi := pasvnum(hd l);
+	lo := pasvnum(hd tl l);
+	if(hi < 0 || lo < 0)
+		return nil;
+	host := peeraddr();
+	if(host == nil)
+		return nil;
+	return "tcp!" + host + "!" + string (hi*256 + lo);
+}
+
+# one of a PASV reply's six numbers, 0 to 255; -1 if it is not one
+pasvnum(s: string): int
+{
+	n := 0;
+	for(i := 0; i < len s && s[i] >= '0' && s[i] <= '9'; i++){
+		n = n*10 + s[i] - '0';
+		if(n > 255)
+			return -1;
+	}
+	if(i == 0)
+		return -1;
+	return n;
+}
+
+# the address of the control connection's other end
+peeraddr(): string
+{
+	fd := sys->open(ftp.dir + "/remote", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	a := string buf[0:n];
+	for(i := 0; i < len a; i++)
+		if(a[i] == '!' || a[i] == '\n')
+			return a[0:i];
+	return a;
 }
 
 commas(l: list of string): string
@@ -870,6 +914,10 @@ passive(cmd: string): ref FD
 		return nil;
 	}
 	a := dataport(l);
+	if (a == nil) {
+		sys->fprint(stderr, "ftpfs: bad PASV reply: %s\n", m);
+		return nil;
+	}
 	if (debug)
 		sys->print("data dial %s\n", a);
 	(s, d) := sys->dial(a, nil);
@@ -1074,7 +1122,9 @@ crackmode(p: string): int
 
 crackdir(p: string): (string, Dir)
 {
-	d: Dir;
+	# (declared and not set, its qid, type and dev were whatever the
+	# frame held: an address of the emulator's, in every entry)
+	d := sys->zerodir;
 	ln, a: string;
 
 	(n, l) := sys->tokenize(p, " \t\r\n");
@@ -1186,6 +1236,7 @@ Node.readdir(n: self ref Node): int
 			continue;
 		p = n.extendpath(l);
 		p.dir = d;
+		p.dir.qid = p.qid();
 		p.valid = 1;
 	}
 	b = nil;
@@ -1853,6 +1904,11 @@ readT(t: ref Tmsg.Read)
 		count = Styx->MAXFDATA;
 	if (t.offset < big 0)
 		return rerror(t.tag, Ebadoffset);
+	# no file here is longer than an int counts: past that is past its
+	# end (cut to an int the offset was negative, an index before the
+	# file's first block, and the server ended)
+	if (t.offset > big 16r7fffffff)
+		return sendreply(ref Rmsg.Read(t.tag, nil));
 	rv := 0;
 	if ((f.node.dir.mode & Sys->DMDIR) != 0) {
 		offset := int t.offset;
@@ -1893,6 +1949,10 @@ writeT(t: ref Tmsg.Write)
 		rerror(t.tag, Eisadirectory);
 		return;
 	}
+	if (t.offset < big 0 || t.offset + big len t.data > big 16r7fffffff) {
+		rerror(t.tag, Ebadoffset);
+		return;
+	}
 	count := f.node.filewrite(t.data, int t.offset, len t.data);
 	if (count < 0) {
 		rerror(t.tag, errstr);
@@ -1905,14 +1965,24 @@ writeT(t: ref Tmsg.Write)
 clunkT(t: ref Tmsg.Clunk)
 {
 	f := getfid(t.fid);
+	# What was written is sent when the file is closed.  If the server
+	# will not have it the close is answered with the error (it was
+	# answered as done, and the failure printed on standard output) and
+	# standard error is told, since few programs can hear a close fail.
+	err: string;
 	if (f.node.fileisdirty()) {
-		if (f.node.createfile() < 0)
-			sys->print("ftpfs: could not create %s\n", f.node.pathname());
+		if (f.node.createfile() < 0) {
+			err = "could not create " + f.node.pathname();
+			sys->fprint(stderr, "ftpfs: %s\n", err);
+		}
 		f.node.fileclean();
 		f.node.uncache();
 	}
 	f.busy = 0;
-	sendreply(ref Rmsg.Clunk(t.tag));
+	if (err != nil)
+		rerror(t.tag, err);
+	else
+		sendreply(ref Rmsg.Clunk(t.tag));
 }
 
 removeT(t: ref Tmsg.Remove)

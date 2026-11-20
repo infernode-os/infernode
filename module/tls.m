@@ -112,6 +112,16 @@ TLS: module {
 		isserver:	int;
 		hsmax:		int;	# the longest handshake message taken; 0: MAXHSMSG
 		peercerts:	list of array of byte;	# a server's: the client's verified chain, until the Conn has it
+
+		# After the handshake
+		done:		int;	# the handshake is over
+		reof:		int;	# the peer's close_notify has been read
+		rerr:		string;	# why reading ended; every later read fails with it
+		werr:		string;	# why writing ended
+		idle:		int;	# records in a row that gave the reader no data
+		phbuf:		array of byte;	# the start of a handshake message that goes on in the next record
+		kureply:	int;	# the peer asked for a KeyUpdate: the writer sends it before its next record
+		kuask:		int;	# the peer's key is due for one: the writer asks
 	};
 
 	# Connection (read/write after handshake)
@@ -124,6 +134,15 @@ TLS: module {
 		peercerts:	list of array of byte;	# a server's: the client's chain (DER, leaf first), verified; nil: none
 		st:		ref State;	# nil once closed
 
+		# read: at most n bytes of the peer's data (n no more than
+		# len buf); 0 once the peer has closed the connection with
+		# close_notify, at this and every later read; -1 for anything
+		# else, a connection cut short included, with the reason in
+		# the error string (%r) at this and every later read.
+		# write: n, or -1 and the reason, at this and every later
+		# write.  Neither raises an exception, whatever the peer
+		# sends or does.  One Prog may read while another writes.
+		# close sends close_notify; the descriptor is the caller's.
 		read:	fn(c: self ref Conn, buf: array of byte, n: int): int;
 		write:	fn(c: self ref Conn, buf: array of byte, n: int): int;
 		close:	fn(c: self ref Conn): string;

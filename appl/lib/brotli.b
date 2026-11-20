@@ -399,6 +399,7 @@ Out: adt {
 	d:	array of byte;
 	n:	int;
 	max:	int;		# a known final size, else -1
+	lim:	int;		# the most it may come to, else -1
 };
 
 put(o: ref Out, c: int)
@@ -408,15 +409,23 @@ put(o: ref Out, c: int)
 	o.d[o.n++] = byte c;
 }
 
+# Room for k more bytes.  A caller that has no size to expect names a
+# limit, and the output is not grown past it: the size argument means
+# "exactly", so a stream of no stated length had no bound at all, and
+# each of its meta-blocks may be 16MB from a dozen bytes.
 grow(o: ref Out, k: int)
 {
 	if(o.max >= 0 && o.n + k > o.max)
 		raise Bad;
+	if(o.lim >= 0 && (k > o.lim || o.n > o.lim - k))
+		raise Ebig;
 	nl := 2 * len o.d;
 	if(nl < o.n + k)
 		nl = o.n + k + 1024;
 	if(o.max >= 0 && nl > o.max)
 		nl = o.max;
+	if(o.lim >= 0 && nl > o.lim)
+		nl = o.lim;
 	nd := array[nl] of byte;
 	nd[0:] = o.d[0:o.n];
 	o.d = nd;
@@ -424,10 +433,22 @@ grow(o: ref Out, k: int)
 
 decompress(data: array of byte, size: int): (array of byte, string)
 {
+	return decompress0(data, size, -1);
+}
+
+decompressmax(data: array of byte, max: int): (array of byte, string)
+{
+	if(max < 0)
+		max = 0;
+	return decompress0(data, -1, max);
+}
+
+decompress0(data: array of byte, size, lim: int): (array of byte, string)
+{
 	if(sys == nil)
 		sys = load Sys Sys->PATH;
 	{
-		return (inflate(data, size), nil);
+		return (inflate(data, size, lim), nil);
 	} exception e {
 	"brotli:*" =>
 		return (nil, e);
@@ -458,12 +479,14 @@ loaddict(): string
 	return nil;
 }
 
-inflate(data: array of byte, size: int): array of byte
+inflate(data: array of byte, size, lim: int): array of byte
 {
 	b := ref Br(data, 0, 0, 0);
-	o := ref Out(array[256] of byte, 0, size);
+	o := ref Out(array[256] of byte, 0, size, lim);
 	if(size >= 0)
 		o.d = array[size] of byte;
+	else if(lim >= 0 && lim < len o.d)
+		o.d = array[lim] of byte;	# so that every byte past the limit asks grow
 	# window size: back references are checked against it
 	wbits := 16;
 	if(b.bits(1)) {
@@ -506,10 +529,18 @@ inflate(data: array of byte, size: int): array of byte
 				break;
 			continue;
 		}
-		mlen := b.bits(4 * (nibbles + 4)) + 1;
+		mlen := b.bits(4 * (nibbles + 4));
+		# RFC 7932 9.2: a length written in five or six nibbles
+		# needs the last of them ("the last nibble must be nonzero")
+		if(nibbles > 0 && (mlen >> (4 * (nibbles + 3))) == 0)
+			raise Bad;
+		mlen++;
 		if(!islast && b.bits(1)) {
 			# uncompressed
 			b.align();
+			# the bytes are there before room is made for them
+			if(mlen > len b.d)
+				raise Bad;
 			if(o.n + mlen > len o.d)
 				grow(o, mlen);
 			for(; mlen > 0 && b.n >= 8; mlen--) {
@@ -528,6 +559,8 @@ inflate(data: array of byte, size: int): array of byte
 	}
 	if(o.max >= 0 && o.n != o.max)
 		raise "brotli: wrong decompressed size";
+	if(o.lim >= 0 && o.n > o.lim)
+		raise Ebig;
 	return o.d[0:o.n];
 }
 

@@ -104,12 +104,13 @@ dedupisreadonly(name: string): int
 	}
 }
 
+# Whatever is not a read may have changed what a read would give: only
+# write, edit, exec, limbo and shell emptied the cache, so after a git
+# checkout, a task's changes applied or an MCP call, a repeated read was
+# answered "nothing has changed" from before it.
 dedupismutating(name: string): int
 {
-	case name {
-	"write" or "edit" or "exec" or "limbo" or "shell" =>	return 1;
-	* =>	return 0;
-	}
+	return !dedupisreadonly(name);
 }
 
 # Clear the cache (call at the start of each agent run/turn).
@@ -137,7 +138,7 @@ dedupcheck(name, args: string): string
 			# No step number: the model's count is not this one, and told
 			# "step 12" it took the result from before its own edit for
 			# this one, and said the file had read stale.
-			return sys->sprint("(skipped: you already made the call `%s %s` in this turn, and nothing has changed anything since, so its output is the same as then)",
+			return sys->sprint("(skipped: you already made the call `%s %s` in this turn, and no call of yours since has changed anything, so its output is the same as then)",
 				name, truncate(args, 120));
 		}
 	}
@@ -370,16 +371,31 @@ injectagent(s: string): string
 
 buildsystemprompt(ns, persona: string): string
 {
-	# NOTE: The system prompt may be written to /mnt/llm/{id}/system via a single
-	# 9P Twrite. llmsrv's MaxMessageSize is 8192 bytes, and each write
-	# REPLACES the content (offset is ignored). If the prompt exceeds the
-	# 9P msize, the kernel splits into multiple Twrites and only the LAST survives.
-	MAXPROMPT: con 65000;
+	return buildsystempromptmax(ns, persona, MAXPROMPT);
+}
+
+# The most a system prompt may be, in bytes: llmsrv takes a prompt of this
+# size whole.
+MAXPROMPT: con 65000;
+
+# The prompt in at most max bytes.  What gives way when it does not fit is
+# the text of the user's folders (their AGENTS.md), then the tools' long
+# documentation: never the policies, the namespace or the reminders.  The
+# whole was built and its end cut off, and the project text was limited by
+# characters, not bytes: a folder's AGENTS.md in a script of three or four
+# bytes a character pushed the security reminder and the tool notes past
+# the cut.
+buildsystempromptmax(ns, persona: string, max: int): string
+{
+	if(max > MAXPROMPT)
+		max = MAXPROMPT;
 
 	# Read base system prompt (behavioral policies only — no tool API docs)
 	base := readfile("/lib/veltro/system.txt");
-	if(base == "")
+	if(base == "") {
+		sys->fprint(stderr, "agentlib: warning: /lib/veltro/system.txt is missing or empty: using the built-in policies\n");
 		base = defaultsystemprompt();
+	}
 
 	# A persona (loaded from /lib/veltro/agents/<type>.txt by the caller)
 	# layers a specialised role ON TOP of the base policies, keeping the
@@ -397,37 +413,66 @@ buildsystemprompt(ns, persona: string): string
 	# spawn.txt: complex multi-section parallel subagent syntax
 	tooldocs := loadtooldocs(toollist);
 
-	prompt := base + "\n\n== Your Namespace ==\n" + ns;
+	# Substitute the agent name so no prompt file hardcodes identity.
+	head := injectagent(base + "\n\n== Your Namespace ==\n" + ns);
+	tail := "";
+	if(reminders != "")
+		tail = injectagent("\n\n== Reminders ==\n" + reminders);
+	docs := "";
+	if(tooldocs != "")
+		docs = injectagent("\n\n== Tool Documentation ==\n" + tooldocs);
+	note := injectagent("\n\n" + TOOLDOCNOTE);
 
 	proj := projectinstructions(userpaths(readfile(toolmount_g + "/paths")));
 	if(proj != "")
-		prompt += "\n\n" + proj;
+		proj = injectagent("\n\n" + proj);
 
-	if(reminders != "")
-		prompt += "\n\n== Reminders ==\n" + reminders;
-
-	if(tooldocs != "")
-		prompt += "\n\n== Tool Documentation ==\n" + tooldocs;
-	prompt += "\n\n" + TOOLDOCNOTE;
-
-	# Substitute the agent name so no prompt file hardcodes identity.
-	prompt = injectagent(prompt);
-
-	# Guard against exceeding 9P write limit
-	data := array of byte prompt;
-	if(len data > MAXPROMPT) {
-		sys->fprint(stderr, "agentlib: WARNING: system prompt %d bytes exceeds %d limit, truncating\n",
-			len data, MAXPROMPT);
-		# Truncate at UTF-8 character boundary: if the byte at the cut
-		# position is a continuation byte (10xxxxxx), back up to exclude
-		# the incomplete character
-		cut := MAXPROMPT;
-		while(cut > 0 && (int data[cut] & 16rC0) == 16r80)
-			cut--;
-		prompt = string data[0:cut];
+	steady := utflen(head) + utflen(tail) + utflen(note);
+	room := max - steady - utflen(docs);
+	if(room < 0) {
+		# the long documentation goes first: each tool's is a file the
+		# agent can read (the note says so)
+		sys->fprint(stderr, "agentlib: warning: system prompt over %d bytes: tool documentation left out\n", max);
+		docs = "";
+		room = max - steady;
 	}
+	if(utflen(proj) > room) {
+		sys->fprint(stderr, "agentlib: warning: system prompt over %d bytes: project instructions cut\n", max);
+		cutnote := "\n... (cut: the system prompt is full; read the folders' " + PROJECTFILES + " for the rest)";
+		if(room > utflen(cutnote) + 256)
+			proj = cututf(proj, room - utflen(cutnote)) + cutnote;
+		else
+			proj = "";
+	}
+	prompt := head + proj + tail + docs + note;
 
+	# What is left over the limit is policy text itself: cut at the end,
+	# on a character.
+	if(utflen(prompt) > max) {
+		sys->fprint(stderr, "agentlib: WARNING: system prompt %d bytes exceeds %d limit, truncating\n",
+			utflen(prompt), max);
+		prompt = cututf(prompt, max);
+	}
 	return prompt;
+}
+
+utflen(s: string): int
+{
+	return len array of byte s;
+}
+
+# The start of s that fits n bytes of UTF-8, ending on a character.
+cututf(s: string, n: int): string
+{
+	if(n <= 0)
+		return "";
+	data := array of byte s;
+	if(len data <= n)
+		return s;
+	cut := n;
+	while(cut > 0 && (int data[cut] & 16rC0) == 16r80)
+		cut--;
+	return string data[0:cut];
 }
 
 # Load full tool documentation for every tool in the list that has a
@@ -905,8 +950,15 @@ editargs(inputjson: string): string
 			"args" => return v;	# already positional
 			}
 		}
-		# Several changes: the JSON as it is, the path in front.
-		if(jget(jv, "edits") != nil)
+		# No path: no call.  It went on as "-r  old new", which the tool
+		# read as a path named by the old text.
+		if(strip(path) == "")
+			return "";
+		# Several changes: the JSON as it is, the path in front.  And any
+		# change whose old or new ends in a backslash: quoted, the backslash
+		# and the closing quote read as an escaped quote, and the edit
+		# changed some other place that happened to match.
+		if(jget(jv, "edits") != nil || endsbackslash(old) || endsbackslash(new))
 			return "-j " + path + " " + inputjson;
 		r := "-r " + path + " " + editquote(old) + " " + editquote(new);
 		if(all == "true" || all == "all" || all == "1")
@@ -939,13 +991,20 @@ writeargs(inputjson: string): string
 			"args" => return v;	# already positional
 			}
 		}
-		if(path == "")
-			return extracttoolargs(inputjson);
+		# No path: no call.  The values were joined as they came, and a
+		# content that began with a path was written there.
+		if(strip(path) == "")
+			return "";
 		# tools9p drops one trailing newline from a call's arguments (as
 		# echo leaves it); this one is that, so the file keeps its own.
 		return "-r " + path + " " + content + "\n";
 	}
 	return inputjson;
+}
+
+endsbackslash(s: string): int
+{
+	return len s > 0 && s[len s - 1] == '\\';
 }
 
 editquote(s: string): string
@@ -1041,7 +1100,10 @@ positional(tool, inputjson: string): string
 	"http" => order = "method" :: "url" :: "body" :: nil;
 	"webfetch" => order = "url" :: "prompt" :: nil;
 	"payfetch" => order = "url" :: "flags" :: nil;
-	"sms" => order = "number" :: "body" :: nil;
+	"sms" =>
+		# the number is the first word of what the tool is given: with
+		# blanks in it ("+1 555 1234") the message went to "+1"
+		return joinargs(nospace(jval(vals, "number")) :: jval(vals, "body") :: nil);
 	"launch" => order = "app" :: "extra" :: nil;
 	"json" => order = "source" :: "path" :: nil;
 	* =>
@@ -1054,6 +1116,15 @@ positional(tool, inputjson: string): string
 	for(; l != nil; l = tl l)
 		r = hd l :: r;
 	return joinargs(r);
+}
+
+nospace(s: string): string
+{
+	out := "";
+	for(i := 0; i < len s; i++)
+		if(s[i] != ' ' && s[i] != '\t' && s[i] != '\n' && s[i] != '\r')
+			out[len out] = s[i];
+	return out;
 }
 
 jval(vals: list of (string, string), name: string): string
@@ -1087,8 +1158,36 @@ calltool(tool, args: string): string
 	# mcp9p /call), so the JSON->positional projection for /tool tools happens
 	# HERE, at the boundary. extracttoolargs passes already-positional or empty
 	# input through unchanged, so this is safe for any caller.
-	args = toolargs(tool, args);
-	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";
+	return callraw(tool, toolargs(tool, args));
+}
+
+# A tool's name, as a name under the tool mount: lower case letters,
+# digits, _ and -.  Anything else is no tool.
+toolname(tool: string): string
+{
+	t := str->tolower(tool);
+	if(t == "" || len t > 64)
+		return nil;
+	for(i := 0; i < len t; i++) {
+		c := t[i];
+		if(!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+			return nil;
+	}
+	return t;
+}
+
+# Call a tool with its arguments as it takes them (toolargs' result): what
+# a caller that has looked at the positional form, to ask the user about
+# it, then sends, so that what was looked at is what runs.
+callraw(tool, args: string): string
+{
+	# The name is a file name here.  Its callers checked it, or did not:
+	# given "../x" this opened x/ctl beside the tool mount and wrote the
+	# arguments to it.
+	name := toolname(tool);
+	if(name == nil)
+		return "error: tool not found";
+	path := toolmount_g + "/" + name + "/ctl";
 
 	# Open tool file. The active tool set in tools9p can transiently churn at
 	# session start (a relayed message turn can race tool installation, INFR-391)
@@ -1101,14 +1200,14 @@ calltool(tool, args: string): string
 		fd = sys->open(path, Sys->ORDWR);
 	}
 	if(fd == nil)
-		return sys->sprint("error: tool not found: %s", tool);
+		return sys->sprint("error: tool not found: %s", name);
 
-	# Write arguments
+	# Write arguments: all of them, or the tool has not been called.
 	if(args != "") {
 		data := array of byte args;
 		n := sys->write(fd, data, len data);
-		if(n < 0)
-			return sys->sprint("error: write to %s failed: %r", tool);
+		if(n != len data)
+			return sys->sprint("error: write to %s failed: %r", name);
 	}
 
 	# Seek back to start
@@ -1138,7 +1237,8 @@ writescratch(content: string, step: int): string
 		return "(cannot create scratch file)";
 
 	data := array of byte content;
-	sys->write(fd, data, len data);
+	if(sys->write(fd, data, len data) != len data)
+		return "(cannot write scratch file)";
 	return path;
 }
 
@@ -1573,19 +1673,45 @@ parsellmresponse(response: string): (string, list of (string, string, string), s
 # The returned string is written to /mnt/llm/{id}/ask to trigger AskWithToolResults.
 #
 # An entry whose id is "-" is not a tool's result but text from the user,
-# sent with the results (a message written while the turn ran).  A line of
-# a result that is all dashes ("---", which ends an entry) is sent with one
-# dash more; parsetoolresults takes it off.  Sent as it was, a result with
-# a "---" line in it (a Markdown rule) was cut there, and its rest taken
-# for another result.
+# sent with the results (a message written while the turn ran): only the
+# harness gives that id, and a call whose own id would read as it is not
+# answered under it (resultid).  A line of a result that the parser would
+# take for the end of an entry is sent with one dash more; parsetoolresults
+# takes it off.  That is any line of three dashes or more once the
+# carriage returns at its end are taken off, as the parser takes them off:
+# only lines of dashes alone were escaped, so a result with the line
+# "---\r" in it ended its own entry there, and what followed was read as
+# the next entry, a line "-" making it the user's words to the model.
 buildtoolresults(results: list of (string, string)): string
 {
 	text := "TOOL_RESULTS\n";
 	for(r := results; r != nil; r = tl r) {
 		(id, content) := hd r;
-		text += id + "\n" + escapedashes(content) + "\n---\n";
+		text += resultid(id) + "\n" + escapedashes(content) + "\n---\n";
 	}
 	return text;
+}
+
+# An entry's id, on its line.  "-" is the user's text, by the caller's
+# word.  A call's id is the provider's, taken as it came: one with a line
+# break in it would start lines of its own, an empty one would give its
+# place to the result's first line, and one that is "-" once blanks are
+# off would make the result the user's.  Such an id answers no call; the
+# model service says so, which is the truth.
+resultid(id: string): string
+{
+	if(id == "-")
+		return id;
+	out := "";
+	for(i := 0; i < len id; i++) {
+		c := id[i];
+		if(c <= ' ' || c == 16r7f)
+			c = '_';
+		out[len out] = c;
+	}
+	if(out == "" || out == "-" || alldashes(out))
+		out = "invalid-call-id" + out;
+	return out;
 }
 
 escapedashes(s: string): string
@@ -1596,7 +1722,7 @@ escapedashes(s: string): string
 		if(i < len s && s[i] != '\n')
 			continue;
 		line := s[start:i];
-		if(len line >= 3 && alldashes(line))
+		if(endsentry(line))
 			out += "-";
 		out += line;
 		if(i < len s)
@@ -1604,6 +1730,17 @@ escapedashes(s: string): string
 		start = i + 1;
 	}
 	return out;
+}
+
+# A line parsetoolresults would end an entry at ("---"), or take a dash
+# off (more dashes): dashes alone, three or more, before any carriage
+# returns at its end.
+endsentry(line: string): int
+{
+	n := len line;
+	while(n > 0 && line[n-1] == '\r')
+		n--;
+	return n >= 3 && alldashes(line[0:n]);
 }
 
 alldashes(s: string): int
@@ -1641,6 +1778,19 @@ mcpdiscover(mountpaths: list of string): (list of (string, string), list of (str
 		prefix = mcpsafename(prefix);
 		if(prefix == "")
 			continue;
+		# A name already taken stays the first mount's: a second server
+		# giving the same name took its calls (the last listed won).
+		taken := 0;
+		for(pm := mounts; pm != nil; pm = tl pm) {
+			(pfx, nil) := hd pm;
+			if(pfx == prefix)
+				taken = 1;
+		}
+		if(taken) {
+			sys->fprint(stderr, "agentlib: MCP server at %s calls itself %s, as another does: left out\n",
+				mount, prefix);
+			continue;
+		}
 		fd := sys->open(mount + "/tools", Sys->OREAD);
 		if(fd == nil)
 			continue;
@@ -1775,7 +1925,8 @@ mcpcall(path, args: string, timeoutms: int): string
 	r := <-resc =>
 		return r;
 	<-tmo =>
-		return sys->sprint("error: tool call to %s timed out after %dms", path, timeoutms);
+		return sys->sprint("error: tool call to %s was not answered in %dms " +
+			"(it was sent, and may still be done)", path, timeoutms);
 	}
 }
 
@@ -2044,7 +2195,7 @@ samefailurenote(n: int): string
 # A folder the user gives the agent may say how to work in it, in the
 # file other agents read for that: AGENTS.md, or CLAUDE.md where there is
 # no AGENTS.md.  The one at the top of each folder given is put in the
-# prompt, up to PROJECTMAX of each and PROJECTALL in all; one longer is
+# prompt, up to PROJECTMAX bytes of each and PROJECTALL in all; one longer is
 # cut, and says where the rest is.  What the agent's namespace cannot see
 # (a folder bound later, outside it) is not read.
 PROJECTMAX: con 16384;
@@ -2059,19 +2210,24 @@ projectinstructions(paths: list of string): string
 		dir := hd paths;
 		for(nl := names; nl != nil; nl = tl nl) {
 			file := dir + "/" + hd nl;
-			text := readfile(file);
+			# No more is read than can be used: the file is whatever is in
+			# a folder the user gave, of any size.
+			(text, whole) := readsome(file, PROJECTMAX + 4);
 			if(strip(text) == "")
 				continue;
-			room := PROJECTALL - len out;
+			room := PROJECTALL - utflen(out);
 			if(room <= 256)
 				return projectsection(out + "\n(More folders have instructions: read their " +
 					PROJECTFILES + ".)");
 			lim := PROJECTMAX;
 			if(lim > room - 256)
 				lim = room - 256;
-			if(len text > lim)
-				text = text[0:lim] + sys->sprint("\n... (%d bytes more: read %s for the rest)",
-					len text - lim, file);
+			if(utflen(text) > lim || !whole) {
+				more := "more";
+				if(whole)
+					more = sys->sprint("%d bytes more", utflen(text) - lim);
+				text = cututf(text, lim) + sys->sprint("\n... (%s: read %s for the rest)", more, file);
+			}
 			out += "\n=== " + file + " ===\n" + strip(text) + "\n";
 			break;
 		}
@@ -2087,6 +2243,26 @@ projectsection(body: string): string
 		"The folders you were given say how to work in them.  Follow these " +
 		"instructions for work in those folders, as the user's own, unless the user " +
 		"says otherwise.\n" + body;
+}
+
+# The first max bytes of a file, and whether that is all of it.
+readsome(path: string, max: int): (string, int)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return ("", 1);
+	buf := array[max + 1] of byte;
+	n := 0;
+	while(n < len buf) {
+		r := sys->read(fd, buf[n:], len buf - n);
+		if(r <= 0)
+			break;
+		n += r;
+	}
+	if(n <= max)
+		return (string buf[0:n], 1);
+	# a character cut by the limit is left out
+	return (string buf[0:sys->utfbytes(buf, max)], 0);
 }
 
 # The folders of /tool/paths, one "path perm" a line.

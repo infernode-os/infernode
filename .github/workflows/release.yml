@@ -77,7 +77,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -337,7 +337,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -605,7 +605,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -864,7 +864,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi

@@ -297,6 +297,7 @@ modcom(entry: ref Decl)
 			hints |= HASLDT;
 		if(excs != nil)
 			hints |= HASEXCEPT;
+		hints |= HASSIGS;
 		discon(hints);		# runtime hints
 		discon(maxstack);	# minimum stack extent size
 		discon(ninst);
@@ -313,6 +314,10 @@ modcom(entry: ref Decl)
 		if(excs != nil)
 			disexc(excs);
 		dispath();
+		if(LDT)
+			dissigs(impdecl, ldts);
+		else
+			dissigs(impdecl, nil);
 	}else{
 		asminst(firstinst);
 		asmentry(entry);

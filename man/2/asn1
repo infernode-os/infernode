@@ -1,6 +1,6 @@
 .TH ASN1 2
 .SH NAME
-asn1: decode, encode \- ASN.1 (X.208), BER (X.209) encoding
+asn1: decode \- ASN.1 values in the Distinguished Encoding Rules (X.690)
 .SH SYNOPSIS
 .EX
 include "asn1.m";
@@ -40,7 +40,7 @@ Value: adt {
         BitString =>
             unusedbits: int;
             bits: array of byte;
-        Null or EOC =>
+        Null =>
             ;
         ObjId =>
             id: ref Oid;
@@ -63,21 +63,42 @@ decode:       fn(a: array of byte): (string, ref Elem);
 decode_seq:   fn(a: array of byte): (string, list of ref Elem);
 decode_value: fn(a: array of byte, kind, constr: int):
               (string, ref Value);
-encode:       fn(e: ref Elem): (string, array of byte);
 oid_lookup:   fn(o: ref Oid, tab: array of Oid): int;
 print_elem:   fn(e: ref Elem);
 
 .EE
 .SH DESCRIPTION
 .B ASN1
-supports decoding and encoding of the ASN.1 Basic Encoding Rules
-(BER, ITU-T Recommendation X.209).
+decodes ASN.1 values written in the Distinguished Encoding Rules
+(DER, ITU-T Recommendation X.690 sections 10 and 11),
+the encoding of certificates, certificate revocation lists, keys and signatures
+(RFC 5280).
 Despite its name, the module is not a parser for Abstract Syntax Notation One
-(ASN.1, ITU-T Recommendation X.208).
+(ASN.1, ITU-T Recommendation X.680), and it does not encode.
 .PP
 .B ASN1
-handles the BER encodings of all types from the ASN.1 Universal class, and
+handles the encodings of all types from the ASN.1 Universal class, and
 provides a simple OBJECT IDENTIFIER comparison facility.
+.PP
+DER gives each value one encoding, and only that encoding is decoded:
+a reader that takes a second spelling of a value reads something
+that a stricter reader refuses, and two readers must not differ about a certificate.
+Refused, with an error, are
+an indefinite length;
+a length, or a tag number, not in its shortest form;
+an INTEGER or ENUMERATED with a leading byte it does not need;
+a BOOLEAN that is neither 00 nor FF;
+a constructed BIT STRING, OCTET STRING or character string;
+a BIT STRING whose unused bits are not zero, or whose count of them is above 7;
+an OBJECT IDENTIFIER with a subidentifier that begins with 80;
+and a character string whose bytes are not its type's (see
+.B Value.String
+below).
+Three rules of DER depend on the type being decoded and are left to the application:
+that a value equal to its DEFAULT is left out,
+that the elements of a SET OF are in order,
+and that a named bit list has no trailing zero bits.
+Whatever the bytes given, the answer is a value or an error; no function raises an exception.
 .PP
 For simplicity,
 .B ASN1
@@ -97,13 +118,13 @@ The module must be initialised by calling this function
 before any other module functions or associated adt member functions are called.
 .TP
 .BI decode( a )
-Convert the BER encoding given by the byte array
+Convert the DER encoding given by the byte array
 .I a
 into an
 .B Elem
 representing the ASN.1 value.
 The byte array must contain
-the entire BER encoding of the value and any component values.
+the entire encoding of the value and any component values, and nothing after it.
 .IP
 Item values not tagged as a Universal type are converted to an
 .B Elem
@@ -114,7 +135,7 @@ value given by the
 .B Value.Octets
 variant, which contains
 the original encoding of the value
-stripped of the BER tag and length header.
+stripped of the tag and length header.
 .IP
 The function returns a tuple composed of an error string and
 the decoded
@@ -150,7 +171,7 @@ Instead, the value's Universal type is given by the
 argument and length is given by that of the array.
 The
 .B constr
-argument indicates if the encoding is in the BER
+argument indicates if the encoding is in the
 constructed form or not.
 A value of 0 indicates that the primitive encoding is used, all other values
 indicate the constructed encoding.
@@ -158,31 +179,6 @@ indicate the constructed encoding.
 The function returns a tuple composed of an error string and a
 .B Value
 reference.
-.TP
-.BI encode( e )
-Convert the
-.B Elem
-.I e
-to a BER encoding of the element.
-If the element is of a structured type, such as SEQUENCE or SET,
-then all component values are also exhaustively encoded.
-.IP
-The encoding can fail if the
-.B Tag
-and
-.B Value
-of the element are not compatible.
-The
-.I constr
-field of the
-.B Tag
-is currently ignored.
-.IP
-The function returns a tuple comprising an error string and
-the BER encoding.  
-If no errors are encountered the error string is nil and the
-second part of the returned tuple is a byte array of the
-BER encoding.
 .TP
 .BI oid_lookup( o ", " tab )
 Lookup an OBJECT IDENTIFIER value in an array of such values.
@@ -298,10 +294,10 @@ straight from the ITU-T Recommendation.
 .B "Tag.constr"
 This flag is set by the
 .B ASN1
-decode functions to mark if the BER
+decode functions to mark if the
 .I constructed
 encoding was used for the value.
-A zero value indicates the BER primitive encoding, non-zero indicates
+A zero value indicates the primitive encoding, non-zero indicates
 the constructed encoding.
 .TP
 .IB t ".tostring()"
@@ -338,7 +334,7 @@ is taken to be of that particular type.
 BOOLEAN
 .IP
 .IB v .v
-equals zero for FALSE, non-zero values represent TRUE.
+is zero for FALSE and 16rFF for TRUE.
 .TP
 .B Value.Int
 INTEGER, ENUMERATED
@@ -351,8 +347,11 @@ Used for INTEGER values too large to fit a Limbo int.
 .IP
 The array
 .IB v .bytes
-contains the encoding of the value.
+contains the encoding of the value, two's complement, most significant byte first.
 The array does not include the tag and length prefix.
+.IB e .is_bigint()
+gives those bytes for an INTEGER of any size, in the fewest bytes that hold it:
+a first byte with its top bit set is a negative number's.
 .TP
 .B Value.Octets
 OCTET_STRING, ObjectDescriptor
@@ -404,14 +403,6 @@ array.
 The number of unused bits in the last byte of the array is given by
 .IB v .unused ,
 counting from the LSB.
-.IP
-The BER constructed encoding of values other than zero-length is not implemented.
-.TP
-.B Value.EOC
-End of Contents octets marker.
-.IP
-This value is not normally returned to the application; it is used
-privately by BER to support indefinite length value encodings.
 .TP
 .B Value.String
 NumericString, PrintableString, TeletexString,
@@ -421,9 +412,18 @@ GeneralString, UniversalString or BMPString.
 .IP
 The text is given by the
 .IB v .s
-Limbo string.
-Currently no character-set conversion is performed between
-the ASN.1 string byte codes and the Unicode code-points of the Limbo string.
+Limbo string, decoded as the type has it;
+.IB e .tag.num
+says which type it was.
+UTF8String is UTF-8, and bytes that are not well-formed UTF-8 are refused.
+BMPString is two bytes a character and UniversalString four, most significant first.
+NumericString, PrintableString, IA5String, VisibleString and the two time types are ASCII,
+and a byte above 127 in one is refused
+(the subsets of ASCII that each allows are not enforced).
+TeletexString, VideotexString, GraphicString and GeneralString are read as Latin-1,
+as other readers of certificates read them.
+A zero byte is a character like any other:
+an application for which a NUL in a name is dangerous refuses it itself.
 .TP
 .B Value.Seq
 SEQUENCE, SEQUENCE OF
@@ -432,7 +432,7 @@ ASN.1 assigns both constructs the same type tag.
 The difference between them is that, within the
 ASN.1 notation, the elements
 of a SEQUENCE OF structure are constrained to be of the same type.
-BER and, consequently,
+The encoding and, consequently,
 .B ASN1
 do not directly enforce the restriction.
 .IP
@@ -447,7 +447,7 @@ ASN.1 assigns both constructs the same type tag.
 The difference between them is that, within the ASN.1 notation,
 SET items are formed from an unordered list of distinct types, whereas
 SET OF items are formed from an unordered list of the same type.
-BER and
+The encoding and
 .B ASN1
 do not enforce these constraints.
 .IP
@@ -485,7 +485,7 @@ Explicitly tagged values are encoded in a nested fashion.
 The outermost item bears the specified tag and its contents is the
 full encoding of the original value using the tag of its underlying type.
 .PP
-The following examples of how to decode and encode simple tagged types
+The following examples of how to decode simple tagged types
 should make the distinction clear.
 .SS "Decoding Tagged Values"
 Consider the following ASN.1 type definitions:
@@ -573,49 +573,9 @@ is of the type
 with the value 16r55 stored in the
 .B v
 member variable.
-.SS "Encoding Tagged Values"
-To encode the value 16r55 in each of the above types, the following
-data structures are required.
-.TP
-.BR Type1 "(primitive type)"
-.EX
-tag := Tag(Universal, INTEGER, 0);
-val := Value.Int(16r55);
-elem := ref Elem(tag, val);
-(err, data) := asn1->encode(elem);
-.EE
-.TP
-.BR Type2 "(explicitly tagged)"
-.EX
-tag1          := Tag(Universal, INTEGER, 0);
-val1          := Value.Int(16r55);
-elem1         := ref Elem(tag1, val1);
-(err1, data1) := asn1->encode(elem1);
-tag2          := Tag(Application, 2, 0);
-val2          := Value.Octets(data1);
-elem2         := ref Elem(tag2, val2);
-(err, data)   := asn1->encode(elem2);
-.EE
-.TP
-.BR Type3 "(implicitly tagged)"
-.EX
-tag         := Tag(Context, 3, 0);
-val         := Value.Int(16r55);
-elem        := ref Elem(tag, val);
-(err, data) := asn1->encode(elem);
-.EE
 .SH SOURCE
 .B /appl/lib/asn1.b
 .SH BUGS
 It is irritating that REAL values are not converted by the module.
-This forces the application to do the conversion to and from the
-raw BER encoding.  Fortunately they are rarely used.
-.PP
-String encodings are converted as UTF-8 byte sequences.
-This will result in strings comprising any character codes above 127
-being incorrectly converted.
-.PP
-There is a particular form of BER encoding that the module will
-handle incorrectly, resulting in a decoding error.
-The error occurs when a tagged value is encoded using the
-indefinite length specifier and the constructed representation.
+This forces the application to do the conversion from the
+raw encoding.  Fortunately they are rarely used.

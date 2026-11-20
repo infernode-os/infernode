@@ -563,8 +563,15 @@ ptmul(const Curve *C, Pt *r, const uchar *k, const Pt *a)
 		ptadd(C, &acc, &acc, &t, bm);
 	}
 	*r = acc;
-	memset(tab, 0, sizeof tab);
-	memset(&t, 0, sizeof t);
+	/*
+	 * multiples of the point by the scalar's digits: cleared by
+	 * secureZero, here and below.  The memsets that were here are
+	 * stores to locals about to go, which a compiler leaves out (gcc
+	 * -O did: the nonce of a signature was still on the stack after it)
+	 */
+	secureZero(tab, sizeof tab);
+	secureZero(&t, sizeof t);
+	secureZero(&acc, sizeof acc);
 }
 
 /* the base point */
@@ -647,10 +654,11 @@ randscalar(const Curve *C, uchar *k)
 		genrandom(k, C->nbytes);
 		bytestof(s, k, C->q.n);
 		if(!fiszero(s, C->q.n) && fless(s, C->q.m, C->q.n)){
-			memset(s, 0, sizeof s);
+			secureZero(s, sizeof s);
 			return 0;
 		}
 	}
+	secureZero(s, sizeof s);
 	return -1;
 }
 
@@ -683,10 +691,13 @@ ecdh(const Curve *C, uchar *shared, const uchar *priv, const uchar *peerx, const
 	if(ptload(C, &p, peerx, peery) < 0)
 		return -1;
 	ptmul(C, &r, priv, &p);
-	if(ptaffine(C, x, nil, &r) < 0)
+	if(ptaffine(C, x, nil, &r) < 0){
+		secureZero(&r, sizeof r);
 		return -1;
+	}
 	ftobytes(shared, x, C->p.n);
-	memset(&r, 0, sizeof r);
+	secureZero(&r, sizeof r);
+	secureZero(x, sizeof x);	/* the shared secret */
 	return 0;
 }
 
@@ -705,25 +716,53 @@ hashtoscalar(const Curve *C, limb *e, const uchar *hash, int hashlen)
 	freduce(&C->q, e, e);	/* e < 2^(8 nbytes) < 2n */
 }
 
+/*
+ * The nonce is RFC 6979's (nonce.c): HMAC_DRBG keyed with the private
+ * key and the digest, with rnd, when there is any, beside them (the
+ * RFC's 3.6; FIPS 186-5 A.3.3's hedged form).  It was the random
+ * number generator's alone: one whose state repeats (a machine's image
+ * started twice, a process copied) signed two messages with one nonce,
+ * which gives the private key to whoever sees both signatures.  With
+ * no rnd the signature is the RFC's deterministic one, which the tests
+ * hold to its Appendix A.2.5 and A.2.6.
+ */
 static int
-ecdsasign(const Curve *C, uchar *sig, const uchar *priv, const uchar *hash, int hashlen)
+ecdsasignrnd(const Curve *C, uchar *sig, const uchar *priv, const uchar *hash, int hashlen, const uchar *rnd, int nrnd)
 {
 	const Mont *Q;
-	uchar k[48];
+	Noncestate ns;
+	uchar k[48], xb[48], hb[48];
 	felem e, d, r, s, km, t;
 	Pt g, R;
-	int i;
+	int i, rv;
 
 	Q = &C->q;
 	hashtoscalar(C, e, hash, hashlen);
 	bytestof(d, priv, Q->n);
 	freduce(Q, d, d);
+	/*
+	 * FIPS 186-5 6.3.1: a private key is from 1 to n-1.  With 0 (or n)
+	 * a signature was made that no key verifies.
+	 */
+	if(fiszero(d, Q->n))
+		return -1;
+	/* int2octets(x) and bits2octets(H(m)) */
+	ftobytes(xb, d, Q->n);
+	ftobytes(hb, e, Q->n);
+	noncestart(&ns, noncehlen(8*C->nbytes), xb, C->nbytes, hb, C->nbytes, (uchar*)rnd, nrnd);
 	mto(Q, d, d);
 	mto(Q, e, e);
 	ptbase(C, &g);
+	rv = -1;
 	for(i = 0; i < 100; i++){
-		if(randscalar(C, k) < 0)
-			break;
+		/*
+		 * a candidate out of [1, n-1] is dropped, and says nothing
+		 * about the one kept
+		 */
+		noncenext(&ns, k, C->nbytes);
+		bytestof(km, k, Q->n);
+		if(fiszero(km, Q->n) || !fless(km, Q->m, Q->n))
+			continue;
 		/* r = x(kG) mod n; x < p < 2n */
 		ptmul(C, &R, k, &g);
 		if(ptaffine(C, r, nil, &R) < 0)
@@ -734,7 +773,6 @@ ecdsasign(const Curve *C, uchar *sig, const uchar *priv, const uchar *hash, int 
 		ftobytes(sig, r, Q->n);
 
 		/* s = k^-1 (e + r d) mod n */
-		bytestof(km, k, Q->n);
 		mto(Q, km, km);
 		minv(Q, km, km);
 		mto(Q, t, r);
@@ -745,14 +783,30 @@ ecdsasign(const Curve *C, uchar *sig, const uchar *priv, const uchar *hash, int 
 		if(fiszero(s, Q->n))
 			continue;
 		ftobytes(sig + C->nbytes, s, Q->n);
-		memset(k, 0, sizeof k);
-		memset(km, 0, sizeof km);
-		memset(d, 0, sizeof d);
-		return 0;
+		rv = 0;
+		break;
 	}
-	memset(k, 0, sizeof k);
-	memset(d, 0, sizeof d);
-	return -1;
+	nonceclear(&ns);
+	secureZero(k, sizeof k);
+	secureZero(xb, sizeof xb);
+	secureZero(hb, sizeof hb);
+	secureZero(km, sizeof km);
+	secureZero(d, sizeof d);
+	secureZero(t, sizeof t);
+	secureZero(&R, sizeof R);
+	return rv;
+}
+
+static int
+ecdsasign(const Curve *C, uchar *sig, const uchar *priv, const uchar *hash, int hashlen)
+{
+	uchar rnd[32];
+	int rv;
+
+	genrandom(rnd, sizeof rnd);
+	rv = ecdsasignrnd(C, sig, priv, hash, hashlen, rnd, sizeof rnd);
+	secureZero(rnd, sizeof rnd);
+	return rv;
 }
 
 /* signature, key and hash are public */

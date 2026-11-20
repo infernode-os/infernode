@@ -16,7 +16,7 @@ Page: module
 	init:	fn(d: ref Draw->Display): string;
 
 	Pg: adt {
-		url:	string;		# after redirects and <base>
+		url:	string;		# where it came from, after redirects (<base> changes doc.url only)
 		doc:	ref Dom->Doc;
 		styles:	ref Style->Styles;
 		computed:	ref Style->Computed;
@@ -32,6 +32,13 @@ Page: module
 		allimages:	int;	# every image wanted, whatever the setting
 		sheetlist:	array of (string, string, string);	# its sheets as last read: (inline text, nil, nil) or (nil, url, charset)
 		sheetcache:	list of (string, ref Css->Sheet);	# parsed, by text or url
+		# with lazy set, an <img loading=lazy> is wanted only once it is
+		# near the view, whose top is at view (a browser's, not a
+		# document laid out whole); sent: what has been sent for
+		lazy:	int;
+		view:	int;
+		sent:	list of string;
+		cqs:	array of (int, int);	# its query containers' sizes, by node, as last laid out (Style->setcontainers)
 
 		relayout:	fn(p: self ref Pg, width, height: int);
 		close:	fn(p: self ref Pg);	# done with: what it alone holds (its web fonts) is let go
@@ -45,6 +52,10 @@ Page: module
 		# progressively: the URLs of images it shows and has not got,
 		# then those that have come, laid out with them
 		wanted:	fn(p: self ref Pg): list of string;
+		# the size, in pixels, each of urls is shown at where the layout
+		# already gives its box one (its width and height, or either):
+		# the largest over its boxes; urls whose boxes have none are left out
+		shown:	fn(p: self ref Pg, urls: list of string): list of (string, int, int);
 		install:	fn(p: self ref Pg, pics: list of ref Pic);
 		frames:	fn(p: self ref Pg);	# fetch and draw its <iframe>s
 		# with images click: the URLs of the images shown where node n's
@@ -74,6 +85,8 @@ Page: module
 	# screen of two pixels to the point (Retina), 2, and pages are
 	# laid out and drawn twice the size, as sharp. Whoever knows the
 	# display says ($displayscale); not a setting, so not saved.
+	# A browser's zoom is the same ratio, so it may be below 1
+	# (0.25 to 4).
 	scale:	fn(r: real);
 	dpr:	fn(): real;
 	setting:	fn(name: string): string;
@@ -106,8 +119,16 @@ Page: module
 	# a document already in hand, as if fetched from url with content type ctype
 	parse:	fn(data: array of byte, ctype, url: string, width, height: int): ref Pg;
 	picture:	fn(url: string, data: array of byte, ctype, err: string): ref Pic;
+	# the same, decoded no smaller than minw by minh where the format can
+	# be decoded smaller (a JPEG); 0 by 0 is the screen's width
+	picturefor:	fn(url: string, data: array of byte, ctype, err: string, minw, minh: int): ref Pic;
 	fetch:	fn(url: string): (array of byte, string, string);	# (data, content type, error)
 	# fetch, saying an image will do: image/webp first, as browsers do
 	fetchimage:	fn(url: string): (array of byte, string, string);
 	decodeimage:	fn(data: array of byte, ctype, url: string): ref Draw->Image;
+	# whether the document at from may have url loaded, or the browser
+	# taken to it: one from the network may not have a file: address or
+	# a bare path, which are read from the browser's own name space;
+	# from nil (nobody's page asks: the user does) may have anything
+	mayload:	fn(from, url: string): int;
 };

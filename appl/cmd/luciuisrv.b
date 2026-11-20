@@ -41,6 +41,10 @@ implement Luciuisrv;
 #                   background/
 #                       0, 1...      background task entries
 #
+# A ctl file takes one request a write.  A request longer than one 9P
+# message arrives as several, each but the last full: they are gathered
+# on the fid and run as one request (see dowrite).
+#
 # Usage:
 #   luciuisrv              mount at /mnt/ui
 #   luciuisrv -m /mnt/ui   legacy mount point
@@ -230,6 +234,12 @@ inputreads: list of ref InputRead;
 
 # The longest message a writer may post to conversation/input.
 MAXINPUT: con 1024*1024;
+
+# Fids whose request (a ctl command, an input message) was refused part
+# way through: what else is written on one is refused too, until it is
+# clunked, so the tail of a refused request is never taken for a
+# request of its own.
+refusedfids: list of int;
 
 PendingRead: adt {
 	fid:	int;
@@ -437,8 +447,18 @@ init(nil: ref Draw->Context, args: list of string)
 
 # --- Activity management ---
 
+# The limit is on activities that are open.  Closed ones stay in the
+# table (their ids are not used again, and their status says closed) and
+# used to count against it for ever: sixty-four tasks made, whatever had
+# become of them, and no more until a restart.
 newactivity(label: string): ref Activity
 {
+	open := 0;
+	for(i := 0; i < nact; i++)
+		if(activities[i].status != "hidden")
+			open++;
+	if(open >= MAX_ACTIVITIES || nextactid > 16rFFFF)	# an id is 16 bits of a qid
+		return nil;
 	id := nextactid++;
 	a := ref Activity(
 		id, label, "active",
@@ -451,8 +471,6 @@ newactivity(label: string): ref Activity
 		nil					# pendingevent
 	);
 
-	if(nact >= MAX_ACTIVITIES)
-		return nil;
 	if(nact >= len activities) {
 		na := array[len activities * 2] of ref Activity;
 		na[0:] = activities[0:nact];
@@ -661,8 +679,11 @@ pushevent(actid: int, msg: string)
 	}
 	if(subs == 0 && delivered == nil) {
 		a := findactivity(actid);
-		if(a != nil)
+		if(a != nil) {
 			a.pendingevent = qpush(a.pendingevent, msg);
+			if(qlen(a.pendingevent) > MAXACTQ)	# no reader: keep the newest
+				a.pendingevent = tl a.pendingevent;
+		}
 	}
 }
 
@@ -754,8 +775,11 @@ pushglobalevent(msg: string)
 	# Buffer the event for any subscriber that wasn't pending.
 	s := eventsubs;
 	while(s != nil) {
-		if(!inlist(s.fid, delivered))
+		if(!inlist(s.fid, delivered)) {
 			s.events = appendstr(s.events, msg);
+			if(qlen(s.events) > MAXACTQ)	# a reader that never reads keeps the newest
+				s.events = tl s.events;
+		}
 		s = s.next;
 	}
 }
@@ -923,6 +947,14 @@ Serve:
 				cf.data = nil;
 				dropinputread(m.fid);
 			}
+			# So is a ctl request whose last piece was a full message.
+			if(cf != nil && isctl(FTYPE(cf.path)) && cf.data != nil) {
+				cerr := runctl(FTYPE(cf.path), ACTID(cf.path), cf.data);
+				if(cerr != nil)
+					sys->fprint(stderr, "luciuisrv: ctl request refused at close: %s\n", cerr);
+				cf.data = nil;
+			}
+			unrefuse(m.fid);
 			# Remove pending reads for this fid
 			prev: ref PendingRead;
 			p := pending;
@@ -1044,10 +1076,15 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		# reply ignores the offset (INFR-28).  Queues are FIFO (head =
 		# oldest). INFR-36.
 		sub := findactsub(m.fid);
+		ea := findactivity(actid);
 		if(sub != nil && sub.events != nil) {
 			srv.reply(ref Rmsg.Read(m.tag, array of byte (hd sub.events + "\n")));
 			sub.events = tl sub.events;
 			sub.n--;
+		} else if(ea == nil || ea.status == "hidden") {
+			# Closed: there will be none.  (A read made after the
+			# close waited for ever.)
+			srv.reply(ref Rmsg.Read(m.tag, nil));
 		} else
 			addpending(m.fid, m.tag, Qactevent, actid, m);
 
@@ -1304,20 +1341,51 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		return;
 	}
 
+	if(inlist(m.fid, refusedfids)) {
+		srv.reply(ref Rmsg.Error(m.tag, "request refused"));
+		return;
+	}
+
+	# One request to a ctl file is one write, which the mount driver
+	# sends as several messages when it is longer than one, each but the
+	# last full.  They are gathered on the fid and run as one request at
+	# the first that is not full (at the clunk, if the last was).  Each
+	# message used to be run as a command of its own: a long request was
+	# cut short, and its tail, which is the writer's text (a model's
+	# reply, an artifact's content), was run as a second command.
+	if(isctl(ft)) {
+		if(len c.data + len m.data > MAX_DATA_SIZE) {
+			c.data = nil;
+			refusedfids = m.fid :: refusedfids;
+			srv.reply(ref Rmsg.Error(m.tag, "ctl request too long"));
+			return;
+		}
+		whole := m.data;
+		if(len c.data > 0) {
+			whole = array[len c.data + len m.data] of byte;
+			whole[0:] = c.data;
+			whole[len c.data:] = m.data;
+		}
+		if(len m.data >= srv.iounit()) {
+			c.data = whole;
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			return;
+		}
+		c.data = nil;
+		err := runctl(ft, actid, whole);
+		if(err != nil)
+			srv.reply(ref Rmsg.Error(m.tag, err));
+		else
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		return;
+	}
+
 	data := string m.data;
 	# Strip trailing newline
 	if(len data > 0 && data[len data - 1] == '\n')
 		data = data[0:len data - 1];
 
 	case ft {
-	Qctl =>
-		err := globalctl(data);
-		if(err != nil) {
-			srv.reply(ref Rmsg.Error(m.tag, err));
-			break;
-		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
 	Qnotification =>
 		data = safeeventtext(data);
 		if(qlen(notifyq) >= MAX_QUEUE_DEPTH) {
@@ -1338,7 +1406,8 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 
 	Qactcurrent =>
 		id := strtoint(data);
-		if(id < 0 || findactivity(id) == nil) {
+		na := findactivity(id);
+		if(id < 0 || na == nil || na.status == "hidden") {
 			srv.reply(ref Rmsg.Error(m.tag, "unknown activity"));
 			break;
 		}
@@ -1385,7 +1454,17 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, "activity closed"));
 			break;
 		}
-		a.status = safeattrtext(data);
+		# "hidden" is how a closed activity is marked, and closing one is
+		# "activity delete" on the global ctl, which also ends its readers
+		# and frees what it held.  Written here it was taken: an agent's
+		# status is a tool's name while the tool runs, so a model that
+		# called a tool named "hidden" closed its own conversation.
+		st := safeattrtext(data);
+		if(st == "hidden") {
+			srv.reply(ref Rmsg.Error(m.tag, "hidden is not a status: close an activity with activity delete"));
+			break;
+		}
+		a.status = st;
 		vers++;
 		pushevent(actid, "status");
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -1404,24 +1483,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		pushglobalevent("activity urgency " + string actid);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
-	Qconvctl =>
-		a := findactivity(actid);
-		if(a == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			break;
-		}
-		err := convctl(a, data);
-		if(err != nil) {
-			# Log rejected ctl writes: a 9P write error here is otherwise
-			# easy to miss because sh's `> ` redirect swallows it, so a bad
-			# write parses as a no-op and the caller assumes success
-			# (INFR-131). The operator at least sees the cause in the log.
-			sys->fprint(stderr, "luciuisrv: convctl rejected %q: %s\n", data, err);
-			srv.reply(ref Rmsg.Error(m.tag, err));
-			break;
-		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
 	Qconvinput =>
 		a := findactivity(actid);
 		if(a == nil) {
@@ -1433,7 +1494,17 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		# piece used to be a message of its own, so a long paste became
 		# several turns, each a fragment.
 		if(len c.data + len m.data > MAXINPUT) {
+			# Refused whole: the pieces taken so far used to be posted
+			# when the file was closed, as the human's message.
+			c.data = nil;
+			refusedfids = m.fid :: refusedfids;
 			srv.reply(ref Rmsg.Error(m.tag, "message too long"));
+			break;
+		}
+		if(qlen(a.inputq) >= MAX_QUEUE_DEPTH) {
+			c.data = nil;
+			refusedfids = m.fid :: refusedfids;
+			srv.reply(ref Rmsg.Error(m.tag, "input queue full"));
 			break;
 		}
 		nd := array[len c.data + len m.data] of byte;
@@ -1448,19 +1519,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			c.data = nil;
 			postinput(actid, msg);
 		}
-
-	Qpresctl =>
-		a := findactivity(actid);
-		if(a == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			break;
-		}
-		err := presctl(a, data);
-		if(err != nil) {
-			srv.reply(ref Rmsg.Error(m.tag, err));
-			break;
-		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qprescurrent =>
 		a := findactivity(actid);
@@ -1505,22 +1563,59 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		pushevent(actid, "presentation app " + a.artifacts[subid].id + " status=" + a.artifacts[subid].appstatus);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
-	Qctxctl =>
-		a := findactivity(actid);
-		if(a == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			break;
-		}
-		err := ctxctl(a, data);
-		if(err != nil) {
-			srv.reply(ref Rmsg.Error(m.tag, err));
-			break;
-		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
 	* =>
 		srv.reply(ref Rmsg.Error(m.tag, Eperm));
 	}
+}
+
+isctl(ft: int): int
+{
+	return ft == Qctl || ft == Qconvctl || ft == Qpresctl || ft == Qctxctl;
+}
+
+unrefuse(fid: int)
+{
+	kept: list of int;
+	for(l := refusedfids; l != nil; l = tl l)
+		if(hd l != fid)
+			kept = hd l :: kept;
+	refusedfids = kept;
+}
+
+# Run one whole request to a ctl file: nil, or why it is refused.
+runctl(ft, actid: int, raw: array of byte): string
+{
+	data := string raw;
+	if(len data > 0 && data[len data - 1] == '\n')
+		data = data[0:len data - 1];
+	if(ft == Qctl)
+		return globalctl(data);
+	a := findactivity(actid);
+	if(a == nil)
+		return Enotfound;
+	# closed since the request's first piece was taken
+	if(a.status == "hidden")
+		return "activity closed";
+	err: string;
+	case ft {
+	Qconvctl =>
+		err = convctl(a, data);
+		if(err != nil) {
+			# Log rejected ctl writes: a 9P write error here is otherwise
+			# easy to miss because sh's `> ` redirect swallows it, so a bad
+			# write parses as a no-op and the caller assumes success
+			# (INFR-131). The operator at least sees the cause in the log.
+			shown := data;
+			if(len shown > 200)
+				shown = shown[0:200] + "...";
+			sys->fprint(stderr, "luciuisrv: convctl rejected %q: %s\n", shown, err);
+		}
+	Qpresctl =>
+		err = presctl(a, data);
+	Qctxctl =>
+		err = ctxctl(a, data);
+	}
+	return err;
 }
 
 # --- Ctl command handlers ---
@@ -1579,6 +1674,12 @@ globalctl(data: string): string
 		idx := findactidx(id);
 		if(idx < 0)
 			return "unknown activity: " + idstr;
+		# Activity 0 is the session's own conversation: everything else is
+		# made from it and reports to it, and nothing can make another.
+		if(id == 0)
+			return "activity 0 cannot be closed";
+		if(activities[idx].status == "hidden")
+			return nil;	# closed already
 		# Mark as hidden and free heavy data to prevent memory leak.
 		activities[idx].status = "hidden";
 		activities[idx].messages = nil;
@@ -1598,6 +1699,9 @@ globalctl(data: string): string
 		# blocked reading its input used to wait for ever, and every closed
 		# task kept its agent, tool server and model session running.
 		endpending(id);
+		# The current activity is never a closed one.
+		if(currentact == id)
+			currentact = 0;
 		vers++;
 		pushglobalevent("activity delete " + idstr);
 		return nil;
@@ -1697,6 +1801,9 @@ presctl(a: ref Activity, data: string): string
 		dispath := getattr(attrs, "dis");
 		if(id == nil || id == "")
 			return "missing id";
+		# the directory's own files: an artifact so named is never reached
+		if(id == "ctl" || id == "current")
+			return "invalid artifact id: " + id;
 		if(atype == nil || atype == "")
 			atype = "text";
 		atype = safeattrtext(atype);
@@ -1706,6 +1813,11 @@ presctl(a: ref Activity, data: string): string
 			label = id;
 		label = safeattrtext(label);
 		dispath = safeattrtext(dispath);
+		# Lucifer loads an app's path only from where GUI apps are kept
+		# (its validdispath); one from anywhere else is refused here too,
+		# before it is stored and announced.
+		if(dispath != nil && dispath != "" && !validapppath(dispath))
+			return "invalid app path: " + dispath;
 		if(findartifact(a, id) != nil)
 			return "artifact already exists: " + id;
 		art := addartifact(a, id, atype, label);
@@ -2778,14 +2890,22 @@ parseattrs(s: string): list of ref Attr
 		i++;
 
 	j := i;
-	inquote := 0;
 	while(j < len s) {
-		if(s[j] == '"') {
-			inquote = !inquote;
-			j++;
-			continue;
+		# A quote opens a quoted value only as the value's first
+		# character, and only if another closes it; what is between them
+		# holds no keys.  Every quote used to switch quoting on or off, so
+		# one inside a value (a title with a " in it) hid every key after
+		# it: the options and the text were lost into the title.
+		if(s[j] == '"' && nkp > 0 && eqposs[nkp - 1] == j - 1) {
+			q := j + 1;
+			while(q < len s && s[q] != '"')
+				q++;
+			if(q < len s) {
+				j = q + 1;
+				continue;
+			}
 		}
-		if(!inquote && s[j] == '=') {
+		if(s[j] == '=') {
 			kstart := j - 1;
 			while(kstart > i && s[kstart - 1] != ' ' && s[kstart - 1] != '\t')
 				kstart--;
@@ -2898,6 +3018,26 @@ validrole(role: string): int
 validdtype(dtype: string): int
 {
 	return dtype == "dialogue" || dtype == "form";
+}
+
+# An app's Dis file: under /dis/wm/ or /dis/xenith/, a .dis, with no
+# blank, control character or dot component (as lucifer.b's validdispath).
+validapppath(p: string): int
+{
+	if(!hasprefix(p, "/dis/wm/") && !hasprefix(p, "/dis/xenith/"))
+		return 0;
+	if(len p < 4 || p[len p - 4:] != ".dis")
+		return 0;
+	for(i := 0; i < len p; i++) {
+		c := p[i];
+		if(c <= ' ' || c == 16r7F)
+			return 0;
+		if(c == '/' && i + 1 < len p && (p[i+1] == '/' || p[i+1] == '.'))
+			return 0;
+		if(c == '.' && i + 1 < len p && p[i+1] == '.')
+			return 0;
+	}
+	return 1;
 }
 
 validleaf(s: string): int

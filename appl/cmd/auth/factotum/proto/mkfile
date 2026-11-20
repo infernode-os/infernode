@@ -4,7 +4,6 @@ TARG=\
 	p9any.dis\
 	pass.dis\
 	sign.dis\
-	infauth.dis\
 	wpapsk.dis\
 	btpin.dis\
 	btlink.dis\
@@ -22,12 +21,9 @@ SYSMODULES=\
 	auth9.m\
 	daytime.m\
 	encoding.m\
-	sexprs.m\
-	spki.m\
 
 MODULES=\
 	../authio.m\
-	keyreps.m\
 
 DISBIN=$ROOT/dis/auth/proto
 

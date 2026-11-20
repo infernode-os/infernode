@@ -1,0 +1,229 @@
+.TH SECSTORED 8
+.SH NAME
+secstored, secstore-setup \- secure store server, and its accounts
+.SH SYNOPSIS
+.B auth/secstored
+[
+.B -d
+] [
+.BI -s " storedir"
+] [
+.BI -a " addr"
+]
+.PP
+.B auth/secstore-setup
+[
+.B -f
+] [
+.BI -k " password"
+] [
+.BI -s " storedir"
+] [
+.BI -u " user"
+] [
+.BI -V " version"
+]
+.SH DESCRIPTION
+.I Secstored
+serves the files of
+.IR secstore (1)
+and
+.IR secstore (2):
+for each user a few files, encrypted by the client, that it will give
+to, and take from, whoever proves the user's password.
+The profile starts one for each host user, on the loopback, and
+.IR logon (1)
+and
+.IR factotum (4)
+keep the user's keys in it, in the file
+.BR factotum .
+.I Addr
+is the address announced (default
+.BR tcp!127.0.0.1!5356 ),
+.I storedir
+the store (default
+.BR /usr/inferno/secstore ),
+and
+.B -d
+logs each request.
+.PP
+The store has a directory for each account, which holds
+.TP 12n
+.B PAK
+the account's verifier, a line
+.RI `` "version verifier" '':
+what the server needs to check a password without being given it
+(the PAK exchange of Plan 9's
+.IR secstore ).
+It is the server's own: no request fetches, stores or removes it under that name.
+.TP
+.B VAULTKEY
+the hash of the account's vault key, when a second factor is enrolled (below).
+.TP
+.B 2fa
+the client's key slots, when the client is on this machine; not served.
+.TP
+.I files
+the account's files, as the client encrypted them.
+A name is one name of a directory with no blank or control character in it;
+names beginning with a dot are the server's while it writes.
+.PP
+A file is written whole beside the one it replaces and renamed over it.
+.SS "Versions
+The version is the first line of the exchange.
+.B secstore4
+is the current one.
+Its verifier is made from the key the account's files are encrypted under
+(100000 HMAC-SHA-256 of the password with the user's name;
+.B mkseckey4
+in
+.IR secstore (2)),
+so that a password tried against a stolen
+.B PAK
+costs what it costs against the stolen files beside it.
+In a
+.B secstore4
+session a store or a remove is answered
+.B OK
+or with an error.
+.PP
+.B secstore3
+(the same group and hash, the verifier made from one SHA-256 of the password)
+and
+.B secstore
+(Plan 9's: a 1024-bit group and SHA-1)
+are kept so that an account made under them can log in once more.
+A session of either may read the account's files and give the account its
+.B secstore4
+verifier, which the client does; it does not store or remove, and is ended if it tries.
+The new verifier is kept beside the old one until a
+.B secstore4
+login has worked, and the old one is then removed.
+Whoever read the store of an account still at
+.B secstore3
+could try a password for one exponentiation; of one at
+.BR secstore4 ,
+for 100000 HMACs and the exponentiation.
+.SS "Requests
+After the exchange the session is encrypted
+.RB ( aes_256_gcm ,
+see
+.IR ssl (3)),
+and the client sends requests, a message each:
+.TP
+.BI GET " name"
+The answer is the file's size and then its bytes;
+.B -1
+if the account has no such file; or an error, if it has and the file cannot be read
+(it was
+.B -1
+for any file that could not be opened, which a client took for an account with nothing stored).
+.B "GET ."
+is a listing: for each file a line of its name, a tab, its size, its date (24 characters)
+and the SHA-256 of its contents in base 64.
+.TP
+.BI PUT " name"
+followed by the size and the bytes: store the file.
+.TP
+.BI RM " name"
+Remove it.
+.TP
+.BI VERIFIER " secstore4 verifier"
+Replace the account's verifier: from a session of an older version, the move to version 4;
+from a
+.B secstore4
+session, a new password.
+.TP
+.B VAULT?
+Answered
+.B enrolled
+or
+.BR none .
+.TP
+.BI VAULTKEY " key"
+Show the account's vault key (64 hexadecimal digits): answered
+.BR OK ,
+.B none
+if no second factor is enrolled, or an error if it is not the key.
+.TP
+.BI ENROLL2FA " key"
+Enrol a second factor: the server keeps the SHA-256 of
+.IR key .
+Refused if one is enrolled and its key has not been shown in this session.
+.TP
+.B UNENROLL2FA
+Remove the enrolment; the key must have been shown.
+.TP
+.B BYE
+End the session.
+.SS "Second factor
+An account whose files are under a data key that a second factor unwraps
+(see
+.B /docs/second-factor-auth.md
+and
+.IR twofaslot (2))
+is
+.I enrolled
+at the server with a vault key made from the data key.
+From then on the server stores and removes that account's files only in a session that has shown the vault key:
+the password alone, which is all the exchange proves, reads the files (they are under the data key)
+and changes nothing.
+(Before this, whoever had the password could replace the vault with one of their own making,
+under the password, which the login screen then loaded with no second factor.)
+The states of an account are therefore: no
+.B VAULTKEY
+(the password alone changes its files), and enrolled.
+.SS "Throttle
+Ten logins in a row that do not prove an account's password lock the account for a minute
+(NIST SP 800-53 AC-7); a wrong vault key is recorded in the audit log.
+.SS "Accounts
+.I Secstore-setup
+makes an account for
+.I user
+(default: the current user) in
+.IR storedir :
+its directory and its
+.BR PAK .
+It asks for the password twice, or takes it from
+.B -k
+(which other programs can read in
+.BR /prog :
+for tests, and it says so).
+The password must be at least 8 characters (NIST SP 800-63B 5.1.1.2:
+the store is guessed at offline by whoever takes the disk).
+An account that exists is not written over unless
+.B -f
+is given; its files stay under the old password.
+.B -V
+makes the verifier of an older
+.I version
+.RB ( secstore
+or
+.BR secstore3 ),
+for tests of the move.
+.IR Logon (1)
+and
+.IR factotum (4)
+make an account the same way at a first login.
+.SH FILES
+.TF /usr/inferno/secstore/user/VAULTKEY
+.TP
+.BI /usr/inferno/secstore/ user /PAK
+.TP
+.BI /usr/inferno/secstore/ user /VAULTKEY
+.TP
+.BI /usr/inferno/secstore/ user /factotum
+.SH SOURCE
+.B /appl/cmd/auth/secstored.b
+.br
+.B /appl/cmd/auth/secstore-setup.b
+.SH SEE ALSO
+.IR logon (1),
+.IR secstore (1),
+.IR secstore (2),
+.IR factotum (4)
+.SH BUGS
+A non-loopback listener lets anybody who reaches it ask whether an account exists
+and guess at passwords, at the throttle's rate;
+.I secstored
+says so when started on one.

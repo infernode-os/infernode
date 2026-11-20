@@ -113,10 +113,22 @@ num(kv: list of (string, string), k: string): (int, int)
 	return (n, 1);
 }
 
+# The watcher is the caller's: it stops at stop, and on its own when
+# the proc that started it is gone. A window that died of an exception
+# never says stop (wm/camera's fatal, a fault), and nor did one that
+# did: stop sent on an unbuffered ctl was dropped unless the watcher
+# was at that moment in its alt, and it is nearly always asleep. A
+# desktop left with such windows closed had six watchers listing their
+# directories twice a second for days, and the idle collector kept
+# going round the heap for what they allocated. ctl holds one stop now,
+# and the owner is looked for at each listing: a pid is never reused.
 Stack.watch(dir: string): ref Stack
 {
-	s := ref Stack(dir, array[0] of ref Layer, nil, chan of int);
-	spawn watcher(s);
+	s := ref Stack(dir, array[0] of ref Layer, nil, chan[1] of int);
+	owner := sys->pctl(0, nil);
+	if(!alive(owner))
+		owner = -1;	# no /prog here: stop alone ends it
+	spawn watcher(s, owner);
 	return s;
 }
 
@@ -126,8 +138,20 @@ Stack.stop(s: self ref Stack)
 	s.ctl <-= 0 =>
 		;
 	* =>
-		;
+		;	# one already waiting
 	}
+}
+
+alive(pid: int): int
+{
+	return sys->open("/prog/" + string pid + "/status", Sys->OREAD) != nil;
+}
+
+# gone, as /prog says: not when /prog itself is not to be seen (taken
+# from the name space since), only when it is and the pid is not in it
+gone(pid: int): int
+{
+	return !alive(pid) && sys->open("/prog", Sys->OREAD) != nil;
 }
 
 Stack.due(s: self ref Stack, frame: int): list of ref Mark
@@ -156,11 +180,15 @@ Stack.due(s: self ref Stack, frame: int): list of ref Mark
 
 # lists the directory, starting a reader for each layer bound and
 # stopping the reader of each unmounted, in the union's order
-watcher(s: ref Stack)
+watcher(s: ref Stack, owner: int)
 {
 	pidc := chan of int;
 	stamps: list of (string, string);
 	for(;;){
+		if(owner >= 0 && gone(owner)){
+			stopall(s);
+			return;
+		}
 		(names, st) := listing(s.dir);
 		old := s.layers;
 		nl := array[len names] of ref Layer;
@@ -199,15 +227,21 @@ watcher(s: ref Stack)
 		s.layers = nl;
 		alt {
 		<-s.ctl =>
-			for(p = s.pids; p != nil; p = tl p)
-				kill((hd p).t1);
-			s.pids = nil;
-			s.layers = array[0] of ref Layer;
+			stopall(s);
 			return;
 		* =>
 			sys->sleep(Listms);
 		}
 	}
+}
+
+# the readers stopped and the layers let go
+stopall(s: ref Stack)
+{
+	for(p := s.pids; p != nil; p = tl p)
+		kill((hd p).t1);
+	s.pids = nil;
+	s.layers = array[0] of ref Layer;
 }
 
 # the directory's files in the union's order, each with a stamp of its

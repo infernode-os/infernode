@@ -120,6 +120,8 @@ replaces the complete TLS, X25519, PSK and D2 candidate in one factotum save,
 then installs it on the brick.  This is the explicit rotation operation.
 The brick holds one commander at a time, so a successful rotation leaves the
 old commander's keys useless.
+Nothing old is carried over, the draft implementation's cleartext files
+included (see the end of this section).
 Because all of it travels over the USB cable, nothing the network
 could alter is trusted.
 A brick that reports
@@ -263,7 +265,8 @@ records what gives or changes authority in the audit log
 .RI ( auditfs (4)):
 .BR pair " and " paired ,
 .B wifi
-(the network's name, never the passphrase),
+(that credentials were set, and the network's name when the passphrase is on a
+line of its own after it; never the passphrase),
 and for
 .BR "brick d2" :
 .B d2arm
@@ -349,9 +352,14 @@ or
 Their secret values are never served in the profile.  A transient exclusive
 .B pair.lock
 serializes key and pairing operations and is removed when its owner closes or
-dies.  Cleartext secret files made by the draft implementation are imported,
+dies.  One left behind (the emulator itself was killed) is taken once it is
+ten minutes old; a newer one refuses the command, which names the file to
+remove.  Cleartext secret files made by the draft implementation are imported,
 synchronously persisted and removed on first use; removal never precedes a
-successful save.
+successful save.  With
+.B -R
+they are not imported: new keys are made, each such file is named on standard
+error, and once the new keys are saved it is written over and removed.
 .SH EXAMPLE
 Pair over USB, give the brick its network, then use it from anywhere:
 .EX

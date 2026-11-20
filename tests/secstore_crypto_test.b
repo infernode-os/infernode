@@ -7,6 +7,9 @@ include "draw.m";
 
 include "dial.m";
 
+include "keyring.m";
+	kr: Keyring;
+
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -71,13 +74,20 @@ testSGCM1Compat(t: ref T)
 	gcm1key := secstore->mkfilekey2(pass);
 	plaintext := array of byte "legacy modern blob\n";
 
-	blob := secstore->encrypt2(plaintext, gcm1key);
-	t.assert(blob != nil, "encrypt2 returns a blob");
-	t.assert(hasprefix(blob, "SGCM1\n"), "encrypt2 still writes SGCM1 header");
+	# nothing writes SGCM1 now: one made as it was
+	magic := array of byte "SGCM1\n";
+	nonce := array[12] of {* => byte 9};
+	(ct, tag) := kr->aesgcmencrypt(kr->aesgcmsetup(gcm1key, nonce), plaintext, magic);
+	blob := array[len magic + 12 + len ct + len tag] of byte;
+	blob[0:] = magic;
+	blob[len magic:] = nonce;
+	blob[len magic + 12:] = ct;
+	blob[len magic + 12 + len ct:] = tag;
 
 	out := secstore->decrypt3(blob, rootkey, gcm1key, nil);
-	t.assert(out != nil, "decrypt3 still reads SGCM1 blob");
-	t.assertseq(string out, string plaintext, "SGCM1 compatibility preserved");
+	t.assert(out != nil, "decrypt3 reads an SGCM1 blob when given its key");
+	t.assertseq(string out, string plaintext, "SGCM1 is read by whoever moves it");
+	t.assert(secstore->decrypt3(blob, rootkey, nil, nil) == nil, "and not otherwise: the file does not choose its format");
 }
 
 testSGCM2UserBinding(t: ref T)
@@ -129,6 +139,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	testing = load Testing Testing->PATH;
 	secstore = load Secstore Secstore->PATH;
+	kr = load Keyring Keyring->PATH;
 
 	if(testing == nil) {
 		sys->fprint(sys->fildes(2), "cannot load testing module: %r\n");

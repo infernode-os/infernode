@@ -22,16 +22,12 @@ SYSMODULES=\
 	daytime.m\
 	draw.m\
 	imagefile.m\
-	ssl3.m\
 	string.m\
 	strinttab.m\
 	sys.m\
 	url.m\
 	webget.m\
-	asn1.m\
-	keyring.m\
-	pkcs.m\
-	sslsession.m\
+	webclient.m\
 
 DISBIN=$ROOT/dis/svc/webget
 

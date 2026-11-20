@@ -4,7 +4,7 @@ implement Fm;
 # sdr/fm - FM demodulated: sdrfs(4)'s iq in, audio(3)'s sound out.
 #
 #	echo freq 98.5M > /mnt/sdr/ctl
-#	sdr/fm < /mnt/sdr/iq > /dev/audio
+#	sdr/fm -o 44100 < /mnt/sdr/iq | auplay /fd/0
 #
 # Wide (broadcast) by default; -n narrow (marine VHF, 2 m amateur, NOAA
 # weather, the land mobile bands).  The samples are summed to about
@@ -15,11 +15,17 @@ implement Fm;
 # 15 kHz (above are the stereo pilot and subcarriers), and averaged to
 # the rate out.  The sound is mono.
 #
-# -r is the rate in (sdrfs's rate; 2048000, its default), -o the rate
-# out (8000, /dev/audio's default) and -c the channels out (2, as
-# audio(3); the same sound in each).  -g multiplies the volume.
+# The rate in is the samples' own: their header (sdrfs's iq has one;
+# sdr/rawiq gives a capture one) says it, and input with no header, or
+# not 8-bit unsigned I and Q (enc cu8), is refused.  -o is the rate out
+# (8000, /dev/audio's default) and -c the channels out (2, as audio(3);
+# the same sound in each); the sound starts with audio(6)'s header
+# saying so (rate, chans, bits 16, enc pcm), for auplay(1) to set
+# audioctl from, or with -R it is raw, and audioctl is the caller's to
+# set.  -g multiplies the volume.  The sound ends when the samples do:
+# sdrfs ends iq's stream when it is retuned.
 #
-# Usage:	sdr/fm [-nw] [-c chans] [-d µs] [-g gain] [-o rate] [-r rate]
+# Usage:	sdr/fm [-nwR] [-c chans] [-d µs] [-g gain] [-o rate]
 #
 
 include "sys.m";
@@ -56,19 +62,21 @@ init(nil: ref Draw->Context, argv: list of string)
 	dsp->init();
 
 	narrow := 0;
+	raw := 0;
 	chans := 2;
 	deemph := -1.0;
 	gain := 1.0;
 	fout := 8000;
-	fin := 2048000;
 	arg->init(argv);
-	arg->setusage("sdr/fm [-nw] [-c chans] [-d µs] [-g gain] [-o rate] [-r rate]");
+	arg->setusage("sdr/fm [-nwR] [-c chans] [-d µs] [-g gain] [-o rate]");
 	while((o := arg->opt()) != 0)
 		case o {
 		'n' =>
 			narrow = 1;
 		'w' =>
 			narrow = 0;
+		'R' =>
+			raw = 1;
 		'c' =>
 			chans = int arg->earg();
 			if(chans < 1 || chans > 8)
@@ -82,14 +90,18 @@ init(nil: ref Draw->Context, argv: list of string)
 		'o' =>
 			if((fout = dsp->rate(arg->earg())) == 0)
 				arg->usage();
-		'r' =>
-			if((fin = dsp->rate(arg->earg())) == 0)
-				arg->usage();
 		* =>
 			arg->usage();
 		}
 	if(arg->argv() != nil)
 		arg->usage();
+
+	# the rate in is what the samples' header says
+	rc := chan[Ahead] of (array of byte, string);
+	pidc := chan of int;
+	spawn readahead(sys->fildes(0), rc, pidc);
+	readerpid = <-pidc;
+	(fin, pend) := readheader(rc);
 
 	# the deviation at full scale, and the rate it is found at: wide,
 	# the samples summed to about 240k; narrow, then the channel (8k
@@ -153,7 +165,6 @@ init(nil: ref Draw->Context, argv: list of string)
 		r = Resamp.new(fin, fout * n);
 	p := Pcm.new(fout, chans);
 
-	stdin := sys->fildes(0);
 	stdout := sys->fildes(1);
 	buf := array[Chunk+1] of byte;	# a byte carried, and a chunk
 	i := array[Chunk/2] of real;
@@ -164,17 +175,28 @@ init(nil: ref Draw->Context, argv: list of string)
 	pi := 1.0;
 	pq := 0.0;
 	y := 0.0;
-	rc := chan[Ahead] of (array of byte, string);
-	pidc := chan of int;
-	spawn readahead(stdin, rc, pidc);
-	readerpid = <-pidc;
+	if(!raw) {
+		h := dsp->mkheader("rate " + string fout :: "chans " + string chans :: "bits 16" :: "enc pcm" :: nil);
+		if(sys->write(stdout, h, len h) != len h)
+			fatal(sys->sprint("write: %r"));
+	}
 	for(;;) {
-		(b, err) := <-rc;
-		if(b == nil) {
-			readerpid = -1;
-			if(err != nil)
-				fatal("read: " + err);
-			break;
+		b: array of byte;
+		if(len pend > 0) {
+			# the samples that came with the header
+			b = pend;
+			if(len b > Chunk)
+				b = b[0:Chunk];
+			pend = pend[len b:];
+		} else {
+			err: string;
+			(b, err) = <-rc;
+			if(b == nil) {
+				readerpid = -1;
+				if(err != nil)
+					fatal("read: " + err);
+				break;
+			}
 		}
 		buf[have:] = b;
 		k := have + len b;
@@ -230,6 +252,37 @@ readahead(fd: ref Sys->FD, c: chan of (array of byte, string), pidc: chan of int
 			return;
 		}
 		c <-= (b[0:n], nil);
+	}
+}
+
+# the samples' header, from the reader's first chunks: the rate it
+# says, and the samples that came after it in them
+readheader(rc: chan of (array of byte, string)): (int, array of byte)
+{
+	b := array[0] of byte;
+	for(;;) {
+		(c, err) := <-rc;
+		if(c == nil) {
+			readerpid = -1;
+			if(err != nil)
+				fatal("read: " + err);
+			if(len b == 0)
+				fatal("no header: no input");
+			fatal("no header: the input ended in it");
+		}
+		nb := array[len b + len c] of byte;
+		nb[0:] = b;
+		nb[len b:] = c;
+		b = nb;
+		(hl, h, e) := dsp->header(b, len b);
+		if(e != nil)
+			fatal(e);
+		if(hl > 0) {
+			(r, nil, fe) := dsp->iqformat(h);
+			if(fe != nil)
+				fatal(fe);
+			return (r, b[hl:]);
+		}
 	}
 }
 

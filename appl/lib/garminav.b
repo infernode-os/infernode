@@ -40,6 +40,8 @@ STX: con 16r02;
 ETX: con 16r03;
 Foot: con 0.3048;
 Knot: con 1852.0 / 3600.0;
+Maxfeet: con 1.0e7;	# an altitude, either way
+Maxknots: con 1.0e5;
 
 init(n: Nmea)
 {
@@ -96,12 +98,17 @@ finish(d: ref Grouper): ref Fix
 	if(f == nil || n == 0)
 		return nil;
 	if(d.hastrack) {
+		# a track of 0 to 360 and a variation of no more than 180
+		# (record holds them to that), so one turn either way is all
+		# there can be.  It was a loop taking 360 off until it fitted:
+		# a track of thirty nines never did, and the source's reader
+		# span for ever.
 		c := d.magtrack;
 		if(f.hasmagvar)
 			c += f.magvar;
-		while(c < 0.0)
+		if(c < 0.0)
 			c += 360.0;
-		while(c >= 360.0)
+		if(c >= 360.0)
 			c -= 360.0;
 		f.course = c;
 		f.hascourse = 1;
@@ -130,7 +137,7 @@ record(d: ref Grouper, s: string)
 	case id {
 	'z' =>
 		(x, ok) := number(v);
-		if(ok) {
+		if(ok && x >= -Maxfeet && x <= Maxfeet) {
 			f.altitude = x * Foot;
 			f.hasalt = 1;
 		}
@@ -148,13 +155,13 @@ record(d: ref Grouper, s: string)
 		}
 	'C' =>
 		(x, ok) := number(v);
-		if(ok) {
+		if(ok && x >= 0.0 && x <= 360.0) {
 			d.magtrack = x;
 			d.hastrack = 1;
 		}
 	'D' =>
 		(x, ok) := number(v);
-		if(ok) {
+		if(ok && x >= 0.0 && x <= Maxknots) {
 			f.speed = x * Knot;
 			f.hasspeed = 1;
 		}
@@ -168,7 +175,7 @@ record(d: ref Grouper, s: string)
 				(x, ok) = number(v[1:]);
 				x /= 10.0;
 			}
-			if(ok) {
+			if(ok && x >= 0.0 && x <= 180.0) {
 				if(v[0] == 'W')
 					x = -x;
 				f.magvar = x;
@@ -188,6 +195,11 @@ hasdot(s: string): int
 		if(s[i] == '.')
 			return 1;
 	return 0;
+}
+
+unsigned(s: string): int
+{
+	return s != "" && s[0] != '-' && s[0] != '+';
 }
 
 # a signed decimal number
@@ -219,6 +231,10 @@ latlon(s: string, ndeg, pos, neg: int): (real, int)
 		return (0.0, 0);
 	deg := s[1:1+ndeg];
 	min := s[1+ndeg:];
+	# degrees and minutes are digits: a sign in either made a valid
+	# fix somewhere else of a damaged record
+	if(!unsigned(deg) || !unsigned(min))
+		return (0.0, 0);
 	(dg, dok) := number(deg);
 	if(!dok || hasdot(deg))
 		return (0.0, 0);

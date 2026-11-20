@@ -3,6 +3,8 @@
 TARG=\
 	am.dis\
 	fm.dis\
+	iqhdr.dis\
+	rawiq.dis\
 
 SYSMODULES=\
 	arg.m\

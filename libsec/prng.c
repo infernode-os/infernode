@@ -59,7 +59,20 @@ prngtry(uchar *p, int n)
 		if(r < 0) {
 			if(errno == EINTR)
 				continue;
-			/* fallback to /dev/urandom; must fill completely */
+			/*
+			 * /dev/urandom only where there is no getrandom
+			 * at all (a kernel before 3.17).  It was the
+			 * answer to any failure: a getrandom that a
+			 * filter refuses, or that fails for a reason of
+			 * its own, is not a reason to read a file that
+			 * anything may have been put in place of, and
+			 * that gives bytes before the kernel's pool is
+			 * seeded where getrandom waits.  Otherwise there
+			 * is no generator, and the caller is told.
+			 */
+			if(errno != ENOSYS)
+				return -1;
+			/* must fill completely */
 			int fd = open("/dev/urandom", 0);
 			if(fd >= 0) {
 				while(n > 0) {

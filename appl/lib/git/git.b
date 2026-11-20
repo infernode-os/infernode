@@ -568,6 +568,11 @@ parsetree(data: array of byte): (array of TreeEntry, string)
 			return (nil, "malformed tree: no null");
 
 		name := string data[sp+1:nul];
+		# The name becomes a file's: checkout, the index and git/fs each
+		# add it to a directory's.  Any name was taken, so a tree with an
+		# entry ".." (or ".git", or "a/b") wrote where its author chose.
+		if(!validtreename(name))
+			return (nil, "tree has an entry with an unsafe name");
 
 		hashstart := nul + 1;
 		if(hashstart + SHA1SIZE > len data)
@@ -594,6 +599,55 @@ parsetree(data: array of byte): (array of TreeEntry, string)
 		result[i--] = hd l;
 
 	return (result, nil);
+}
+
+# A tree entry's name is one component of a path in the work tree: not
+# empty, not "." or "..", with no slash or control character, and nothing
+# a host file system reads as ".git" (git's own verify_path: any case,
+# NTFS's trailing dots and blanks, its streams and its short name, the
+# code points HFS+ ignores).  A backslash separates components where the
+# host is Windows, so each part between them is held to the same.
+validtreename(name: string): int
+{
+	if(name == nil || name == "")
+		return 0;
+	for(i := 0; i < len name; i++) {
+		c := name[i];
+		if(c == '/' || c < 16r20 || c == 16r7f)
+			return 0;
+	}
+	start := 0;
+	for(i = 0; i <= len name; i++)
+		if(i == len name || name[i] == '\\') {
+			if(!validtreepart(name[start:i]))
+				return 0;
+			start = i + 1;
+		}
+	return 1;
+}
+
+validtreepart(s: string): int
+{
+	if(s == "")
+		return 1;	# beside a backslash; the whole name is not empty
+	t := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == ':')
+			break;
+		if((c >= 16r200c && c <= 16r200f) || (c >= 16r202a && c <= 16r202e) ||
+		   (c >= 16r206a && c <= 16r206f) || c == 16rfeff)
+			continue;
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		t[len t] = c;
+	}
+	while(len t > 0 && (t[len t - 1] == '.' || t[len t - 1] == ' '))
+		t = t[0:len t - 1];
+	# "", "." and ".." are what is left of names of dots and blanks alone
+	if(s == "." || s == ".." || t == "" || t == ".git" || t == "git~1")
+		return 0;
+	return 1;
 }
 
 parsetag(data: array of byte): (ref Tag, string)
@@ -1319,8 +1373,23 @@ Repo.hasobj(r: self ref Repo, h: Hash): int
 	return err == nil;
 }
 
+# A ref is read from the file of its name under .git, so the name is a
+# ref's (or HEAD and its kind) and nothing else: what HEAD says, a symbolic
+# ref's target and a caller's argument all arrive here, and "../../x" read
+# the file it named.  A symbolic ref naming itself recursed without end.
 Repo.readref(r: self ref Repo, name: string): (Hash, string)
 {
+	return readrefn(r, name, 0);
+}
+
+MAXSYMREF: con 5;
+
+readrefn(r: ref Repo, name: string, depth: int): (Hash, string)
+{
+	if(!validrefname(name) && !pseudoref(name))
+		return (nullhash(), "invalid ref name");
+	if(depth > MAXSYMREF)
+		return (nullhash(), "symbolic ref loop: " + name);
 	refpath := r.path + "/" + name;
 	fd := sys->open(refpath, Sys->OREAD);
 	if(fd != nil) {
@@ -1332,7 +1401,7 @@ Repo.readref(r: self ref Repo, name: string): (Hash, string)
 				s = s[0:len s - 1];
 
 			if(len s > 5 && s[0:5] == "ref: ")
-				return r.readref(s[5:]);
+				return readrefn(r, s[5:], depth + 1);
 
 			return parsehash(s);
 		}
@@ -1452,6 +1521,10 @@ Repo.checkout(r: self ref Repo, treehash: Hash, destpath: string): string
 
 	for(i := 0; i < len entries; i++) {
 		e := entries[i];
+		# parsetree refuses a name that is not one component of this
+		# directory; asked again here, where the name becomes a path
+		if(!validtreename(e.name))
+			return "tree has an entry with an unsafe name";
 		path := destpath + "/" + e.name;
 
 		if(e.mode == 8r40000) {
@@ -1477,8 +1550,8 @@ Repo.checkout(r: self ref Repo, treehash: Hash, destpath: string): string
 			fd := sys->create(path, Sys->OWRITE, perm);
 			if(fd == nil)
 				return sprint("create %s: %r", path);
-			if(len bdata > 0)
-				sys->write(fd, bdata, len bdata);
+			if(len bdata > 0 && sys->write(fd, bdata, len bdata) != len bdata)
+				return sprint("write %s: %r", path);
 		}
 	}
 
@@ -1582,7 +1655,7 @@ fetchpack(remoteurl: string, want: list of Hash,
 
 	u := url->makeurl(remoteurl);
 	if(u == nil)
-		return "bad url: " + remoteurl;
+		return "bad url";
 
 	host := u.host;
 	port := u.port;
@@ -1899,25 +1972,79 @@ getremoteurl(gitdir, remote: string): string
 	return nil;
 }
 
-writeref(gitdir, name: string, h: Hash)
+# A ref's name as git's check-ref-format has it, and under refs/: no
+# component empty, beginning with a dot or ending ".lock"; no "..", no
+# control character, blank, ~ ^ : ? * [ or backslash, no "@{"; not ending
+# with a slash or a dot.  A ref is a file of its name under .git, and the
+# names come from remotes, from HEAD and from callers.
+validrefname(name: string): int
 {
+	n := len name;
+	if(n < 6 || name[0:5] != "refs/" || name[n-1] == '/' || name[n-1] == '.')
+		return 0;
+	start := 0;
+	for(i := 0; i <= n; i++) {
+		if(i == n || name[i] == '/') {
+			if(i == start || name[start] == '.')
+				return 0;
+			if(i - start >= 5 && name[i-5:i] == ".lock")
+				return 0;
+			start = i + 1;
+			continue;
+		}
+		c := name[i];
+		if(c <= ' ' || c == 16r7f || c == '~' || c == '^' || c == ':' ||
+		   c == '?' || c == '*' || c == '[' || c == '\\')
+			return 0;
+		if(i + 1 < n && ((c == '.' && name[i+1] == '.') || (c == '@' && name[i+1] == '{')))
+			return 0;
+	}
+	return 1;
+}
+
+# HEAD, FETCH_HEAD, ORIG_HEAD: a file of .git itself
+pseudoref(name: string): int
+{
+	if(name == nil || name == "")
+		return 0;
+	for(i := 0; i < len name; i++)
+		if(!((name[i] >= 'A' && name[i] <= 'Z') || name[i] == '_'))
+			return 0;
+	return 1;
+}
+
+# The name was joined to gitdir and created whatever it was: a remote's
+# "refs/heads/../../../x", stored as its tracking ref, was a file outside
+# the repository holding the remote's hash.  Nothing said a write failed.
+writeref(gitdir, name: string, h: Hash): string
+{
+	if(!validrefname(name))
+		return "invalid ref name";
 	path := gitdir + "/" + name;
 	mkdirp(path);
 	fd := sys->create(path, Sys->OWRITE, 8r644);
 	if(fd == nil)
-		return;
+		return sprint("cannot create %s: %r", name);
 	data := array of byte (h.hex() + "\n");
-	sys->write(fd, data, len data);
+	if(sys->write(fd, data, len data) != len data)
+		return sprint("cannot write %s: %r", name);
+	return nil;
 }
 
-writesymref(gitdir, name, target: string)
+writesymref(gitdir, name, target: string): string
 {
+	if(!pseudoref(name) && !validrefname(name))
+		return "invalid ref name";
+	if(!validrefname(target))
+		return "invalid ref name";
 	p := gitdir + "/" + name;
 	fd := sys->create(p, Sys->OWRITE, 8r644);
-	if(fd != nil) {
-		d := array of byte ("ref: " + target + "\n");
-		sys->write(fd, d, len d);
-	}
+	if(fd == nil)
+		return sprint("cannot create %s: %r", name);
+	d := array of byte ("ref: " + target + "\n");
+	if(sys->write(fd, d, len d) != len d)
+		return sprint("cannot write %s: %r", name);
+	return nil;
 }
 
 mkdirp(filepath: string)
@@ -1929,19 +2056,28 @@ mkdirp(filepath: string)
 
 copyfile(src, dst: string)
 {
+	copyfilee(src, dst);
+}
+
+copyfilee(src, dst: string): string
+{
 	sfd := sys->open(src, Sys->OREAD);
 	if(sfd == nil)
-		return;
+		return sprint("open: %r");
 	dfd := sys->create(dst, Sys->OWRITE, 8r644);
 	if(dfd == nil)
-		return;
+		return sprint("create: %r");
 	buf := array [8192] of byte;
 	for(;;) {
 		n := sys->read(sfd, buf, len buf);
-		if(n <= 0)
+		if(n < 0)
+			return sprint("read: %r");
+		if(n == 0)
 			break;
-		sys->write(dfd, buf[:n], n);
+		if(sys->write(dfd, buf[:n], n) != n)
+			return sprint("write: %r");
 	}
+	return nil;
 }
 
 strtrim(s: string): string
@@ -1963,14 +2099,22 @@ inlist(s: string, l: list of string): int
 	return 0;
 }
 
-renamepak(gitdir, packpath, packname: string)
+# The pack at packpath and the index beside it (indexpack's: the same
+# name, .idx) installed under the pack's own checksum.  packname is not
+# used: the index was looked for at objects/pack/packname.idx, wherever
+# the pack was, and when it was not there the pack was installed without
+# one, its objects never found, and nothing said so.
+renamepak(gitdir, packpath, nil: string): string
 {
+	if(len packpath < 6 || packpath[len packpath - 5:] != ".pack")
+		return "not a pack: its name does not end .pack";
 	pfd := sys->open(packpath, Sys->OREAD);
 	if(pfd == nil)
-		return;
+		return sprint("cannot open the fetched pack: %r");
 	sys->seek(pfd, big -20, Sys->SEEKEND);
 	sha := array [20] of byte;
-	sys->read(pfd, sha, 20);
+	if(sys->read(pfd, sha, 20) != 20)
+		return "the fetched pack is too short";
 	pfd = nil;
 
 	packhex := "";
@@ -1979,37 +2123,68 @@ renamepak(gitdir, packpath, packname: string)
 
 	newpackpath := gitdir + "/objects/pack/pack-" + packhex + ".pack";
 	newidxpath := gitdir + "/objects/pack/pack-" + packhex + ".idx";
-	oldidxpath := gitdir + "/objects/pack/" + packname + ".idx";
+	oldidxpath := packpath[0:len packpath - 5] + ".idx";
 
-	copyfile(packpath, newpackpath);
-	copyfile(oldidxpath, newidxpath);
+	err := copyfilee(oldidxpath, newidxpath);
+	if(err == nil)
+		err = copyfilee(packpath, newpackpath);
+	if(err != nil) {
+		sys->remove(newidxpath);
+		sys->remove(newpackpath);
+		return "cannot install the fetched pack: " + err;
+	}
 	sys->remove(packpath);
 	sys->remove(oldidxpath);
+	return nil;
 }
 
-updaterefs(gitdir, remote: string, refs: list of Ref, verbose: int)
+# A remote's branches as this repository's tracking refs, its tags as
+# tags.  The names are the remote's: one that is no ref's name is left
+# out and counted (as git ignores a ref with a broken name), and the
+# answer says how many were; a write that fails is the answer too.
+# "refs/tags/v1^{}" is what tag v1 points at, not a ref.
+updaterefs(gitdir, remote: string, refs: list of Ref, verbose: int): string
 {
+	if(remote == nil || !validrefname("refs/remotes/" + remote + "/x") ||
+	   !validtreename(remote))
+		return "invalid remote name";
+	bad := 0;
+	err: string;
 	for(rl := refs; rl != nil; rl = tl rl) {
 		r := hd rl;
 		name := r.name;
 
-		if(name == "HEAD")
+		if(name == "HEAD" || peeled(name))
 			continue;
 
-		if(len name > 11 && name[:11] == "refs/heads/") {
-			branchname := name[11:];
-			refname := "refs/remotes/" + remote + "/" + branchname;
-			writeref(gitdir, refname, r.hash);
-			if(verbose)
-				sys->fprint(stderr, "  -> %s\n", refname);
+		refname: string;
+		if(len name > 11 && name[:11] == "refs/heads/")
+			refname = "refs/remotes/" + remote + "/" + name[11:];
+		else if(len name > 10 && name[:10] == "refs/tags/")
+			refname = name;
+		else
+			continue;
+		if(!validrefname(name) || !validrefname(refname)) {
+			bad++;
+			continue;
 		}
-
-		if(len name > 10 && name[:10] == "refs/tags/") {
-			writeref(gitdir, name, r.hash);
-			if(verbose)
-				sys->fprint(stderr, "  -> %s\n", name);
+		werr := writeref(gitdir, refname, r.hash);
+		if(werr != nil) {
+			if(err == nil)
+				err = werr;
+			continue;
 		}
+		if(verbose)
+			sys->fprint(stderr, "  -> %s\n", refname);
 	}
+	if(err == nil && bad > 0)
+		err = sprint("%d ref(s) with unsafe names ignored", bad);
+	return err;
+}
+
+peeled(name: string): int
+{
+	return len name > 3 && name[len name - 3:] == "^{}";
 }
 
 isancestor(repo: ref Repo, ancestor, descendant: Hash): int
@@ -2346,11 +2521,19 @@ parseoctal(s: string): int
 # Working Tree Comparison
 # =====================================================================
 
+EMPTYTREE: con "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 isclean(repo: ref Repo, treehash: Hash, workdir: string): (int, string)
 {
 	(otype, data, err) := repo.readobj(treehash);
-	if(err != nil)
-		return (1, nil);	# no tree = empty repo, treat as clean
+	if(err != nil) {
+		# The empty tree need not be stored.  Any other tree that
+		# cannot be read was taken for clean, and what followed (a
+		# checkout, a merge) wrote over the work tree unlooked at.
+		if(treehash.hex() == EMPTYTREE)
+			return (1, nil);
+		return (0, "cannot read the tree to compare: " + err);
+	}
 	if(otype != OBJ_TREE)
 		return (0, "not a tree object");
 
@@ -2652,7 +2835,7 @@ sendpack(remoteurl: string, updates: list of ref RefUpdate,
 {
 	u := url->makeurl(remoteurl);
 	if(u == nil)
-		return "bad url: " + remoteurl;
+		return "bad url";
 
 	host := u.host;
 	port := u.port;

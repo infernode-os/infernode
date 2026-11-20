@@ -21,6 +21,7 @@ Jittmpl: con "/dis/lib/js/jsjitt.dis";
 Disdata: type Dis->Data;	# (the engine has a Data of its own)
 jitthreshold := -2;	# calls and backward jumps before compiling; -1: never; -2: as /env/jsjit says
 jitsig := 0;		# run's signature, from the template
+jitdig: array of byte;	# and its type digest
 jitsrt := 0;
 jitssize := 0;
 jitok := -1;		# 1 ready, 0 cannot, -1 not tried
@@ -77,6 +78,7 @@ jitinit(): int
 	if(tm == nil || len tm.links != 1)
 		return 0;
 	jitsig = tm.links[0].sig;
+	jitdig = tm.links[0].dig;
 	jitsrt = tm.rt;
 	jitssize = tm.ssize;
 	# made, if it is not there, as the shell's profile makes it (a
@@ -792,7 +794,7 @@ jitcompile(c: ref Code): int
 	# arrays it holds are kept as words)
 	m.types = array[] of {ref Dis->Type(m.dsize, 0, nil), ref Dis->Type(Fsize, 2, array[] of {byte 0, byte 16r80})};
 	m.data = ref Disdata.Words((Dis->DEFW << 4), len words, 0, words) :: nil;
-	m.links = array[] of {ref Dis->Link(0, 1, jitsig, "run")};
+	m.links = array[] of {ref Dis->Link(0, 1, jitsig, "run", jitdig)};
 	if(jitcorrupt != nil)
 		spoil(m, c.nregs, jitcorrupt);
 	if((verr := jitverify(m, c.nregs)) != nil) {

@@ -26,8 +26,15 @@
 # a page's Content-Length, ETag, 304, ranges and HEAD; an edit, a new
 # page and a removed one seen at the next request, an unchanged page's
 # ETag kept; host symbolic links out of the site not followed (a page,
-# a file, a directory, an included file); 30 clients at once.  Then emu
-# must not have faulted.
+# a file, a directory, an included file); pages of Markdown nested
+# 20000 deep made (32 deep) and a source too long to be a page refused,
+# the site's other pages served after them (the first took the heap
+# and ended wercfs's one process: no request was answered again); 30
+# clients at once; _werc's config and lib/ not served under another
+# spelling of its name (a host that folds case opens them; here the
+# same directory bound as _WERC), and a page under another spelling of
+# its path the page already made; a page made from a file dated
+# tomorrow dated now.  Then emu must not have faulted.
 #
 # Run from project root: ./tests/host/werc_test.sh
 #
@@ -70,7 +77,7 @@ siteTitle='Test Site'
 siteSubTitle='it''s a subtitle'	# a comment
 meta_description='a site for the test'
 sideBarNavTitle=Pages
-conf_hide_paths secret
+conf_hide_paths secret ABOUT
 conf_enable_blog
 if(~ $req_path /docs/*) {
 	siteTitle='WRONG'
@@ -113,10 +120,18 @@ ln -s "$W/outside.md" "$S/escape2.txt"
 ln -s "$W" "$S/escapedir"
 ln -s "$W/outside.md" "$S/_werc/lib/headers.inc"
 
+# What a host that folds case makes of a name in another case, made
+# here by binds: _WERC is the site's _werc and ABOUT.md its about.md,
+# the same files under a second spelling.
+mkdir "$S/_WERC"
+: > "$S/ABOUT.md"
+
 PORT=$((20000 + $$ % 20000))
 T=/tmp/$NAME
 cat > "$W/run.sh" <<INFERNO
 mkdir -p $T/www
+bind $T/werc/sites/example.test/_werc $T/werc/sites/example.test/_WERC
+bind $T/werc/sites/example.test/about.md $T/werc/sites/example.test/ABOUT.md
 mount {wercfs -w $T/werc $T/werc/sites/example.test >[2] $T/wercfs.err} $T/www
 svc/httpd/httpd -v -s 40 -T text/html -l $T/access.log -a tcp!127.0.0.1!$PORT $T/www &
 while {! ftest -e $T/stop} {sleep 1}

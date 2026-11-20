@@ -2,7 +2,6 @@ intro 0intro
 arg arg
 asn1 asn1
 decode asn1
-encode asn1
 attrdb attrdb
 bloomfilter bloomfilter
 bufio bufio
@@ -160,6 +159,14 @@ rc4 keyring-rc4
 rc4back keyring-rc4
 rc4setup keyring-rc4
 rc4skip keyring-rc4
+dsapk keyring-rsa
+dsask keyring-rsa
+egpk keyring-rsa
+egsk keyring-rsa
+keyring keyring-rsa
+keyring-rsa keyring-rsa
+rsapk keyring-rsa
+rsask keyring-rsa
 hmac_md5 keyring-sha1
 hmac_sha1 keyring-sha1
 keyring keyring-sha1
@@ -239,6 +246,7 @@ rooted names
 newns newns
 nmea nmea
 plumbmsg plumbmsg
+mailconn mailconn
 pop3 pop3
 print print
 prof prof

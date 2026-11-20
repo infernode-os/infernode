@@ -166,7 +166,19 @@ hierarchical modes are refused.  It also implements
 .B Jpegplanes
 .RI ( jpegenc (2)),
 which gives a 4:2:0 JPEG's planes as decoded, without converting them to
-RGB.
+RGB, and
+.BR Jpegscaled ,
+whose
+.B scaled
+decodes at the smallest of 1, 1/2, 1/4 and 1/8 of the size that is still
+.I minw
+by
+.I minh
+(as libjpeg's
+.BR scale_denom ,
+by inverse DCTs of the block's lowest coefficients), returning the image
+and its own width and height; 0 by 0 is the whole size.  A photograph
+several times the screen's width decodes in about half the time.
 .PP
 Writing JPEG is
 .IR jpegenc (2)'s,

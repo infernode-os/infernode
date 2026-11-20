@@ -17,7 +17,17 @@ AuditProv: module
 	# payload. The score locates; the SHA-256, sealed into the chain,
 	# pins — venti's SHA-1 addressing is treated as mechanism only.
 	# A record whose payload could not be stored carries
-	# content=unstored instead (the event is still sealed).
+	# content=unstored instead (the event is still sealed), and
+	# why=no-store, too-large or store-failed.
+	#
+	# These keys, and cut, are the emitter's: in a record written by
+	# log() each is given once, by log().  A word of the caller's
+	# message that begins with one, or with a key the message gives
+	# twice, is not a field and is written as value() writes it.
+
+	# A caller's message is at most this many bytes; a longer one is
+	# cut and the record says cut=<its length>.
+	MAXMSG:		con 2048;
 
 	init:		fn(): string;
 
@@ -39,6 +49,17 @@ AuditProv: module
 
 	# get fetches a payload back by the score put() returned.
 	get:		fn(score: string): (array of byte, string);
+
+	# value writes text that is not the caller's own (a tool's name
+	# the model chose, a file's name, anything read from elsewhere)
+	# as the value of a key=value field: one word, with no blank and
+	# no key= of its own (Auditchain->value; unvalue reads it back).
+	# A caller building msg writes  "tool=" + value(name).
+	value:		fn(s: string): string;
+
+	# get fetches by score alone and checks nothing against a record:
+	# the score is venti's SHA-1.  Compare sha256() of what it returns
+	# with the record's sha256= before relying on it (auditget -s).
 
 	# sha256 of a payload, as the lowercase hex a record carries.
 	sha256:		fn(data: array of byte): string;

@@ -58,6 +58,7 @@ usage(void)
 		"\t-r<rootpath>\n"
 		"\t-7\n"
 		"\t-B\n"
+		"\t-L\n"
 		"\t-C<channel string>\n"
 		"\t-S\n");
 
@@ -198,6 +199,9 @@ option(int argc, char *argv[], void (*badusage)(void))
 			fprint(2, "emu: invalid channel specifier (-C): %q\n", cp);
 			exits("usage");
 		}
+		break;
+	case 'L':		/* link modules by their type digests only */
+		strictlink = 1;
 		break;
 	case 'S':
 		tkstylus = 1;

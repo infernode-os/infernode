@@ -38,6 +38,12 @@ Background: con int 16r777777FF;
 screen: ref Screen;
 display: ref Display;
 ptrfocus: ref Client;
+# each client's last "cursor" request (wmlib's, as Tk's cursor command
+# sends it: a link's hand in Charon), shown while the pointer is over
+# its window, as Lucifer does; "cursor" alone, the arrow, is kept as none
+cursors: list of (ref Client, string);
+shown := "cursor";	# the cursor the screen has
+lastxy: Point;	# where the pointer was last
 kbdfocus: ref Client;
 docked: ref Client;	# a keyboard on the screen ("dock"), above every other window
 controller: ref Client;
@@ -190,6 +196,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		if(kbdfocus != nil)
 			kbdfocus.kbd <-= c;
 	p := <-wmctxt.ptr =>
+		lastxy = p.xy;
 		if(wmclient->win.pointer(*p))
 			break;
 		if(held){
@@ -198,6 +205,18 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			if(p.buttons == 0)
 				held = 0;
 			break;
+		}
+		# the cursor of the window the pointer is over, or of the one a
+		# press went to while it is held; a frame's is the arrow
+		{
+			over := ptrfocus;
+			if(buttons == 0 || over == nil){
+				over = nil;
+				(fc, nil) := framehit(p.xy);
+				if(fc == nil)
+					over = wmsrv->find(p.xy);
+			}
+			setcursor(cursorof(over));
 		}
 		if(p.buttons && (ptrfocus == nil || buttons == 0)){
 			presspt = p.xy;
@@ -392,6 +411,17 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 		c.setimage(hd tl args, nil);
 		if(c.wins == nil && c == kbdfocus)
 			setkbdfocus(nil);
+	"cursor" =>
+		# cursor [hotx hoty w h bits]: the window's cursor from now on
+		ncs: list of (ref Client, string);
+		for(l := cursors; l != nil; l = tl l)
+			if((hd l).t0 != c)
+				ncs = hd l :: ncs;
+		cursors = ncs;
+		if(req != "cursor")
+			cursors = (c, req) :: cursors;
+		if(c == ptrfocus || c == wmsrv->find(lastxy))
+			setcursor(req);
 	"raise" =>
 		totop(c);
 	"lower" =>
@@ -1177,6 +1207,11 @@ forgetclient(c: ref Client)
 		ptrfocus = nil;
 	if(c == kbdfocus)
 		kbdfocus = nil;
+	ncs: list of (ref Client, string);
+	for(l := cursors; l != nil; l = tl l)
+		if((hd l).t0 != c)
+			ncs = hd l :: ncs;
+	cursors = ncs;
 	if(c == controller)
 		controller = nil;
 	if(c == docked)
@@ -1315,6 +1350,18 @@ setcursor(c: string)
 {
 	if(c == nil)
 		c = "cursor";
+	if(c == shown)
+		return;
+	shown = c;
 	if(wmwin != nil)
 		wmclient->wmwin.wmctl(c);
+}
+
+cursorof(c: ref Client): string
+{
+	if(c != nil)
+		for(l := cursors; l != nil; l = tl l)
+			if((hd l).t0 == c)
+				return (hd l).t1;
+	return "cursor";
 }

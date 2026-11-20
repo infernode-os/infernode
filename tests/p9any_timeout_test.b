@@ -75,6 +75,27 @@ stallserver(c: Sys->Connection, accepted, closed: chan of int)
 	closed <-= 1;
 }
 
+fakecs(io: ref Sys->FileIO)
+{
+	q := "";
+	for(;;) alt{
+	(nil, data, nil, wc) := <-io.write =>
+		if(wc == nil)
+			continue;
+		q = string data;
+		wc <-= (len data, nil);
+	(off, nil, nil, rc) := <-io.read =>
+		if(rc == nil)
+			continue;
+		if(off > 0)
+			rc <-= (nil, nil);
+		else if(len q > 0 && q[0] == '!')
+			rc <-= (array of byte "authdom=test auth=127.0.0.1", nil);
+		else
+			rc <-= (array of byte ("/net/tcp/clone " + hangaddr[len "tcp!":]), nil);
+	}
+}
+
 timer(c: chan of int, ms: int)
 {
 	sys->sleep(ms);
@@ -102,7 +123,19 @@ init(nil: ref Draw->Context, nil: list of string)
 	closed := chan[1] of int;
 	spawn stallserver(c, accepted, closed);
 
-	tr := ref Ticketreq(Auth9->AuthTreq, "server", nil,
+	# p9sk1 asks the connection server for the negotiated domain's
+	# authentication server and takes no other ($auth was the fallback,
+	# whatever the domain): a connection server of the test's own names
+	# one for "test", and translates the dial that follows.
+	sys->pctl(Sys->FORKNS, nil);
+	if(sys->bind("#s", "/net", Sys->MBEFORE) < 0)
+		fail(sys->sprint("cannot bind #s on /net: %r"));
+	csio := sys->file2chan("/net", "cs");
+	if(csio == nil)
+		fail(sys->sprint("cannot serve /net/cs: %r"));
+	spawn fakecs(csio);
+
+	tr := ref Ticketreq(Auth9->AuthTreq, "server", "test",
 		array[Auth9->CHALLEN] of byte, "client", "client");
 	ticketreq = tr.pack();
 	testkey = ref Key(ref Attr(Aval, "user", "client") :: nil,
@@ -214,5 +247,19 @@ lookattrval(a: list of ref Attr, name: string): string
 	return nil;
 }
 
-parseline(nil: string): list of ref Attr { return nil; }
+# what the test's connection server answers: name=value pairs
+parseline(s: string): list of ref Attr
+{
+	al: list of ref Attr;
+	(nil, toks) := sys->tokenize(s, " \t\n");
+	for(; toks != nil; toks = tl toks){
+		t := hd toks;
+		for(i := 0; i < len t; i++)
+			if(t[i] == '=')
+				break;
+		if(i < len t)
+			al = ref Attr(Aval, t[0:i], t[i+1:]) :: al;
+	}
+	return al;
+}
 attrtext(nil: list of ref Attr): string { return nil; }

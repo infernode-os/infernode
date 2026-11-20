@@ -77,11 +77,18 @@ fcontract(uchar *out, const felem in)
 	t[4] += t[3] >> 51; t[3] &= MASK51;
 	mask = ~((t[4] >> 51) - 1);
 	t[4] &= MASK51;
+	/*
+	 * 19 is taken back when p was not taken: what leaves the top of a
+	 * limb here is a borrow, and it was added to the next limb, as a
+	 * carry is.  A result whose low limb was within 19 of 2^51 (one in
+	 * 2^46 of them, and no RFC 7748 vector) came out with 2^51 added
+	 * twice over: another number.
+	 */
 	t[0] -= 19 & ~mask;
-	t[1] += t[0] >> 63; t[0] &= MASK51;
-	t[2] += t[1] >> 63; t[1] &= MASK51;
-	t[3] += t[2] >> 63; t[2] &= MASK51;
-	t[4] += t[3] >> 63; t[3] &= MASK51;
+	t[1] -= t[0] >> 63; t[0] &= MASK51;
+	t[2] -= t[1] >> 63; t[1] &= MASK51;
+	t[3] -= t[2] >> 63; t[2] &= MASK51;
+	t[4] -= t[3] >> 63; t[3] &= MASK51;
 
 	out[0] = t[0]; out[1] = t[0]>>8; out[2] = t[0]>>16;
 	out[3] = t[0]>>24; out[4] = t[0]>>32; out[5] = t[0]>>40;
@@ -311,6 +318,15 @@ x25519(uchar out[32], uchar scalar[32], uchar point[32])
 	finvert(z2, z2);
 	fmul(x2, x2, z2);
 	fcontract(out, x2);
+
+	/* the scalar, and the ladder: x2 is the result, which is a secret shared */
+	secureZero(e, sizeof e);
+	secureZero(x2, sizeof x2);
+	secureZero(z2, sizeof z2);
+	secureZero(x3, sizeof x3);
+	secureZero(z3, sizeof z3);
+	secureZero(tmp0, sizeof tmp0);
+	secureZero(tmp1, sizeof tmp1);
 }
 
 static uchar basepoint[32] = {9};

@@ -1,5 +1,6 @@
 #include "os.h"
 #include <mp.h>
+#include "dat.h"
 
 #define iseven(a)	(((a)->p[0] & 1) == 0)
 
@@ -9,35 +10,83 @@
 // ax + by = v
 //
 // Handbook of Applied Cryptography, Menezes et al, 1997, pg 608.  
-void
-mpextendedgcd(mpint *a, mpint *b, mpint *v, mpint *x, mpint *y)
+//
+// Its time follows its operands at every step: it is for numbers that
+// are public, or that have been blinded (rsadecrypt's r, egsign's
+// k*b).  A secret is inverted mod a prime as a power (dsasign).
+//
+// Every working number is made first, at the length it can reach, and
+// the results given room: nothing here allocates after that, so a
+// raise for want of memory leaves none of the eight behind (each made
+// in turn was lost when a later one, or a sum grown by a digit, was
+// refused).  mpextendedgcdtry returns -1 for it; mpextendedgcd raises.
+int
+mpextendedgcdtry(mpint *a, mpint *b, mpint *v, mpint *x, mpint *y)
 {
-	mpint *u, *A, *B, *C, *D;
-	int g;
+	mpint *u, *A, *B, *C, *D, *a0, *b0;
+	int g, atop, btop;
+	vlong bits;
 
 	if(a->sign < 0 || b->sign < 0){
 		mpassign(mpzero, v);
 		mpassign(mpzero, y);
 		mpassign(mpzero, x);
-		return;
+		return 0;
 	}
 
-	if(a->top == 0){
+	// zero digits above a number are not the number: a zero written
+	// with digits passed these tests, and the loops below, which look
+	// at the low digit, halved it for ever
+	atop = a->top;
+	while(atop > 0 && a->p[atop-1] == 0)
+		atop--;
+	btop = b->top;
+	while(btop > 0 && b->p[btop-1] == 0)
+		btop--;
+	// the longer operand and three digits: a sum's carry, mpadd's
+	// digit of room for one, and mpleft's
+	bits = ((vlong)(atop > btop? atop: btop) + 3)*Dbits;
+	if(bits > MAXBITS || mpreservetry(v, bits) < 0 || mpreservetry(x, bits) < 0 || mpreservetry(y, bits) < 0)
+		return -1;
+	if(atop == 0){
 		mpassign(b, v);
+		mpnorm(v);
 		mpassign(mpone, y);
 		mpassign(mpzero, x);
-		return;
+		return 0;
 	}
-	if(b->top == 0){
+	if(btop == 0){
 		mpassign(a, v);
+		mpnorm(v);
 		mpassign(mpone, x);
 		mpassign(mpzero, y);
-		return;
+		return 0;
 	}
 
 	g = 0;
-	a = mpcopy(a);
-	b = mpcopy(b);
+	a0 = mptrynew(bits);
+	b0 = mptrynew(bits);
+	u = mptrynew(bits);
+	A = mptrynew(bits);
+	B = mptrynew(bits);
+	C = mptrynew(bits);
+	D = mptrynew(bits);
+	if(a0 == nil || b0 == nil || u == nil || A == nil || B == nil || C == nil || D == nil){
+		mpfree(a0);
+		mpfree(b0);
+		mpfree(u);
+		mpfree(A);
+		mpfree(B);
+		mpfree(C);
+		mpfree(D);
+		return -1;
+	}
+	mpassign(a, a0);
+	mpassign(b, b0);
+	a = a0;
+	b = b0;
+	a->top = atop;
+	b->top = btop;
 
 	while(iseven(a) && iseven(b)){
 		mpright(a, 1, a);
@@ -45,12 +94,12 @@ mpextendedgcd(mpint *a, mpint *b, mpint *v, mpint *x, mpint *y)
 		g++;
 	}
 
-	u = mpcopy(a);
+	mpassign(a, u);
 	mpassign(b, v);
-	A = mpcopy(mpone);
-	B = mpcopy(mpzero);
-	C = mpcopy(mpzero);
-	D = mpcopy(mpone);
+	mpassign(mpone, A);
+	mpassign(mpzero, B);
+	mpassign(mpzero, C);
+	mpassign(mpone, D);
 
 	for(;;) {
 //		print("%B %B %B %B %B %B\n", u, v, A, B, C, D);
@@ -101,4 +150,12 @@ mpextendedgcd(mpint *a, mpint *b, mpint *v, mpint *x, mpint *y)
 	mpfree(u);
 	mpfree(a);
 	mpfree(b);
+	return 0;
+}
+
+void
+mpextendedgcd(mpint *a, mpint *b, mpint *v, mpint *x, mpint *y)
+{
+	if(mpextendedgcdtry(a, b, v, x, y) < 0)
+		sysfatal("mpextendedgcd: no memory");
 }

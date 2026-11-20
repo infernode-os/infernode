@@ -126,6 +126,16 @@ struct SigAlgVec {
 	void*	(*genskfrompk)(void*);
 	void*	(*sign)(mpint*, void*);
 	int	(*verify)(mpint*, void*, void*);
+	/*
+	 * For an algorithm that signs bytes (Ed25519, ML-DSA, SLH-DSA),
+	 * the digest as it is, at its full length; nil for one that signs
+	 * a number (RSA, DSA, ElGamal), to which a digest is that number
+	 * and its leading zero bytes are no part of it.  The byte signers
+	 * used to be handed the number's bytes too (mptobe), so a digest
+	 * beginning 00 was signed as 31 bytes of a 32-byte hash.
+	 */
+	void*	(*signb)(uchar*, int, void*);
+	int	(*verifyb)(uchar*, int, void*, void*);
 
 	void	(*skfree)(void*);
 	void	(*pkfree)(void*);

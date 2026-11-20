@@ -83,6 +83,9 @@ Git: module
 		hash: Hash;
 	};
 	parsetree: fn(data: array of byte): (array of TreeEntry, string);
+	# a name a tree may give a file: one component, not ".", "..", or
+	# anything a host could take for ".git"
+	validtreename: fn(name: string): int;
 
 	Tag: adt {
 		obj:    Hash;
@@ -137,14 +140,17 @@ Git: module
 	splitfirst:   fn(s: string, sep: int): (string, string);
 	findgitdir:   fn(dir: string): string;
 	getremoteurl: fn(gitdir, remote: string): string;
-	writeref:     fn(gitdir, name: string, h: Hash);
-	writesymref:  fn(gitdir, name, target: string);
+	# a ref's name as git has it (check-ref-format), under refs/
+	validrefname: fn(name: string): int;
+	# each gives nil, or why nothing was written
+	writeref:     fn(gitdir, name: string, h: Hash): string;
+	writesymref:  fn(gitdir, name, target: string): string;
 	mkdirp:       fn(filepath: string);
 	copyfile:     fn(src, dst: string);
 	strtrim:      fn(s: string): string;
 	inlist:       fn(s: string, l: list of string): int;
-	renamepak:    fn(gitdir, packpath, packname: string);
-	updaterefs:   fn(gitdir, remote: string, refs: list of Ref, verbose: int);
+	renamepak:    fn(gitdir, packpath, packname: string): string;
+	updaterefs:   fn(gitdir, remote: string, refs: list of Ref, verbose: int): string;
 	isancestor:   fn(repo: ref Repo, ancestor, descendant: Hash): int;
 	isclean:      fn(repo: ref Repo, treehash: Hash, workdir: string): (int, string);
 

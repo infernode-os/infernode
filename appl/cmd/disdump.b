@@ -29,8 +29,14 @@ init(nil: ref Draw->Context, argv: list of string)
 		raise "fail:bad module";
 	}
 
+	# -l: the links and imports, with their type digests, not the code
+	lflag := 0;
+	if (len argv > 1 && hd tl argv == "-l") {
+		lflag = 1;
+		argv = tl argv;
+	}
 	if (len argv < 2) {
-		sys->fprint(stderr, "usage: dis module...\n");
+		sys->fprint(stderr, "usage: dis [-l] module...\n");
 		raise "fail:usage";
 	}
 	dis->init();
@@ -43,10 +49,41 @@ init(nil: ref Draw->Context, argv: list of string)
 			errs++;
 			continue;
 		}
+		if (lflag) {
+			links(out, mod);
+			continue;
+		}
 		for (i := 0; i < len mod.inst; i++)
 			out.puts(dis->inst2s(mod.inst[i])+"\n");
 	}
 	out.close();
 	if (errs)
 		raise "fail:errors";
+}
+
+hex(d: array of byte): string
+{
+	if (d == nil)
+		return "-";
+	s := "";
+	for (i := 0; i < len d; i++)
+		s += sys->sprint("%.2ux", int d[i]);
+	return s;
+}
+
+# what the loader checks when the module is linked: each function it
+# exports and imports, its 32-bit signature and, where the file has
+# them (HASSIGS), the digest of its type
+links(out: ref Iobuf, m: ref Dis->Mod)
+{
+	out.puts(sys->sprint("module %s rt 0x%ux\n", m.name, m.rt));
+	for (i := 0; i < len m.links; i++) {
+		l := m.links[i];
+		out.puts(sys->sprint("\tlink %d,%d, 0x%ux, \"%s\" %s\n", l.desc, l.pc, l.sig, l.name, hex(l.dig)));
+	}
+	for (i = 0; i < len m.imports; i++)
+		for (j := 0; j < len m.imports[i]; j++) {
+			im := m.imports[i][j];
+			out.puts(sys->sprint("\timport %d 0x%ux, \"%s\" %s\n", i, im.sig, im.name, hex(im.dig)));
+		}
 }

@@ -1,0 +1,9 @@
+# What the tests of tools/ref/wpt-suites load besides themselves:
+# references, support files, fonts, images.  tools/ref/wpt-fetch.sh
+# checks these out with the suites.
+css/reference
+css/support
+fonts
+resources
+images
+common

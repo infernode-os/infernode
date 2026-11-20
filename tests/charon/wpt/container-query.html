@@ -1,0 +1,8 @@
+<!doctype html><title>@container rules hold by their container's size, not always</title>
+<style>body{margin:0} .w{width:100px;container-type:inline-size} .n{width:50px;container:card / inline-size}
+.x{height:50px;background:red} .y{height:50px;background:green} .z{height:50px;background:green}
+@container (min-width: 80px) { .x { background: green } }
+@container (max-width: 80px) { .y { background: red } }
+@container card (min-width: 80px) { .z { background: red } }</style>
+<div class=w><div class=x></div><div class=y></div></div>
+<div class=n><div class=z></div></div>

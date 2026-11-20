@@ -373,7 +373,7 @@ The verify persona *runs* the check, probes edge cases, and ends with a single
 
 For deployments where untrusted prompts may reach the agent:
 
-1. **Trim the tool budget** — remove `exec`, `shell`, `launch`, `spawn`, `git`, `keyring`, `wallet` from `-b` and the positional tool list in `lib/lucifer/boot.sh`.
+1. **Trim the tool budget** — remove `exec`, `shell`, `launch`, `spawn`, `keyring`, `wallet` from `-b` (`git` is not in it by default) and the positional tool list in `lib/lucifer/boot.sh`.
 2. **Restrict `-p` paths** — only mount what the agent legitimately needs.
 3. **Disable `xenith` and `memory`** in the `Capabilities` you construct.
 4. **Pin `llmconfig.model`** so prompt-injected attempts to switch to a more permissive model can't take effect.

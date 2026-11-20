@@ -55,13 +55,29 @@ interaction(attrs: list of ref Attr, io: ref Authio->IO): string
 	return nil;
 }
 
+# A long-term key is one peripheral's, and sixteen bytes; its Rand is
+# eight.  (The check was here and nothing called it.)
 keycheck(k: ref Authio->Key): string
 {
+	if(authio->lookattrval(k.attrs, "addr") == nil)
+		return "a btltk key needs addr=";
 	key := authio->lookattrval(k.secrets, "!ltk");
-	if(key != nil && len key != 32)
+	if(key == nil || !hexdigits(key, 32))
 		return "btltk !ltk must be 32 hex digits";
 	rnd := authio->lookattrval(k.attrs, "rand");
-	if(rnd != nil && len rnd != 16)
+	if(rnd != nil && !hexdigits(rnd, 16))
 		return "btltk rand must be 16 hex digits";
 	return nil;
+}
+
+hexdigits(s: string, n: int): int
+{
+	if(len s != n)
+		return 0;
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		if(!(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'))
+			return 0;
+	}
+	return 1;
 }

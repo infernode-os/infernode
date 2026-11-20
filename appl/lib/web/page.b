@@ -16,6 +16,7 @@ include "imagefile.m";
 	imageremap: Imageremap;
 include "imgload.m";
 	imgload: Imgload;
+	jpegscaled: Jpegscaled;
 include "encoding.m";
 	base64: Encoding;
 include "web/dom.m";
@@ -27,6 +28,7 @@ include "web/css.m";
 	css: Css;
 include "web/style.m";
 	style: Style;
+	Vars: import style;
 	Styles, Env: import style;
 include "outlinefont.m";
 include "web/fonts.m";
@@ -36,6 +38,8 @@ include "web/layout.m";
 include "plumbmsg.m";
 	plumbmsg: Plumbmsg;
 	Msg: import plumbmsg;
+include "publicnet.m";
+	publicnet: Publicnet;
 include "web/page.m";
 
 display: ref Display;
@@ -138,8 +142,10 @@ init(d: ref Display): string
 	layout = load Layout Layout->PATH;
 	imgload = load Imgload Imgload->PATH;
 	imageremap = load Imageremap Imageremap->PATH;
+	jpegscaled = load Jpegscaled Jpegscaled->PATH;	# (without it, JPEGs decode whole)
 	base64 = load Encoding Encoding->BASE64PATH;
-	if(html == nil || css == nil || style == nil || layout == nil)
+	publicnet = load Publicnet Publicnet->PATH;
+	if(html == nil || css == nil || style == nil || layout == nil || publicnet == nil)
 		return sys->sprint("cannot load modules: %r");
 	display = d;
 	html->init();
@@ -164,7 +170,13 @@ open(url: string, width, height: int): (ref Pg, string)
 
 request(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
-	(p, err) := begin(url, method, reqctype, body, width, height);
+	return requestfrom(nil, url, method, reqctype, body, width, height);
+}
+
+# request, on behalf of the page at from (its frame)
+requestfrom(from, url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
+{
+	(p, err) := begin0(from, url, method, reqctype, body, width, height, 1);
 	if(p == nil)
 		return (nil, err);
 	images(p);
@@ -190,17 +202,51 @@ phase(what: string)
 
 begin(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
-	return begin0(url, method, reqctype, body, width, height, 1);
+	return begin0(nil, url, method, reqctype, body, width, height, 1);
 }
 
 go(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
-	return begin0(url, method, reqctype, body, width, height, 2);
+	return begin0(nil, url, method, reqctype, body, width, height, 2);
 }
 
-# page is 1 for a page (a frame's too), 2 for one navigated to
-begin0(url, method, reqctype: string, body: array of byte, width, height: int, page: int): (ref Pg, string)
+# ---- what a page may have loaded ----
+#
+# A document that came from the network does not have the browser read
+# its own name space.  Only the user does: file: URLs, and names with
+# no scheme, are read by fetchfinal as whoever runs the browser, so a
+# page linking, framing, redirecting or scripting its way to
+# file:///usr/someone/... was shown that file (and anything that reads
+# the page for the user, an agent's charon tool, was given it).  from
+# is the address of the document that asks, nil when nobody's page
+# does (the user typed it, or went back to it).  data: and about: name
+# nothing outside themselves and are always loaded; a document made of
+# such a URL is whoever wrote the URL, so it asks as the network does.
+mayload(from, url: string): int
 {
+	(ts, nil) := splitscheme(url);
+	if(ts == "data" || ts == "about")
+		return 1;
+	(fs, nil) := splitscheme(from);
+	if(fs == "data" || fs == "about" || fs == "blob" || fs == "javascript")
+		from = "http:";
+	return publicnet->transitionallowed(from, ts);
+}
+
+notallowed(url: string): string
+{
+	(ts, nil) := splitscheme(url);
+	if(ts == "")
+		ts = "file";
+	return "a page from the network may not open a " + ts + ": address";
+}
+
+# page is 1 for a page (a frame's too), 2 for one navigated to; from
+# is the page that asks for it, nil if none does
+begin0(from, url, method, reqctype: string, body: array of byte, width, height: int, page: int): (ref Pg, string)
+{
+	if(!mayload(from, url))
+		return (nil, notallowed(url));
 	readsettings();
 	(pok, nil) := sys->stat("/env/pagetime");
 	ptime = pok >= 0;
@@ -218,7 +264,7 @@ begin0(url, method, reqctype: string, body: array of byte, width, height: int, p
 	if(method == "POST" || scheme == "http" || scheme == "https")
 		(data, ctype, err, final, nil) = webfsp(url, method, reqctype, body, nil, page);
 	else
-		(data, ctype, err, final) = fetchfinal(url, nil);
+		(data, ctype, err, final) = fetchfinal(from, url, nil);
 	phase(sys->sprint("fetched (%d bytes)", len data));
 	if(err != nil && len data == 0)
 		return (nil, err);	# (webfs gives a failed dial an empty body, not none)
@@ -241,7 +287,7 @@ images(p: ref Pg)
 {
 	if((urls := p.wanted()) != nil) {
 		pics: list of ref Pic;
-		got := fetchall(urls, ACCEPTIMAGE);
+		got := fetchall(p.url, urls, ACCEPTIMAGE);
 		phase(sys->sprint("images fetched (%d)", len got));
 		for(; got != nil; got = tl got) {
 			g := hd got;
@@ -262,7 +308,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	scripting := setting("scripts") == "on";
 	html->scripting(scripting);
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, pxscale, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil);
+		ref Env(width, height, pxscale, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil, 0, 0, nil, nil);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);
@@ -274,11 +320,13 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 		p.doc = html->parse(data, charset, url);
 	d := p.doc;
 	phase(sys->sprint("parsed (%d nodes)", d.n));
-	# <base href>
-	if((b := d.find(1, Dom->Tbase)) != 0 && (h := d.attr(b, "href")) != nil) {
+	# <base href>: what the document's relative URLs are resolved
+	# against (d.url), not where it is.  It was made the page's address
+	# too: a page saying <base href="file:///usr/x/"> was then a file:
+	# page to everything that asked, its scripts given that directory,
+	# and the address shown for it whatever the page chose.
+	if((b := d.find(1, Dom->Tbase)) != 0 && (h := d.attr(b, "href")) != nil)
 		d.url = style->resolveurl(url, h);
-		p.url = d.url;
-	}
 	if((t := d.find(1, Dom->Ttitle)) != 0)
 		p.title = squash(d.textof(t));
 	declarative(d);
@@ -290,6 +338,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	phase("objects");
 	plock();
 	{
+		style->setcontainers(p.cqs);
 		p.computed = style->compute(d, p.styles, p.env);
 		phase("styles computed");
 		rebuild(p);
@@ -339,6 +388,67 @@ rebuild(p: ref Pg)
 	phase("rebuild: inline svgs");
 	if(layoutcheck && old != nil)
 		checklayout(p);
+	if(!incq)
+		cqpass(p);
+}
+
+# @container conditions are of the containers' sizes, which only a
+# layout knows: styles computed with the sizes the last one gave (the
+# viewport's at first), the page is styled and laid out again, twice at
+# most, while a condition was asked and a container's size changed
+# (Vercel's hero, a row at @lg, was all its variants at once)
+incq := 0;
+cqpass(p: ref Pg)
+{
+	for(pass := 0; pass < 2; pass++) {
+		if(!style->containersasked())
+			return;
+		sizes := array[p.doc.n] of {* => (-1, -1)};
+		if(!cqsizes(p.root, sizes))
+			return;
+		if(p.cqs != nil && len p.cqs == len sizes) {
+			same := 1;
+			for(i := 0; i < len sizes && same; i++)
+				if(sizes[i].t0 != p.cqs[i].t0 || sizes[i].t1 != p.cqs[i].t1)
+					same = 0;
+			if(same)
+				return;
+		}
+		p.cqs = sizes;
+		style->setcontainers(p.cqs);
+		p.computed = style->compute(p.doc, p.styles, p.env);
+		incq = 1;
+		{
+			rebuild(p);
+		} exception e {
+		"*" =>
+			incq = 0;
+			raise e;
+		}
+		incq = 0;
+		phase("rebuild: containers");
+	}
+}
+
+# each query container's content box, by node; whether there is one
+cqsizes(b: ref Box, sizes: array of (int, int)): int
+{
+	any := 0;
+	if(b.node > 0 && b.node < len sizes && b.st != nil && b.st.cqtype != 0) {
+		sizes[b.node] = (b.w - b.bl - b.br - b.pl - b.pr, b.h - b.bt - b.bb - b.pt - b.pb);
+		any = 1;
+	}
+	for(i := 0; i < len b.kids; i++)
+		any |= cqsizes(b.kids[i], sizes);
+	for(l := b.pos; l != nil; l = tl l)
+		any |= cqsizes(hd l, sizes);
+	for(i = 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		for(j := 0; j < len ln.frags; j++)
+			if(ln.frags[j].kind == Layout->Fatomic && ln.frags[j].box != nil)
+				any |= cqsizes(ln.frags[j].box, sizes);
+	}
+	return any;
 }
 
 # a test's (/env/layoutcheck): the boxes built and laid out again from
@@ -420,8 +530,14 @@ Pg.wanted(p: self ref Pg): list of string
 		curdoc = p.doc;
 		ny := array[p.doc.n + 1] of {* => -1};
 		nodetops(p.root, ny);
-		for(l := replacedboxes(p.root, nil); l != nil; l = tl l)
-			urls = ((hd l).url, boxtop(hd l)) :: urls;
+		lazy := p.lazy && !p.allimages;
+		for(l := replacedboxes(p.root, nil); l != nil; l = tl l) {
+			b := hd l;
+			y := boxtop(b);
+			if(lazy && b.url != nil && !nearview(p, y, b.h) && islazy(p.doc, b.node))
+				continue;	# later, should the view come near it
+			urls = (b.url, y) :: urls;
+		}
 		c := p.computed;
 		for(i := 0; i < len c.st; i++) {
 			y := Unplaced;
@@ -450,6 +566,8 @@ Pg.wanted(p: self ref Pg): list of string
 		(u, y) := hd urls;
 		if(u == nil || picof(p, u) != nil)
 			continue;
+		if(!mayload(p.url, u))
+			continue;	# not this page's to have: never fetched
 		if(click && !local(u) && !member(u, p.asked))
 			continue;
 		for(t := r; t != nil; t = tl t)
@@ -484,6 +602,24 @@ toptobottom(l: list of (string, int), n: int): list of string
 	for(i = n - 1; i >= 0; i--)
 		r = a[i].t0 :: r;
 	return r;
+}
+
+# How near the view an <img loading=lazy> is fetched: Chrome's margin
+LAZYMARGIN: con 1250;	# CSS px
+
+# whether a box at y, h tall, is within LAZYMARGIN of the view
+nearview(p: ref Pg, y, h: int): int
+{
+	m := int (real LAZYMARGIN * pxscale);
+	return y < p.view + p.height + m && y + h > p.view - m;
+}
+
+islazy(d: ref Doc, n: int): int
+{
+	if(n <= 0 || n >= len d.nodes)
+		return 0;
+	nd := d.nodes[n];
+	return nd.tag == Dom->Timg && nd.ns == Dom->HTML && lower(d.attr(n, "loading")) == "lazy";
 }
 
 # a box's top in page coordinates (an absolutely positioned box's
@@ -522,7 +658,11 @@ Pg.want(p: self ref Pg, n: int): list of string
 		raise e;
 	}
 	punlock();
-	return urls;
+	ok: list of string;
+	for(; urls != nil; urls = tl urls)
+		if(mayload(p.url, hd urls))
+			ok = hd urls :: ok;
+	return ok;
 }
 
 want1(p: ref Pg, n: int): list of string
@@ -557,6 +697,46 @@ want1(p: ref Pg, n: int): list of string
 	return urls;
 }
 
+Pg.shown(p: self ref Pg, urls: list of string): list of (string, int, int)
+{
+	r: list of (string, int, int);
+	plock();
+	{
+		curdoc = p.doc;
+		boxes := replacedboxes(p.root, nil);
+		bgs := bgurls(p);	# a background is tiled at its own size
+		for(; urls != nil; urls = tl urls) {
+			u := hd urls;
+			if(member(u, bgs))
+				continue;
+			(w, h) := (0, 0);
+			unknown := 0;
+			for(l := boxes; l != nil; l = tl l) {
+				b := hd l;
+				if(b.url != u)
+					continue;
+				(bw, bh) := layout->objectbox(b);
+				if(bw <= 1 && bh <= 1) {
+					unknown = 1;	# a box not yet sized: the image says how big
+					continue;
+				}
+				if(bw > w)
+					w = bw;
+				if(bh > h)
+					h = bh;
+			}
+			if(!unknown && (w > 1 || h > 1))
+				r = (u, w, h) :: r;
+		}
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+	return r;
+}
+
 Pg.wantall(p: self ref Pg)
 {
 	p.allimages = 1;
@@ -570,6 +750,7 @@ local(u: string): int
 
 Pg.install(p: self ref Pg, pics: list of ref Pic)
 {
+	fresh: list of ref Pic;
 	for(; pics != nil; pics = tl pics) {
 		pic := hd pics;
 		if(pic == nil || picof(p, pic.url) != nil)
@@ -577,16 +758,91 @@ Pg.install(p: self ref Pg, pics: list of ref Pic)
 		if(pic.err != nil)
 			p.errors = pic.url + ": " + pic.err :: p.errors;
 		p.pics = pic :: p.pics;
+		fresh = pic :: fresh;
 	}
 	plock();
 	{
-		rebuild(p);
+		# pictures whose boxes their pixels cannot resize go straight
+		# into them; any other is laid out with the page again (a long
+		# Wikipedia article's 15 images were five 500ms relayouts)
+		if(!placed(p, fresh))
+			rebuild(p);
 	} exception e {
 	"*" =>
 		punlock();
 		raise e;
 	}
 	punlock();
+}
+
+# put the fresh pictures in their boxes with no relayout, if that is
+# all they change: each shown by boxes already, only by boxes whose width
+# and height are both lengths (an <img width height>), and the document unchanged
+# since it was laid out; an SVG is then drawn at its box's size, as a
+# rebuild draws it.  A background, a mask or a border image only
+# paints (from layout's table, made again): unless it is also a
+# list-style-image, which sizes its marker, it needs no relayout either
+placed(p: ref Pg, fresh: list of ref Pic): int
+{
+	# nothing new: laid out again as before, which a caller may be
+	# asking for (an install of pictures it had already)
+	if(fresh == nil)
+		return 0;
+	if(p.root == nil || p.computed == nil || p.doc.nchanged != 0 || len p.computed.st < p.doc.n)
+		return 0;
+	curdoc = p.doc;
+	bgs := bgurls(p);
+	boxes := replacedboxes(p.root, nil);
+	for(l := fresh; l != nil; l = tl l) {
+		pic := hd l;
+		isbg := member(pic.url, bgs);
+		if(isbg && islistimage(p, pic.url))
+			return 0;
+		shown := 0;
+		for(bl := boxes; bl != nil; bl = tl bl) {
+			b := hd bl;
+			if(b.url != pic.url)
+				continue;
+			shown = 1;
+			st := b.st;
+			if(!fixedlen(st.width) || !fixedlen(st.height) || st.imgorient == 1)
+				return 0;
+			if(st.minwidth.kind != Style->Lauto && !fixedlen(st.minwidth) ||
+			   st.minheight.kind != Style->Lauto && !fixedlen(st.minheight))
+				return 0;
+		}
+		# no replaced box shows it and it is no background: an <img>
+		# laid out before its picture came (as its alt text, or
+		# nothing), which the picture's size changes (WPT's
+		# intrinsic-size-009: an image in a flex item, 100% of it)
+		if(!shown && !isbg)
+			return 0;
+	}
+	applypics(p, p.root);
+	fitimages(p, p.root);
+	inlinesvg(p, p.root);
+	bgpage = nil;	# its background images, again with the new ones
+	usebg(p);
+	return 1;
+}
+
+# a length with no percentage in it: Lpx is px plus pct% of the basis,
+# so width: 100% is Lpx too, and sized by the picture's box (WPT's
+# intrinsic-size-009: placed with no relayout, the image kept its size)
+fixedlen(l: Style->Len): int
+{
+	return l.kind == Style->Lpx && l.pct == 0.0;
+}
+
+# whether url is some element's list-style-image
+islistimage(p: ref Pg, url: string): int
+{
+	c := p.computed;
+	for(i := 0; i < len c.st; i++)
+		if(c.st[i] != nil && c.st[i].listimage != nil && layout->listurl(c.st[i]) == url ||
+		   c.before != nil && c.before[i] != nil && c.before[i].listimage != nil && layout->listurl(c.before[i]) == url)
+			return 1;
+	return 0;
 }
 
 Pg.frames(p: self ref Pg)
@@ -605,11 +861,16 @@ picof(p: ref Pg, url: string): ref Pic
 # An image fetched, decoded; or why not.
 picture(url: string, data: array of byte, ctype, err: string): ref Pic
 {
+	return picturefor(url, data, ctype, err, 0, 0);
+}
+
+picturefor(url: string, data: array of byte, ctype, err: string, minw, minh: int): ref Pic
+{
 	if(err != nil)
 		return ref Pic(url, nil, nil, err, nil, 0, 0, nil, nil);
 	dlk <-= 1;
 	{
-		pic := picture1(url, data, ctype);
+		pic := picture1(url, data, ctype, minw, minh);
 		<-dlk;
 		return pic;
 	} exception e {
@@ -619,19 +880,30 @@ picture(url: string, data: array of byte, ctype, err: string): ref Pic
 	}
 }
 
-picture1(url: string, data: array of byte, ctype: string): ref Pic
+picture1(url: string, data: array of byte, ctype: string, minw, minh: int): ref Pic
 {
-	(img, raw) := decodeimage2(data, ctype, url);
+	sw := 0;
+	if(display != nil)
+		sw = display.image.r.dx();
+	# no smaller than its box, where the layout gives it one (fitimages
+	# decodes it again should it be shown larger), else the screen's
+	# width: a photograph shown as a thumbnail is decoded at a fraction
+	(dw, dh) := (sw, 0);
+	if(minw > 0 || minh > 0) {
+		(dw, dh) = (minw, minh);
+		if(sw > 0 && dw > sw)
+			dw = sw;
+	}
+	(img, raw, nw, nh) := decodeimage3(data, ctype, url, dw, dh);
 	if(img == nil)
 		return ref Pic(url, nil, nil, "cannot decode " + ctype, nil, 0, 0, nil, nil);
 	if(issvg(data, ctype, url))
 		return ref Pic(url, img, data, nil, raw, img.r.dx(), img.r.dy(), nil, nil);
-	(nw, nh) := (img.r.dx(), img.r.dy());
 	# no wider than the screen, from the start: pictures wait to be laid
 	# out in batches, several decoding at once, and GitHub's held 100M at
 	# full size.  Layout cuts each to its size (fitimages), and decodes it
 	# again in the rare case it is shown wider.
-	if(raw == nil && display != nil && (sw := display.image.r.dx()) > 0 && nw > sw)
+	if(raw == nil && sw > 0 && img.r.dx() > sw)
 		if((small := layout->scaleimage(img, sw, (nh*sw + nw-1)/nw)) != nil)
 			img = small;
 	return ref Pic(url, img, nil, nil, raw, nw, nh, data, ctype);
@@ -670,12 +942,15 @@ loadframes(p: ref Pg)
 		framedepth++;
 		framing = p.url :: framing;
 		sub: ref Pg;
+		ferr: string;
 		{
-			(sub, nil) = request(url, "GET", nil, nil, w, h);
+			(sub, ferr) = requestfrom(p.url, url, "GET", nil, nil, w, h);
 		} exception {
 		"*" =>
 			sub = nil;
 		}
+		if(sub == nil && ferr != nil && !prefix(url, "data:"))
+			p.errors = url + ": " + ferr :: p.errors;
 		framing = tl framing;
 		framedepth--;
 		img := display.newimage(Rect((0, 0), (w, h)), Draw->RGB24, 0, Draw->White);
@@ -849,6 +1124,7 @@ Pg.stylefor(p: self ref Pg, n: int): ref Style->St
 		} else {
 			if(resheet(p))
 				p.computed = nil;	# (the next styling is of the whole, with these sheets)
+			style->setcontainers(p.cqs);
 			st = style->element(p.doc, p.styles, p.env, n);
 		}
 	} exception e {
@@ -946,14 +1222,23 @@ resheet(p: ref Pg): int
 
 # the document's styles after a script's changes: only what changed
 # (style->restyle), unless the sheets did
+pseudoname(k: int): string
+{
+	if(k == 0)
+		return "before";
+	return "after";
+}
+
 styleagain(p: ref Pg)
 {
+	style->setcontainers(p.cqs);
 	if(resheet(p) || p.computed == nil)
 		p.computed = style->compute(p.doc, p.styles, p.env);
 	else {
 		p.computed = style->restyle(p.doc, p.styles, p.env, p.computed);
 		if(stylecheck) {
 			# a test's: the whole computed again, element by element
+			style->setcontainers(p.cqs);
 			c := style->compute(p.doc, p.styles, p.env);
 			bad := 0;
 			first := 0;
@@ -981,7 +1266,25 @@ styleagain(p: ref Pg)
 					}
 				}
 			}
-			sys->fprint(sys->fildes(2), "page: restyle checked: %d of %d differ (first %d)\n", bad, p.doc.n, first);
+			# and their ::before and ::after
+			pbad := 0;
+			for(i = 1; i < p.doc.n; i++)
+				for(k := 0; k < 2; k++) {
+					a, b: ref Style->St;
+					if(k == 0) {
+						if(c.before != nil && i < len c.before) a = c.before[i];
+						if(p.computed.before != nil && i < len p.computed.before) b = p.computed.before[i];
+					} else {
+						if(c.after != nil && i < len c.after) a = c.after[i];
+						if(p.computed.after != nil && i < len p.computed.after) b = p.computed.after[i];
+					}
+					if((a == nil) != (b == nil) || a != nil && style->dump(a) != style->dump(b)) {
+						if(pbad++ == 0)
+							sys->fprint(sys->fildes(2), "page: restyle differs at %d <%s>::%s: whole %d, restyled %d\n",
+								i, p.doc.nodes[i].name, pseudoname(k), a != nil, b != nil);
+					}
+				}
+			sys->fprint(sys->fildes(2), "page: restyle checked: %d of %d differ (first %d), %d pseudo-elements\n", bad, p.doc.n, first, pbad);
 			p.computed = c;
 		}
 	}
@@ -1015,11 +1318,22 @@ sheetsof(p: ref Pg): array of (string, string, string)
 			sheets = (d.textof(n), nil, nil) :: sheets;
 		Dom->Tlink =>
 			rel := " " + lower(d.attr(n, "rel")) + " ";
+			onload := d.attr(n, "onload");
+			# loadCSS's idioms, a sheet loaded without holding up the
+			# page: <link rel=preload as=style onload="this.rel=
+			# 'stylesheet'"> and <link rel=stylesheet media=print
+			# onload="this.media='all'">, taken as their onload makes
+			# them whether or not it runs (Smashing Magazine's main.css)
+			if(index(rel, " preload ") >= 0 && lower(d.attr(n, "as")) == "style" && lower(assigned(onload, "rel")) == "stylesheet")
+				rel = " stylesheet ";
 			if(index(rel, " stylesheet ") < 0 || index(rel, " alternate ") >= 0)
 				continue;
 			if(d.hasattr(n, "disabled") || !indoc(d, n))
 				continue;
-			if(!style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
+			media := d.attr(n, "media");
+			if((m := assigned(onload, "media")) != nil)
+				media = m;
+			if(!style->mediamatch(css->tokenize(media), p.env))
 				continue;
 			href := d.attr(n, "href");
 			if(href == nil)
@@ -1037,6 +1351,49 @@ sheetsof(p: ref Pg): array of (string, string, string)
 		sheets = tl sheets;
 	}
 	return a;
+}
+
+# the quoted value a script assigns to this.name (or name) in js, nil
+# for none: "this.media='all'" gives all
+assigned(js, name: string): string
+{
+	for(i := index(js, name); i >= 0 && i < len js; ) {
+		j := i + len name;
+		if(i > 0 && (isalnum(js[i-1]) || js[i-1] == '_' || js[i-1] == '-')) {
+			i = nextindex(js, name, j);
+			continue;
+		}
+		while(j < len js && (js[j] == ' ' || js[j] == '\t'))
+			j++;
+		if(j < len js && js[j] == '=' && (j + 1 >= len js || js[j+1] != '=')) {
+			j++;
+			while(j < len js && (js[j] == ' ' || js[j] == '\t'))
+				j++;
+			if(j < len js && (js[j] == '\'' || js[j] == '"')) {
+				q := js[j];
+				for(e := j + 1; e < len js; e++)
+					if(js[e] == q)
+						return js[j+1:e];
+			}
+		}
+		i = nextindex(js, name, j);
+	}
+	return nil;
+}
+
+nextindex(s, t: string, from: int): int
+{
+	if(from >= len s)
+		return -1;
+	k := index(s[from:], t);
+	if(k < 0)
+		return -1;
+	return from + k;
+}
+
+isalnum(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9';
 }
 
 # whether n is in the document (not removed, nor in a shadow tree or
@@ -1067,7 +1424,7 @@ applysheets(p: ref Pg, a: array of (string, string, string))
 			urls = a[i].t1 :: urls;
 	got: list of ref Got;
 	if(urls != nil)
-		got = fetchall(urls, nil);
+		got = fetchall(p.url, urls, nil);
 	# a sheet linked (or written inline) again is parsed once: the
 	# parsed form is never changed, and each use keeps its own place
 	# in the cascade.  (GitHub links some of its largest sheets five
@@ -1127,7 +1484,7 @@ applysheets(p: ref Pg, a: array of (string, string, string))
 		urls = p.styles.imports(p.env);
 		if(urls == nil)
 			break;
-		got = fetchall(urls, nil);
+		got = fetchall(p.url, urls, nil);
 		for(; urls != nil; urls = tl urls) {
 			(data, ctype, err) := fetched(got, hd urls);
 			if(err != nil) {
@@ -1214,6 +1571,7 @@ loadfonts(p: ref Pg)
 	fontowner = p;
 	fontownerclosed = 0;
 	punlock();
+	featurevalues(p, fm);
 	if(setting("fonts") == "system")
 		return;	# the faces the system has, nothing fetched
 	srcs: list of ref Fontsrc;
@@ -1231,15 +1589,241 @@ loadfonts(p: ref Pg)
 			urls = (hd s).url :: urls;
 			keep = hd s :: keep;
 		}
-	got := fetchall(urls, nil);
+	tf := sys->millisec();
+	got := fetchall(p.url, urls, nil);
+	phase(sys->sprint("fonts: fetched (%d)", len got));
 	for(; keep != nil; keep = tl keep) {
 		f := hd keep;
 		(data, nil, err) := fetched(got, f.url);
+		tf = sys->millisec();
 		if(err == nil)
 			err = fm->addfacedesc(f.family, f.desc, f.ranges, data);
+		if(ptime)
+			sys->fprint(sys->fildes(2), "page: font %s: %d bytes, read %d ms\n", f.url, len data, sys->millisec() - tf);
 		if(err != nil)
 			p.errors = f.url + ": " + err :: p.errors;
 	}
+}
+
+# font-feature-settings' value (Fonts 4 §6.12): normal, or a list of
+# a tag and on, off or a whole number; nil for normal or an error
+featuresettings(x: array of ref Css->Tok): list of (string, int)
+{
+	r: list of (string, int);
+	for(i := 0; i < len x; ) {
+		if(x[i].kind != Css->Kstring || len x[i].s != 4)
+			return nil;
+		tag := x[i++].s;
+		val := 1;
+		if(i < len x && x[i].kind == Css->Knumber) {
+			if(!(x[i].flag & 1) || x[i].n < 0.0)
+				return nil;
+			val = int x[i++].n;
+		} else if(i < len x && x[i].kind == Css->Kident) {
+			case lower(x[i++].s) {
+			"on" =>	val = 1;
+			"off" =>	val = 0;
+			* =>	return nil;
+			}
+		}
+		r = (tag, val) :: r;
+		if(i < len x) {
+			if(x[i].kind != Css->Kcomma)
+				return nil;
+			i++;
+		}
+	}
+	o: list of (string, int);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+# ---- @font-feature-values (Fonts 4 §6.9) ----
+
+# The values a rule gives a name, for a family, with the layer the
+# rule is in ("" unlayered) and its place in the document
+Ffv: adt {
+	family, kind, name:	string;
+	vals:	array of int;
+	layer:	string;
+	seq:	int;
+};
+
+# Register the document's @font-feature-values with the fonts: those
+# of later layers over earlier, unlayered rules over all, and in one
+# layer the last in the document (as the cascade orders declarations)
+featurevalues(p: ref Pg, fm: Fonts)
+{
+	layers: list of string;	# the layer order as met, reversed
+	acc: list of ref Ffv;
+	seq := 0;
+	for(l := p.styles.sheets; l != nil; l = tl l) {
+		(sh, nil, nil) := hd l;
+		(acc, layers, seq) = ffvrules(p, sh.rules, "", acc, layers, seq);
+	}
+	if(acc == nil)
+		return;
+	nl := 0;
+	for(ll := layers; ll != nil; ll = tl ll)
+		nl++;
+	a := array[seq] of (int, ref Ffv);
+	n := 0;
+	for(; acc != nil; acc = tl acc) {
+		e := hd acc;
+		rank := nl;	# unlayered
+		if(e.layer != "") {
+			k := nl;
+			for(ll = layers; ll != nil; ll = tl ll) {
+				k--;
+				if(hd ll == e.layer)
+					break;
+			}
+			rank = k;
+		}
+		a[n++] = (rank, e);
+	}
+	for(i := 1; i < n; i++)
+		for(j := i; j > 0 && (a[j].t0 < a[j-1].t0 || a[j].t0 == a[j-1].t0 && a[j].t1.seq < a[j-1].t1.seq); j--)
+			(a[j], a[j-1]) = (a[j-1], a[j]);
+	for(i = 0; i < n; i++) {
+		e := a[i].t1;
+		fm->addfeaturevalues(e.family, e.kind, e.name, e.vals);
+	}
+}
+
+ffvrules(p: ref Pg, rs: array of ref Css->Rule, layer: string,
+	acc: list of ref Ffv, layers: list of string, seq: int): (list of ref Ffv, list of string, int)
+{
+	for(i := 0; i < len rs; i++)
+		pick r := rs[i] {
+		Media =>
+			if(style->mediamatch(r.cond, p.env))
+				(acc, layers, seq) = ffvrules(p, r.rules, layer, acc, layers, seq);
+		Supports =>
+			if(style->supports(r.cond))
+				(acc, layers, seq) = ffvrules(p, r.rules, layer, acc, layers, seq);
+		Layer =>
+			for(nl := r.names; nl != nil; nl = tl nl) {
+				full := hd nl;
+				if(layer != "")
+					full = layer + "." + full;
+				ll: list of string;
+				for(ll = layers; ll != nil; ll = tl ll)
+					if(hd ll == full)
+						break;
+				if(ll == nil)
+					layers = full :: layers;
+				if(r.rules != nil)
+					(acc, layers, seq) = ffvrules(p, r.rules, full, acc, layers, seq);
+			}
+		Other =>
+			if(r.name != "font-feature-values")
+				continue;
+			blk := ffvblock(r.block);
+			for(fams := ffvfamilies(r.prelude); fams != nil; fams = tl fams)
+				for(vl := blk; vl != nil; vl = tl vl) {
+					(kind, name, vals) := hd vl;
+					acc = ref Ffv(hd fams, kind, name, vals, layer, seq++) :: acc;
+				}
+		}
+	return (acc, layers, seq);
+}
+
+# the prelude's family names: idents (several make one name) or
+# strings, between commas
+ffvfamilies(v: array of ref Css->Tok): list of string
+{
+	r: list of string;
+	cur := "";
+	for(i := 0; i <= len v; i++) {
+		if(i == len v || v[i].kind == Css->Kcomma) {
+			if(cur != "")
+				r = cur :: r;
+			cur = "";
+			continue;
+		}
+		case v[i].kind {
+		Css->Kstring =>
+			cur = v[i].s;
+		Css->Kident =>
+			if(cur != "")
+				cur += " ";
+			cur += v[i].s;
+		}
+	}
+	return r;
+}
+
+# the block's @stylistic, @styleset ... blocks, as (kind, name, values):
+# each declaration a name and its whole numbers; a value that is not
+# one leaves the declaration out
+ffvblock(v: array of ref Css->Tok): list of (string, string, array of int)
+{
+	r: list of (string, string, array of int);
+	for(i := 0; i < len v; i++) {
+		if(v[i].kind != Css->Katkeyword)
+			continue;
+		kind := v[i].s;
+		case kind {
+		"stylistic" or "styleset" or "character-variant" or "swash" or "ornaments" or "annotation" =>
+			;
+		* =>
+			continue;
+		}
+		j := i + 1;
+		while(j < len v && v[j].kind == Css->Kws)
+			j++;
+		if(j >= len v || v[j].kind != Css->Kblock || v[j].s != "{")
+			continue;
+		b := v[j].kids;
+		i = j;
+		for(k := 0; k < len b; ) {
+			while(k < len b && (b[k].kind == Css->Kws || b[k].kind == Css->Ksemicolon))
+				k++;
+			if(k >= len b)
+				break;
+			e := k;
+			while(e < len b && b[e].kind != Css->Ksemicolon)
+				e++;
+			d := b[k:e];
+			k = e;
+			# name : n n ...
+			if(len d < 3 || d[0].kind != Css->Kident)
+				continue;
+			c := 1;
+			while(c < len d && d[c].kind == Css->Kws)
+				c++;
+			if(c >= len d || d[c].kind != Css->Kcolon)
+				continue;
+			nums: list of int;
+			nn := 0;
+			ok := 1;
+			for(c++; c < len d; c++) {
+				if(d[c].kind == Css->Kws)
+					continue;
+				if(d[c].kind != Css->Knumber || !(d[c].flag & 1) || d[c].n < 0.0) {
+					ok = 0;
+					break;
+				}
+				nums = int d[c].n :: nums;
+				nn++;
+			}
+			if(!ok || nn == 0)
+				continue;
+			# one value but for styleset (any) and character-variant (two)
+			if(nn > 1 && kind != "styleset" && (kind != "character-variant" || nn > 2))
+				continue;
+			vals := array[nn] of int;
+			for(; nums != nil; nums = tl nums)
+				vals[--nn] = hd nums;
+			r = (kind, d[0].s, vals) :: r;
+		}
+	}
+	o: list of (string, string, array of int);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
 }
 
 fontrules(p: ref Pg, rs: array of ref Css->Rule, base: string, acc: list of ref Fontsrc): list of ref Fontsrc
@@ -1263,7 +1847,7 @@ fontrules(p: ref Pg, rs: array of ref Css->Rule, base: string, acc: list of ref 
 
 fontface(decls: array of ref Css->Decl, base: string): ref Fontsrc
 {
-	f := ref Fontsrc(nil, 400, 0, nil, nil, ref Fonts->Desc(0, 0, 0.0, 0.0, -1, 0.0, 0.0, nil));	# auto: the font's own ranges (Fonts 4 §4)
+	f := ref Fontsrc(nil, 400, 0, nil, nil, ref Fonts->Desc(0, 0, 0.0, 0.0, -1, 0.0, 0.0, nil, nil));	# auto: the font's own ranges (Fonts 4 §4)
 	for(i := 0; i < len decls; i++) {
 		d := decls[i];
 		v := d.val;
@@ -1327,6 +1911,8 @@ fontface(decls: array of ref Css->Decl, base: string): ref Fontsrc
 					r = (x[j].s, x[j+1].n) :: r;
 			for(; r != nil; r = tl r)
 				f.desc.vars = hd r :: f.desc.vars;
+		"font-feature-settings" =>
+			f.desc.feats = featuresettings(nows(v));
 		"unicode-range" =>
 			f.ranges = uranges(css->tostring(v));
 		"src" =>
@@ -1553,7 +2139,7 @@ findobjects(p: ref Pg)
 	ul: list of string;
 	for(l := urls; l != nil; l = tl l)
 		ul = (hd l).t1 :: ul;
-	got := fetchall(ul, nil);
+	got := fetchall(p.url, ul, nil);
 	r: list of (int, int, string);
 	for(l = urls; l != nil; l = tl l) {
 		(n, u) := hd l;
@@ -1641,7 +2227,8 @@ fitimages(p: ref Pg, root: ref Box)
 			continue;
 		if(img.r.dx() < w || img.r.dy() < h) {
 			# shown larger than it was kept: from its bytes again
-			if((img = decodeimage(pic.data, pic.ctype, pic.url)) == nil)
+			(img, nil, nil, nil) = decodeimage3(pic.data, pic.ctype, pic.url, w, h);
+			if(img == nil)
 				continue;
 		}
 		if(img.r.dx() != w || img.r.dy() != h)
@@ -1872,7 +2459,7 @@ svgmarkup(d: ref Doc, cs: ref Style->Computed, n, w, h: int, st: ref Style->St):
 		"viewBox" =>
 			vb = 1;
 		}
-		s += " " + k + "=\"" + xmlesc(v) + "\"";
+		s += " " + k + "=\"" + xmlesc(attrvars(v, st)) + "\"";
 	}
 	s += " style=\"" + xmlesc(css) + "\"";
 	if(!vb) {
@@ -1883,9 +2470,108 @@ svgmarkup(d: ref Doc, cs: ref Style->Computed, n, w, h: int, st: ref Style->St):
 			s += " viewBox=\"0 0 " + xmlesc(num(ow)) + " " + xmlesc(num(oh)) + "\"";
 	}
 	s += ">";
+	body := "";
 	for(c := d.nodes[n].first; c != 0; c = d.nodes[c].next)
-		s += xmlnode(d, cs, c, st);
-	return s + "</svg>";
+		body += xmlnode(d, cs, c, st);
+	return s + body + svgdefs(d, body) + "</svg>";
+}
+
+# What an inline svg refers to (a <use href="#icon-news">, a
+# fill="url(#g)") and does not hold, from elsewhere in the document: a
+# page's icons are uses of symbols in one sprite <svg> (NPR's 281), and
+# each svg is drawn as a document of its own.  Copied as written, so a
+# symbol's currentColor is the use's.  Its own references followed a
+# few deep.
+svgdefs(d: ref Doc, body: string): string
+{
+	(have, want) := svgids(body);
+	if(want == nil)
+		return "";
+	defs := "";
+	for(round := 0; want != nil && round < 4; round++) {
+		more := "";
+		for(; want != nil; want = tl want) {
+			id := hd want;
+			if(member(id, have))
+				continue;
+			have = id :: have;
+			if((m := elementid(d, id)) != 0 && d.nodes[m].ns == Dom->SVG)
+				more += xmlnode(d, nil, m, nil);
+		}
+		defs += more;
+		(nil, want) = svgids(more);
+	}
+	if(defs == "")
+		return "";
+	return "<defs>" + defs + "</defs>";
+}
+
+# the ids an svg's markup defines and those it names (href="#x",
+# xlink:href="#x", url(#x))
+svgids(s: string): (list of string, list of string)
+{
+	have, want: list of string;
+	for(i := 0; i < len s; i++) {
+		if(s[i] == ' ' && i + 5 < len s && s[i+1:i+5] == "id=\"") {
+			e := i + 5;
+			while(e < len s && s[e] != '"')
+				e++;
+			have = s[i+5:e] :: have;
+		} else if(s[i] == 'h' && i + 7 < len s && s[i:i+7] == "href=\"#") {
+			e := i + 7;
+			while(e < len s && s[e] != '"')
+				e++;
+			if(e > i + 7)
+				want = s[i+7:e] :: want;
+		} else if(s[i] == 'u' && i + 5 < len s && s[i:i+5] == "url(#") {
+			e := i + 5;
+			while(e < len s && s[e] != ')' && s[e] != '"' && s[e] != '\'' && s[e] != ' ')
+				e++;
+			if(e > i + 5)
+				want = s[i+5:e] :: want;
+		}
+	}
+	return (have, want);
+}
+
+# the element with id, 0 for none: the document's ids indexed once a
+# generation
+Nids: con 512;
+iddoc: ref Doc;
+idgen := -1;
+idtab: array of list of (string, int);
+
+elementid(d: ref Doc, id: string): int
+{
+	if(d != iddoc || d.gen != idgen || idtab == nil) {
+		idtab = array[Nids] of list of (string, int);
+		for(i := len d.nodes - 1; i > 0; i--) {
+			nd := d.nodes[i];
+			if(nd == nil || nd.kind != Dom->Element)
+				continue;
+			for(a := nd.attrs; a != nil; a = tl a)
+				if((hd a).t0 == "id") {
+					v := (hd a).t1;
+					k := idhash(v);
+					idtab[k] = (v, i) :: idtab[k];	# the first in the document last pushed: first found
+					break;
+				}
+		}
+		iddoc = d;
+		idgen = d.gen;
+	}
+	for(l := idtab[idhash(id)]; l != nil; l = tl l)
+		if((hd l).t0 == id)
+			return (hd l).t1;
+	return 0;
+}
+
+idhash(s: string): int
+{
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = (h * 31 + s[i]) & 16r7fffffff;
+	return h % Nids;
 }
 
 num(s: string): string
@@ -1924,7 +2610,7 @@ xmlnode(d: ref Doc, cs: ref Style->Computed, n: int, pst: ref Style->St): string
 				css += ";" + (hd a).t1;
 				continue;
 			}
-			s += " " + (hd a).t0 + "=\"" + xmlesc((hd a).t1) + "\"";
+			s += " " + (hd a).t0 + "=\"" + xmlesc(attrvars((hd a).t1, st)) + "\"";
 		}
 		if(css != nil)
 			s += " style=\"" + xmlesc(css[1:]) + "\"";
@@ -1938,6 +2624,75 @@ xmlnode(d: ref Doc, cs: ref Style->Computed, n: int, pst: ref Style->St): string
 		return s + "</" + nd.name + ">";
 	}
 	return "";
+}
+
+# A presentation attribute's var()s, from the custom properties the
+# element has: the drawing is made from markup, where they mean
+# nothing.  Stripe's Sign in button, an svg whose rects are filled
+# var(--hds-color-text-solid) and var(--hds-color-surface-bg-quiet),
+# was drawn black.
+attrvars(v: string, st: ref Style->St): string
+{
+	if(st == nil || st.vars == nil || index(v, "var(") < 0)
+		return v;
+	t := css->tokenize(v);
+	(r, ok) := substvars(t, st.vars, 0);
+	if(!ok)
+		return v;
+	return css->tostring(r);
+}
+
+substvars(t: array of ref Css->Tok, vars: ref Style->Vars, depth: int): (array of ref Css->Tok, int)
+{
+	if(depth > 16)
+		return (nil, 0);	# a cycle
+	r: list of ref Css->Tok;
+	n := 0;
+	for(i := 0; i < len t; i++) {
+		k := t[i];
+		if(k.kind == Css->Kfunction && lower(k.s) == "var") {
+			(sub, ok) := varvalue(k.kids, vars, depth);
+			if(!ok)
+				return (nil, 0);
+			for(j := 0; j < len sub; j++) {
+				r = sub[j] :: r;
+				n++;
+			}
+			continue;
+		}
+		if(k.kids != nil) {
+			(kids, ok) := substvars(k.kids, vars, depth);
+			if(!ok)
+				return (nil, 0);
+			k = ref *k;
+			k.kids = kids;
+		}
+		r = k :: r;
+		n++;
+	}
+	a := array[n] of ref Css->Tok;
+	for(; r != nil; r = tl r)
+		a[--n] = hd r;
+	return (a, 1);
+}
+
+# var(--name [, fallback]): the property's value, else the fallback
+varvalue(args: array of ref Css->Tok, vars: ref Style->Vars, depth: int): (array of ref Css->Tok, int)
+{
+	i := 0;
+	while(i < len args && args[i].kind == Css->Kws)
+		i++;
+	if(i >= len args || args[i].kind != Css->Kident || len args[i].s < 2 || args[i].s[0:2] != "--")
+		return (nil, 0);
+	name := args[i].s;
+	i++;
+	while(i < len args && args[i].kind == Css->Kws)
+		i++;
+	if((v := vars.get(name)) != nil)
+		return substvars(v, vars, depth + 1);
+	if(i < len args && args[i].kind == Css->Kcomma)
+		return substvars(args[i+1:], vars, depth + 1);
+	return (nil, 0);
 }
 
 xmlesc(s: string): string
@@ -1993,18 +2748,54 @@ decodeimage(data: array of byte, ctype, url: string): ref Image
 # turned it
 decodeimage2(data: array of byte, ctype, url: string): (ref Image, ref Image)
 {
-	img := decodeimage1(data, ctype, url);
-	if(img == nil)
-		return (nil, nil);
-	o := exiforient(data);
-	if(o <= 1)
-		return (img, nil);
-	if((t := orient(img, o)) == nil)
-		return (img, nil);
-	return (t, img);
+	(img, raw, nil, nil) := decodeimage3(data, ctype, url, 0, 0);
+	return (img, raw);
 }
 
-decodeimage1(data: array of byte, ctype, url: string): ref Image
+# The same, perhaps decoded smaller than it is, but no smaller than
+# minw by minh (0 by 0 is all of it): a JPEG by its IDCT's scaling,
+# which costs a quarter of the time for a photograph several times
+# the screen's width (NASA's front page decoded 24 megapixels for a
+# card 400 wide).  With the image's own size, turned.
+decodeimage3(data: array of byte, ctype, url: string, minw, minh: int): (ref Image, ref Image, int, int)
+{
+	o := exiforient(data);
+	if(o > 1)
+		minw = minh = 0;	# kept as stored too (raw): all of it
+	(img, nw, nh) := decodeimage1(data, ctype, url, minw, minh);
+	if(img == nil)
+		return (nil, nil, 0, 0);
+	if(o <= 1)
+		return (img, nil, nw, nh);
+	if((t := orient(img, o)) == nil)
+		return (img, nil, nw, nh);
+	return (t, img, t.r.dx(), t.r.dy());
+}
+
+decodeimage1(data: array of byte, ctype, url: string, minw, minh: int): (ref Image, int, int)
+{
+	if((minw > 0 || minh > 0) && jpegscaled != nil && imageremap != nil &&
+	   len data > 4 && data[0] == byte 16rFF && data[1] == byte 16rD8) {
+		{
+			(raw, w, h, err) := jpegscaled->scaled(data, minw, minh);
+			if(raw != nil && err == nil) {
+				(img, nil) := imageremap->remap(raw, display, 0);
+				if(img != nil)
+					return (img, w, h);
+			}
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "charon: %s: jpeg: %s\n", url, e);
+		}
+		return (nil, 0, 0);
+	}
+	img := decodeimage0(data, ctype, url);
+	if(img == nil)
+		return (nil, 0, 0);
+	return (img, img.r.dx(), img.r.dy());
+}
+
+decodeimage0(data: array of byte, ctype, url: string): ref Image
 {
 	if(imgload == nil || len data < 4)
 		return nil;
@@ -2180,9 +2971,9 @@ Got: adt {
 	err:	string;
 };
 
-# Fetch urls concurrently, each distinct URL once, saying accept (if
-# not nil) is what will do.
-fetchall(urls: list of string, accept: string): list of ref Got
+# Fetch urls concurrently for the page at from, each distinct URL once,
+# saying accept (if not nil) is what will do.
+fetchall(from: string, urls: list of string, accept: string): list of ref Got
 {
 	todo: list of string;
 	n := 0;
@@ -2208,18 +2999,18 @@ fetchall(urls: list of string, accept: string): list of ref Got
 	if(nw > n)
 		nw = n;
 	for(i := 0; i < nw; i++)
-		spawn fetcher(work, res, accept);
+		spawn fetcher(from, work, res, accept);
 	got: list of ref Got;
 	for(i = 0; i < n; i++)
 		got = <-res :: got;
 	return got;
 }
 
-fetcher(work: chan of string, res: chan of ref Got, accept: string)
+fetcher(from: string, work: chan of string, res: chan of ref Got, accept: string)
 {
 	for(;;) alt {
 	u := <-work =>
-		(data, ctype, err, nil) := fetchfinal(u, accept);
+		(data, ctype, err, nil) := fetchfinal(from, u, accept);
 		res <-= ref Got(u, data, ctype, err);
 	* =>
 		return;
@@ -2236,7 +3027,7 @@ fetched(got: list of ref Got, url: string): (array of byte, string, string)
 
 fetch(url: string): (array of byte, string, string)
 {
-	(data, ctype, err, nil) := fetchfinal(url, nil);
+	(data, ctype, err, nil) := fetchfinal(nil, url, nil);
 	return (data, ctype, err);
 }
 
@@ -2244,7 +3035,7 @@ fetchimage(url: string): (array of byte, string, string)
 {
 	(scheme, nil) := splitscheme(url);
 	if(scheme != "http" && scheme != "https") {
-		(data, ctype, err, nil) := fetchfinal(url, ACCEPTIMAGE);
+		(data, ctype, err, nil) := fetchfinal(nil, url, ACCEPTIMAGE);
 		return (data, ctype, err);
 	}
 	if((c := cachedimage(url)) != nil)
@@ -2332,9 +3123,12 @@ nostore(header: string): int
 	return 0;
 }
 
-# fetch, and the URL the resource came from in the end
-fetchfinal(url, accept: string): (array of byte, string, string, string)
+# fetch for the page at from (nil: for no page), and the URL the
+# resource came from in the end
+fetchfinal(from, url, accept: string): (array of byte, string, string, string)
 {
+	if(!mayload(from, url))
+		return (nil, nil, notallowed(url), url);
 	(scheme, rest) := splitscheme(url);
 	case scheme {
 	"file" =>
@@ -2906,8 +3700,8 @@ pxscale := 1.0;
 
 scale(r: real)
 {
-	if(r < 1.0)
-		r = 1.0;
+	if(r < 0.25)
+		r = 0.25;
 	if(r > 4.0)
 		r = 4.0;
 	pxscale = r;

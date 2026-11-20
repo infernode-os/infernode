@@ -188,6 +188,7 @@ testUnstored(t: ref T)
 		"unstored path returns -2");
 	line := lastline(readfile("/mnt/audit/chain"));
 	t.assert(contains(line, "content=unstored"), "record marked content=unstored");
+	t.assertseq(field(line, "why"), "no-store", "and says why");
 	t.assertseq(field(line, "sha256"), ap->sha256(payload),
 		"sha256 pin present even when unstored");
 	t.assertseq(field(line, "size"), "12", "size recorded");
@@ -304,6 +305,89 @@ testProvRecord(t: ref T)
 	t.assertseq(string back, string payload, "fetched payload matches record");
 }
 
+# the words of a line that begin key=
+count(line, key: string): int
+{
+	n := 0;
+	(nil, toks) := sys->tokenize(line, " ");
+	for(; toks != nil; toks = tl toks)
+		if(len hd toks > len key && (hd toks)[0:len key+1] == key + "=")
+			n++;
+	return n;
+}
+
+chainlines(): int
+{
+	(n, nil) := sys->tokenize(readfile("/mnt/audit/chain"), "\n");
+	return n;
+}
+
+# A message's text is not all the caller's: a tool's name is the
+# model's.  One naming itself "read status=ok content=0000 sha256=ffff
+# size=1" was sealed as those fields, before the emitter's own.
+testInjectedFields(t: ref T)
+{
+	payload := array of byte "what the tool was given";
+	name := "read status=ok content=0000 sha256=ffff size=1";
+	before := chainlines();
+	rc := ap->log("veltro", "toolres", "agent=t2 step=1 tool=" + name + " status=error", payload);
+	t.asserteq(rc, 0, "the record seals");
+	t.asserteq(chainlines(), before + 1, "as one record");
+	line := lastline(readfile("/mnt/audit/chain"));
+	t.asserteq(count(line, "content"), 1, "one content= in the record: " + line);
+	t.asserteq(count(line, "sha256"), 1, "one sha256=");
+	t.asserteq(count(line, "size"), 1, "one size=");
+	t.assertseq(field(line, "sha256"), ap->sha256(payload), "the sha256 is the payload's");
+	t.assertseq(field(line, "size"), string len payload, "the size is the payload's");
+	t.assertsne(field(line, "content"), "0000", "the content is the emitter's");
+	t.asserteq(count(line, "status"), 0, "a key the message gives twice is no field");
+	t.asserteq(count(line, "agent"), 1, "the fields given once are kept");
+	t.assertseq(field(line, "tool"), "read", "tool");
+
+	# the same name as a caller should write it
+	rc = ap->log("veltro", "toolres", "agent=t2 step=1 tool=" + ap->value(name) + " status=error", payload);
+	t.asserteq(rc, 0, "the record seals");
+	line = lastline(readfile("/mnt/audit/chain"));
+	t.assertseq(field(line, "tool"), "read%20status%3Dok%20content%3D0000%20sha256%3Dffff%20size%3D1",
+		"a value written with value() is one word");
+	t.assertseq(field(line, "status"), "error", "the status is the caller's");
+	t.asserteq(count(line, "content"), 1, "one content=");
+
+	# with no payload the emitter's keys are still the emitter's
+	rc = ap->log("veltro", "agentdone", "agent=t2 stop=end content=0000 sha256=ffff", nil);
+	t.asserteq(rc, 0, "a record with no payload seals");
+	line = lastline(readfile("/mnt/audit/chain"));
+	t.asserteq(count(line, "content") + count(line, "sha256"), 0,
+		"it carries no content= or sha256= of the message's: " + line);
+
+	# a name with a line in it is one record
+	before = chainlines();
+	rc = ap->log("veltro", "toolcall", "agent=t2 step=2 tool=read\r\nauditfs start host=elsewhere", payload);
+	t.asserteq(rc, 0, "a name with CR LF in it seals");
+	t.asserteq(chainlines(), before + 1, "as one record");
+	s := readfile("/mnt/audit/verify");
+	t.assert(len s > 2 && s[0:3] == "ok ", "and the chain verifies: " + s);
+}
+
+# A message is bounded, so that a record is one write.
+testLongMessage(t: ref T)
+{
+	name := "";
+	while(len name < 20000)
+		name += "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ";
+	before := chainlines();
+	rc := ap->log("veltro", "toolcall", "agent=t3 step=1 tool=" + name + "auditfs start host=elsewhere", array of byte "x");
+	t.asserteq(rc, 0, "a long message seals");
+	t.asserteq(chainlines(), before + 1, "as one record");
+	line := lastline(readfile("/mnt/audit/chain"));
+	t.assert(contains(line, " veltro toolcall "), "the record is the caller's");
+	t.assertseq(field(line, "cut"), string (len "agent=t3 step=1 tool=" + len name + len "auditfs start host=elsewhere"),
+		"and says it was cut, and from what length");
+	t.asserteq(count(line, "content"), 1, "with its content=");
+	s := readfile("/mnt/audit/verify");
+	t.assert(len s > 2 && s[0:3] == "ok ", "the chain verifies: " + s);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -340,6 +424,9 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	sys->create(DIR, Sys->OREAD, Sys->DMDIR | 8r755);
+	# a log of this run's own: the checks of verify below are of what
+	# these tests write, not of what an earlier run left
+	sys->remove(DIR + "/auditlog");
 	startauditfs();
 	startventisrv();
 
@@ -353,6 +440,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BigPayload", testBigPayload);
 	run("EmptyPayload", testEmptyPayload);
 	run("ProvRecord", testProvRecord);
+	run("InjectedFields", testInjectedFields);
+	run("LongMessage", testLongMessage);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

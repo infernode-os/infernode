@@ -20,12 +20,30 @@ static char *qidtype(char*, uchar);
 
 #define	QIDFMT	"(%.16llux %lud %s)"
 
+enum {
+	/*
+	 * the longest stat %F unpacks to print.  It was unpacked into
+	 * 200 bytes that held the Dir too: a stat of 150 bytes or more
+	 * went past them, and one convM2D refused was printed all the
+	 * same, from whatever the bytes held before.
+	 */
+	Maxfmtstat	= 256,
+};
+
 int
 fcallfmt(Fmt *fmt)
 {
 	Fcall *f;
 	int fid, type, tag, i;
-	char buf[512], tmp[200];
+	char buf[512], tmp[16];
+	/*
+	 * a stat unpacked for printing: convM2D puts its strings after
+	 * the Dir, at most as many bytes as the stat has
+	 */
+	union {
+		Dir	d;
+		char	b[sizeof(Dir)+Maxfmtstat];
+	} st;
 	char *p, *e;
 	Dir *d;
 	Qid *q;
@@ -129,22 +147,24 @@ fcallfmt(Fmt *fmt)
 		break;
 	case Rstat:
 		p = seprint(buf, e, "Rstat tag %ud ", tag);
-		if(f->nstat > sizeof tmp)
+		d = &st.d;
+		if(f->nstat > Maxfmtstat)
 			seprint(p, e, " stat(%d bytes)", f->nstat);
+		else if(convM2D(f->stat, f->nstat, d, st.b+sizeof(Dir)) == 0)
+			seprint(p, e, " stat(%d bytes, malformed)", f->nstat);
 		else{
-			d = (Dir*)tmp;
-			convM2D(f->stat, f->nstat, d, (char*)(d+1));
 			seprint(p, e, " stat ");
 			fdirconv(p+6, e, d);
 		}
 		break;
 	case Twstat:	/* 126 */
 		p = seprint(buf, e, "Twstat tag %ud fid %ud", tag, fid);
-		if(f->nstat > sizeof tmp)
+		d = &st.d;
+		if(f->nstat > Maxfmtstat)
 			seprint(p, e, " stat(%d bytes)", f->nstat);
+		else if(convM2D(f->stat, f->nstat, d, st.b+sizeof(Dir)) == 0)
+			seprint(p, e, " stat(%d bytes, malformed)", f->nstat);
 		else{
-			d = (Dir*)tmp;
-			convM2D(f->stat, f->nstat, d, (char*)(d+1));
 			seprint(p, e, " stat ");
 			fdirconv(p+6, e, d);
 		}
@@ -236,7 +256,7 @@ dumpsome(char *ans, char *e, char *buf, long count)
 		for(i=0; i<count; i++){
 			if(i>0 && i%4==0)
 				*p++ = ' ';
-			sprint(p, "%2.2ux", buf[i]);
+			sprint(p, "%2.2ux", (uchar)buf[i]);
 			p += 2;
 		}
 	}

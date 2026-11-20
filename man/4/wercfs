@@ -114,6 +114,11 @@ directory is served: its
 and
 .B lib/
 are the site's source, not its pages.
+That holds for the name in any case
+.RB ( _WERC ),
+which a host whose file system folds case opens as the same
+directory; and there a page asked for under another spelling of its
+path is the same page, made and kept once.
 Nor is a name beginning with a dot.
 A directory and a page of one name are the directory, as in werc;
 a page hides a file of its own name.
@@ -145,6 +150,11 @@ source, each
 .B _werc/config
 down its path, the included files, the directories its menu lists),
 and made again when one has changed.
+A file dated after the present does not date the page.
+A page that cannot be made (a file it is made from is longer than 16
+megabytes, or cannot be read) is that page's error: its open fails
+with the reason, which is also said on standard error, the other
+pages are served, and it is tried again a few seconds later.
 .SH PAGES
 A page is made as werc 1.5 makes it
 .RB ( bin/werc.rc ,

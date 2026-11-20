@@ -8,6 +8,10 @@ Pop3: module
 
          # open a connection with the pop3 server
          # requires the email server's name or address or nil if a default server is to be used
+	# (a host, or host!port for a port of its own).  With usessl the
+	# connection is TLS from the start (port 995), the server's
+	# certificate verified against the system's roots and its name:
+	# the server must then be given by name.
 	# returns (status, errror string)
          open: fn(user, password, server: string, usessl: int) : (int, string);
 
@@ -46,4 +50,9 @@ Pop3: module
          # close the connection
 	# returns (status, error string)
          close: fn(): (int, string);
+
+	# Every reply is waited for ms milliseconds (30 seconds unless set
+	# here), and so is the connection's making; after a timeout the
+	# connection is closed.
+	timeout: fn(ms: int);
 };

@@ -85,9 +85,10 @@ dropped in favour of plain offset-addressed I420 — simpler, and it makes the
 frame file random access, which is what buys seek/DVR/multi-viewer sync):
 
 ```
-/mnt/video/<id>/ctl      # write: "open <file.y4m>" | "play [<cmd> arg...]"
-                         #        "play" | "pause" | "stop"
+/mnt/video/<id>/ctl      # write: "play" | "pause" | "stop"
                          #        "seek <ms>|+<ms>|-<ms>" | "live"
+                         #        (the source is vid9p's command line:
+                         #        a file, -r file, -c cmd; ctl names none)
 /mnt/video/<id>/fmt      # read:  "<w> <h> i420 <fps>"
 /mnt/video/<id>/frame    # read:  raw I420; frame N is framesize bytes at
                          #        offset N*framesize (framesize = w*h*3/2).

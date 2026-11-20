@@ -1,0 +1,3 @@
+<!doctype html><title>a picture's chosen source gives the img its width and height</title>
+<style>body{margin:0} div{width:120px;height:100px;background:red} img{display:block}</style>
+<div><picture><source media="(max-width: 1px)" srcset="support/red.svg" width="10" height="10"><source srcset="support/green.svg" width="120" height="100"><img src="support/red.svg" width="25" height="25"></picture></div>

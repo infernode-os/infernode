@@ -36,6 +36,7 @@ chacha_block(u32int out[16], const u32int in[16], int rounds)
 
 	for(i = 0; i < 16; i++)
 		out[i] = x[i] + in[i];
+	secureZero(x, sizeof x);	/* keystream less the key: both, to who has one */
 }
 
 static u32int
@@ -137,4 +138,5 @@ chacha_encrypt(uchar *src, int n, ChaChastate *s)
 		if(m < ChachaBsize)
 			s->blen = ChachaBsize - m;
 	}
+	secureZero(block, sizeof block);	/* a block of keystream */
 }

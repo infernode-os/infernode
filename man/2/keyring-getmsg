@@ -20,17 +20,35 @@ They are used to implement various authentication protocols, including
 as implemented by
 .IR keyring-auth (2).
 .PP
-Each data message is transmitted with a five-byte header containing a four-character zero-padded decimal count
+A data message of up to 9999 bytes is transmitted with a five-byte header containing a four-character zero-padded decimal count
 .I n
 terminated by a newline, followed by
 .I n
 bytes of message data.
-An error message has a similar structure, except that the first character
+A longer message, of up to
+.B Keyring->Maxmsg
+(49151) bytes, has a header of its count's five decimal digits and a newline;
+a count has one form, so five digits with a leading zero are an error.
+The limit holds the text of the largest certificate
+.RI ( keyring-certtostr (2))
+of the signature algorithms offered, an SLH-DSA-256s one of about 40K, with room.
+An error message has a similar structure to a short data message, except that the first character
 of the count is replaced by an exclamation mark
 .RB ( ! );
 the message data following
 contains the diagnostic string in its UTF-8 encoding (see
-.IR utf (6)).
+.IR utf (6)),
+of at most 999 bytes.
+.PP
+An implementation that knows only the four-digit header reads a digit where it expects
+the newline of a longer message's, and rejects it as a format error.
+(Before there was a longer form,
+.B sendmsg
+sent five bytes of a longer header and then the data,
+.B getmsg
+refused any message of 4096 bytes or more, and
+.IR keyring-auth (2)
+could not exchange certificates of more than 9999 bytes.)
 .PP
 .B Getmsg
 reads the next message from
@@ -57,12 +75,22 @@ sends the error message
 and
 .B senderrmsg
 return -1 if there was an error writing to
-.IR fd ;
+.IR fd ,
+or if the message is longer than a message may be
+.RB (`` "message too long" '',
+with nothing written);
 they set the system error string.
 .B Getmsg
 returns nil if there was an error reading from
 .IR fd ;
 it sets the system error string to reflect the cause.
+A header that is not one is
+.RB `` "input or format error" '',
+and a count beyond
+.B Maxmsg
+is
+.RB `` "message too long" '':
+nothing is allocated or read for it.
 It also returns nil
 if an error message was received instead of a data message;
 the system error string will contain the error message's diagnostic.

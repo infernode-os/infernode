@@ -129,6 +129,31 @@ Rejoin:		con 15000;	# ms
 #	The largest int, as a millisecond count: about twenty-five days.
 Maxms:		con 16r7FFFFFFF;
 
+#
+#	What a peer can make this program say, and how much of it is kept.
+#
+#	A frame the supplicant refuses is refused before any key is looked
+#	at, or because the key is wrong: anyone who can put an EAPOL frame
+#	for this station on the air can send them, as many as the radio
+#	will pass.  Each was a line.  On the boards the lines go to a file
+#	on a RAM file system of 8MB that everything else's /tmp shares
+#	(os/init: wparun), so a radio in range with no key could fill it;
+#	run by hand they go to the console, which is how a board came to
+#	be power-cycled (above).  So what is refused is counted, by kind,
+#	and each kind is said on the schedule everything else here is said
+#	on: once at once, then with the count since, at widening intervals.
+#	The kinds are few (Maxkinds; any more are one kind), so the lines
+#	are few whoever sends.
+#
+#	That bounds the rate, not the total: an access point may rekey as
+#	often as it likes and anyone may break the association as often as
+#	they like, and each is a few honest lines.  So the log itself is
+#	bounded.  Once Maxlog bytes have been written, and standard error
+#	is a file that has kept them, it is begun again from its start.
+#
+Maxkinds:	con 8;
+Maxlog:		con 64*1024;	# bytes of log kept
+
 stderr: ref Sys->FD;
 debug := 0;
 dev: string;
@@ -356,7 +381,7 @@ init(nil: ref Draw->Context, args: list of string)
 				break;		# the driver closed the queue: deassociated
 			(acts, err) := supp.recv(frame[0:n], nonce());
 			if(err != nil){
-				report(err);
+				refused(err);
 				continue;
 			}
 			for(; acts != nil; acts = tl acts)
@@ -598,8 +623,19 @@ associate(cfd: ref Sys->FD, rsne: array of byte, announce: int, essid: string): 
 	#
 	if(announce || say.said > 0)
 		report("associated; starting the four-way handshake");
+	#
+	# Not fatal.  The write is inert only while the driver is still
+	# associated: if the link went between the look at ifstats above
+	# and here, the driver takes it as a join, the join fails, and so
+	# does the write.  This exited on it, and nothing starts a
+	# supplicant again once its link has keyed (os/init watches the
+	# log, no more): a moment's loss of the link, which is what this
+	# program exists to survive, became no Wi-Fi until a reboot.  It is
+	# one rationed line, and the caller's read then finds the queue
+	# closed and its loop turns.
+	#
 	if(sys->fprint(cfd, "auth %s", wpakey->hex(rsne)) < 0)
-		fatal(sys->sprint("auth: %r"));
+		rationed("auth", sys->sprint("auth: %r"));
 	return waited;
 }
 
@@ -634,18 +670,34 @@ perform(cfd, dfd: ref Sys->FD, a: ref Action): int
 		if(debug)
 			report(sys->sprint("send %s", wpakey->hex(a.frame)));
 		if(sys->write(dfd, a.frame, len a.frame) != len a.frame)
-			report(sys->sprint("cannot send an EAPOL frame: %r"));
+			rationed("send", sys->sprint("cannot send an EAPOL frame: %r"));
 	Wpakey->Actl =>
 		#
 		# The key itself is in this line, so it is never echoed:
 		# what is reported is which key went in, not what it is.
 		#
-		if(sys->fprint(cfd, "%s", a.text) < 0)
-			report(sys->sprint("%s: %r", verb(a.text)));
-		else{
-			report(sys->sprint("%s installed", keyname(a.text)));
-			return 1;
+		v := verb(a.text);
+		if(sys->fprint(cfd, "%s", a.text) < 0){
+			rationed(v, sys->sprint("%s: %r", v));
+			return 0;
 		}
+		#
+		# What the driver said, no more.  txkey and the group keys
+		# are answered by the firmware, and a refusal fails the
+		# write: those are installed.  The pairwise receive key is
+		# a verb the driver takes and does nothing with (the
+		# firmware has one pairwise key, set by txkey), so its
+		# write returning says only that it was taken: it was
+		# reported "installed" and counted as a key in the radio,
+		# and an association whose txkey was then refused was held
+		# to have keyed.
+		#
+		if(v == "rxkey"){
+			report(sys->sprint("%s accepted", keyname(a.text)));
+			return 0;
+		}
+		report(sys->sprint("%s installed", keyname(a.text)));
+		return 1;
 	Wpakey->Adelay =>
 		sys->sleep(a.ms);
 	}
@@ -753,9 +805,111 @@ passphrase(essid: string): string
 	return string a;
 }
 
+#
+#	The kinds of thing said at a peer's bidding, each with its own
+#	schedule: when it was last counted, how many since it was last
+#	said, and how many in all.
+#
+Kind: adt {
+	name:	string;
+	say:	ref Sparse;
+	last:	int;	# sys->millisec() of the last one
+	since:	int;	# counted since the last line
+	total:	int;
+};
+kinds: list of ref Kind;
+
+#
+#	Say text about a condition a peer (or a driver) can bring about
+#	as often as it likes: at once the first time, then no oftener
+#	than Sparse allows, with how many there have been.
+#
+rationed(name, text: string)
+{
+	k: ref Kind;
+	n := 0;
+	for(l := kinds; l != nil; l = tl l){
+		if((hd l).name == name)
+			k = hd l;
+		n++;
+	}
+	if(k == nil){
+		if(n >= Maxkinds)
+			name = "other";
+		for(l = kinds; l != nil; l = tl l)
+			if((hd l).name == name)
+				k = hd l;
+		if(k == nil){
+			k = ref Kind(name, Sparse.mk(0), sys->millisec(), 0, 0);
+			kinds = k :: kinds;
+		}
+	}
+	now := sys->millisec();
+	ms := now - k.last;
+	if(ms < 0)
+		ms = 0;
+	k.last = now;
+	k.since++;
+	if(k.total < Maxms)
+		k.total++;
+	if(!k.say.due(ms))
+		return;
+	if(k.total == 1)
+		report(text);
+	else
+		report(sys->sprint("%s (%d of these since the last was reported, %d in all)", text, k.since, k.total));
+	k.since = 0;
+}
+
+#
+#	A frame the supplicant refused.  Its kind is its reason with the
+#	numbers taken out, so that "stale replay counter 7" and "stale
+#	replay counter 8" are one kind and not two thousand.
+#
+refused(err: string)
+{
+	name := "frame:";
+	for(i := 0; i < len err && len name < 48; i++)
+		if(err[i] < '0' || err[i] > '9')
+			name[len name] = err[i];
+	rationed(name, err);
+}
+
+logged := 0;	# bytes written since the log was last begun
+
 report(s: string)
 {
-	sys->fprint(stderr, "wpa: %s\n", s);
+	b := array of byte ("wpa: " + s + "\n");
+	if(logged + len b > Maxlog)
+		relog();
+	if(sys->write(stderr, b, len b) > 0)
+		logged += len b;
+}
+
+#
+#	Begin the log again, if it is a file that has kept what it was
+#	given (a console or a pipe has no length, and keeps nothing).
+#	Truncated by opening it again where that can be done; otherwise
+#	written over from its start.
+#
+relog()
+{
+	n := logged;
+	logged = 0;
+	(ok, d) := sys->fstat(stderr);
+	if(ok < 0 || (d.qid.qtype & Sys->QTDIR) || d.length < big (Maxlog/2))
+		return;
+	path := sys->fd2path(stderr);
+	nfd: ref Sys->FD;
+	if(path != nil && path != "")
+		nfd = sys->open(path, Sys->OWRITE|Sys->OTRUNC);
+	if(nfd != nil && sys->dup(nfd.fd, stderr.fd) >= 0)
+		nfd = nil;
+	else
+		sys->seek(stderr, big 0, Sys->SEEKSTART);
+	b := array of byte sys->sprint("wpa: the log is begun again: %d bytes had been written to it\n", n);
+	if(sys->write(stderr, b, len b) > 0)
+		logged = len b;
 }
 
 fatal(s: string)

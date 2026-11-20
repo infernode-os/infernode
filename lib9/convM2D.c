@@ -21,6 +21,9 @@ statcheck(uchar *buf, uint nbuf)
 		remain -= BIT16SZ;
 		if(n > remain)
 			return -1;
+		/* a name with a NUL in it is another name to C */
+		if(n != 0 && memchr(buf, 0, n) != nil)
+			return -1;
 		buf += n;
 		remain -= n;
 	}
@@ -63,6 +66,11 @@ gbit32dontcare(uchar *p)
 	return v;
 }
 
+/*
+ * strs is given no length: nbuf bytes are always enough (the four
+ * strings and their NULs take the room of their counts and less),
+ * and a caller whose buffer is of another size checks nbuf first.
+ */
 uint
 convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
 {
@@ -102,6 +110,8 @@ convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
 		ns = GBIT16(p);
 		p += BIT16SZ;
 		if(p + ns > ebuf)
+			return 0;
+		if(ns != 0 && memchr(p, 0, ns) != nil)
 			return 0;
 		if(strs){
 			sv[i] = strs;

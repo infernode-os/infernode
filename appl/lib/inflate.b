@@ -441,6 +441,18 @@ decodeblock(s: ref State, litlendec, offdec: ref DeHuff)
 			dist := offbase[sym] + xtra;
 			if(dist > s.out && s.usehist == 0)
 				fatal(s, "corrupted data");
+			if(dist <= s.out && s.out + length <= MaxOff) {
+				# all in this buffer: no flush, no history
+				o := s.out;
+				obuf := s.obuf;
+				if(dist >= length && length >= 64)
+					obuf[o:] = obuf[o-dist:o-dist+length];
+				else
+					for(i := 0; i < length; i++)
+						obuf[o+i] = obuf[o+i-dist];
+				s.out = o + length;
+				continue;
+			}
 			for(i := 0; i < length; i++) {
 				# inline putb(lzbyte(dist));
 				ix := s.out - dist;
@@ -787,19 +799,27 @@ outblockgzip(s: ref State)
 
 outblockzlib(s: ref State)
 {
-	ZLADLERBASE:	con big 65521;
+	BASE:	con 65521;
+	NMAX:	con 3800;	# s2 stays under 2^31 (zlib's 5552 is for unsigned 32 bits)
 
 	buf := s.obuf;
 	n := s.out;
 
-	s1 := s.sum & big 16rffff;
-	s2 := (s.sum>>16) & big 16rffff;
+	s1 := int (s.sum & big 16rffff);
+	s2 := int ((s.sum>>16) & big 16rffff);
 
-	for(i := 0; i < n; i++) {
-		s1 = (s1 + big buf[i]) % ZLADLERBASE;
-		s2 = (s2 + s1) % ZLADLERBASE;
+	for(i := 0; i < n; ) {
+		e := i + NMAX;
+		if(e > n)
+			e = n;
+		for(; i < e; i++) {
+			s1 += int buf[i];
+			s2 += s1;
+		}
+		s1 %= BASE;
+		s2 %= BASE;
 	}
-	s.sum = (s2<<16) + s1;
+	s.sum = (big s2<<16) + big s1;
 }
 
 outblock(s: ref State)

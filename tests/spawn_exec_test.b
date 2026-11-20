@@ -139,8 +139,9 @@ testSpawnExec(t: ref T)
 	t.log(sys->sprint("spawn result (%d chars): %s", len result, result[0:min(300, len result)]));
 
 	if(hasprefix(result, "error:")) {
-		if(result == "error: LLM returned empty response") {
-			t.skip("spawn needs a live LLM response in this harness");
+		if(result == "error: LLM returned empty response" ||
+		   contains(result, "cannot open a model session")) {
+			t.skip("spawn needs a model service in this harness: " + result);
 			return;
 		}
 		t.error(sys->sprint("spawn failed: %s", result));

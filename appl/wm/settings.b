@@ -68,6 +68,10 @@ include "dialnorm.m";
 
 include "lucitheme.m";
 
+include "plumbmsg.m";
+	plumbmsg: Plumbmsg;
+	Msg: import plumbmsg;
+
 Settings: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
@@ -125,6 +129,7 @@ top: ref Toplevel;
 wmctl: chan of string;
 actch: chan of string;
 display_g: ref Display;
+ctxt_g: ref Draw->Context;	# for an editor window of our own (openineditor)
 category: int;		# current category index
 mobile := 0;		# /env/infmobile=1 (kept for parity; Tk sizes itself)
 TAPMIN: con 132;
@@ -257,6 +262,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		ctxt = tkclient->makedrawcontext();
 	(top, wmctl) = tkclient->toplevel(ctxt, "-width 560 -height 440", "Settings", Tkclient->Appl);
 	display_g = top.display;
+	ctxt_g = ctxt;
 
 	loadcolors();
 
@@ -1138,7 +1144,7 @@ handleaction(a: string)
 	"themeedit" =>
 		lt := load Lucitheme Lucitheme->PATH;
 		if(lt != nil)
-			openineditor("/lib/lucifer/theme/" + lt->current());
+			openineditor("/lib/lucifer/theme/" + lt->current(), 0);
 	"llmmode" =>
 		llm_is_remote = tkv("llmmode") == "remote";
 		buildpanel(CatLLM);
@@ -1170,12 +1176,12 @@ handleaction(a: string)
 	"prompt" =>
 		if(arg >= 0 && arg < len prompt_files){
 			(path, nil) := prompt_files[arg];
-			openineditor(path);
+			openineditor(path, 0);
 		}
 	"profile" =>
-		openineditor("/lib/sh/profile");
+		openineditor("/lib/sh/profile", 0);
 		flashstatus("restart required for profile changes");
-	"msgedit" =>	openineditor("/lib/veltro/sources/email.conf");
+	"msgedit" =>	openineditor("/lib/veltro/sources/email.conf", 1);
 	"msgregister" =>	doregisteremail();
 	"auditenable" =>	doauditenable();
 	"auditdisable" =>	doauditdisable();
@@ -1932,65 +1938,100 @@ doregisteremail()
 		buildpanel(CatMessaging);
 }
 
-openineditor(path: string)
+# Open a text file for the user to edit: every button of Settings that
+# opens a file comes here.  The file is plumbed, and the plumbing rules
+# say where it goes: on the Desktop (lib/wm/plumbing) a Xenith window
+# under wm/wm, in Lucifer (lib/lucifer/plumbing) the presentation zone,
+# whose plumb handler (lucipres) gives text to its editor.  Settings has
+# no say in which editor, and does not know which interface it is in.
+# With no plumber it starts an editor itself: in Lucifer's zone when
+# there is one (an app there cannot open a window of its own), else in a
+# window.  A file that may not exist yet (a configuration Settings asks
+# the user to write) is made, empty, when create is set.
+openineditor(path: string, create: int)
 {
-	# Check if the file is accessible first
 	(ok, nil) := sys->stat(path);
+	if(ok < 0 && create)
+		ok = mkfile(path);
 	if(ok < 0) {
 		flashstatus(path + " not accessible — check namespace paths");
 		sys->fprint(stderr, "settings: stat %s failed: %r\n", path);
 		return;
 	}
 
-	# Write to presentation ctl to launch editor with the file.
-	# /tool/activity exists only in agent namespaces; from a GUI app
-	# launched by lucifer we read /mnt/ui/activity/current instead.
-	actid := readfile("/mnt/ui/activity/current");
-	if(actid == nil) {
-		flashstatus("cannot reach presentation zone — is luciuisrv running?");
-		sys->fprint(stderr, "settings: cannot read /mnt/ui/activity/current\n");
-		return;
-	}
-	aid := strip(actid);
-	pctl := sys->sprint("/mnt/ui/activity/%s/presentation/ctl", aid);
-	sys->fprint(stderr, "settings: openineditor %s → pctl=%s\n", path, pctl);
-
-	# A running editor is asked to open the file, through its posted
-	# server (#seditor/fs, post9p(2)); it was killed and started again,
-	# losing what it had not saved.  Else one is started on the file.
-	done := chan[1] of int;
-	spawn editoropen(path, done);
-	t := chan[1] of int;
-	spawn after(t, Waitctl);
-	opened := 0;
-	alt {
-	opened = <-done =>
-		;
-	<-t =>
-		flashstatus("no answer from the editor");
-		return;
-	}
-	if(!opened) {
-		cmd := sys->sprint("create id=editor type=app dis=/dis/wm/editor.dis label=editor data=%s", path);
-		if(writectl(pctl, cmd) < 0)
-			return;
-	}
-	writectl(pctl, "center id=editor");
-
-	flashstatus("opened " + path + " in editor");
+	if(plumbfile(path) || presentationopen(path) || windowopen(path))
+		flashstatus("opened " + path);
+	else
+		flashstatus("cannot open an editor for " + path);
 }
 
-editoropen(path: string, done: chan of int)
+# Make path, empty, and the directories it needs; 0 if it is there after.
+mkfile(path: string): int
 {
-	sys->pctl(Sys->FORKNS, nil);
-	fd := sys->open("#seditor/fs", Sys->ORDWR);
-	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
-		done <-= 0;
-		return;
+	for(i := 1; i < len path; i++)
+		if(path[i] == '/' && sys->stat(path[0:i]).t0 < 0)
+			sys->create(path[0:i], Sys->OREAD, Sys->DMDIR|8r755);
+	fd := sys->create(path, Sys->OWRITE|Sys->OEXCL, 8r644);
+	if(fd == nil && sys->stat(path).t0 < 0)
+		return -1;
+	return 0;
+}
+
+# Send the file's name to the plumber; 0 if there is none or nothing
+# takes it.  The plumber is looked for each time: it may have started
+# after Settings did.
+plumbfile(path: string): int
+{
+	if(plumbmsg == nil) {
+		plumbmsg = load Plumbmsg Plumbmsg->PATH;
+		if(plumbmsg == nil)
+			return 0;
 	}
-	b := array of byte ("open " + path);
-	ctl := sys->open("/mnt/editor/ctl", Sys->OWRITE);
-	done <-= ctl != nil && sys->write(ctl, b, len b) == len b;
+	if(plumbmsg->init(1, nil, 0) < 0)
+		return 0;
+	msg := ref Msg("Settings", "", "/", "text", "", array of byte path);
+	return msg.send() >= 0;
+}
+
+# Lucifer with no plumber: an editor of the file's own in the
+# presentation zone.  Which editor a file goes to is the plumb handler's
+# policy (lucipres), not repeated here.
+editseq := 0;
+
+presentationopen(path: string): int
+{
+	actid := readfile("/mnt/ui/activity/current");
+	if(actid == nil)
+		return 0;
+	pctl := sys->sprint("/mnt/ui/activity/%s/presentation/ctl", strip(actid));
+	id := sys->sprint("settings-edit-%d", ++editseq);
+	cmd := sys->sprint("create id=%s type=app dis=/dis/wm/editor.dis label=editor data=%s", id, path);
+	if(writectl(pctl, cmd) < 0)
+		return 0;
+	writectl(pctl, "center id=" + id);
+	return 1;
+}
+
+# No plumber and no Lucifer: wm/editor in a window of its own, on our
+# draw context (wm/wm's, under the Desktop).
+windowopen(path: string): int
+{
+	if(ctxt_g == nil)
+		return 0;
+	ed := load Runnable "/dis/wm/editor.dis";
+	if(ed == nil) {
+		sys->fprint(stderr, "settings: cannot load /dis/wm/editor.dis: %r\n");
+		return 0;
+	}
+	spawn runeditor(ed, path);
+	return 1;
+}
+
+runeditor(ed: Runnable, path: string)
+{
+	# a group of its own: Settings' Exit must not take the editor with it
+	sys->pctl(Sys->NEWPGRP|Sys->FORKNS, nil);
+	ed->init(ctxt_g, "editor" :: path :: nil);
 }
 
 # ── Theme listener ─────────────────────────────────────────────

@@ -87,42 +87,71 @@ whole(p: string): string
 	return s;
 }
 
-testFdShortReads(t: ref T)
+# What a child with an fd table of its own read of its fd file: the
+# whole file in one read, the same a byte at a time, and the faults seen.
+Fdread: adt {
+	all:	string;
+	bytes:	string;
+	p:	string;
+	errs:	list of string;
+};
+
+# The fd table is the child's alone (NEWFD with nothing kept): the
+# runner's table is shared with the tests running beside this one, whose
+# files' offsets moved between the two reads (macOS ARM64 CI, a TCP
+# connection's and the console's).
+fdreader(c: chan of ref Fdread)
 {
+	r := ref Fdread(nil, nil, nil, nil);
+	sys->pctl(Sys->NEWFD, nil);
 	# fds enough for lines of their own
 	keep := array[8] of ref Sys->FD;
 	for(i := 0; i < len keep; i++)
 		keep[i] = sys->open("/dev/null", Sys->OREAD);
-	p := sys->sprint("/prog/%d/fd", sys->pctl(0, nil));
-	fd := sys->open(p, Sys->OREAD);
-	if(fd == nil)
-		t.fatal(sys->sprint("open %s: %r", p));
+	r.p = sys->sprint("/prog/%d/fd", sys->pctl(0, nil));
+	fd := sys->open(r.p, Sys->OREAD);
+	if(fd == nil){
+		r.errs = sys->sprint("open %s: %r", r.p) :: nil;
+		c <-= r;
+		return;
+	}
 	# through the same fd as the reads below: another open is another line
-	all := "";
 	buf := array[65536] of byte;
 	for(o := big 0; (m := sys->pread(fd, buf, len buf, o)) > 0; o += big m)
-		all += string buf[0:m];
-	t.assert(len all > 0, "the fd file reads");
+		r.all += string buf[0:m];
 	for(n := 0; n <= 3; n++){
-		(r, nil, ok) := guarded(fd, n, big 0);
-		t.assert(ok, sys->sprint("a read of %d bytes writes only its buffer", n));
-		t.assert(r <= n, sys->sprint("a read of %d bytes gives no more (%d)", n, r));
+		(k, nil, ok) := guarded(fd, n, big 0);
+		if(!ok)
+			r.errs = sys->sprint("a read of %d bytes wrote outside its buffer", n) :: r.errs;
+		if(k > n)
+			r.errs = sys->sprint("a read of %d bytes gave %d", n, k) :: r.errs;
 	}
 	# a byte at a time, at each offset, is the file
-	s := "";
-	for(off := 0; off < len array of byte all + 4; off++){
-		(r, b, ok) := guarded(fd, 1, big off);
+	for(off := 0; off < len array of byte r.all + 4; off++){
+		(k, b, ok) := guarded(fd, 1, big off);
 		if(!ok){
-			t.error(sys->sprint("a 1-byte read at %d wrote outside its buffer", off));
+			r.errs = sys->sprint("a 1-byte read at %d wrote outside its buffer", off) :: r.errs;
 			break;
 		}
-		if(r <= 0)
+		if(k <= 0)
 			break;
-		s += string b;
+		r.bytes += string b;
 	}
-	# less the line of the fd read through: its offset moves as it is read
-	t.assertseq(notline(s, p), notline(all, p), "read a byte at a time");
 	keep = nil;
+	c <-= r;
+}
+
+testFdShortReads(t: ref T)
+{
+	c := chan of ref Fdread;
+	spawn fdreader(c);
+	r := <-c;
+	for(e := r.errs; e != nil; e = tl e)
+		t.error(hd e);
+	if(r.all == nil)
+		t.fatal("the fd file read nothing");
+	# less the line of the fd read through: its offset moves as it is read
+	t.assertseq(notline(r.bytes, r.p), notline(r.all, r.p), "read a byte at a time");
 }
 
 notline(s, p: string): string

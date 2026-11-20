@@ -1,6 +1,6 @@
 .TH CAMERA 3
 .SH NAME
-camera \- the Raspberry Pi 4's camera receiver
+camera \- the Raspberry Pi 4's and 5's camera receiver
 .SH SYNOPSIS
 .nf
 .B bind -a #V /dev
@@ -9,8 +9,9 @@ camera \- the Raspberry Pi 4's camera receiver
 .B /dev/unicam/frame
 .fi
 .SH DESCRIPTION
-The camera device drives Unicam, the receiver on a Raspberry Pi 4's
-CSI connector, and nothing beyond it. The power, clocks, lanes, memory
+The camera device drives the receiver on a Raspberry Pi's CSI
+connector, and nothing beyond it: Unicam on a Pi 4, RP1's CSI-2
+front end on a Pi 5, which has two connectors. The power, clocks, lanes, memory
 and interrupt are here; what is at the far end of the ribbon, how to
 program it, and what to do with its samples are a program's:
 .IR camsrv (4)
@@ -39,6 +40,13 @@ after this. Refused while streaming.
 .TP
 .B "stream on\fR|\fPoff
 Receive frames.
+.TP
+.B "port 0\fR|\fP1
+On a Pi 5, the connector: CAM/DISP 0 or 1. Refused while powered.
+A read then says
+.BI i2c " name
+for the sensor's bus in
+.IR i2c (3).
 .PD
 .PP
 Each open of
@@ -47,8 +55,16 @@ waits for the next complete frame and holds it until closed, so a
 slow reader reads one whole picture. Reads return its samples, 16 bits
 little-endian, row by row. One reader at a time; an open with the
 stream off is refused, and one waits a second at most for a frame.
+.PP
+On a Pi 5,
+.B ctl
+has one writer at a time (another's open is refused,
+.BR "in use" ),
+and its close stops the stream and takes the power off.
 .SH SOURCE
 .B /os/bcm2711/devcam.c
+.br
+.B /os/bcm2712/devcam.c
 .SH SEE ALSO
 .IR i2c (3),
 .IR camsrv (4),

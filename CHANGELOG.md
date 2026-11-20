@@ -4,6 +4,17 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **The camera on the Raspberry Pi 5.** `#V` drives RP1's CSI-2
+  receiver on either camera connector and serves the Pi 4's
+  `#V/unicam` files, so camsrv(4), `wm/camera`, vision(4) and the
+  card's `camera` file work unchanged; a Camera Module 3 gives frames
+  at 576x324. ctl gains `port 0|1` for the connector, and has one
+  writer at a time, its close powering the camera off. `#J` gains
+  i2c4 and i2c6, the connectors' buses, and each open of a data file
+  keeps its own address (the sensor's reads went to the lens).
+
 ## [0.11.0] - 2026-11-19
 
 ### Added
@@ -813,9 +824,8 @@ installation, especially bare-metal nodes and systems that ran
   `infernode-0.10.0-rpi5.img.xz` is built by the release job and
   checked as the boot ROM and firmware read a card (`piromcheck`), and
   by `piimage_test` as the other boards' cards are (#1125). It is not in
-  Raspberry Pi Imager, whose entry lists the 3B+ and 4B only, and it
-  has never yet been booted from a real card. Write it by hand, and
-  treat it as a preview.
+  Raspberry Pi Imager, whose entry lists the 3B+ and 4B only: write it
+  by hand, and treat it as a preview.
 - **Shared kernel fixes the Pi 5 found (#1046).** Core 0 idled in `wfi`,
   which the `sev` that wakes a core does not end, so a process that had
   to run there waited for a clock tick; with #1032's IP hardening

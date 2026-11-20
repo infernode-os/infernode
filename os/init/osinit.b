@@ -1972,7 +1972,7 @@ btjoin(txt: string)
 # card's to say, as the radio's settings are; the same kernel and the
 # same camsrv serve any mounting. No file, nothing started here, and
 # wm/camera starts camsrv for itself as on any other machine. No
-# receiver (#V: a board other than the Pi 4), the file is not read.
+# receiver (#V: a board other than the Pi 4 or 5), the file is not read.
 #
 # In THIS namespace, as /net/bt is, so the console shell, the network
 # console and the desktop all inherit /mnt/video/0; the mount point

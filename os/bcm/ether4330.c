@@ -51,9 +51,12 @@
  *
  * The first two are where Miller's driver looks (Plan 9 keeps its
  * firmware in /sys/lib/firmware and its boot partition at /boot); the
- * third is this system's card. For the 43455 the names are
- * brcmfmac43455-sdio.bin, brcmfmac43455-sdio.txt (the NVRAM) and
- * brcmfmac43455-sdio.clm_blob (the regulatory table). None of them is
+ * third is this system's card. The writer of the firmware verb names
+ * them (os/init/osinit.b's radiosetup, by the chip ifstats reports):
+ * for the 43455 brcmfmac43455-sdio.bin, brcmfmac43455-sdio.txt (the
+ * NVRAM) and brcmfmac43455-sdio.clm_blob (the regulatory table); a
+ * chip with no regulatory table (the Zero 2 W's 43436s) names two.
+ * None of them is
  * in this tree and none may be: they are Cypress binaries, licensed for
  * use with Cypress parts. The release's Pi card images carry them;
  * otherwise tools/pi-firmware.sh fetches them at a pinned revision,
@@ -352,7 +355,7 @@ static Cmdtab cmds[] =
 	{CMcrypt,	"crypt",	2},
 	{CMdebug,	"debug",	2},
 	{CMessid,	"essid",	0},	/* the rest of the line: an SSID may contain spaces */
-	{CMfirmware,	"firmware",	4},
+	{CMfirmware,	"firmware",	0},	/* bin nvram [clm]: not every chip has a regulatory table */
 	{CMjoin,	"join",		4},
 	{CMkey1,	"key1",		2},
 	{CMkey2,	"key2",		2},
@@ -3162,9 +3165,11 @@ etherbcmctl(Ether *edev, void *a, long n)
 			qunlock(&ctl->alock);
 			nexterror();
 		}
+		if(cb->nf != 3 && cb->nf != 4)
+			error("usage: firmware bin nvram [clm]");
 		if(ctl->running)
 			error("ether4330: firmware already running");
-		for(i = 0; i < 3; i++)
+		for(i = 0; i < cb->nf-1; i++)
 			ctl->fwchan[i] = namec(cb->f[1+i], Aopen, OREAD, 0);
 		bringup(edev);
 		closefw(ctl);

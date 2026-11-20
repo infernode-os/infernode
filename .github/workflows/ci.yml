@@ -153,7 +153,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -263,6 +263,22 @@ jobs:
         chmod +x tests/host/charon_notpage_test.sh
         ROOT=. bash tests/host/charon_notpage_test.sh
 
+    - name: Check Charon's render fixtures
+      run: |
+        # tests/charon/wpt: one feature a page, each drawn solid green
+        # with no pure red when right (tests/charon/wpt/README.md); a
+        # layout or paint change that breaks one fails here
+        mkdir -p charon-wpt-out
+        sh tools/charon-wpt.sh charon-wpt-out
+
+    - name: Keep the render fixtures' images
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: failure()
+      with:
+        name: charon-wpt-images
+        path: charon-wpt-out
+        if-no-files-found: ignore
+
     - name: Check the DOM a page's scripts see
       run: |
         # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;
@@ -345,6 +361,15 @@ jobs:
         chmod +x tests/host/profile_proxy_test.sh
         rc=0
         ROOT=. bash tests/host/profile_proxy_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
+    - name: Run login-profile home directory check
+      run: |
+        # The profile finds the host's home with HOME set, with a blank in
+        # it, from passwd with no HOME, and goes on with none (#737).
+        chmod +x tests/host/profile_home_test.sh
+        rc=0
+        ROOT=. bash tests/host/profile_home_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run agent harness checks
@@ -440,6 +465,12 @@ jobs:
         chmod +x tests/host/dossrv_lfn_test.sh
         rc=0
         ROOT=. bash tests/host/dossrv_lfn_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # A card whose boot sector, FAT or entries are not what a
+        # FAT's are must not end dossrv or keep it reading for ever.
+        chmod +x tests/host/dossrv_hostile_test.sh
+        rc=0
+        ROOT=. bash tests/host/dossrv_hostile_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
         # The radio firmware tool's verification path: a mismatched
         # checksum must refuse to install. Network-free (--from a
@@ -789,6 +820,13 @@ jobs:
               statcheck_bounds_test tools9p_env_isolation_test
               tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
               tls_clientauth_test ssl_killedcall_test vid9p_hangup_test httpd_test httpd_auth_test
+              charon_netfile_test fetch_tools_test msg_email_bind_test editor_deputy_test
+              matrix_compose_test llmsrv_ctl_test llmctl9p_test veltrosrv_gate_test veltro_kill_test
+              keyfs_file_test aescbc_test keytools_test login_test x509_chain_test
+              mail9p_hostile_test pop3_tls_test webget_https_test legacy_ssl_gone_test
+              cs_cancel_test registry_test secstore_cmd_test logon_unlock_test sntp_test
+              vid9p_ctl_test wpa_log_test
+              acvp_pq_test sha3_test sign_nonce_test tls_keyupdate_test auth_services_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
@@ -799,6 +837,7 @@ jobs:
               usbdwc_bounds_test udp_len_test iproute_guard_test arp_enter_test ptclcsum_guard_test
               usbxhci_trblen_test ip6reasm_test ipifc_guard_test devip_guard_test tcp_isn_test
               bt9p_selftest_test
+              export_limits_test devip_conv_test arpadd_test factotum_persist_test devsd_part_test devether_rndis_test netif_multi_test devcmd_fdleak_test devprog_fdsnap_test errlabel_test flawfinder_filter_test print_heapfull_test load_heapfull_test nil_far_test jit_compile_fail_test jit_4gb_test limbo_stale_test slice_end_test draw_pools_test tk_nomem_test link_digest_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
@@ -812,6 +851,11 @@ jobs:
               tls_malformed_server_test tools9p_activity_ns_test
               tools9p_basics_test tools9p_write_exec_view_test
               write_capability_test xenith_build_test werc_test charon_werc_test
+              git_tool_test exec_fd_test limbo_tool_test lucibridge_promote_test lucibridge_turn_test
+              spawn_life_test spawn_provenance_test tools9p_call_test nsaudit_truth_test default_budget_test
+              digest_edge_test elgamal_test ipint_nomem_test libmp_edge_test rsa_edge_test
+              x25519_test mnt_unexpected_test ninep_conv_test mldsa_test mlkem_test slhdsa_test
+              pq_nodivide_test pq_residue_test
     permissions:
       contents: read
     env:
@@ -821,7 +865,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind python3-numpy
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind python3-numpy python3-cryptography
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -860,7 +904,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1007,7 +1051,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1170,7 +1214,7 @@ jobs:
         # in dis/wm opening at a size that shows it, under wm/wm and in
         # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_view_plumb_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test ns_topology_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
+        for t in wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_view_plumb_test settings_stall_test settings_edit_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test ns_topology_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -1209,7 +1253,8 @@ jobs:
             xenith_event_test xenith_image_test xenith_browse_test \
             xenith_scroll_focus_test xenith_scroll_quit_test \
             xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
-            xenith_race_test xenith_doc_test xenith_wrap_test; do
+            xenith_race_test xenith_doc_test xenith_wrap_test \
+            xenith_ctlcut_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
@@ -1351,7 +1396,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1580,7 +1625,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1794,7 +1839,14 @@ jobs:
           - arch: arm64
             label: ARM64
             runner: macos-15
-            backstop: 1500  # the suite runs interpreted here (no -c1)
+            # The suite runs interpreted here (no -c1).  At 1500 it was cut
+            # off in bt_ns, the first sh test, on 2026-11-17, nothing hung:
+            # its Limbo tests alone add up to 1396 s, 192 s more than on
+            # master (wikifs, secstore_client, keyring_letgo and
+            # keyring_msg are new, webclient_deadline 37 s longer), and
+            # bt_ns takes 113 s here.  The backstop bounds a hang, and the
+            # job has 75 minutes, as AMD64's does.
+            backstop: 2400
             gui: wm
           - arch: arm64
             label: ARM64 GUI (osk)
@@ -1806,7 +1858,12 @@ jobs:
           - arch: amd64
             label: AMD64
             runner: macos-15-intel
-            backstop: 1800  # an i7-8700B, interpreted: slower still
+            # An i7-8700B, interpreted: slower still.  At 1800 the suite
+            # was cut off in its last few tests on 2026-11-15, nothing
+            # hung: the tests it had finished add up to 1801 s (crypto
+            # 247 s, tls_server 209 s).  The backstop bounds a hang, and
+            # the job has 75 minutes.
+            backstop: 2400
     env:
       ROOT: ${{ github.workspace }}
       OBJTYPE: ${{ matrix.arch }}
@@ -1947,7 +2004,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -2140,7 +2197,7 @@ jobs:
         # As the Linux GUI job's wm and osk parts; wm_cursor_test and
         # lucifer_cursor_test need LD_PRELOAD and skip here (77).
         case $GUI in
-        wm)	tests="wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_view_plumb_test settings_stall_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test ns_topology_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
+        wm)	tests="wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_view_plumb_test settings_stall_test settings_edit_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test ns_topology_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
         osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test interface_test phone_fuzz_test tablet_layout_test" ;;
         esac
         failed=

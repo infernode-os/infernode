@@ -14,6 +14,7 @@ include "draw.m";
 
 include "html.m";
 	html: HTML;
+	Lex: import html;
 
 include "testing.m";
 	testing: Testing;
@@ -191,6 +192,140 @@ testUTF8(t: ref T)
 	}
 }
 
+# ── What a page chooses ──────────────────────────────────────────────────────
+
+lexer(data: array of byte, pidc: chan of int, done: chan of array of ref Lex)
+{
+	pidc <-= sys->pctl(0, nil);
+	a: array of ref Lex;
+	{
+		a = html->lex(data, HTML->UTF8, 0);
+	} exception {
+	"*" =>
+		a = nil;
+	}
+	done <-= a;
+}
+
+lextimer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# the tokens of data, given 20 seconds; (nil, 0) if the lexer did not return
+lexin(data: array of byte): (array of ref Lex, int)
+{
+	pidc := chan of int;
+	done := chan[1] of array of ref Lex;
+	spawn lexer(data, pidc, done);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn lextimer(tc, 20000);
+	alt{
+	a := <-done =>
+		return (a, 1);
+	<-tc =>
+		fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+		return (nil, 0);
+	}
+}
+
+withbyte(s: string, b: array of byte): array of byte
+{
+	a := array of byte s;
+	r := array[len a + len b] of byte;
+	r[0:] = a;
+	r[len a:] = b;
+	return r;
+}
+
+# A page that ends in the middle of a character: the lexer was given no
+# bytes for it and never moved past it, adding to its text for ever.
+testCutCharacter(t: ref T)
+{
+	cuts := array[] of {
+		array[] of {byte 16re2},
+		array[] of {byte 16re2, byte 16r82},
+		array[] of {byte 16rf0, byte 16r9f, byte 16r9a},
+		array[] of {byte 16rc3},
+	};
+	for(i := 0; i < len cuts; i++){
+		(a, ok) := lexin(withbyte("abc", cuts[i]));
+		if(!ok){
+			t.error(sys->sprint("text ending in %d bytes of a character: the lexer did not return", len cuts[i]));
+			continue;
+		}
+		t.asserteq(len a, 1, "text ending in part of a character is one token");
+		if(len a == 1){
+			t.asserteq(a[0].tag, HTML->Data, "and it is text");
+			want := "abc";
+			for(k := 0; k < len cuts[i]; k++)
+				want[len want] = 16rFFFD;
+			t.assertseq(a[0].text, want, "the text before it, and a bad character for each byte");
+		}
+
+		(a, ok) = lexin(withbyte("<a href=x", cuts[i]));
+		if(!ok){
+			t.error("an attribute's value ending in part of a character: the lexer did not return");
+			continue;
+		}
+		t.assert(len a == 1 && a[0].tag == HTML->Ta, "an attribute's value ending in part of a character is one tag");
+
+		(a, ok) = lexin(withbyte("<a href=\"x", cuts[i]));
+		if(!ok){
+			t.error("a quoted value ending in part of a character: the lexer did not return");
+			continue;
+		}
+		t.assert(len a == 1 && a[0].tag == HTML->Ta, "a quoted value ending in part of a character is one tag");
+	}
+	# in the middle of the page it was always one bad character
+	(a, ok) := lexin(array[] of {byte 'a', byte 16re2, byte 'b'});
+	t.assert(ok && len a == 1 && a[0].text == "a�b", "part of a character with text after it");
+}
+
+onetext(t: ref T, src, want, what: string)
+{
+	(a, ok) := lexin(array of byte src);
+	if(!ok){
+		t.error(what + ": the lexer did not return");
+		return;
+	}
+	got := "";
+	for(i := 0; i < len a; i++){
+		if(a[i].tag != HTML->Data){
+			t.error(sys->sprint("%s: a token that is not text (tag %d)", what, a[i].tag));
+			return;
+		}
+		got += a[i].text;
+	}
+	t.assertseq(got, want, what);
+}
+
+# A character given by number: the digits are the page's.
+testNumericEntity(t: ref T)
+{
+	onetext(t, "a&#60;b", "a<b", "&#60;");
+	onetext(t, "a&#233;b", "aéb", "&#233;");
+	# 2^32+60 wrapped to 60, and 2^32+233 to 233
+	onetext(t, "a&#4294967356;b", "a&#4294967356;b", "a number past 32 bits is no character");
+	onetext(t, "a&#4294967529;b", "a&#4294967529;b", "another");
+	onetext(t, "a&#99999999999999999999999999999999999999060;b", "a&#99999999999999999999999999999999999999060;b", "forty digits");
+	onetext(t, "a&#256;b", "a&#256;b", "256, as before");
+}
+
+# A comment that ends where the page does, or does not end.
+testCommentAtEnd(t: ref T)
+{
+	onetext(t, "x<!--c-->y", "xy", "a comment in the middle");
+	onetext(t, "x<!--c-->", "x", "a comment whose end is the page's");
+	onetext(t, "x<!---->", "x", "an empty comment at the end");
+	onetext(t, "x<!--", "x", "a comment begun in the last four bytes");
+	onetext(t, "x<!-- never closed -", "x", "a comment with no end");
+}
+
 testLatin1(t: ref T)
 {
 	data := array of byte "<p>test</p>";
@@ -275,6 +410,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Lex2string", testLex2string);
 	run("TagConstants", testTagConstants);
 	run("UTF8", testUTF8);
+	run("CutCharacter", testCutCharacter);
+	run("NumericEntity", testNumericEntity);
+	run("CommentAtEnd", testCommentAtEnd);
 	run("Latin1", testLatin1);
 	run("NestedTags", testNestedTags);
 	run("MultipleAttributes", testMultipleAttributes);

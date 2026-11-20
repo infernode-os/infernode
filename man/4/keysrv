@@ -3,6 +3,9 @@
 keysrv \- secret key server
 .SH SYNOPSIS
 .B auth/keysrv
+[
+.BI -k " keyfile"
+]
 .SH DESCRIPTION
 .I Keysrv
 is a file service run on a connection to an authentication server.
@@ -24,57 +27,116 @@ first authenticates the connection using
 requiring the client to use
 .B aes_256_gcm
 .RI ( ssl (3)).
+It authenticates itself with the signer's own key,
+.B /keydb/signerkey
+(or
+.IR keyfile ),
+so that a client can tell it is the signer's key server and not
+another holder of one of the signer's certificates:
+the name in that key is certified for nobody else
+(see
+.IR logind (8)).
 If authentication succeeds,
 .I keysrv
 exports a name space containing a file
 .BR secret .
 The authentication ensures that only a user that possesses a valid certificate can connect to the service.
 .PP
-If the authenticated user (ie, the user name in the verified certificate)
-has an entry in
+The authenticated user (ie, the user name in the verified certificate)
+must be one account name as
+.IR login (6)
+defines it, have an entry in
 .BR /mnt/keys ,
 as served by
 .IR keyfs (4),
-and that user has a non-empty secret,
-then the file
+and have a non-empty secret;
+otherwise every read or write returns an appropriate error.
+.PP
+A read of
 .B secret
-will accept reads and writes.
-(Otherwise, every read or write returns an appropriate error.)
-Every successful read returns 0 bytes; thus a read can be used to check that the user is known and has a secret key.
-Each write contains data of the following form:
+returns a challenge:
+.IP
+.EX
+keysrv 2 \fIchallenge\fP
+.EE
+.PP
+where
+.I challenge
+is 32 random bytes as 64 hexadecimal digits.
+There is a new one after every write.
+A write answers the challenge last read:
 .IP
 .EX
 .fi
-.I oldhash
+.I proof
 [
 .I newsecret
 ]
 .EE
 .PP
-.I Oldhash
-is the SHA1 hash
-(see
-.IR keyring-sha1 (2))
-of the user's existing secret, as 20 hexadecimal digits.
-If the value of
-.I oldhash
-does not match that of the stored secret, the write returns an error and suitable diagnostic.
-.I Oldhash
-is optionally followed by a
-.IR newsecret ,
-in clear text as a sequence of bytes (typically the secret as
-.IR utf (6)),
+With
+.I secret
+the user's existing secret as
+.IR keyfs (4)
+holds it (the SHA-256 of the password),
+.IP
+.EX
+PRK = HMAC-SHA-384(challenge, secret)
+proof = HKDF-Expand(PRK, "infernode keysrv 2 proof" || user, 48)
+key || nonce = HKDF-Expand(PRK,
+    "infernode keysrv 2 new secret" || user, 44)
+newsecret = AES-256-GCM(key, nonce, SHA-256(new password))
+.EE
+.PP
+.I Proof
+is 96 hexadecimal digits.
+.I Newsecret
+is the ciphertext and its tag (the associated data is the label
+.BR "infernode keysrv 2 new secret" ),
+96 hexadecimal digits,
 separated from
-.I oldhash
+.I proof
 by a single space.
-If the
-.I oldhash
-matches that of the secret currently stored,
+If
+.I proof
+is right for the secret currently stored and
 .I newsecret
-replaces it.
+is given and opens to 32 bytes, they replace the stored secret;
+they are what
+.IR login (6)
+expects there.
+A write of
+.I proof
+alone checks the secret and changes nothing.
 The write returns an error if
-.I oldhash
-does not match the stored value, or if something else goes wrong.
+.I proof
+is wrong
+.RB ( "wrong secret" ),
+or if something else goes wrong.
+.PP
+A proof is good for one challenge, so what a client sent cannot be sent again;
+the proof and the new secret say nothing to anyone without the old secret,
+though whoever is sent them could try passwords against them, which is why the
+client first makes sure the server is the signer.
+Before version 2 the proof was a hash of the stored secret, the same every time,
+and the new secret was sent and stored as typed, which no login then matched.
+.PP
+Wrong proofs are guesses at the password, and are counted where
+.IR logind (8)
+counts logins that do not prove it,
+.BR /keydb/loginfail :
+ten in a row for a name, here or there, and both refuse the name for a minute.
+A session takes five wrong proofs and then no more of any kind.
+When the audit log is set up
+.RI ( auditfs (4)),
+.I keysrv
+records
+.B authfail
+for a wrong proof,
+.B authlock
+for a refusal and
+.B secretchange
+for a secret changed.
 .PP
 .I Keysrv
 can be invoked via
@@ -106,10 +168,20 @@ mount point for
 .B /mnt/keysrv
 exported mount point for
 .I keysrv
+.TP
+.B /keydb/signerkey
+the signer's key, with which
+.I keysrv
+authenticates
+.TP
+.B /keydb/loginfail
+counts of failed attempts, shared with
+.IR logind (8)
 .SH SOURCE
 .B /appl/cmd/auth/keysrv.b
 .SH SEE ALSO
 .IR listen (1),
 .IR passwd (1),
 .IR keyfs (4),
+.IR login (6),
 .IR logind (8)

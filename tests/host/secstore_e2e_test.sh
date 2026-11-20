@@ -27,7 +27,7 @@ echo 'setup status: '$status
 
 # Start secstored
 echo '--- starting secstored ---'
-auth/secstored -d -s /tmp/secstore_e2e -a 'tcp!*!15357' &
+auth/secstored -d -s /tmp/secstore_e2e -a 'tcp!127.0.0.1!15357' &
 sleep 2
 
 # Start factotum with -S pointing to local secstored
@@ -61,7 +61,7 @@ if [ -d "$ROOT/tmp/secstore_e2e/testuser" ]; then
     echo "--- secstore user dir exists ---"
     ls -la "$ROOT/tmp/secstore_e2e/testuser/"
     PAKHDR=$(LC_ALL=C awk '{print $1}' "$ROOT/tmp/secstore_e2e/testuser/PAK" 2>/dev/null || true)
-    if [ "$PAKHDR" != "secstore3" ]; then
+    if [ "$PAKHDR" != "secstore4" ]; then
         echo "FAIL: PAK verifier format mismatch (got '$PAKHDR')"
         exit 1
     fi
@@ -76,7 +76,7 @@ load std
 
 # Start secstored (account already exists from phase 1)
 echo '--- starting secstored ---'
-auth/secstored -d -s /tmp/secstore_e2e -a 'tcp!*!15357' &
+auth/secstored -d -s /tmp/secstore_e2e -a 'tcp!127.0.0.1!15357' &
 sleep 2
 
 # Start factotum with -S — should load keys from secstore

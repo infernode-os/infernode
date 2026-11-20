@@ -78,6 +78,10 @@ enum {
  *
  */
 
+enum {
+	Maxblock	= 1024*1024*1024,	/* no block is this big: for sanity and to avoid overflow */
+};
+
 /* tracing */
 enum {
 	Npadlong	= 2,
@@ -126,6 +130,16 @@ ulong
 heapactivity(void)
 {
 	return heapmem->nalloc + heapmem->nfree;
+}
+
+/*
+ * How many objects the heap holds: what a round of the collector goes
+ * round.  The idle collector measures a change in the heap against it.
+ */
+ulong
+heaplive(void)
+{
+	return heapmem->nalloc - heapmem->nfree;
 }
 
 int
@@ -878,6 +892,15 @@ smalloc(size_t size)
 	 * and a kill of the Prog waiting interrupts it, as a kill
 	 * interrupts any sleep, where there is an error label to take it.
 	 */
+	/*
+	 * but not for a size no pool gives: that wait had no end. It is
+	 * an error where there is someone to take it.
+	 */
+	if(size >= Maxblock){
+		if(up != nil && up->nerr > 0)
+			error(Enomem);
+		panic("smalloc: %lud bytes asked for, pc=%#lux", (ulong)size, getcallerpc(&size));
+	}
 	for(retries = 0;; retries++){
 		v = malloc(size);
 		if(v != nil)
@@ -905,11 +928,30 @@ smalloc(size_t size)
 	return v;
 }
 
+/*
+ * A size no block has, asked of the main pool. The pools refuse a block
+ * of a gigabyte or more, but were asked only after the tag words were
+ * added to the size: a size within sixteen bytes of the top of a ulong
+ * (malloc(-1), which is what a negative int from a program is) came out
+ * as a few bytes, was given, and was then zeroed for the size asked:
+ * every byte after it, to the end of memory.
+ */
+static int
+toobig(size_t size, ulong pc)
+{
+	if(size < Maxblock)
+		return 0;
+	poolnomem(mainmem, size, pc, "over the 1GB limit on one block");
+	return 1;
+}
+
 void*
 kmalloc(size_t size)
 {
 	void *v;
 
+	if(toobig(size, getcallerpc(&size)))
+		return nil;
 	v = dopoolalloc(mainmem, size+Npadlong*sizeof(ulong), getcallerpc(&size));
 	if(v != nil){
 		ML(v, size, getcallerpc(&size));
@@ -931,6 +973,8 @@ malloc(size_t size)
 {
 	void *v;
 
+	if(toobig(size, getcallerpc(&size)))
+		return nil;
 	v = pallocpc(mainmem, size+Npadlong*sizeof(ulong), getcallerpc(&size));
 	if(v != nil){
 		ML(v, size, getcallerpc(&size));
@@ -950,6 +994,8 @@ mallocz(ulong size, int clr)
 {
 	void *v;
 
+	if(toobig(size, getcallerpc(&size)))
+		return nil;
 	v = pallocpc(mainmem, size+Npadlong*sizeof(ulong), getcallerpc(&size));
 	if(v != nil){
 		ML(v, size, getcallerpc(&size));
@@ -1035,6 +1081,8 @@ realloc(void *v, size_t size)
 		free(v);
 		return nil;
 	}
+	if(toobig(size, getcallerpc(&v)))
+		return nil;
 	if(v != nil)
 		v = (ulong*)v-Npadlong;
 	if(Npadlong!=0 && size!=0)

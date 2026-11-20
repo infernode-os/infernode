@@ -10,6 +10,9 @@ implement ImgloadTest;
 # - Which names are images (what Xenith opens as one)
 # - Every format decoded from a file, its pixels checked
 #   (fixtures in /tests/imgload, made by mkfixtures.py there)
+# - SVG clip paths, masks, use and symbols, by pixel
+# - PNG alpha that is not RGBA (grey and alpha; a palette with
+#   translucent and several transparent entries) made RGBA
 # - Xenith's image renderer claims images, and not text that
 #   begins like one
 # - An Inferno image (image(6)) read from bytes
@@ -249,6 +252,113 @@ readfile(path: string): array of byte
 }
 
 testDecodePng(t: ref T)		{ checkfixture(t, "rb.png", "png", (255, 0, 0), (0, 0, 255), 0); }
+# readpng's alpha that is not an RGBA image's: each made RGBA
+pngraw(t: ref T, name: string): ref RImagefile->Rawimage
+{
+	if(readpng == nil){
+		readpng = load RImagefile RImagefile->READPNGPATH;
+		if(readpng == nil)
+			t.fatal("cannot load readpng");
+		readpng->init(bufio);
+	}
+	(raw, err) := readpng->read(bufio->aopen(readfile(FIXTURES + "/" + name)));
+	if(raw == nil || err != nil)
+		t.fatal(name + ": " + err);
+	if(raw.nchans != 4 || raw.chandesc != RImagefile->CRGBA)
+		t.fatal(sys->sprint("%s: %d channels, chandesc %d: not RGBA", name, raw.nchans, raw.chandesc));
+	return raw;
+}
+
+rgba(raw: ref RImagefile->Rawimage, x, y: int): string
+{
+	i := y * raw.r.dx() + x;
+	return sys->sprint("%d %d %d %d", int raw.chans[0][i], int raw.chans[1][i], int raw.chans[2][i], int raw.chans[3][i]);
+}
+
+testPngGreyAlpha(t: ref T)
+{
+	raw := pngraw(t, "wbla.png");
+	t.assertseq(rgba(raw, 3, 1), "255 255 255 255", "white, opaque");
+	t.assertseq(rgba(raw, 3, 6), "0 0 0 128", "black at half alpha (the alpha was dropped: Apple's logo a black box)");
+}
+
+testPngPaletteAlpha(t: ref T)
+{
+	raw := pngraw(t, "rbpa.png");
+	t.assertseq(rgba(raw, 3, 1), "255 0 0 255", "red, opaque");
+	t.assertseq(rgba(raw, 3, 6), "0 0 255 128", "blue at alpha 128 (translucent entries were opaque)");
+	t.asserteq(int raw.chans[3][1*8+7], 0, "a transparent index");
+	t.asserteq(int raw.chans[3][7*8+3], 0, "a second transparent index (with two, neither was)");
+}
+
+# An SVG's clip-path (its clip path after it), mask, use and use of a
+# symbol: each was drawn as if not there (the square unclipped, the
+# mask's hole filled, nothing for the uses)
+testSvgRefs(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimage(FIXTURES + "/refs.svg");
+	if(im == nil)
+		t.fatal("refs.svg: " + err);
+	t.asserteq(im.r.dx(), 40, "refs.svg width");
+	o := im.r.min;
+	near(t, pixel(im, o.add((2, 5))), (255, 0, 0), 0, "clip-path: the half inside");
+	near(t, pixel(im, o.add((7, 5))), (0, 0, 0), 0, "clip-path: the half outside, not drawn");
+	near(t, pixel(im, o.add((11, 1))), (0, 255, 0), 0, "mask: where it is white");
+	near(t, pixel(im, o.add((15, 5))), (0, 0, 0), 0, "mask: where it is black, not drawn");
+	near(t, pixel(im, o.add((25, 5))), (0, 0, 255), 0, "use: the rect it names, at its x");
+	near(t, pixel(im, o.add((35, 5))), (255, 255, 0), 0, "use of a symbol: its viewBox into the use's size");
+}
+
+# Gradients a fill names before they are defined, in a <defs> at the end
+# (MediaWiki's logo: its flower was not drawn)
+testSvgForwardGradient(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimage(FIXTURES + "/fwdgrad.svg");
+	if(im == nil)
+		t.fatal("fwdgrad.svg: " + err);
+	o := im.r.min;
+	near(t, pixel(im, o.add((5, 5))), (0, 255, 0), 0, "a linear gradient defined after its use");
+	near(t, pixel(im, o.add((15, 5))), (0, 0, 255), 0, "a radial one");
+}
+
+# An SVG's style sheet: Illustrator's .cls-1{fill:...} on every shape
+# (Kubernetes' icons were black), by specificity and order, after the
+# presentation attributes and before the style attribute; and a style
+# attribute's last declaration is the one taken (it was its first)
+testSvgSheet(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimage(FIXTURES + "/sheet.svg");
+	if(im == nil)
+		t.fatal("sheet.svg: " + err);
+	o := im.r.min;
+	near(t, pixel(im, o.add((5, 5))), (0, 0, 255), 0, ".a over rect");
+	near(t, pixel(im, o.add((15, 5))), (0, 255, 0), 0, ".b.c");
+	near(t, pixel(im, o.add((25, 5))), (255, 255, 0), 0, "#d over .a");
+	near(t, pixel(im, o.add((35, 5))), (255, 255, 255), 0, "the style attribute over the sheet");
+	near(t, pixel(im, o.add((45, 5))), (0, 0, 255), 0, "the sheet over a presentation attribute");
+	near(t, pixel(im, o.add((55, 5))), (0, 255, 255), 0, "a style attribute's last fill");
+	near(t, pixel(im, o.add((65, 5))), (255, 0, 0), 0, "rect alone");
+}
+
+# A palette image's transparent index after a colour is clear: the
+# colour of the pixel before it was kept with alpha 0, and premultiplied,
+# added to whatever it was drawn over
+testClearAfterColour(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimage(FIXTURES + "/clear.gif");
+	if(im == nil)
+		t.fatal("clear.gif: " + err);
+	o := im.r.min;
+	near(t, pixel(im, o.add((0, 0))), (255, 0, 0), 0, "red");
+	near(t, pixel(im, o.add((1, 0))), (0, 0, 0), 0, "clear after red: nothing on black");
+	near(t, pixel(im, o.add((2, 0))), (255, 255, 255), 0, "white");
+	near(t, pixel(im, o.add((3, 0))), (0, 0, 0), 0, "clear after white: nothing on black");
+}
+
 testDecodeJpeg(t: ref T)	{ checkfixture(t, "rb.jpg", "jpeg", (255, 0, 0), (0, 0, 255), 40); }
 testDecodeGif(t: ref T)		{ checkfixture(t, "rb.gif", "gif", (255, 0, 0), (0, 0, 255), 0); }
 testDecodeWebpLossless(t: ref T)	{ checkfixture(t, "rb.webp", "webp", (255, 0, 0), (0, 0, 255), 0); }
@@ -349,6 +459,68 @@ testDecodeBit(t: ref T)
 	t.asserteq(im.r.dx(), 8, "width");
 	near(t, pixel(im, (3, 1)), (255, 0, 0), 0, "top half");
 	near(t, pixel(im, (3, 6)), (0, 0, 255), 0, "bottom half");
+}
+
+# an image file's bytes read by the draw library, or nil
+readbit(data: array of byte): ref Image
+{
+	path := "/tmp/imgload_test_hdr.bit";
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return nil;
+	sys->write(fd, data, len data);
+	fd = sys->open(path, Sys->OREAD);
+	im: ref Image;
+	if(fd != nil)
+		im = display.readimage(fd);
+	sys->remove(path);
+	return im;
+}
+
+# Each field of an image file's header is eleven characters and a blank
+# (image(6)).  The numbers were read with atoi, which stops at what is
+# not a digit: a field of twelve digits ran on into the next, and the
+# last into a byte of the stack that nothing had set.
+testBitHeaderFields(t: ref T)
+{
+	needdisplay(t);
+	# 2 by 2, three bytes a pixel, not compressed
+	hdr := sys->sprint("%11s %11d %11d %11d %11d ", "r8g8b8", 0, 0, 2, 2);
+	plain := array[len hdr + 12] of {* => byte 16r80};
+	plain[0:] = array of byte hdr;
+	im := readbit(plain);
+	t.assert(im != nil && im.r.dx() == 2 && im.r.dy() == 2, "an image file that is one is read");
+
+	# the same written by the display, which compresses it
+	src := display.newimage(Rect((0, 0), (8, 8)), Draw->RGB24, 0, Draw->Blue);
+	path := "/tmp/imgload_test_hdr2.bit";
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil || display.writeimage(fd, src) < 0)
+		t.fatal(sys->sprint("writeimage: %r"));
+	fd = nil;
+	comp := readfile(path);
+	sys->remove(path);
+	t.assert(len comp > 11 + 60 + 24 && string comp[0:11] == "compressed\n", "the display writes a compressed image");
+	t.assert(readbit(comp) != nil, "and reads it back");
+
+	# a digit where each field's blank is
+	for(f := 1; f < 5; f++){
+		a := array[len plain] of byte;
+		a[0:] = plain;
+		a[f*12 + 11] = byte '0';
+		t.assert(readbit(a) == nil, sys->sprint("field %d with a digit for its blank is refused", f + 1));
+		c := array[len comp] of byte;
+		c[0:] = comp;
+		c[11 + f*12 + 11] = byte '0';
+		t.assert(readbit(c) == nil, sys->sprint("the same of a compressed image's field %d", f + 1));
+	}
+	# and in a compressed image's first block
+	for(f = 0; f < 2; f++){
+		c := array[len comp] of byte;
+		c[0:] = comp;
+		c[11 + 60 + f*12 + 11] = byte '0';
+		t.assert(readbit(c) == nil, sys->sprint("a block's field %d with a digit for its blank is refused", f + 1));
+	}
 }
 
 # A row wider than the display's buffer (8000 bytes: 2100 pixels of
@@ -923,6 +1095,12 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Every format through imgload
 	run("DecodePng", testDecodePng);
+	run("PngGreyAlpha", testPngGreyAlpha);
+	run("PngPaletteAlpha", testPngPaletteAlpha);
+	run("SvgRefs", testSvgRefs);
+	run("ClearAfterColour", testClearAfterColour);
+	run("SvgSheet", testSvgSheet);
+	run("SvgForwardGradient", testSvgForwardGradient);
 	run("DecodeJpeg", testDecodeJpeg);
 	run("DecodeGif", testDecodeGif);
 	run("DecodeWebpLossless", testDecodeWebpLossless);
@@ -935,6 +1113,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DecodePic", testDecodePic);
 	run("DecodeBit", testDecodeBit);
 	run("WriteWide", testWriteWide);
+	run("BitHeaderFields", testBitHeaderFields);
 	run("RemapTrueColour", testRemapTrueColour);
 	run("Unrecognised", testUnrecognised);
 	run("GifNoColourTable", testGifNoColourTable);

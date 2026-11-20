@@ -191,6 +191,7 @@ Flags worth knowing:
 - `-c1` — JIT on (default for performance). Use `-c0` for interpreter-only when investigating a JIT-suspected bug.
 - `-pheap`/`-pmain`/`-pimage` — pool sizes; raise if you hit allocation pressure with large LLM contexts.
 - `-r<path>` — Inferno root. Use `-r$PWD` from the repo root to run against the working tree.
+- `-L` — strict linking: a module without type digests (built by a compiler from before they existed) is refused instead of linked on its 32-bit signatures. Everything the tree builds has them; see emu(1) and dis(6).
 
 ### Just the editor
 

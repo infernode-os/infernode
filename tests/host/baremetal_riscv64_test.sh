@@ -298,7 +298,7 @@ build_kernel() {
         comp-riscv64.c) ;;
         comp-*.c) continue;;
         das-*.c) continue;;
-        gpu.c|crypt.c) continue;;
+        gpu.c) continue;;
         i420.c|bayer.c) continue;;		# $I420, $Bayer: registered by the emulators and the Pi kernels
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
@@ -311,8 +311,7 @@ build_kernel() {
 
     for f in "$ROOT"/libmp/*.c "$ROOT"/libsec/*.c "$ROOT"/libkeyring/*.c; do
         case "$(basename "$f")" in
-        bigtest.c|crttest.c|mtest.c|test.c|egtest.c|hmactest.c|md4test.c|p384ecdhtest.c|rsatest.c|primetest.c) continue;;
-        decodepem.c|prng.c) continue;;
+        prng.c) continue;;
         esac
         o="$BUILD/crypto-$(basename "$f").o"
         "$CC" "${CFLAGS[@]}" -I"$ROOT/libmp" -I"$ROOT/libsec" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
@@ -533,7 +532,7 @@ run_riscvvirt() {
     fi
     rcheck "a default route is installed" "etherusb: default route via 10.0.2.2"
     rcheck "the JIT's correctness suite passes in the kernel" "=== Results: 182/182 passed ==="
-    rcheck "faults in compiled code reach the right handler" "8 passed"
+    rcheck "faults in compiled code reach the right handler" "9 passed"
     rrefute "no test fails" "FAIL"
     rrefute "no panic" "panic:"
     rrefute "no unhandled exception" "unhandled exception"
@@ -758,7 +757,7 @@ run_mpfs() {
     mcheck "DHCP answers over the GEM" "etherusb: 10.0.2.15 mask"
     mcheck "a default route is installed" "etherusb: default route via 10.0.2.2"
     mcheck "the JIT's correctness suite passes" "=== Results: 182/182 passed ==="
-    mcheck "faults in compiled code reach the right handler" "8 passed"
+    mcheck "faults in compiled code reach the right handler" "9 passed"
     mrefute "no test fails" "FAIL"
     mrefute "no panic" "panic:"
     mrefute "no unhandled exception" "unhandled exception"

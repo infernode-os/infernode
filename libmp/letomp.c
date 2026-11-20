@@ -6,12 +6,14 @@
 mpint*
 letomp(uchar *s, uint n, mpint *b)
 {
-	int i=0, m = 0;
+	int i=0, m = 0, bits;
 	mpdigit x=0;
 
+	// see betomp
+	bits = mpsizebits(0, (vlong)n*8, "letomp");
 	if(b == nil)
-		b = mpnew(0);
-	mpbits(b, 8*n);
+		b = mpnew(bits);
+	mpbits(b, bits);
 	for(; n > 0; n--){
 		x |= ((mpdigit)(*s++)) << i;
 		i += 8;
@@ -24,5 +26,7 @@ letomp(uchar *s, uint n, mpint *b)
 	if(i > 0)
 		b->p[m++] = x;
 	b->top = m;
+	// zero bytes at the top are not digits: see betomp
+	mpnorm(b);
 	return b;
 }

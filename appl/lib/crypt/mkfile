@@ -2,8 +2,6 @@
 
 TARG=\
 	pkcs.dis\
-	ssl3.dis\
-	sslsession.dis\
 	tls.dis\
 	x509.dis\
 
@@ -15,8 +13,6 @@ SYSMODULES= \
 	keyring.m\
 	pkcs.m\
 	security.m\
-	ssl3.m\
-	sslsession.m\
 	sys.m\
 	tls.m\
 	x509.m\

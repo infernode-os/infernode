@@ -180,6 +180,10 @@ nameimage(Image *i, char *name, int in)
 	int n;
 
 	n = strlen(name);
+	if(n >= 256){	/* its length is sent in a byte; the rest was read as further messages */
+		kwerrstr("nameimage: name too long");
+		return 0;
+	}
 	a = bufimage(i->display, 1+4+1+1+n);
 	if(a == 0)
 		return 0;

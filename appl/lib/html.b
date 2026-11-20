@@ -296,16 +296,17 @@ lex(b: array of byte, charset: int, keepwh: int): array of ref Lex
 				}
 			}
 			# skip comments
-			if(i<nb-4 && int b[i]=='<' && int b[i+1]=='!'
+			if(i<=nb-4 && int b[i]=='<' && int b[i+1]=='!'
 					&& int b[i+2]=='-' && int b[i+3]=='-') {
 				i += 4;
-				while(i<nb-3){
+				while(i<=nb-3){
 					if(int b[i]=='-' && int b[i+1]=='-' && int b[i+2]=='>'){
 						i += 3;
 						continue Whitespace;
 					}
 					i++;
 				}
+				i = nb;	# a comment with no end is the rest of the page
 				continue Whitespace;
 			}
 			break;
@@ -348,6 +349,13 @@ loop:
 		UTF8 =>
 			j: int;
 			(c, j, nil) = sys->byte2char(b, i);
+			# A character cut off by the end of the buffer is given
+			# as no bytes: taken as that, the loop never moved on,
+			# and added U+FFFD to the text until memory was gone.
+			# Its first byte is one bad character, as it is anywhere
+			# else in the page.
+			if(j <= 0)
+				j = 1;
 			i += j;
 		}
 		case c {
@@ -482,6 +490,13 @@ attrloop:
 			UTF8 =>
 				j: int;
 				(c, j, nil) = sys->byte2char(b, i);
+				# A character cut off by the end of the buffer is given
+				# as no bytes: taken as that, the loop never moved on,
+				# and added U+FFFD to the text until memory was gone.
+				# Its first byte is one bad character, as it is anywhere
+				# else in the page.
+				if(j <= 0)
+					j = 1;
 				i += j;
 			}
 			if(c == '>') {
@@ -543,7 +558,10 @@ ampersand(b: array of byte, i: int): (int, int)
 			d := int b[i];
 			if(!(int (ctype[d]&D)))
 				break;
-			c = c*10 + d-'0';
+			# no further once it is past any character: the digits
+			# are the page's, and enough of them wrapped to one
+			if(c < 256)
+				c = c*10 + d-'0';
 			i++;
 		}
 		if(0<c && c<256) {

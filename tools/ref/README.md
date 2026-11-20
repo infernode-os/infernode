@@ -10,10 +10,27 @@ name=fuzzy>`, and writes `summary.txt` (per directory), `results.txt`
 `--chromium` adds Chromium's rendering of the test).
 
 ```sh
-git clone --depth 1 --filter=blob:none --sparse https://github.com/web-platform-tests/wpt.git
-(cd wpt; git sparse-checkout set css/CSS2 css/css-flexbox css/css-grid css/reference css/support fonts resources)
-tools/ref/wptrun.py -j 3 wpt css/css-flexbox css/CSS2
+tools/ref/wpt-fetch.sh tmp/wptsrc        # the pinned commit, the suites and what they load
+tools/ref/wptrun.py -j 4 tmp/wptsrc $(grep -v '^#' tools/ref/wpt-suites)
+tools/ref/wptgate.py --flaky tools/ref/baseline/wpt-flaky.txt \
+	tools/ref/baseline/wpt-results.txt.gz tmp/wpt/results.txt
 ```
+
+**The gate.** WPT is pinned: `wpt-commit` is the commit, `wpt-suites`
+the directories held to (about 14,000 reftests), `wpt-paths` what their
+tests load, and `wpt-fetch.sh` checks out exactly that (by the commit's
+hash, which git checks every object against).
+`baseline/wpt-results.txt.gz` is a run at that commit; `wptgate.py`
+fails when a test that passed there no longer does, unless
+`baseline/wpt-flaky.txt` names it, and counts what newly passes.  It is
+a ratchet: a commit that makes more pass moves the baseline up with
+`wptgate.py --update baseline results.txt`, and a commit that loses one
+either fixes it or says in `baseline/open-regressions.txt` why the test
+was wrong to pass.  `.github/workflows/wpt.yml` runs it on every pull
+request that touches the engine, and nightly; a failure keeps the run's
+`index.html` and pictures as an artifact.  Moving the pin is a change of
+its own: a new commit's results, compared with the old by `wptcmp.py`,
+committed with the new hash.
 
 Tests with any script are counted as `needs-js`, apart from the pass
 rate, even when their pixels happen to match: Charon has no script

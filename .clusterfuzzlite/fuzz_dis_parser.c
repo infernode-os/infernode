@@ -44,6 +44,13 @@ libqlockproc(void *l)
 	USED(l);
 }
 
+int
+libcompile(void *l, Module *m, int size)
+{
+	USED(l);
+	return compile(m, size, nil);
+}
+
 void
 libqunlockproc(void *l)
 {
@@ -331,6 +338,7 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	uchar *copy;
 	Module *m;
 	Dir dir;
+	Module *volatile building;
 
 	if(size == 0 || size >= 8*1024*1024)
 		return 0;
@@ -344,14 +352,18 @@ LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 #ifdef STANDALONE_FUZZ_TARGET
 	parsedmodule = 0;
 #endif
+	building = nil;
 	if(setjmp(parseerror) == 0){
-		m = parsemod("/fuzz.dis", copy, size, &dir);
+		m = parsemod("/fuzz.dis", copy, size, &dir, &building);
 		if(m != nil){
 #ifdef STANDALONE_FUZZ_TARGET
 			parsedmodule = 1;
 #endif
 			unload(m);
 		}
+	}else if(building != nil){
+		/* as the kernel's libparsemod does when the parse raises */
+		parsefail(building);
 	}
 	parsing = 0;
 	free(copy);

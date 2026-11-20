@@ -1,13 +1,13 @@
 /*
  * AES with the ARMv8 Cryptography Extension's instructions (AESE, AESD,
- * AESMC, AESIMC): several times the speed of aes.c's table code, and no
- * table indexed by key-dependent bytes for a cache to leak.
+ * AESMC, AESIMC): many times the speed of aes.c's C, which is constant
+ * time by bit planes; these are constant time by construction.
  *
  * Used where aes.c asks (aesarm64ok) and the processor has them: Apple's
  * (always), Linux's and Android's where getauxval says so.  The native kernels build this file with
  * NEON (tests/host/baremetal_test.sh), though the rest of their C is
  * -mgeneral-regs-only, and ask ID_AA64ISAR0_EL1: a Pi 5 has the
- * instructions, a Pi 3 or 4 does not and keeps the C.  That is safe
+ * instructions, a Pi 3 or 4 does not and keeps the C (aes.c).  That is safe
  * because only processes reach it (devssl, Keyring, the generator), no
  * interrupt does, and a process's FP/SIMD registers are saved at every
  * switch (os/arm64/main.c's procsave); an interrupt touches none of them.
@@ -68,6 +68,18 @@ aesarm64use(int on)
 		aesarm64ok();
 }
 
+/*
+ * aes.c gives these 10, 12 or 14 rounds, the only schedules there are.
+ * Given none (a state made of a key that was no key) enc1 read the
+ * round key before its array, 16 bytes of the stack that the result
+ * gave back: any other count does nothing here, whoever calls.
+ */
+static int
+roundsok(int rounds)
+{
+	return rounds == 10 || rounds == 12 || rounds == 14;
+}
+
 /* round keys, rounds+1 of them, from aes.c's big-endian words */
 static void
 loadkeys(uint8x16_t *k, const u32int *rk, int rounds)
@@ -109,8 +121,13 @@ aesarm64encryptblock(const u32int *ekey, int rounds, const uchar pt[16], uchar c
 {
 	uint8x16_t k[AESmaxrounds+1];
 
+	if(!roundsok(rounds)){
+		memset(ct, 0, 16);
+		return;
+	}
 	loadkeys(k, ekey, rounds);
 	vst1q_u8(ct, enc1(vld1q_u8(pt), k, rounds));
+	secureZero(k, sizeof k);
 }
 
 /* nblocks of CBC in place, the chaining value in and out of iv */
@@ -119,6 +136,11 @@ aesarm64cbcencrypt(uchar *p, int nblocks, const u32int *ekey, int rounds, uchar 
 {
 	uint8x16_t k[AESmaxrounds+1], c;
 
+	if(!roundsok(rounds)){
+		if(nblocks > 0)
+			memset(p, 0, (ulong)nblocks*16);
+		return;
+	}
 	loadkeys(k, ekey, rounds);
 	c = vld1q_u8(iv);
 	for(; nblocks > 0; nblocks--, p += 16){
@@ -126,6 +148,7 @@ aesarm64cbcencrypt(uchar *p, int nblocks, const u32int *ekey, int rounds, uchar 
 		vst1q_u8(p, c);
 	}
 	vst1q_u8(iv, c);
+	secureZero(k, sizeof k);
 }
 
 /* CBC decryption's blocks are independent: four at a time */
@@ -135,6 +158,11 @@ aesarm64cbcdecrypt(uchar *p, int nblocks, const u32int *dkey, int rounds, uchar 
 	uint8x16_t k[AESmaxrounds+1], prev, c0, c1, c2, c3, s0, s1, s2, s3;
 	int i;
 
+	if(!roundsok(rounds)){
+		if(nblocks > 0)
+			memset(p, 0, (ulong)nblocks*16);
+		return;
+	}
 	loadkeys(k, dkey, rounds);
 	prev = vld1q_u8(iv);
 	for(; nblocks >= 4; nblocks -= 4, p += 64){
@@ -164,6 +192,7 @@ aesarm64cbcdecrypt(uchar *p, int nblocks, const u32int *dkey, int rounds, uchar 
 		prev = c0;
 	}
 	vst1q_u8(iv, prev);
+	secureZero(k, sizeof k);
 }
 
 /*
@@ -181,6 +210,10 @@ aesarm64ctr32(const u32int *ekey, int rounds, const uchar ctr[16], uchar *p, ulo
 
 	int l;
 
+	if(!roundsok(rounds)){
+		memset(p, 0, n);
+		return;
+	}
 	loadkeys(k, ekey, rounds);
 	memmove(blk, ctr, 16);
 	base = (u32int)blk[12]<<24 | (u32int)blk[13]<<16 | (u32int)blk[14]<<8 | blk[15];
@@ -209,7 +242,11 @@ aesarm64ctr32(const u32int *ekey, int rounds, const uchar ctr[16], uchar *p, ulo
 		}
 		i += 4;
 	}
-	memset(blk, 0, sizeof blk);
+	/* the round keys, the keystream and the last part-block: cleared
+	 * by stores a compiler keeps (the memset of blk alone was one it drops) */
+	secureZero(k, sizeof k);
+	secureZero(s, sizeof s);
+	secureZero(blk, sizeof blk);
 }
 
 #else

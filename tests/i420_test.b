@@ -219,6 +219,12 @@ testBadArgs(t: ref T)
 	t.assert(refused(p.Y, p.Cb, p.Cr, 8, 4, array[96] of byte), "short planes refused");
 	t.assert(refused(nil, p.Cb, p.Cr, 4, 4, array[48] of byte), "nil plane refused");
 	t.assert(!refused(p.Y, p.Cb, p.Cr, 4, 4, array[48] of byte), "exact sizes accepted");
+	# sizes whose products wrap an int: 2^33 pixels of planes a byte long
+	one := array[1] of byte;
+	t.assert(refused(one, one, one, 131072, 65536, array[1] of byte), "131072 by 65536 of one byte refused");
+	t.assert(refused(one, one, one, 65536, 65536, array[1] of byte), "65536 by 65536 refused");
+	t.assert(refused(one, one, one, 16r40000000, 4, array[1] of byte), "2^30 by 4 refused");
+	t.assert(refused(p.Y, p.Cb, p.Cr, 46342, 46342, array[48] of byte), "46342 square refused");
 }
 
 init(nil: ref Draw->Context, args: list of string)

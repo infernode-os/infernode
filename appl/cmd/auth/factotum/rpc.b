@@ -43,7 +43,14 @@ init(nil: ref Draw->Context, args: list of string)
 		s := f.gets('\n');
 		if(s == nil)
 			break;
-		rpc(rfd, s[0:len s-1]);
+		# a last line with no newline lost its last character
+		if(s[len s-1] == '\n')
+			s = s[0:len s-1];
+		# nothing to send: an empty write printed whatever error
+		# string was left from before
+		if(s == nil)
+			continue;
+		rpc(rfd, s);
 	}
 }
 
@@ -61,6 +68,10 @@ rpc(f: ref Sys->FD, addr: string)
 		buf := array[4096+3] of byte;
 		if((n := sys->read(f, buf, len buf)) > 0)
 			sys->print("%s\n", string buf[0:n]);
+		# factotum cuts a reply of text to the reader's buffer
+		# without a word: say that this one may not be whole
+		if(n == len buf)
+			sys->print("!reply filled the %d bytes read: it may be cut short\n", len buf);
 		if(n >= 0)
 			return;
 	}

@@ -56,6 +56,10 @@ where
 and
 .I network
 are optional for some networks.
+.I Network
+is the name of one directory of
+.BR /net ;
+it cannot contain a slash.
 The write returns an error if the address cannot be translated.
 Otherwise, the file offset should be reset to 0 using
 .IR sys-seek (2)
@@ -132,8 +136,20 @@ Otherwise, each subsequent read returns the whole of the next matching entry, in
 .IR ndb (6)
 form.
 .PP
+A query is given up when its file is closed or another is written
+on the same file descriptor;
+a write still waiting for its answer then fails with
+.LR "cs: request cancelled" .
+.PP
 The file
 .B /net/cs
+may be read and written by any process of the name space, whoever it runs as
+(mode 666), but its service directory
+.B #scs
+can be attached only by the user who started
+.IR cs ,
+so no other user can replace the file or put another beside it.
+The file
 persists until it is removed or unmounted from
 .BR /net ,
 or the

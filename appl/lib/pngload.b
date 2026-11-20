@@ -65,6 +65,14 @@ MAXPIXELS: con 16 * 1024 * 1024;
 # Maximum for interlaced images (must fit imgbuf in heap)
 MAXPIXELS_INTERLACED: con 8 * 1024 * 1024;
 
+# The widest and the tallest image taken.  A file says what it likes in
+# its header, so the sizes below are worked out as bigs, and with these a
+# row's bytes fit an int with room to spare.
+MAXDIM: con 1 << 20;
+
+# A palette is at most 256 entries of three bytes
+MAXPLTE: con 256 * 3;
+
 init(d: ref Display)
 {
 	sys = load Sys Sys->PATH;
@@ -83,16 +91,40 @@ init(d: ref Display)
 # Calculate subsample factor to fit image within limits
 calcsubsample(width, height: int): int
 {
-	pixels := width * height;
-	if(pixels <= MAXPIXELS)
+	# as bigs: the product of two ints from a file's header wraps, and a
+	# wrapped product looked small enough
+	if(big width * big height <= big MAXPIXELS)
 		return 1;
 
-	for(factor := 2; factor <= 16; factor++){
-		newpixels := (width / factor) * (height / factor);
-		if(newpixels <= MAXPIXELS)
+	for(factor := 2; factor <= 16; factor++)
+		if(big (width / factor) * big (height / factor) <= big MAXPIXELS)
 			return factor;
-	}
 	return 16;
+}
+
+# Whether an output of this size is more than is decoded
+toolarge(w, h, interlace: int): int
+{
+	lim := MAXPIXELS;
+	if(interlace != 0)
+		lim = MAXPIXELS_INTERLACED;
+	return big w * big h > big lim;
+}
+
+# Skip n bytes of a chunk; 0 if the file ended first
+png_skip(fd: ref Iobuf, n: int): int
+{
+	buf := array[1024] of byte;
+	while(n > 0){
+		m := len buf;
+		if(m > n)
+			m = n;
+		m = fd.read(buf, m);
+		if(m <= 0)
+			return 0;
+		n -= m;
+	}
+	return 1;
 }
 
 # Read PNG dimensions from IHDR chunk without decoding
@@ -139,6 +171,10 @@ loadpng(fd: ref Iobuf, path: string): (ref Image, string)
 	if(width <= 0 || height <= 0){
 		fd.close();
 		return (nil, sys->sprint("invalid PNG dimensions: %dx%d", width, height));
+	}
+	if(width > MAXDIM || height > MAXDIM){
+		fd.close();
+		return (nil, sys->sprint("PNG too large: %dx%d", width, height));
 	}
 
 	# Calculate subsample factor
@@ -270,11 +306,8 @@ loadpngsubsample(fd: ref Iobuf, width, height, subsample: int): (ref Image, stri
 
 	# For interlaced images, we need stricter subsampling since imgbuf must fit in memory
 	if(interlace != 0){
-		pixels := (width / subsample) * (height / subsample);
-		while(pixels > MAXPIXELS_INTERLACED && subsample < 32){
+		while(big (width / subsample) * big (height / subsample) > big MAXPIXELS_INTERLACED && subsample < 32)
 			subsample++;
-			pixels = (width / subsample) * (height / subsample);
-		}
 	}
 
 	# Setup subsampling state
@@ -285,6 +318,13 @@ loadpngsubsample(fd: ref Iobuf, width, height, subsample: int): (ref Image, stri
 	png.dstheight = height / subsample;
 	if(png.dstwidth < 1) png.dstwidth = 1;
 	if(png.dstheight < 1) png.dstheight = 1;
+	# what is allocated below is these, so these are what must fit: no
+	# factor may have been enough, and the two lines above make a size
+	# the factor's choice did not see
+	if(toolarge(png.dstwidth, png.dstheight, interlace)){
+		fd.close();
+		return (nil, sys->sprint("PNG too large: %dx%d", width, height));
+	}
 	png.subsample = subsample;
 	png.depth = depth;
 	png.colortype = colortype;
@@ -358,6 +398,11 @@ loadpngsubsample(fd: ref Iobuf, width, height, subsample: int): (ref Image, stri
 			png.done = 1;
 
 		"PLTE" =>
+			# the length is the file's: 2GB was allocated for the asking
+			if(chunklen > MAXPLTE || chunklen % 3 != 0){
+				png.error = "bad PLTE length";
+				break;
+			}
 			palette = array[chunklen] of byte;
 			if(fd.read(palette, chunklen) != chunklen){
 				png.error = "can't read PLTE";
@@ -367,6 +412,11 @@ loadpngsubsample(fd: ref Iobuf, width, height, subsample: int): (ref Image, stri
 
 		"IDAT" =>
 			remaining := chunklen;
+			if(firstIDAT && chunklen < 2){
+				# the two bytes skipped below would be the next chunk's
+				png.error = "first IDAT too short";
+				break;
+			}
 			if(firstIDAT){
 				rq = inflate->start(nil);
 				inflateStarted = 1;
@@ -392,27 +442,32 @@ loadpngsubsample(fd: ref Iobuf, width, height, subsample: int): (ref Image, stri
 					remaining -= got;
 
 				Result =>
-					m.reply <-= 0;
+					# the reply after the bytes are used: the buffer is
+					# the inflater's, written again once it is answered
 					png_processdata(png, im, dstrowdata, palette, m.buf);
+					m.reply <-= 0;
 
 				Finished =>
 					inflateFinished = 1;
 
 				Error =>
+					# its last message: it has gone, and a wait for
+					# another (the drain below) would never end
 					png.error = "inflate error";
+					inflateFinished = 1;
 				}
 			}
+			# what the chunk has left (the stream ended before it did,
+			# or this is an IDAT after the stream's end)
+			if(remaining > 0 && png.error == nil && !png_skip(fd, remaining))
+				png.error = "EOF in IDAT";
 			fd.read(array[4] of byte, 4);  # skip CRC
 
 		* =>
 			# Skip unknown chunk
-			skipbuf := array[1024] of byte;
-			while(chunklen > 0){
-				toread := 1024;
-				if(toread > chunklen)
-					toread = chunklen;
-				fd.read(skipbuf, toread);
-				chunklen -= toread;
+			if(!png_skip(fd, chunklen)){
+				png.error = "unexpected EOF";
+				break;
 			}
 			fd.read(array[4] of byte, 4);  # skip CRC
 		}
@@ -425,12 +480,16 @@ loadpngsubsample(fd: ref Iobuf, width, height, subsample: int): (ref Image, stri
 			Fill =>
 				m.reply <-= -1;
 			Result =>
-				m.reply <-= 0;
 				png_processdata(png, im, dstrowdata, palette, m.buf);
+				m.reply <-= 0;
 			Finished =>
 				inflateFinished = 1;
 			Error =>
 				inflateFinished = 1;
+				# a stream that went wrong before the image was whole:
+				# an image of what came before it was returned as the file's
+				if(png.error == nil && !png_complete(png))
+					png.error = "inflate error";
 			}
 		}
 	}
@@ -454,6 +513,14 @@ loadpngsubsample(fd: ref Iobuf, width, height, subsample: int): (ref Image, stri
 	return (im, nil);
 }
 
+# Whether every row of the image has been decoded
+png_complete(png: ref SPng): int
+{
+	if(png.interlaced != 0)
+		return png.phase > 7;
+	return png.srcrow >= png.height;
+}
+
 # Process decompressed PNG data with subsampling
 png_processdata(png: ref SPng, im: ref Image, dstrow, palette: array of byte, buf: array of byte)
 {
@@ -471,7 +538,7 @@ png_processdata(png: ref SPng, im: ref Image, dstrow, palette: array of byte, bu
 			return;
 
 		# Skip empty phases in interlaced mode
-		if(png.interlaced != 0 && png.phaserows == 0){
+		if(png.interlaced != 0 && (png.phaserows == 0 || png.phasecols == 0)){
 			png.phase++;
 			if(png.phase <= 7)
 				png_initphase(png);
@@ -741,6 +808,10 @@ loadpngprogressive(fd: ref Iobuf, path: string,
 		fd.close();
 		return (nil, sys->sprint("invalid PNG dimensions: %dx%d", width, height));
 	}
+	if(width > MAXDIM || height > MAXDIM){
+		fd.close();
+		return (nil, sys->sprint("PNG too large: %dx%d", width, height));
+	}
 
 	# Calculate subsample factor
 	subsample := calcsubsample(width, height);
@@ -831,11 +902,8 @@ loadpngsubsampleprogressive(fd: ref Iobuf, width, height, subsample: int,
 
 	# For interlaced images, stricter subsampling
 	if(interlace != 0){
-		pixels := (width / subsample) * (height / subsample);
-		while(pixels > MAXPIXELS_INTERLACED && subsample < 32){
+		while(big (width / subsample) * big (height / subsample) > big MAXPIXELS_INTERLACED && subsample < 32)
 			subsample++;
-			pixels = (width / subsample) * (height / subsample);
-		}
 	}
 
 	# Setup subsampling state
@@ -846,6 +914,13 @@ loadpngsubsampleprogressive(fd: ref Iobuf, width, height, subsample: int,
 	png.dstheight = height / subsample;
 	if(png.dstwidth < 1) png.dstwidth = 1;
 	if(png.dstheight < 1) png.dstheight = 1;
+	# what is allocated below is these, so these are what must fit: no
+	# factor may have been enough, and the two lines above make a size
+	# the factor's choice did not see
+	if(toolarge(png.dstwidth, png.dstheight, interlace)){
+		fd.close();
+		return (nil, sys->sprint("PNG too large: %dx%d", width, height));
+	}
 	png.subsample = subsample;
 	png.depth = depth;
 	png.colortype = colortype;
@@ -929,6 +1004,11 @@ loadpngsubsampleprogressive(fd: ref Iobuf, width, height, subsample: int,
 			png.done = 1;
 
 		"PLTE" =>
+			# the length is the file's: 2GB was allocated for the asking
+			if(chunklen > MAXPLTE || chunklen % 3 != 0){
+				png.error = "bad PLTE length";
+				break;
+			}
 			palette = array[chunklen] of byte;
 			if(fd.read(palette, chunklen) != chunklen){
 				png.error = "can't read PLTE";
@@ -938,6 +1018,11 @@ loadpngsubsampleprogressive(fd: ref Iobuf, width, height, subsample: int,
 
 		"IDAT" =>
 			remaining := chunklen;
+			if(firstIDAT && chunklen < 2){
+				# the two bytes skipped below would be the next chunk's
+				png.error = "first IDAT too short";
+				break;
+			}
 			if(firstIDAT){
 				rq = inflate->start(nil);
 				inflateStarted = 1;
@@ -962,8 +1047,10 @@ loadpngsubsampleprogressive(fd: ref Iobuf, width, height, subsample: int,
 					remaining -= got;
 
 				Result =>
-					m.reply <-= 0;
+					# the reply after the bytes are used: the buffer is
+					# the inflater's, written again once it is answered
 					png_processdata(png, im, dstrowdata, palette, m.buf);
+					m.reply <-= 0;
 
 					# Send progress if enough rows decoded
 					if(progress != nil && png.dstrow - lastprogressrow >= progressinterval){
@@ -978,19 +1065,22 @@ loadpngsubsampleprogressive(fd: ref Iobuf, width, height, subsample: int,
 					inflateFinished = 1;
 
 				Error =>
+					# its last message: it has gone, and a wait for
+					# another (the drain below) would never end
 					png.error = "inflate error";
+					inflateFinished = 1;
 				}
 			}
+			# what the chunk has left (the stream ended before it did,
+			# or this is an IDAT after the stream's end)
+			if(remaining > 0 && png.error == nil && !png_skip(fd, remaining))
+				png.error = "EOF in IDAT";
 			fd.read(array[4] of byte, 4);
 
 		* =>
-			skipbuf := array[1024] of byte;
-			while(chunklen > 0){
-				toread := 1024;
-				if(toread > chunklen)
-					toread = chunklen;
-				fd.read(skipbuf, toread);
-				chunklen -= toread;
+			if(!png_skip(fd, chunklen)){
+				png.error = "unexpected EOF";
+				break;
 			}
 			fd.read(array[4] of byte, 4);
 		}
@@ -1003,12 +1093,16 @@ loadpngsubsampleprogressive(fd: ref Iobuf, width, height, subsample: int,
 			Fill =>
 				m.reply <-= -1;
 			Result =>
-				m.reply <-= 0;
 				png_processdata(png, im, dstrowdata, palette, m.buf);
+				m.reply <-= 0;
 			Finished =>
 				inflateFinished = 1;
 			Error =>
 				inflateFinished = 1;
+				# a stream that went wrong before the image was whole:
+				# an image of what came before it was returned as the file's
+				if(png.error == nil && !png_complete(png))
+					png.error = "inflate error";
 			}
 		}
 	}

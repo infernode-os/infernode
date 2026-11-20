@@ -1,0 +1,26 @@
+Noto Emoji (monochrome), the regular weight: what Charon draws a
+character with when the page's fonts have no glyph for it and it is
+past U+FFFF (emoji, and the symbols beside them).
+
+Taken from Google Fonts (https://github.com/google/fonts, file
+ofl/notoemoji/NotoEmoji[wght].ttf, the variable font, 1982596 bytes,
+SHA-256 de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551).
+Upstream: https://github.com/googlefonts/noto-emoji
+
+Made from it with fontTools 4.68: instanced at wght=400 (its default),
+then subset to the 1489 characters its cmap maps, the layout tables
+(GSUB, GPOS, GDEF) and STAT dropped, the names kept:
+
+	from fontTools.ttLib import TTFont
+	from fontTools.varLib import instancer
+	from fontTools import subset
+	f = instancer.instantiateVariableFont(TTFont("NotoEmoji[wght].ttf"), {"wght": 400})
+	o = subset.Options(); o.layout_features = []; o.name_IDs = ["*"]
+	o.notdef_outline = True; o.drop_tables += ["GSUB", "GPOS", "GDEF", "STAT"]
+	s = subset.Subsetter(o); s.populate(unicodes=list(f.getBestCmap())); s.subset(f)
+	f.save("NotoEmoji-Regular.ttf")
+
+Without GSUB, a sequence joined by U+200D (a family, a flag) is drawn
+as its parts.
+
+Licence: OFL.txt (SIL Open Font License 1.1).  SHA256SUMS pins the files.

@@ -123,6 +123,13 @@ and finally in the directory
 .BR /net.alt
 .RB ( dial
 only).
+A translation is taken only if it names the
+.B clone
+file of one protocol directory of the network directory in use,
+and an address of one word;
+at most 64 are tried for one
+.IR addr .
+If none can be used the error string says why.
 If the connection server cannot be found,
 the
 .I addr

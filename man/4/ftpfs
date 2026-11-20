@@ -59,7 +59,9 @@ avoiding prompting.
 By default,
 .I ftpfs
 uses a `passive' connection for file transfer: the remote system gives the local
-system a new address to call to fetch the data.
+system a new port to call to fetch the data.
+Only the port is taken from the server's reply: the call is made to the
+address the control connection reached, whatever address the reply names.
 This often works best for local systems behind firewalls that block incoming calls
 to arbitrary ports,
 but can fail for instance if the remote system does not support passive mode,
@@ -92,6 +94,12 @@ Cached entries for a given directory can be flushed explicitly by
 accessing the name
 .B .flush.ftpfs
 in that directory.
+.PP
+A file that is written is sent to the server when it is closed.
+If the server refuses it the close fails,
+which few programs can see, and
+.I ftpfs
+says so on its standard error.
 .SH EXAMPLE
 Mount a remote machine and copy files from there to here.
 .IP

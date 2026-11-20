@@ -202,6 +202,11 @@ cmdhelp(cmd: string): string
 
 doaccounts(): string
 {
+	# no wallet and a wallet with no accounts are different answers
+	fd := sys->open(WALLET_MOUNT + "/accounts", Sys->OREAD);
+	if(fd == nil)
+		return sys->sprint("error: the wallet is not available (%s/accounts: %r)", WALLET_MOUNT);
+	fd = nil;
 	s := readfile(WALLET_MOUNT + "/accounts");
 	if(s == nil || s == "")
 		return "no accounts configured. Use 'keyring' to add wallet credentials.";
@@ -214,8 +219,15 @@ doread(acct: string, file: string): string
 		return "error: unsafe account name";
 	path := WALLET_MOUNT + "/" + acct + "/" + file;
 	s := readfile(path);
-	if(s == nil)
-		return sys->sprint("cannot read %s: %r", path);
+	if(s == nil) {
+		if(file == "history" && exists(path))
+			return "no transactions";
+		return sys->sprint("error: cannot read %s: %r", path);
+	}
+	# the history is a transaction a line, newest first: all of it
+	# (it was cut to its first line, one transaction given as the history)
+	if(file == "history")
+		return s;
 	return str->take(s, "^\n") ;
 }
 
@@ -244,13 +256,25 @@ dopay(acct: string, args: list of string): string
 	rbuf := array[1024] of byte;
 	sys->seek(fd, big 0, Sys->SEEKSTART);
 	rn := sys->read(fd, rbuf, len rbuf);
+	# The wallet took the proposal; what became of it is on this fd. With
+	# nothing read there is no id to give, and "submitted" said more
+	# than is known.
 	if(rn <= 0)
-		return "payment proposal submitted";
+		return sys->sprint("error: the wallet took the proposal but its result could not be read (%r); " +
+			"do not propose it again before the wallet's controller has been asked");
 
 	result := str->take(string rbuf[0:rn], "^\n");
 	if(len result >= 8 && result[0:8] == "pending:")
 		return "payment pending approval: " + result[8:] +
 			"\nA trusted controller must approve it before it executes.";
+	# decided between the write and the read: say which way. Every such
+	# answer was labelled a transaction ("tx: denied").
+	if(result == "denied")
+		return "payment denied by the wallet's controller";
+	if(result == "expired")
+		return "payment proposal expired unapproved";
+	if(len result >= 6 && result[0:6] == "error:")
+		return "pay failed: " + result[6:];
 	return "tx: " + result;
 }
 
@@ -272,6 +296,12 @@ readfile(path: string): string
 	if(n <= 0)
 		return nil;
 	return string buf[0:n];
+}
+
+exists(path: string): int
+{
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
 }
 
 writefile(path: string, data: string): int

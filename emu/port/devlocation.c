@@ -136,7 +136,8 @@ locationbridge_post_fix(const LocFix *f)
 	int y, mo, d, s, cs;
 	Listener *l;
 
-	if(f->lat < -90 || f->lat > 90 || f->lon < -180 || f->lon > 180)
+	/* (in range, said so that a NaN is not: it is neither below nor above anything) */
+	if(!(f->lat >= -90 && f->lat <= 90 && f->lon >= -180 && f->lon <= 180))
 		return;
 	t = f->utcms;
 	days = t / 86400000;

@@ -1,0 +1,5 @@
+<!doctype html>
+<title>Busy green</title>
+<body style="background:#00ff00">
+<p>A green page whose script keeps the session for three seconds.</p>
+<script>var t = Date.now(); while(Date.now() - t < 3000) {}</script>

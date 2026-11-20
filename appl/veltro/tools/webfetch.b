@@ -42,10 +42,16 @@ ToolWebfetch: module {
 	doc:  fn(): string;
 	exec: fn(args: string): string;
 	schema: fn(): string;
+	html2text: fn(html: string): string;	# (for tests)
 };
 
-REQUEST_TIMEOUT: con 30000;	# 30 seconds
-MAX_BODY: con 512 * 1024;	# 512KB max page size
+REQUEST_TIMEOUT: con 30000;	# 30 seconds, redirects and body included
+# The most of a page that is read.  What comes back goes into a model's
+# context, and 512KB of text is already more than one holds; it is also
+# what the tool has always said it returns.  It is the limit on what is
+# read (webclient stops there), not a cut made after the whole page has
+# been fetched.
+MAX_BODY: con 512 * 1024;
 
 init(): string
 {
@@ -65,8 +71,13 @@ init(): string
 	if(publicnet == nil)
 		return "cannot load Publicnet";
 	publicnet->init();
+	inited = 1;
 	return nil;
 }
+
+# set once init has loaded everything: a call is refused, saying why,
+# rather than made with half of it
+inited := 0;
 
 name(): string
 {
@@ -88,6 +99,11 @@ doc(): string
 		"Fetches the page and returns clean readable text.\n" +
 		"HTML tags, scripts, styles, and navigation are stripped.\n" +
 		"Block elements become paragraphs. Links show their URLs.\n" +
+		"The result begins with the address the page came from, in\n" +
+		"brackets (after any redirects); a failure begins \"error:\".\n" +
+		"Only public addresses are fetched. A fetch is given 30 seconds,\n" +
+		"and only the first 512KB of a page is read: the result says\n" +
+		"when the page was longer.\n" +
 		"Requires /net access (trusted agents only).";
 }
 
@@ -109,8 +125,8 @@ schema(): string
 
 exec(args: string): string
 {
-	if(sys == nil)
-		init();
+	if(!inited && (ierr := init()) != nil)
+		return "error: webfetch: " + ierr;
 
 	# Parse: first token is URL, rest is optional prompt
 	s := strip(args);
@@ -139,21 +155,13 @@ exec(args: string): string
 	hdrs := Webclient->Header("User-Agent", "Veltro/1.0 (readable text extraction)") ::
 		Webclient->Header("Accept", "text/html, application/xhtml+xml, text/plain, */*") :: nil;
 
-	result := chan[1] of (ref Webclient->Response, string);
-	spawn dofetch(url, hdrs, result);
-
-	timeout := chan[1] of int;
-	spawn timer(timeout, REQUEST_TIMEOUT);
-
-	resp: ref Webclient->Response;
-	err: string;
-	alt {
-	(r, e) := <-result =>
-		(resp, err) = (r, e);
-	<-timeout =>
+	# The request keeps the time and the limit itself: at the deadline
+	# its connection is hung up and it is gone.  (A timer here used to
+	# give up on a fetch that then went on, with its connection and a
+	# buffer as large as the response's header said.)
+	(resp, err) := webclient->requestbounded("GET", url, hdrs, nil, 1, REQUEST_TIMEOUT, MAX_BODY);
+	if(err == "request timed out")
 		return "error: request timed out (30s)";
-	}
-
 	if(err != nil)
 		return "error: fetch failed: " + err;
 	if(resp.statuscode >= 400)
@@ -161,20 +169,24 @@ exec(args: string): string
 	if(resp.body == nil || len resp.body == 0)
 		return "error: empty response";
 
-	# Truncate oversized responses
-	body := resp.body;
-	if(len body > MAX_BODY)
-		body = body[0:MAX_BODY];
+	raw := string resp.body;
 
-	raw := string body;
+	# What was fetched is the page's words, not the tool's: it follows
+	# a line saying where it came from, so that a page beginning
+	# "error:" is not read as a failed call, and a page that was cut
+	# says so.
+	head := "[" + resp.url + "]\n\n";
+	tail := "";
+	if(resp.truncated)
+		tail = "\n\n[the page is longer: only its first 512KB were read]";
 
 	# Detect content type — if not HTML, return raw text
 	ctype := getheader(resp.headers, "content-type");
 	if(ctype != "" && !hassubstr(str->tolower(ctype), "html"))
-		return raw;
+		return head + raw + tail;
 
 	# Extract readable text from HTML
-	return html2text(raw);
+	return head + html2text(raw) + tail;
 }
 
 # Get a response header value by name (case-insensitive)
@@ -315,9 +327,12 @@ convertlinks(s: string): string
 		# Find closing </a>
 		closestart := findtagi(s, "</a", tagend);
 		if(closestart < 0) {
-			# No closing tag — just emit the text after >
-			i = tagend + 1;
-			continue;
+			# No closing tag, here or for any <a> after it: the rest
+			# as it is.  (Each later <a> looked to the end again: a
+			# page of them took the square of its length, minutes
+			# for one the size this tool reads.)
+			result += s[tagend+1:];
+			break;
 		}
 
 		# Link text is between > and </a
@@ -642,18 +657,6 @@ isblocked(host: string): int
 }
 
 # ---- Utility functions ----
-
-dofetch(url: string, hdrs: list of Webclient->Header, result: chan of (ref Webclient->Response, string))
-{
-	(resp, err) := webclient->requestpublic("GET", url, hdrs, nil);
-	result <-= (resp, err);
-}
-
-timer(ch: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	ch <-= 1;
-}
 
 findstr(s, sub: string): int
 {

@@ -1,0 +1,4 @@
+# Reftests whose result changes from one identical run to the next, a
+# path a line: tools/ref/wptgate.py does not fail on them.  A test goes
+# here only when two runs of the same tree at tools/ref/wpt-commit
+# disagree on it, with what is known of why.

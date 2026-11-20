@@ -182,6 +182,13 @@ Doc: adt {
 
 	# Snarf
 	snarf:		string;
+
+	# The name is another name space's (set with "remote" by a client
+	# that does its own file I/O): shown, never read or written here.
+	foreign:	int;
+	# Changed through the served files since it was last saved or
+	# loaded: not saved without being asked.
+	served:		int;
 };
 
 newdoc(id: int): ref Doc
@@ -217,6 +224,8 @@ newdoc(id: int): ref Doc
 	d.saveasmode = 0;
 	d.saveasbuf = "";
 	d.snarf = "";
+	d.foreign = 0;
+	d.served = 0;
 	return d;
 }
 
@@ -678,6 +687,7 @@ handleeditreq(req: ref EditReq)
 		req.reply <-= getbodytext();
 	Rsetbody =>
 		setbodytext(req.data);
+		doc.served = 1;
 		postevent("modified");
 		req.reply <-= "ok";
 	Rgetaddr =>
@@ -753,7 +763,14 @@ handledocctl(cmd: string): string
 	op = str->tolower(op);
 	case op {
 	"save" =>
-		dosave();
+		# In this name space, under the document's own name: for a
+		# client that is in it too.  It answered ok whatever happened.
+		if(doc.filepath == "")
+			return "error: the document has no name";
+		if(doc.foreign)
+			return "error: the document's name is not this editor's to write";
+		if(!savefile(doc.filepath))
+			return sys->sprint("error: cannot save %s: %r", doc.filepath);
 		return "ok";
 	"goto" =>
 		(lns, nil) := str->toint(rest, 10);
@@ -772,17 +789,47 @@ handledocctl(cmd: string): string
 		}
 		return "ok";
 	"saveas" =>
-		if(rest != "")
-			dosaveas(rest);
+		if(rest == "")
+			return "error: saveas needs a name";
+		doc.filepath = rest;
+		doc.foreign = 0;
+		if(!savefile(doc.filepath))
+			return sys->sprint("error: cannot save %s: %r", rest);
+		tkclient->settitle(top, titlestr());
 		return "ok";
 	"name" =>
 		if(rest != "") {
 			doc.filepath = rest;
+			doc.foreign = 0;
 			tkclient->settitle(top, titlestr());
+		}
+		return "ok";
+	"remote" =>
+		# A name in the client's name space, not this one (the editor
+		# tool's, whose view of the files is the agent's): the client
+		# reads and writes the file itself, through body.  The editor
+		# does neither under such a name: it used to be told to open and
+		# save the agent's names itself, in its own name space, where a
+		# name is another file (another activity's scratch, the file
+		# under an overlay) and nothing is read-only.
+		if(rest != "") {
+			doc.filepath = rest;
+			doc.foreign = 1;
+			tkclient->settitle(top, titlestr());
+		}
+		return "ok";
+	"saved" =>
+		# The client wrote the text under the remote name.
+		if(doc.foreign && rest == doc.filepath) {
+			doc.dirty = 0;
+			doc.served = 0;
+			tkclient->settitle(top, titlestr());
+			postevent("save " + doc.filepath);
 		}
 		return "ok";
 	"clean" =>
 		doc.dirty = 0;
+		doc.served = 0;
 		return "ok";
 	"dirty" =>
 		doc.dirty = 1;
@@ -801,6 +848,7 @@ handledocctl(cmd: string): string
 			fixcol();
 			insertstring(text);
 			doc.dirty = 1;
+			doc.served = 1;
 			postevent("modified");
 		}
 		return "ok";
@@ -821,6 +869,7 @@ handledocctl(cmd: string): string
 			doc.selendline = el - 1;
 			doc.selendcol = ec - 1;
 			deletesel();
+			doc.served = 1;
 			postevent("modified");
 		}
 		return "ok";
@@ -830,6 +879,7 @@ handledocctl(cmd: string): string
 		(f, rp) := splittab(rest);
 		if(f != "") {
 			doreplace(f, rp);
+			doc.served = 1;
 			postevent("modified");
 		}
 		return "ok";
@@ -838,6 +888,7 @@ handledocctl(cmd: string): string
 		(f, rp) := splittab(rest);
 		if(f != "") {
 			n := doreplaceall(f, rp);
+			doc.served = 1;
 			postevent("modified");
 			return sys->sprint("ok %d", n);
 		}
@@ -856,6 +907,8 @@ handlegctl(cmd: string): string
 		sys->fprint(stderr, "edit: handlegctl open: rest=%s\n", rest);
 		if(rest != "") {
 			doc.filepath = rest;
+			doc.foreign = 0;
+			doc.served = 0;
 			loadfile(doc.filepath);
 			sys->fprint(stderr, "edit: handlegctl open: loaded %d lines\n", doc.nlines);
 			tkclient->settitle(top, titlestr());
@@ -871,6 +924,8 @@ handlegctl(cmd: string): string
 		doc.topline = 0;
 		doc.dirty = 0;
 		doc.filepath = "";
+		doc.foreign = 0;
+		doc.served = 0;
 		doc.selactive = 0;
 		doc.undocount = 0;
 		doc.redocount = 0;
@@ -878,12 +933,17 @@ handlegctl(cmd: string): string
 		postevent("new");
 		return "ok";
 	"quit" =>
-		if(checkdirty()) {
-			postevent("quit");
-			postnote(1, sys->pctl(0, nil), "kill");
-			exit;
-		}
-		return "ok";
+		# A client's quit saves nothing.  It saved a changed document
+		# under its name first, as the user's own quit does: a client
+		# that had set the name and the text (the editor tool's open,
+		# then write) so wrote any file it could name, read-only to it
+		# or not, by asking to close.  And it answered ok when it had
+		# not quit.
+		if(doc.dirty)
+			return "error: the document has unsaved changes";
+		postevent("quit");
+		postnote(1, sys->pctl(0, nil), "kill");
+		exit;
 	* =>
 		return "error: unknown global ctl: " + op;
 	}
@@ -1280,6 +1340,7 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver,
 	pidc: chan of int, navops: chan of ref Navop)
 {
 	pidc <-= sys->pctl(Sys->FORKNS|Sys->NEWFD, 1 :: 2 :: srv.fd.fd :: nil);
+	refused: list of int;	# fids whose ctl request was refused part way
 
 Serve:
 	while((gm := <-tchan) != nil) {
@@ -1351,6 +1412,39 @@ Serve:
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				break;
 			}
+			if(isctlfile(c.path)) {
+				# One request is one write, sent as several messages
+				# when it is longer than one, each but the last full:
+				# gathered here and run at the first that is not full,
+				# or at the clunk.  Each message was a command of its
+				# own, so the end of a long "insert" or "find", which
+				# is the client's text, was run as one ("saveas ...").
+				if(inlist(m.fid, refused) || len c.data + len m.data > MAXCTL) {
+					c.data = nil;
+					if(!inlist(m.fid, refused))
+						refused = m.fid :: refused;
+					srv.reply(ref Rmsg.Error(m.tag, "error: ctl request too long"));
+					break;
+				}
+				whole := m.data;
+				if(len c.data > 0) {
+					whole = array[len c.data + len m.data] of byte;
+					whole[0:] = c.data;
+					whole[len c.data:] = m.data;
+				}
+				if(len m.data >= srv.iounit()) {
+					c.data = whole;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					break;
+				}
+				c.data = nil;
+				result := runctl(c.path, string whole);
+				if(len result >= 6 && result[0:6] == "error:")
+					srv.reply(ref Rmsg.Error(m.tag, result));
+				else
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				break;
+			}
 			handlefswrite(srv, m, c);
 
 		Flush =>
@@ -1360,6 +1454,19 @@ Serve:
 			srv.default(gm);
 
 		Clunk =>
+			cf := srv.getfid(m.fid);
+			if(cf != nil && isctlfile(cf.path) && len cf.data > 0) {
+				held := string cf.data;
+				cf.data = nil;
+				runctl(cf.path, held);
+			}
+			if(inlist(m.fid, refused)) {
+				kept: list of int;
+				for(rl := refused; rl != nil; rl = tl rl)
+					if(hd rl != m.fid)
+						kept = hd rl :: kept;
+				refused = kept;
+			}
 			evops <-= ref Evop.Clunk(srv, m.fid);
 			srv.clunk(m);
 
@@ -1408,39 +1515,49 @@ handlefsread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 	}
 }
 
+# The longest request a ctl file takes.
+MAXCTL: con 64*1024;
+
+isctlfile(path: big): int
+{
+	did := qiddoc(path);
+	fid := qidfile(path);
+	return (did == 0 && fid == Ggctl) || (did > 0 && fid == Fctl);
+}
+
+# One whole request to a ctl file, the editor's answer.
+runctl(path: big, data: string): string
+{
+	reply := chan of string;
+	did := qiddoc(path);
+	if(did == 0)
+		editreq <-= ref EditReq(Rgctl, 0, data, reply);
+	else
+		editreq <-= ref EditReq(Rdoctl, did, data, reply);
+	return <-reply;
+}
+
+inlist(v: int, l: list of int): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == v)
+			return 1;
+	return 0;
+}
+
 handlefswrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 {
 	did := qiddoc(c.path);
 	fid := qidfile(c.path);
 	data := string m.data;
 
-	# Global ctl
-	if(did == 0 && fid == Ggctl) {
-		reply := chan of string;
-		editreq <-= ref EditReq(Rgctl, 0, data, reply);
-		result := <-reply;
-		if(len result >= 6 && result[0:6] == "error:")
-			srv.reply(ref Rmsg.Error(m.tag, result));
-		else
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
-		return;
-	}
-
 	if(did == 0) {
 		srv.reply(ref Rmsg.Error(m.tag, Styxservers->Eperm));
 		return;
 	}
 
-	# Per-doc files
+	# Per-doc files (ctl is serveloop's)
 	case fid {
-	Fctl =>
-		reply := chan of string;
-		editreq <-= ref EditReq(Rdoctl, did, data, reply);
-		result := <-reply;
-		if(len result >= 6 && result[0:6] == "error:")
-			srv.reply(ref Rmsg.Error(m.tag, result));
-		else
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 	Faddr =>
 		reply := chan of string;
 		editreq <-= ref EditReq(Rsetaddr, did, data, reply);
@@ -1622,12 +1739,16 @@ startgoto()
 
 startsaveas()
 {
-	beginprompt(PSAVEAS, "Save as:");
+	if(doc.foreign)
+		beginprompt(PSAVEAS, "Save as (" + doc.filepath + " is the agent's name for it):");
+	else
+		beginprompt(PSAVEAS, "Save as:");
 }
 
 dosaveas(path: string)
 {
 	doc.filepath = path;
+	doc.foreign = 0;
 	if(savefile(doc.filepath))
 		tkclient->settitle(top, titlestr());
 }
@@ -2182,7 +2303,7 @@ loadfile(path: string)
 
 dosave()
 {
-	if(doc.filepath == "") {
+	if(doc.filepath == "" || doc.foreign) {
 		startsaveas();
 		return;
 	}
@@ -2218,6 +2339,7 @@ savefile(path: string): int
 		return 0;
 
 	doc.dirty = 0;
+	doc.served = 0;
 	tkclient->settitle(top, titlestr());
 	postevent("save " + doc.filepath);
 	return 1;
@@ -2227,9 +2349,16 @@ checkdirty(): int
 {
 	if(!doc.dirty)
 		return 1;
-	if(doc.filepath != "")
+	# Saved on the way out only when the name and the changes are the
+	# user's: not under a name from another name space, and not text a
+	# client put there through the served files, which the user has not
+	# asked to keep (Save does that).
+	if(doc.filepath != "" && !doc.foreign && !doc.served)
 		return savefile(doc.filepath);
-	# Dirty unnamed file: refuse to quit (user must save or discard)
+	# Else refuse to quit (user must save or discard)
+	if(top != nil && !prompting)
+		tk->cmd(top, ".status configure -text " +
+			tk->quote("Not saved: save it (Ctrl-S) before quitting"));
 	return 0;
 }
 

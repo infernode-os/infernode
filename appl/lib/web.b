@@ -128,6 +128,10 @@ webpost(base, url, types, msg: string) : (string, string, int)
 {
 	u := urlmod->makeurl(url);
 	b := urlmod->makeurl(base);
+	if(u == nil){
+		error("not a URL", url);
+		return ("", "", 0);
+	}
 	u.makeabsolute(b);
 	savefrag := u.frag;
 	u.frag = "";
@@ -158,6 +162,10 @@ webget(base, url, types: string) : (string, string, int)
 	s : string;
 	u := urlmod->makeurl(url);
 	b := urlmod->makeurl(base);
+	if(u == nil){
+		error("not a URL", url);
+		return ("", "", 0);
+	}
 	u.makeabsolute(b);
 	savefrag := u.frag;
 	u.frag = "";

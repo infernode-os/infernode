@@ -14,6 +14,10 @@ set -e
 
 ROOT="${ROOT:-.}"
 . "$(dirname "$0")/common.sh"
+
+# a port of this test's own for its secstored (it used 5356, and killed
+# whatever held it)
+PORT=$(freeport)
 PASS="testpass-apikey"
 USER="testuser-apikey"
 
@@ -23,7 +27,6 @@ if [ ! -x "$EMU" ]; then
 fi
 
 # Kill stale secstored
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # Clean secstore state
@@ -74,10 +77,10 @@ cat > "$ROOT/tmp/test_apikey_setup.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
 auth/secstore-setup -u $USER -k $PASS
-auth/factotum -S tcp!localhost!5356 -u $USER -P $PASS
+auth/factotum -S tcp!127.0.0.1!$PORT -u $USER -P $PASS
 sleep 1
 
 # Add API key (same format as keyring app uses)
@@ -113,7 +116,6 @@ else
     fail "secstore factotum file missing"
 fi
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 2: Key survives restart ──────────────────────────
@@ -123,9 +125,9 @@ cat > "$ROOT/tmp/test_apikey_reload.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
-auth/factotum -S tcp!localhost!5356 -u $USER -P $PASS
+auth/factotum -S tcp!127.0.0.1!$PORT -u $USER -P $PASS
 sleep 2
 
 echo '--- keys after reload ---'
@@ -136,7 +138,6 @@ OUTPUT=$(run_emu 25 /tmp/test_apikey_reload.sh)
 check "API key survives restart" "$OUTPUT" "service=anthropic"
 check "API key value preserved" "$OUTPUT" "user=apikey"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 3: wrong password fails to load keys ────────────
@@ -146,9 +147,9 @@ cat > "$ROOT/tmp/test_apikey_wrongpass.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
-auth/factotum -S tcp!localhost!5356 -u $USER -P wrongpassword
+auth/factotum -S tcp!127.0.0.1!$PORT -u $USER -P wrongpassword
 sleep 2
 
 echo '--- keys with wrong password ---'
@@ -158,7 +159,6 @@ EOF
 OUTPUT=$(run_emu 25 /tmp/test_apikey_wrongpass.sh)
 check_not "wrong password yields no API key" "$OUTPUT" "service=anthropic"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 4: Multiple API keys (anthropic + brave) ────────
@@ -168,9 +168,9 @@ cat > "$ROOT/tmp/test_apikey_multi.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
-auth/factotum -S tcp!localhost!5356 -u $USER -P $PASS
+auth/factotum -S tcp!127.0.0.1!$PORT -u $USER -P $PASS
 sleep 2
 
 # Add brave key alongside existing anthropic key
@@ -186,7 +186,6 @@ OUTPUT=$(run_emu 25 /tmp/test_apikey_multi.sh)
 check "anthropic key present" "$OUTPUT" "service=anthropic"
 check "brave key present" "$OUTPUT" "service=brave"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Test 5: Both keys survive restart ─────────────────────
@@ -196,9 +195,9 @@ cat > "$ROOT/tmp/test_apikey_multi_reload.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
-auth/factotum -S tcp!localhost!5356 -u $USER -P $PASS
+auth/factotum -S tcp!127.0.0.1!$PORT -u $USER -P $PASS
 sleep 2
 
 echo '--- keys after reload ---'
@@ -209,7 +208,6 @@ OUTPUT=$(run_emu 25 /tmp/test_apikey_multi_reload.sh)
 check "anthropic key survives" "$OUTPUT" "service=anthropic"
 check "brave key survives" "$OUTPUT" "service=brave"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 sleep 1
 
 # ── Summary ───────────────────────────────────────────────

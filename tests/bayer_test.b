@@ -217,6 +217,41 @@ testBounds(t: ref T)
 	t.assert(refused, "an odd scale is refused");
 }
 
+# A scale large enough that a cell's sum of 16-bit samples passes an int
+# (258: 2*129*129*65535).  The green sum went negative and indexed before
+# its table: the tables here are slices far into arrays that are zero but
+# for the byte such an index reads.
+testLargeScale(t: ref T)
+{
+	rw := 516;
+	rh := 516;
+	s := 258;
+	raw := array[rw*rh*2] of {* => byte 16rff};
+	y := array[4] of byte;
+	cb := array[1] of byte;
+	cr := array[1] of byte;
+	mean := array[3] of int;
+	n := (s/2)*(s/2);
+	gi := int (big 2 * big n * big 65535) / (2*n);	# as an int held it
+	t.assert(gi < 0, "the green sum does not fit an int");
+	bigr := array[200000] of {* => byte 0};
+	bigg := array[200000] of {* => byte 0};
+	bigb := array[200000] of {* => byte 0};
+	lr := bigr[100000:100256];
+	lg := bigg[100000:100256];
+	lb := bigb[100000:100256];
+	lr[255] = byte 255;
+	lg[255] = byte 255;
+	lb[255] = byte 255;
+	bigg[100000+gi] = byte 77;
+	bayer->merge(raw, rw, rh, s, 0, 0, lr, lg, lb, y, cb, cr, mean);
+	for(i := 0; i < 4; i++)
+		t.asserteq(int y[i], 255, sys->sprint("saturated samples at scale 258: luma %d is the table's last entry", i));
+	t.asserteq(mean[0], 65535, "mean red");
+	t.asserteq(mean[1], 65535, "mean green");
+	t.asserteq(mean[2], 65535, "mean blue");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -234,6 +269,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Scale", testScale);
 		run("Rotate", testRotate);
 		run("Bounds", testBounds);
+		run("LargeScale", testLargeScale);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

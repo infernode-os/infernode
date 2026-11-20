@@ -2324,7 +2324,7 @@ up:
      seconds. `wpa: still waiting for the radio to associate` repeating
      means the firmware never joined: the supplicant is not the problem,
      `status:` in `ifstats` is where to look;
-   - `wpa: pairwise receive key installed`
+   - `wpa: pairwise receive key accepted`
    - `wpa: pairwise transmit key installed`
    - `wpa: group key <n> installed`
    All five within about a second of each other. `wpa: bad MIC` instead

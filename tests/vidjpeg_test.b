@@ -8,7 +8,8 @@ implement VidjpegTest;
 # and status and fmt as the feed's; a frame past the clip's end refused
 # through both; a quality written to jpeg/ctl taking effect (smaller
 # frames, and the cache started again); one frame read as eight reads at
-# once decoding the same bytes as one read.
+# once decoding the same bytes as one read; one open of status, read in
+# pieces while the clip plays, one text through vid9p and through vidjpeg.
 #
 
 include "sys.m";
@@ -275,6 +276,55 @@ testView(t: ref T)
 	t.assert(k <= 0, sys->sprint("a frame past the end refused through vidjpeg (%d: %r)", k));
 }
 
+# One open of f reads one text, however many reads it takes: a piece read
+# at offset 0, the feed moved on (t= at least), then the rest from the same
+# fid.  The servers made the text again for each read and cut it at that
+# read's offset, so the rest was the newer text's (a reader whose second
+# read came after pos= gained a digit was given its last bytes, "0\n").
+# A read at offset 0 again takes the text afresh, so a reader polling at 0
+# sees the feed move.
+onetext(t: ref T, f: string)
+{
+	for(try := 0; try < 20; try++){
+		(before, nil) := readall(f);
+		fd := sys->open(f, Sys->OREAD);
+		if(fd == nil)
+			t.fatal(sys->sprint("open %s: %r", f));
+		b := array[16] of byte;
+		k := sys->pread(fd, b, len b, big 0);
+		(after, nil) := readall(f);
+		if(k <= 0 || before != after)
+			continue;	# the feed moved under the first piece: again
+		for(n := 0; n < 60; n++){	# 3 s
+			(now, nil) := readall(f);
+			if(now != after)
+				break;
+			sys->sleep(50);
+		}
+		(now, nil) := readall(f);
+		if(now == after)
+			t.fatal(f + ": the feed's status never changed");
+		s := string b[0:k];
+		r := array[4096] of byte;
+		off := big k;
+		while((m := sys->pread(fd, r, len r, off)) > 0){
+			s += string r[0:m];
+			off += big m;
+		}
+		t.assertseq(s, after, f + ": one open's reads are one text");
+		k = sys->pread(fd, r, len r, big 0);
+		t.assert(k > 0 && string r[0:k] != after, f + ": a read at offset 0 takes the text afresh");
+		return;
+	}
+	t.fatal(f + ": the feed never held still for a read");
+}
+
+testOneText(t: ref T)
+{
+	onetext(t, dir + "/feed/0/status");
+	onetext(t, dir + "/view/0/status");
+}
+
 testQuality(t: ref T)
 {
 	(off75, sz75, nil) := record(0);
@@ -311,6 +361,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	run("Vidjpeg/Files", testFiles);
 	run("Vidjpeg/View", testView);
+	run("Vidjpeg/OneText", testOneText);
 	run("Vidjpeg/Quality", testQuality);
 	# the servers are in this group: end them, so that emu exits
 	r := testing->summary(passed, failed, skipped);

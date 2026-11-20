@@ -16,114 +16,329 @@ A shared secret must previously be agreed between
 user and certifying authority (CA).
 It is used by the protocol to establish a secure channel between user and CA.
 .PP
-In the description below:
-.TF key(m)
+This page describes version 2 of the exchange.
+It is Bellovin and Merritt's encrypted key exchange
+with the CA's Diffie-Hellman value alone encrypted,
+and it is meant to have that protocol's properties:
+somebody who watches a login, or takes either end's part in one
+without the password, learns nothing that a guessed password can
+be checked against, except that each login he takes part in lets him
+try one guess; and each end knows the other had the password before
+it sends anything more.
+The reason for each step is given with it, because the exchange this
+replaces lost those properties one step at a time.
+.SS Names
+.TF secret
 .PD
 .TP
-.I ivec
-is a random salt followed by a 12-byte nonce, chosen for this
-conversation.
-Its length names the AEAD the client takes:
-32 bytes (a 20-byte salt) for ChaCha20-Poly1305,
-44 bytes (a 32-byte salt) for AES-256-GCM.
-A client in CNSA mode (\f5/env/cnsamode\fP set) sends only the second,
-and a CA in CNSA mode refuses the first, saying so.
+.I name
+is the user's account name.
+It is one name: not empty, at most 255 bytes of UTF-8, with no
+.B /
+or
+.BR \e ,
+no control character, no blank at either end, and not
+.B .
+or
+.BR .. .
+The CA refuses any other before it acknowledges, counts, looks up or
+signs anything, and so do
+.IR keysrv (4),
+.IR signer (8)
+and
+.IR changelogin (8).
+A name is a directory of
+.IR keyfs (4),
+the key of the CA's count of failed attempts, the owner of a certificate,
+and for
+.IR signer (8)
+a file of the host's; a name such as
+.B carol/.
+was the same account as
+.B carol
+to the first and another name to the second.
 .TP
 .I pw
 is the 32-byte SHA-256 of the password, as
 .IR changelogin (8)
 keeps it.
 .TP
-.I key
-is 32 bytes by HKDF (RFC 5869) from
-.I pw
-and the salt:
-.EX
-PRK = HMAC-H(salt, pw)
-key = HMAC-H(PRK, info || 0x01)[0:32]
-.EE
-where H is SHA-256 and info is \f5infernode login aead\fP for
-ChaCha20-Poly1305, and H is SHA-384 and info is
-\f5infernode login aes-256-gcm\fP for AES-256-GCM.
+.I suite
+is 1 or 2.
+Suite 1 is ChaCha20 as the keystream and SHA-256 as the hash H, with a group of
+2048 bits or more.
+Suite 2 is AES-256 in counter mode (as GCM runs it) and SHA-384, with a group of
+3072 bits or more.
+A client in CNSA mode (\f5/env/cnsamode\fP set) offers and takes only suite 2,
+and a CA in CNSA mode refuses suite 1, saying so.
+A CA not in CNSA mode takes either.
+In CNSA mode the CA's own key must be ML-DSA-87 with a modulus of 3072 bits or more
+(the CA refuses to sign with another, and the client refuses a CA's key,
+modulus or certificate that is not: ML-DSA-87, SHA-384 or SHA-512, 3072 bits).
 .TP
-.I alpha
-is a Diffie-Hellman base used system wide
-.TP
+.I group
+is 14, 15 or 16: RFC 3526's groups of 2048, 3072 and 4096 bits.
+Each is a prime
 .I p
-is a Diffie-Hellman modulus used system wide
+with
+.IR q =( p \-1)/2
+also prime, and the generator 2, which is of order
+.IR q .
+These are the only groups.
+Both ends have them, and neither takes a modulus or a generator from the
+other: a client that took them from whoever answered could be sent a modulus of 2,
+which made the secret one of two values and the sender the signer.
+The CA chooses the group: 14 for suite 1 and 15 for suite 2, or a larger one if
+.IR logind (8)
+was told to.
+The client refuses a number not on the list, and a group smaller than its suite allows.
+The top 64 bits of each prime are ones, which matters below.
 .TP
-.I "key(m)"
+.I Nc, Ns
+are 32 random bytes chosen by the client and by the CA for this conversation.
+.TP
+.I r0, r1
+are the CA's and the client's random exponents, uniform in
+.RI 1.. q \-1
+(64 random bits more than
+.I q
+has, reduced).
+.TP
+.IB len ( p )
+is the length of
+.I p
+in bytes; a number sent is sent big-endian in exactly that many.
+.TP
+.I secret
 is
+.BI 2**(2* r0 * r1 ") mod " p \fR,
+in
+.IB len ( p )
+bytes.
+.TP
+.BI L( m )
+is the length of
 .I m
-sealed by the AEAD with
-.I key
-and the nonce, sent as the ciphertext and then its 16-byte tag.
-.TP
-.I Rx
-is a random number of the same order as
-.IR p .
-.TP
-.I "secret"
-is the Diffie-Hellman secret
-.IR "alpha**(r0*r1) mod p" .
-.PP
-The protocol follows.  ``user→CA xxx'' means that the user
+as two bytes, big-endian, followed by
+.IR m .
+.SS Messages
+``user→CA xxx'' means that the user
 sends the message ``xxx'' to the certifying authority.
-Any party can send an error instead of a message at any
+Either party can send an error instead of a message at any
 point to terminate the protocol.
 .IP
 .EX
 user→CA	name
-CA→user	ACK
+CA→user	name
 .sp 1v
-user→CA	ivec
-CA→user	key(alpha**r0 mod p), alpha, p
+user→CA	hello = 2, suite, Nc
+CA→user	reply = 2, suite, group, Ns, mask(±2**r0 mod p)
 .sp 1v
-user→CA	alpha**r1 mod p
-CA→user	CA's public key, SHA(CA's public key + secret)
+user→CA	2**r1 mod p, proofc
+CA→user	proofs
 .sp 1v
-user→CA	user's public key, SHA(user's public key + secret)
+CA→user	CA's public key, alpha, p
+user→CA	user's public key
 CA→user	user's public key certificate
 .EE
 .PP
-Once both have
-.IR secret ,
-each pushes
-.IR ssl (3)
-onto the connection with
+The numbers 2,
+.I suite
+and
+.I group
+are one byte each.
+The last three lines are sent under
+.IR ssl (3)'s
+.BR aes_256_gcm ,
+each way under its own secret; everything before is in clear.
+.SS "The masked value"
+The CA computes
+.BI 2** r0 " mod " p
+and, as a coin falls, sends it or
+.I p
+less it, under a keystream:
+.IP
+.EX
+PRK = HMAC-H(Nc || Ns, pw)
+key || nonce = HKDF-Expand(PRK,
+    "infernode login 2 mask" || 0 || suite || group || name, 44)
+mask(x) = x XOR stream(key, nonce)
+.EE
+.PP
+HKDF is RFC 5869's;
+.I key
+is the first 32 bytes and
+.I nonce
+the last 12.
+The stream is the one the suite's AEAD (ChaCha20-Poly1305, AES-256-GCM)
+encrypts with, so
+.B mask
+is that AEAD's ciphertext with its tag left off, and applied twice gives
+.I x
+back.
+.PP
+There is no tag, and that is the point of this message.
+The CA sends it to anybody who gives a name.
+When it was sealed by the AEAD, tag and all, one reply was all that was needed
+to try passwords at leisure: the right one was the one whose tag verified.
+Now every password turns the reply into
+.I some
+number of
+.IB len ( p )
+bytes, and the right one cannot be told from the others:
+.IP \(bu
+The value sent is uniform over
+.RI 2.. p \-2,
+and a wrong password gives a number uniform over all strings of that length,
+which is outside that range once in 2^64 because of the prime's leading ones.
+(A prime not chosen so would rule out a fraction of the guesses with each reply.)
+.IP \(bu
+.BI 2** r0
+alone is always a square mod
+.IR p ,
+and whether a number is one can be computed.
+Without the sign, a wrong password would unmask the reply to a non-square half the time,
+and each login watched would halve the list of candidates.
+With it the value is a square or not with equal chance, as a wrong guess's is.
+The 2 in the secret's exponent removes the sign again.
+.IP \(bu
+The value is not text: base 64, which the old exchange sent, has only some byte values.
+.PP
+.I Ns
+is in the keystream's derivation so that a keystream is used once whatever the client sends:
+with the nonce the client's alone, the same hello sent again had the CA encrypt a new value
+under the same keystream.
+.I Name,
+.I suite
+and
+.I group
+are there so that a reply is of one conversation's terms.
+.PP
+The client unmasks the value and refuses it unless it is in
+.RI 2.. p \-2;
+with 0, 1 or
+.IR p \-1
+the secret would be a number anybody knows.
+It reports
+.B "name or secret incorrect"
+and sends nothing more.
+.SS "The proofs"
+The client sends
+.BI 2** r1 " mod " p
+in clear, with a proof that it has the secret.
+The CA refuses a value outside
+.RI 2.. p \-2
+(the range is SP 800-56A's, 5.6.2.3.1):
+with 1 the secret was 1 whatever
+.I r0
+was, with 0 it was 0, with
+.IR p \-1
+one of two values, and a client that sent one of them was given a certificate
+for any name it chose, with no password.
+No test of the value's order is needed: in these groups an element in that range
+is of order
+.I q
+or
+.RI 2 q ,
+and the exponent
+.BI 2* r0
+leaves one of order
+.IR q .
+.PP
+Both ends then compute
+.IP
+.EX
+th = H("infernode login 2 transcript" ||
+       L(name) || L(hello) || L(reply) || L(2**r1 mod p))
+PRK = HMAC-H(th, secret || pw)
+proofc = HKDF-Expand(PRK, "infernode login 2 client proof", len H)
+proofs = HKDF-Expand(PRK, "infernode login 2 signer proof", len H)
+key    = HKDF-Expand(PRK, "infernode login 2 session", len H)
+.EE
+.PP
+.I Th
+covers everything said, so the two ends agree on the name, the suite, the group,
+both nonces and both values, or their proofs differ: a party between them that
+changes any of it gets nothing.
+.I Pw
+is with the secret so that a secret somebody has contrived to know is still not enough.
+.PP
+The CA checks
+.I proofc
+before it sends anything made from the secret.
+In the old exchange the CA spoke first under the secret's keys, to a client that had proved nothing;
+a client that had chosen
+.I r1
+could then try each password by unmasking the CA's value with it,
+raising the result to
+.IR r1 ,
+and seeing whether the CA's next message opened.
+If the proof is wrong the CA answers
+.BR "name or secret incorrect" ,
+in clear, and the attempt stays counted against the name
+(see
+.IR logind (8));
+a wrong password, a name with no account and an expired entry are all answered so.
+If it is right the CA sends
+.IR proofs ,
+which the client checks: only an end with the password could have made it.
+.SS "The rest"
+Each end then pushes
 .B aes_256_gcm
-under its own secret each way, made from
-.I secret
+onto the connection, each way under its own secret, made from
+.I key
 by
 .B secrets
 in
-.IR security-ssl (2),
-and the last four messages go sealed.
-.PP
-The complexity of this protocol is intended to shield the password.
-To start a clear text attack against the password, one
-needs to first attack the Diffie-Hellman exponential
-to determine
-.IR "alpha**r0 mod p" .
-A possible weakness is that the encrypted quantity
-is base64 encoded, constraining
-the possible values of each byte.
-This could aid a brute force attack.
-.PP
-.I Alpha
+.IR security-ssl (2).
+The CA sends its public key and the
+.I alpha
 and
 .I p
-are sent unprotected, though the user code does a few sanity checks
-on the values it receives.
-This is another likely point of attack.
-We should like to know about any.
+of its key file
+.RI ( createsignerkey (8)).
+Those two are not used by this exchange, whatever the file has: they are the
+parameters
+.IR security-auth (2)
+uses between the holders of the CA's certificates, and they now reach the client
+from the CA the password has just authenticated, not in clear before it.
+The client refuses a
+.I p
+of fewer than 2048 or more than 8192 bits, an even one, and an
+.I alpha
+outside
+.RI 2.. p \-2.
+It makes a key of the CA's kind, sends the public part, and checks that
+what comes back is a certificate for that key that verifies with the CA's.
+.SS Versions
+There is no negotiation, and neither end goes back to the exchange before this one,
+whose third message was an initialization vector of 32 or 44 bytes.
+A CA sent one answers
+.BR "signer speaks login version 2" ;
+a client whose hello is refused as that exchange's CA refused anything that was not
+its vector reports that the signer speaks the old exchange.
+Both ends of a realm must be of the same version.
+.SS "What is not claimed"
+.I Pw
+is all a client needs, so the CA's copy of it in
+.IR keyfs (4)
+is as good as the password, and it is an unsalted hash: whoever reads the CA's
+key file can log in as anybody and can guess passwords from it.
+The exchange protects the password on the network, not on the CA.
 .PP
-The role of
-.I ivec
-is to foil any replay attacks by someone spoofing the CA
-though this is probably overkill.
+Someone who takes the client's part can try one password in each login,
+which is what the CA's count of failed attempts is for;
+someone who takes the CA's part can try one in each login a user makes to him.
+.PP
+The certificate lasts as long as the account's entry does, and there is no revocation.
 .SH SEE ALSO
 .IR security-intro (2),
 .IR security-login (2),
+.IR keysrv (4),
 .IR logind (8),
 .IR signer (8)
+.br
+S. M. Bellovin and M. Merritt,
+``Encrypted Key Exchange: Password-Based Protocols Secure Against Dictionary Attacks'',
+.I "Proc. IEEE Symposium on Research in Security and Privacy",
+1992.

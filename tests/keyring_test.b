@@ -325,7 +325,9 @@ testIPintModular(t: ref T)
 testIPintRandom(t: ref T)
 {
 	# Generate random number with specific bit count
-	r := IPint.random(128, 0);
+	# (minbits, maxbits: with the two the other way round this asked for
+	# no bits, got zero, and passed while a zero had "one bit")
+	r := IPint.random(0, 128);
 	t.assert(r != nil, "random 128-bit not nil");
 	t.assert(r.bits() <= 128, "random within bounds");
 	t.assert(r.bits() > 0, "random non-zero");

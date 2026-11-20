@@ -23,6 +23,7 @@ static int netown(Netfile*, char*, int);
 static int openfile(Netif*, int);
 static char* matchtoken(char*, char*);
 static char* netmulti(Netif*, Netfile*, uchar*, int);
+static void closefile(Netif*, Netfile*);
 static int parseaddr(uchar*, char*, int);
 
 /*
@@ -80,7 +81,15 @@ netifgen(Chan *c, char*, Dirtab *vp, int, int i, Dir *dp)
 
 	/* second level contains clone plus all the conversations */
 	t = NETTYPE(c->qid.path);
-	if(t == N2ndqid || t == Ncloneqid || t == Naddrqid){
+	/*
+	 * stats and ifstats are of this level too. Left out, a stat of
+	 * either went on to the third level below as conversation 0's,
+	 * and with no conversation 0 was answered "not this one" for
+	 * every index: devstat asks until it is told there are no more,
+	 * so it asked for ever, on one core, and could not be killed.
+	 * /net/ether2 and /net/ether3 are in that state from boot.
+	 */
+	if(t == N2ndqid || t == Ncloneqid || t == Naddrqid || t == Nstatqid || t == Nifstatqid){
 		switch(i) {
 		case DEVDOTDOT:
 			q.type = QTDIR;
@@ -119,9 +128,11 @@ netifgen(Chan *c, char*, Dirtab *vp, int, int i, Dir *dp)
 	}
 
 	/* third level */
+	if(NETID(c->qid.path) >= nif->nfile)
+		return -1;
 	f = nif->f[NETID(c->qid.path)];
 	if(f == 0)
-		return 0;
+		return -1;	/* no such conversation: an end, not "skip this one" */
 	if(*f->owner){
 		o = f->owner;
 		perm = f->mode;
@@ -197,8 +208,16 @@ netifopen(Netif *nif, Chan *c, int omode)
 		case Ndataqid:
 		case Nctlqid:
 			f = nif->f[id];
-			if(netown(f, up->env->user, omode&7) < 0)
+			if(netown(f, up->env->user, omode&7) < 0){
+				/*
+				 * openfile counted this open: left counted,
+				 * a refused open (of clone for execute, say)
+				 * kept its conversation for good, and there
+				 * are only so many
+				 */
+				closefile(nif, f);
 				error(Eperm);
+			}
 			break;
 		}
 	}
@@ -421,12 +440,63 @@ netifstat(Netif *nif, Chan *c, uchar *db, int n)
 	return devstat(c, db, n, (Dirtab *)nif, 0, netifgen);
 }
 
+/*
+ * One open of a conversation gone; with the last, what the conversation
+ * asked of the interface is given back. The interface's lock is taken
+ * before the conversation's, as openfile takes them for a clone: this
+ * took them the other way about, and the two could wait for each other.
+ */
+static void
+closefile(Netif *nif, Netfile *f)
+{
+	int t;
+	Netaddr *ap;
+
+	qlock(&nif->ql);
+	qlock(&f->ql);
+	if(--(f->inuse) == 0){
+		if(f->prom){
+			if(--(nif->prom) == 0 && nif->promiscuous != nil)
+				nif->promiscuous(nif->arg, 0);
+			f->prom = 0;
+		}
+		if(f->scan){
+			if(--(nif->scan) == 0 && nif->scanbs != nil)
+				nif->scanbs(nif->arg, 0);
+			f->prom = 0;
+			f->scan = 0;
+		}
+		if(f->nmaddr){
+			/*
+			 * each address this conversation joined, by its place
+			 * in the list (t was never advanced: every address
+			 * was released if the first was the conversation's,
+			 * and none otherwise)
+			 */
+			t = 0;
+			for(ap = nif->maddr; ap != nil && t < 8*sizeof(f->maddr); ap = ap->next, t++){
+				if(f->maddr[t/8] & (1<<(t%8)))
+					netmulti(nif, f, ap->addr, 0);
+			}
+			f->nmaddr = 0;
+			memset(f->maddr, 0, sizeof(f->maddr));
+		}
+		if(f->type < 0)
+			--(nif->all);
+		f->owner[0] = 0;
+		f->type = 0;
+		f->bridge = 0;
+		f->headersonly = 0;
+		qclose(f->in);
+	}
+	qunlock(&f->ql);
+	qunlock(&nif->ql);
+}
+
 void
 netifclose(Netif *nif, Chan *c)
 {
-	Netfile *f;
 	int t;
-	Netaddr *ap;
 
 	if((c->flag & COPEN) == 0)
 		return;
@@ -435,46 +505,7 @@ netifclose(Netif *nif, Chan *c)
 	if(t != Ndataqid && t != Nctlqid)
 		return;
 
-	f = nif->f[NETID(c->qid.path)];
-	qlock(&f->ql);
-	if(--(f->inuse) == 0){
-		if(f->prom){
-			qlock(&nif->ql);
-			if(--(nif->prom) == 0 && nif->promiscuous != nil)
-				nif->promiscuous(nif->arg, 0);
-			qunlock(&nif->ql);
-			f->prom = 0;
-		}
-		if(f->scan){
-			qlock(&nif->ql);
-			if(--(nif->scan) == 0 && nif->scanbs != nil)
-				nif->scanbs(nif->arg, 0);
-			qunlock(&nif->ql);
-			f->prom = 0;
-			f->scan = 0;
-		}
-		if(f->nmaddr){
-			qlock(&nif->ql);
-			t = 0;
-			for(ap = nif->maddr; ap; ap = ap->next){
-				if(f->maddr[t/8] & (1<<(t%8)))
-					netmulti(nif, f, ap->addr, 0);
-			}
-			qunlock(&nif->ql);
-			f->nmaddr = 0;
-		}
-		if(f->type < 0){
-			qlock(&nif->ql);
-			--(nif->all);
-			qunlock(&nif->ql);
-		}
-		f->owner[0] = 0;
-		f->type = 0;
-		f->bridge = 0;
-		f->headersonly = 0;
-		qclose(f->in);
-	}
-	qunlock(&f->ql);
+	closefile(nif, nif->f[NETID(c->qid.path)]);
 }
 
 Lock netlock;
@@ -645,27 +676,57 @@ parseaddr(uchar *to, char *from, int alen)
 static char*
 netmulti(Netif *nif, Netfile *f, uchar *addr, int add)
 {
-	Netaddr **l, *ap;
-	int i;
+	Netaddr **l, *ap, *dead, **hl;
+	int i, di;
 	ulong h;
 
 	if(nif->multicast == nil)
 		return "interface does not support multicast";
 
+	/*
+	 * An address's place in the list is its bit in each conversation's
+	 * set, so an entry is never taken out; one nobody has joined (ref
+	 * 0) is used again for the next new address. The list is therefore
+	 * no longer than a conversation's set has bits. It grew by one for
+	 * every new address ever added, and a driver that programs a
+	 * filter from it (ethergenet's) was led past its table.
+	 */
 	l = &nif->maddr;
 	i = 0;
+	dead = nil;
+	di = -1;
 	for(ap = *l; ap; ap = *l){
-		if(memcmp(addr, ap->addr, nif->alen) == 0)
+		if(ap->ref > 0 && memcmp(addr, ap->addr, nif->alen) == 0)
 			break;
+		if(ap->ref <= 0 && dead == nil){
+			dead = ap;
+			di = i;
+		}
 		i++;
 		l = &ap->next;
 	}
 
 	if(add){
+		if(ap != 0 && i < 8*sizeof(f->maddr) && (f->maddr[i/8] & (1<<(i%8))))
+			return 0;	/* joined already: a second join added a reference nothing gave back */
 		if(ap == 0){
-			*l = ap = smalloc(sizeof(*ap));
+			if(dead != nil){
+				/* an entry nobody has: out of its hash chain, and given the new address */
+				h = hash(dead->addr, nif->alen);
+				for(hl = &nif->mhash[h]; *hl != nil; hl = &(*hl)->hnext)
+					if(*hl == dead){
+						*hl = dead->hnext;
+						break;
+					}
+				ap = dead;
+				i = di;
+			}else{
+				if(i >= 8*sizeof(f->maddr))
+					return "too many multicast addresses";
+				*l = ap = smalloc(sizeof(*ap));
+				ap->next = 0;
+			}
 			memmove(ap->addr, addr, nif->alen);
-			ap->next = 0;
 			ap->ref = 1;
 			h = hash(addr, nif->alen);
 			ap->hnext = nif->mhash[h];
@@ -677,24 +738,24 @@ netmulti(Netif *nif, Netfile *f, uchar *addr, int add)
 			nif->nmaddr++;
 			nif->multicast(nif->arg, addr, 1);
 		}
-		if(i < 8*sizeof(f->maddr)){
-			if((f->maddr[i/8] & (1<<(i%8))) == 0)
-				f->nmaddr++;
-			f->maddr[i/8] |= 1<<(i%8);
-		}
+		if((f->maddr[i/8] & (1<<(i%8))) == 0)
+			f->nmaddr++;
+		f->maddr[i/8] |= 1<<(i%8);
 	} else {
-		if(ap == 0 || ap->ref == 0)
+		/*
+		 * only an address this conversation joined: any other's
+		 * was given back by whoever asked, and its owner's bit
+		 * left set over a reference that had gone
+		 */
+		if(ap == 0 || i >= 8*sizeof(f->maddr) || (f->maddr[i/8] & (1<<(i%8))) == 0)
 			return 0;
 		ap->ref--;
 		if(ap->ref == 0){
 			nif->nmaddr--;
 			nif->multicast(nif->arg, addr, 0);
 		}
-		if(i < 8*sizeof(f->maddr)){
-			if((f->maddr[i/8] & (1<<(i%8))) != 0)
-				f->nmaddr--;
-			f->maddr[i/8] &= ~(1<<(i%8));
-		}
+		f->nmaddr--;
+		f->maddr[i/8] &= ~(1<<(i%8));
 	}
 	return 0;
 }

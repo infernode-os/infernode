@@ -118,6 +118,8 @@ tokenbalance(token: string, addr: string): (string, string)
 		return (nil, "tokenbalance: invalid address");
 	# balanceOf(address) = 0x70a08231 + address padded to 32 bytes
 	paddedaddr := padaddr(addr);
+	if(paddedaddr == nil)
+		return (nil, "tokenbalance: invalid address");
 	calldata := "0x70a08231" + paddedaddr;
 
 	(result, err) := ethcall(calldata, token);
@@ -268,8 +270,9 @@ hextowei(hex: string): string
 	s := hex;
 	if(len s >= 2 && s[0:2] == "0x")
 		s = s[2:];
-	if(s == "")
-		return "0";
+	# a quantity has a digit ("0x0" is zero); "0x" alone is no bytes,
+	# what a call to an address with no contract returns, and was read
+	# as a balance of zero
 	if(!validhexdigits(s) || len s > 64)
 		return nil;
 	# Strip leading zeros
@@ -362,17 +365,63 @@ rpccall(method: string, params: string): (ref JValue, string)
 		return (nil, sys->sprint("%s: HTTP %d", method, resp.statuscode));
 
 	jv := parsejson(string resp.body);
-	if(jv == nil)
+	if(jv == nil || !jv.isobject())
 		return (nil, method + ": invalid JSON response");
 
-	# Check for JSON-RPC error
+	# The answer is to this request: JSON-RPC 2.0 has the request's id
+	# in its response, and one with another's (or none) is not ours.
+	# Nothing was looked at, so any object with a "result" was taken.
+	if(jvgetstr(jv, "jsonrpc") != "2.0")
+		return (nil, method + ": response is not JSON-RPC 2.0");
+	if(!sameid(jv.get("id"), id))
+		return (nil, method + ": response id is not the request's");
+
+	# The node's own refusal, said to be one, with its text bounded and
+	# on one line: it was passed on as it came, at any length, into the
+	# wallet's errors and an agent's tool results.
 	errobj := jv.get("error");
-	if(errobj != nil && errobj.isobject()) {
-		emsg := jvgetstr(errobj, "message");
-		return (nil, method + ": " + emsg);
+	if(errobj != nil && !errobj.isnull()) {
+		emsg := "";
+		if(errobj.isobject())
+			emsg = jvgetstr(errobj, "message");
+		return (nil, method + ": refused by node: " + cleantext(emsg, 200));
 	}
+	if(jv.get("result") == nil)
+		return (nil, method + ": response has neither result nor error");
 
 	return (jv, nil);
+}
+
+# a response's id against the number sent (a number, or the number as
+# a string, which some nodes send back)
+sameid(v: ref JValue, id: int): int
+{
+	if(v == nil)
+		return 0;
+	pick x := v {
+	Int =>
+		return x.value == big id;
+	String =>
+		return x.s == string id;
+	}
+	return 0;
+}
+
+# text from the node for an error: printable, one line, at most n
+cleantext(s: string, n: int): string
+{
+	r := "";
+	for(i := 0; i < len s && len r < n; i++) {
+		c := s[i];
+		if(c < ' ' || c == 16r7f)
+			c = ' ';
+		r[len r] = c;
+	}
+	if(i < len s)
+		r += "...";
+	if(r == "")
+		r = "(no message)";
+	return r;
 }
 
 #
@@ -498,12 +547,10 @@ validtxhash(s: string): int
 
 # Pad an address to 32 bytes (64 hex chars), left-padded with zeros
 # Input: "0xABCD..." → output: "000000000000000000000000ABCD..."
+# nil for what is not an address (a short string was padded all the same)
 padaddr(addr: string): string
 {
-	s := addr;
-	if(len s >= 2 && s[0:2] == "0x")
-		s = s[2:];
-	while(len s < 64)
-		s = "0" + s;
-	return s;
+	if(!validaddress(addr))
+		return nil;
+	return "000000000000000000000000" + addr[2:];
 }

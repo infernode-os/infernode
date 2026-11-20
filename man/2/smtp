@@ -13,6 +13,9 @@ sendmail: fn(fromwhom: string,
              cc: list of string,
              msg: list of string): (int, string);
 close:    fn(): (int, string);
+okaddr:   fn(addr: string): int;
+okheader: fn(value: string): int;
+timeout:  fn(ms: int);
 .EE
 .SH DESCRIPTION
 .B Smtp
@@ -65,14 +68,54 @@ and
 .I msg
 has the text of the message. The latter
 may simply be a list of one item containing the whole message, a list of lines of the message
-or any intermediate format. It returns -1 and an error message on failure.
+or any intermediate format (an empty item is an empty line). It returns -1 and an error message on failure.
+The sender and each recipient must be an address as
+.B okaddr
+has it, or nothing is sent: an address goes on a command's line, and
+one with a line break in it would be further commands.
+A message with a NUL in it, or with a carriage return inside a header
+line, is refused; a carriage return inside a line of the body ends
+that line, so that no receiver reads past it a dot that the sender
+did not double.
+The message is sent only when the server answers
+.B DATA
+with 354, and every reply is judged by its code.
+.PP
+.B Okaddr
+says whether
+.I addr
+can stand between < and > in
+.B "MAIL FROM"
+and
+.BR "RCPT TO" :
+it is not empty and has no blank, control character, DEL, < or >.
+.B Okheader
+says whether
+.I value
+stays one header's value: it has no CR, LF or NUL.
+Callers that make a message's headers from text they were given
+(another message's subject or id) should ask.
+.PP
+.B Timeout
+sets how long, in milliseconds, the connection's making and each reply
+are waited for (30 seconds by default).
+After a timeout, a failed write or a reply that is not SMTP's, the
+connection is closed and its processes are gone.
+.PP
+No error says what was sent as a credential: a refused or unanswered
+.B AUTH
+is reported as
+.BR "AUTH credentials" ,
+with the server's reply, less the credential if the server says it
+back.
 .PP
 .B Close
 closes the connection to the SMTP server.
 .SH SOURCE
 .B /appl/lib/smtp.b
+.br
+.B /appl/lib/mailconn.b
 .SH SEE ALSO
 .IR sendmail (1),
-.IR acme (1)
-.SH BUGS
-Too much copying of strings is done, especially with large messages.
+.IR acme (1),
+.IR mailconn (2)

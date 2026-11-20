@@ -9,6 +9,7 @@
 extern char*	heapaudittext(void);	/* libinterp/heapaudit.c */
 
 extern int cflag;
+extern int strictlink;	/* libinterp/link.c */
 int	exdebug;
 extern int keepbroken;
 
@@ -38,7 +39,8 @@ enum
 	Qsysctl,
 	Qsysname,
 	Qtime,
-	Quser
+	Quser,
+	Qstrictlink
 };
 
 Dirtab contab[] =
@@ -64,6 +66,7 @@ Dirtab contab[] =
 	"null",		{Qnull},	0,	0666,
 	"random",	{Qrandom},	0,	0444,
 	"scancode",	{Qscancode},	0,	0444,
+	"strictlink",	{Qstrictlink},	0,	0644,
 	"sysctl",	{Qsysctl},	0,	0644,
 	"sysname",	{Qsysname},	0,	0644,
 	"time",		{Qtime},	0,	0644,
@@ -483,6 +486,8 @@ consopen(Chan *c, int omode)
 	return c;
 }
 
+static QLock heaptypesl;	/* one reader of heaptypes at a time: its text is on the channel */
+
 static void
 consclose(Chan *c)
 {
@@ -513,8 +518,10 @@ consclose(Chan *c)
 		break;
 
 	case Qheaptypes:
+		qlock(&heaptypesl);
 		free(c->aux);
 		c->aux = nil;
+		qunlock(&heaptypesl);
 		break;
 	}
 }
@@ -527,6 +534,15 @@ consread(Chan *c, void *va, long n, vlong offset)
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, va, n, contab, nelem(contab), devgen);
+
+	/*
+	 * as the native kernel has it. A read of no bytes went on to the
+	 * files' own code, and the pool listing's (/dev/memory) formats
+	 * into what room it is given: with none, snprint answers -1, the
+	 * next line was written one byte before the buffer.
+	 */
+	if(n <= 0)
+		return 0;
 
 	switch((ulong)c->qid.path) {
 	default:
@@ -569,6 +585,10 @@ consread(Chan *c, void *va, long n, vlong offset)
 		snprint(buf, sizeof(buf), "%d", cflag);
 		return readstr(offset, va, n, buf);
 
+	case Qstrictlink:
+		snprint(buf, sizeof(buf), "%d", strictlink);
+		return readstr(offset, va, n, buf);
+
 	case Qtime:
 		snprint(buf, sizeof(buf), "%.lld", timeoffset + osusectime());
 		return readstr(offset, va, n, buf);
@@ -584,13 +604,28 @@ consread(Chan *c, void *va, long n, vlong offset)
 	 * made at offset 0, the rest of the reads take the same text.
 	 */
 	case Qheaptypes:
+		/*
+		 * One reader at a time. The text is kept on the channel
+		 * and made again at offset 0, and reads of one channel are
+		 * not otherwise kept apart: two at once both freed the old
+		 * text, or one freed what the other was copying from.
+		 */
+		qlock(&heaptypesl);
+		if(waserror()){
+			qunlock(&heaptypesl);
+			nexterror();
+		}
 		if(offset == 0 || c->aux == nil){
 			free(c->aux);
+			c->aux = nil;
 			c->aux = heapaudittext();
 			if(c->aux == nil)
 				error(Enomem);
 		}
-		return readstr(offset, va, n, c->aux);
+		n = readstr(offset, va, n, c->aux);
+		poperror();
+		qunlock(&heaptypesl);
+		return n;
 
 	case Qnull:
 		return 0;
@@ -907,6 +942,24 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		if(x < 0 || x > 9)
 			error(Ebadarg);
 		cflag = x;
+		break;
+
+	case Qstrictlink:
+		/*
+		 * Modules are linked by their type digests alone from now on
+		 * (libinterp/link.c).  One way: a boot script sets it once it
+		 * has loaded whatever old module it needs, and nothing that
+		 * runs later can take it back.
+		 */
+		if(!iseve())
+			error(Eperm);
+		if(n >= sizeof(buf))
+			n = sizeof(buf)-1;
+		strncpy(buf, va, n);
+		buf[n] = '\0';
+		if(buf[0] != '1' || (buf[1] != '\0' && buf[1] != '\n'))
+			error("strictlink: only 1; it stays set until the system restarts");
+		strictlink = 1;
 		break;
 
 	case Qsysname:

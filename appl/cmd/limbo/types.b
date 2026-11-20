@@ -3196,9 +3196,28 @@ sign(d: ref Decl): int
 	for(i := 0; i < Keyring->MD5dlen; i += 4)
 		t.sig ^= int md5sig[i+0] | (int md5sig[i+1]<<8) | (int md5sig[i+2]<<16) | (int md5sig[i+3]<<24);
 
+	#
+	# The 32 bits above are all a module file had of a type, and two
+	# different function types with the same 32 are found in a second.
+	# The same text's SHA-256 goes beside each (dissigs), for the
+	# loader to compare.
+	#
+	t.dig = array[Keyring->SHA256dlen] of byte;
+	sha256(sig, sigend, t.dig, nil);
+
 	if(debug['S'])
 		print("signed %s type %s len %d sig %#ux\n", dotconv(d), typeconv(t), sigend, t.sig);
 	return t.sig;
+}
+
+#
+# the digest of the text sign() folds into d's signature
+#
+signdigest(d: ref Decl): array of byte
+{
+	t := d.ty;	# the type sign() signs, whatever it does to d
+	sign(d);
+	return t.dig;
 }
 
 SIGSELF:	con byte 'S';

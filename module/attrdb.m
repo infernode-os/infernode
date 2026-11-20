@@ -41,11 +41,11 @@ Attrdb: module
 	};
 
 	Dbf: adt {
-		fd:	ref Bufio->Iobuf;
+		data:	array of byte;	# the file as last read; nil if it could not be
 		name:	string;
 		dir:	ref Sys->Dir;
 		indices:	list of ref Attrindex->Index;
-		lockc:	chan of int;
+		errs:	list of string;	# why it could not be read, or its lines that are not attributes
 
 		open:	fn(path: string): ref Dbf;
 		sopen:	fn(data: string): ref Dbf;

@@ -58,6 +58,7 @@ usage(void)
 		"\t-r<rootpath>\n"
 		"\t-7\n"
 		"\t-B\n"
+		"\t-L\n"
 		"\t-C<channel string>\n"
 		"\t-S\n");
 
@@ -199,6 +200,9 @@ option(int argc, char *argv[], void (*badusage)(void))
 			exits("usage");
 		}
 		break;
+	case 'L':		/* link modules by their type digests only */
+		strictlink = 1;
+		break;
 	case 'S':
 		tkstylus = 1;
 		break;
@@ -282,7 +286,12 @@ emu_run(int argc, char *argv[])
 	opt = getenv("EMU");
 	if(opt != nil && *opt != '\0') {
 		enva[0] = "emu";
-		envc = tokenize(opt, &enva[1], sizeof(enva)-1) + 1;
+		/*
+		 * as many as enva has room for after "emu" and before the
+		 * nil: it was sizeof(enva), its bytes, so a nineteenth
+		 * word put the nil past the array and a twentieth a pointer
+		 */
+		envc = tokenize(opt, &enva[1], nelem(enva)-2) + 1;
 		enva[envc] = 0;
 		option(envc, enva, envusage);
 	}

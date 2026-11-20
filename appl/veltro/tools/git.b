@@ -127,13 +127,13 @@ findrepo(): string
 
 mountgitfs(ready: chan of int)
 {
-	# Keep the pre-restriction files already in this namespace, but do not
-	# retain ambient device attach or host-symlink traversal authority.
-	# FORKNS is required: NODEVS is a namespace property and must not change
-	# the dispatcher shared with other tool workers.
-	sys->pctl(Sys->FORKNS, nil);
-	sys->pctl(Sys->NODEVS, nil);
-
+	# The mount is made here, in the tool server's name space, where each
+	# call's restriction finds /mnt/git and keeps it for this tool.  It
+	# was made after a FORKNS (taken so that NODEVS would not reach the
+	# dispatcher), so no call ever saw it: status, log, branch and cat
+	# described an empty repository whatever was in it.  git/fs now gives
+	# up device attach and host symlinks itself (-n), in its own
+	# processes' name spaces.
 	gitfs := load Gitfs "/dis/cmd/git/fs.dis";
 	if(gitfs == nil) {
 		ready <-= 0;
@@ -142,15 +142,15 @@ mountgitfs(ready: chan of int)
 
 	# git/fs says where it mounted on standard output, which in Xenith
 	# is the +Errors window: an Agent window opened one, saying it.
-	# (A file descriptor group of its own: the tool server's stdout is
-	# left alone.)
-	sys->pctl(Sys->FORKFD, nil);
+	# (A file descriptor group of its own, holding nothing else of the
+	# tool server's.)
+	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: nil);
 	null := sys->open("/dev/null", Sys->OWRITE);
 	if(null != nil)
 		sys->dup(null.fd, 1);
 	null = nil;
 	{
-		gitfs->init(nil, "git/fs" :: "-m" :: "/mnt/git" :: gitdir :: nil);
+		gitfs->init(nil, "git/fs" :: "-n" :: "-m" :: "/mnt/git" :: gitdir :: nil);
 		ready <-= 1;
 	} exception {
 	"*" =>
@@ -168,6 +168,16 @@ gitworker(ready: chan of int)
 	# affect the dispatcher or another worker.
 	sys->pctl(Sys->FORKNS, nil);
 	sys->pctl(Sys->NODEVS, nil);
+
+	# No descriptor of the tool server's, and nothing on its console: a
+	# remote's progress text (side band 2) is printed by the library on
+	# standard error, which was the operator's terminal.
+	# (0, 1 and 2 are held open on /dev/null for as long as the worker
+	# lives, so that no file it opens later is taken for one of them.)
+	sys->pctl(Sys->NEWFD, nil);
+	stdfds := array[3] of ref Sys->FD;
+	for(nfd := 0; nfd < len stdfds; nfd++)
+		stdfds[nfd] = sys->open("/dev/null", Sys->ORDWR);
 
 	wgit := load Git Git->PATH;
 	if(wgit == nil) {
@@ -219,6 +229,11 @@ gitworker(ready: chan of int)
 				r = workpush(wgit, repo, gitdir, rest);
 			"fetch" =>
 				r = workfetch(wgit, repo, gitdir, rest);
+				# the fetched pack is found when the repository is
+				# opened: until then a merge could not read it
+				(nrepo, nerr) := wgit->openrepo(gitdir);
+				if(nerr == nil)
+					repo = nrepo;
 			"branch-create" =>
 				r = workbranchcreate(wgit, repo, gitdir, rest);
 			"branch-delete" =>
@@ -442,7 +457,7 @@ doc(): string
 		"  git status              Current branch and HEAD commit\n" +
 		"  git log [n]             Last n commits (default 10, max 50)\n" +
 		"  git show <hash>         Show commit details by hash or branch\n" +
-		"  git branch              List branches\n" +
+		"  git branch              List branches (with a name: branch-create)\n" +
 		"  git tag                 List tags\n" +
 		"  git cat <path> [ref]    Show file content at HEAD or ref\n\n" +
 		"Write commands:\n" +
@@ -466,7 +481,7 @@ schema(): string
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"subcommand\":{\"type\":\"string\",\"description\":\"One of: status, log, show, branch, tag, cat, add, commit, push, fetch, branch-create, branch-delete, checkout, merge, rm.\"}," +
-				"\"args\":{\"type\":\"string\",\"description\":\"Subcommand arguments: count for log; hash for show; path [ref] for cat; paths for add/rm; message for commit; remote for push/fetch; branch name for branch-create/branch-delete/checkout/merge. Omit for status/branch/tag.\"}" +
+				"\"args\":{\"type\":\"string\",\"description\":\"Subcommand arguments: count for log; hash for show; path [ref] for cat; paths for add/rm; message for commit; remote for push/fetch; branch name for branch-create/branch-delete/checkout/merge. Omit for status/tag, and for branch to list them (branch with a name creates it).\"}" +
 			"}," +
 			"\"required\":[\"subcommand\"]" +
 		"}" +
@@ -487,7 +502,16 @@ exec(args: string): string
 	(cmd, rest) := splitword(args);
 	rest = strip(rest);
 
-	# Read operations — go through git/fs
+	# Read operations — go through git/fs.  A file that cannot be opened
+	# reads as nothing, which is also what an empty repository reads as:
+	# say so when it is the file system that is missing.
+	case cmd {
+	"status" or "log" or "show" or "branch" or "branches" or
+	"tag" or "tags" or "cat" =>
+		(fsok, nil) := sys->stat("/mnt/git/ctl");
+		if(fsok < 0)
+			return "error: the repository's file system is not mounted at /mnt/git";
+	}
 	case cmd {
 	"status" =>
 		return gitstatus();
@@ -723,11 +747,13 @@ gitcat(args: string): string
 	if(gitref == "") {
 		treepath = "/mnt/git/HEAD/tree/" + fpath;
 	} else {
-		if(len gitref != 40 && (verr := validatebranchname(gitref)) != nil)
+		# (a ref of 40 characters was taken for a hash unlooked at, and
+		# walked as a branch's name first)
+		if(!ishexhash(gitref) && (verr := validatebranchname(gitref)) != nil)
 			return verr;
 		hash := strip(readfile("/mnt/git/branch/heads/" + gitref + "/hash"));
 		if(hash == "") {
-			if(len gitref == 40 && ishexhash(gitref))
+			if(ishexhash(gitref))
 				hash = gitref;
 			else
 				return "error: cannot find ref: " + gitref;
@@ -735,9 +761,13 @@ gitcat(args: string): string
 		treepath = "/mnt/git/object/" + hash + "/tree/" + fpath;
 	}
 
+	fd := sys->open(treepath, Sys->OREAD);
+	if(fd == nil)
+		return "error: file not found: " + fpath;
+	fd = nil;
 	content := readfile(treepath);
 	if(content == "")
-		return "error: file not found: " + fpath;
+		return "(empty file)";
 
 	return content;
 }
@@ -763,10 +793,15 @@ workadd(wgit: Git, gitdir, reporoot, args: string): string
 		(relpath, perr) := cleanrelpath(hd paths);
 		if(perr != nil)
 			return perr;
-		path := startdir + "/" + relpath;
+		# "." is the directory itself: as startdir/. its files were
+		# recorded as ./name, which the index is then refused for, at
+		# every add, commit and rm until it was removed by hand
+		path := startdir;
+		if(relpath != ".")
+			path += "/" + relpath;
 		(rc, dir) := sys->stat(path);
 		if(rc < 0)
-			return sprint("error: stat %s: %r", path);
+			return "error: cannot add " + relpath + ": no such file in the work tree";
 
 		if(dir.qid.qtype & Sys->QTDIR)
 			(entries, added) = adddir(wgit, gitdir, reporoot, path, entries, added);
@@ -774,6 +809,9 @@ workadd(wgit: Git, gitdir, reporoot, args: string): string
 			(entries, added) = addfile(wgit, gitdir, reporoot, path, entries, added);
 	}
 
+	# never keep an index that would be refused when it is read
+	if((ierr = validateindex(entries)) != nil)
+		return ierr + "; nothing added";
 	serr := wgit->saveindex(gitdir, entries);
 	if(serr != nil)
 		return "error: saveindex: " + serr;
@@ -898,8 +936,11 @@ workcommit(wgit: Git, wdaytime: Daytime, repo: ref Repo, gitdir, msg: string): s
 	if(werr != nil)
 		return "error: write commit: " + werr;
 
-	wgit->writeref(gitdir, headref, commithash);
-	wgit->clearindex(gitdir);
+	# (the ref's write went unlooked at, and the index was cleared and
+	# the commit reported whether or not the branch had moved)
+	if((rferr := wgit->writeref(gitdir, headref, commithash)) != nil)
+		return "error: commit " + commithash.hex()[:7] + " was written but the branch was not moved: " + rferr;
+	clrerr := wgit->clearindex(gitdir);
 
 	nfiles := 0;
 	for(el := entries; el != nil; el = tl el)
@@ -911,8 +952,11 @@ workcommit(wgit: Git, wdaytime: Daytime, repo: ref Repo, gitdir, msg: string): s
 
 	# (nfiles is the whole index, every file of the tree, not what
 	# changed: it was given as "files changed".)
-	return sprint("[%s %s] %s\n %d file(s) in the tree",
+	r := sprint("[%s %s] %s\n %d file(s) in the tree",
 		branch, commithash.hex()[:7], msg, nfiles);
+	if(clrerr != nil)
+		r += "\nwarning: the index was not cleared: " + clrerr;
+	return r;
 }
 
 workpush(wgit: Git, repo: ref Repo, gitdir, args: string): string
@@ -945,7 +989,7 @@ workpush(wgit: Git, repo: ref Repo, gitdir, args: string): string
 
 	(refs, nil, derr) := wgit->discover_receive(remoteurl);
 	if(derr != nil)
-		return "error: discover: " + derr;
+		return "error: discover: " + scrub(derr, remoteurl);
 
 	oldhash := wgit->nullhash();
 	for(rl := refs; rl != nil; rl = tl rl) {
@@ -986,10 +1030,55 @@ workpush(wgit: Git, repo: ref Repo, gitdir, args: string): string
 
 	serr := wgit->sendpack(remoteurl, updates, packdata, creds);
 	if(serr != nil)
-		return "error: push: " + serr;
+		return "error: push: " + scrub(serr, remoteurl);
 
 	return sprint("To %s\n   %s..%s  %s -> %s",
-		remoteurl, oldhash.hex()[:7], localhash.hex()[:7], branch, branch);
+		safeurl(remoteurl), oldhash.hex()[:7], localhash.hex()[:7], branch, branch);
+}
+
+# A remote's URL as it may be shown: without the user and password some
+# configurations keep in it.  The URL was given back whole in push's and
+# fetch's answers, so a token in .git/config reached the model.
+safeurl(u: string): string
+{
+	return cut(u, userinfo(u));
+}
+
+# an error's text, which may quote the URL, likewise
+scrub(s, u: string): string
+{
+	return cut(s, userinfo(u));
+}
+
+# u's "user:password@", or nil
+userinfo(u: string): string
+{
+	for(i := 0; i + 2 < len u; i++)
+		if(u[i:i+3] == "://") {
+			at := -1;
+			for(k := i + 3; k < len u && u[k] != '/' && u[k] != '?' && u[k] != '#'; k++)
+				if(u[k] == '@')
+					at = k;
+			if(at >= 0)
+				return u[i+3:at+1];
+			break;
+		}
+	return nil;
+}
+
+# s without any occurrence of sub
+cut(s, sub: string): string
+{
+	if(sub == nil || sub == "")
+		return s;
+	out := "";
+	for(i := 0; i < len s; ) {
+		if(i + len sub <= len s && s[i:i+len sub] == sub)
+			i += len sub;
+		else
+			out[len out] = s[i++];
+	}
+	return out;
 }
 
 gitcredentials(remoteurl: string): string
@@ -997,9 +1086,11 @@ gitcredentials(remoteurl: string): string
 	if(factotum == nil || url == nil)
 		return nil;
 	u := url->makeurl(remoteurl);
-	keyspec := "proto=pass service=git";
-	if(u != nil && u.host != nil && u.host != "")
-		keyspec += " dom=" + u.host;
+	# A key is asked for by the host it is for.  With no host in the URL
+	# the question was for any service=git key, whoever it was for.
+	if(u == nil || u.host == nil || u.host == "")
+		return nil;
+	keyspec := "proto=pass service=git dom=" + u.host;
 	(user, password) := factotum->getuserpasswd(keyspec);
 	if(password == nil || password == "")
 		return nil;
@@ -1023,7 +1114,20 @@ workfetch(wgit: Git, repo: ref Repo, gitdir, args: string): string
 	# Discover remote refs
 	(refs, nil, derr) := wgit->discover(remoteurl);
 	if(derr != nil)
-		return "error: discover: " + derr;
+		return "error: discover: " + scrub(derr, remoteurl);
+
+	# The names are the remote's, and each becomes a file's under .git.
+	# One that is no ref's name ("refs/heads/../../x") is a remote not to
+	# take anything from: the name was joined to .git and written.
+	for(cl := refs; cl != nil; cl = tl cl) {
+		rn := (hd cl).name;
+		if(rn == "HEAD")
+			continue;
+		if(len rn > 3 && rn[len rn - 3:] == "^{}")
+			rn = rn[0:len rn - 3];
+		if(!wgit->validrefname(rn))
+			return "error: the remote advertises a ref whose name is not a ref's; nothing fetched";
+	}
 
 	# Build want/have lists
 	want: list of Hash;
@@ -1049,40 +1153,32 @@ workfetch(wgit: Git, repo: ref Repo, gitdir, args: string): string
 		have = lh :: have;
 	}
 
-	# Fetch pack
-	tmppack := gitdir + "/tmp-fetchpack.pack";
+	# Fetch the pack to where its index is made and both are installed
+	# from.  (It was fetched to .git itself and its index looked for in
+	# objects/pack: the pack was installed without one, so nothing fetched
+	# could be read, and "fetched" was said all the same.)
+	tmppack := gitdir + "/objects/pack/tmp-fetch.pack";
 	ferr := wgit->fetchpack(remoteurl, want, have, tmppack);
-	if(ferr != nil)
-		return "error: fetchpack: " + ferr;
-
-	# Index the pack
-	ierr := wgit->indexpack(tmppack);
-	if(ierr != nil)
-		return "error: indexpack: " + ierr;
-
-	# Compute pack name and rename
-	fd := sys->open(tmppack, Sys->OREAD);
-	if(fd != nil) {
-		(rc, dir) := sys->fstat(fd);
-		if(rc >= 0) {
-			packdata := array[int dir.length] of byte;
-			total := 0;
-			while(total < len packdata) {
-				n := sys->read(fd, packdata[total:], len packdata - total);
-				if(n <= 0)
-					break;
-				total += n;
-			}
-			packhash := wgit->hashobj(wgit->OBJ_BLOB, packdata[:total]);
-			packname := "pack-" + packhash.hex();
-			wgit->renamepak(gitdir, tmppack, packname);
-		}
+	if(ferr == nil) {
+		ferr = wgit->indexpack(tmppack);
+		if(ferr != nil)
+			ferr = "indexpack: " + ferr;
+	} else
+		ferr = "fetchpack: " + scrub(ferr, remoteurl);
+	if(ferr == nil)
+		ferr = wgit->renamepak(gitdir, tmppack, nil);
+	if(ferr != nil) {
+		sys->remove(tmppack);
+		sys->remove(gitdir + "/objects/pack/tmp-fetch.idx");
+		return "error: " + ferr;
 	}
 
 	# Update remote tracking refs
-	wgit->updaterefs(gitdir, remote, refs, 0);
+	uerr := wgit->updaterefs(gitdir, remote, refs, 0);
+	if(uerr != nil)
+		return "error: objects were fetched but refs were not all updated: " + uerr;
 
-	return sprint("From %s\n %d new object(s) fetched", remoteurl, nwant);
+	return sprint("From %s\n %d new object(s) fetched", safeurl(remoteurl), nwant);
 }
 
 workbranchcreate(wgit: Git, repo: ref Repo, gitdir, bname: string): string
@@ -1107,7 +1203,8 @@ workbranchcreate(wgit: Git, repo: ref Repo, gitdir, bname: string): string
 	if(rerr != nil)
 		return "error: resolve HEAD: " + rerr;
 
-	wgit->writeref(gitdir, "refs/heads/" + bname, h);
+	if((werr := wgit->writeref(gitdir, "refs/heads/" + bname, h)) != nil)
+		return "error: branch '" + bname + "' not created: " + werr;
 	return "Created branch '" + bname + "' at " + h.hex()[:7];
 }
 
@@ -1130,7 +1227,7 @@ workbranchdelete(nil: Git, gitdir, bname: string): string
 
 	rc := sys->remove(refpath);
 	if(rc < 0)
-		return sprint("error: remove %s: %r", refpath);
+		return "error: branch '" + bname + "' could not be deleted";
 
 	return "Deleted branch '" + bname + "'";
 }
@@ -1148,23 +1245,6 @@ workcheckout(wgit: Git, repo: ref Repo, gitdir, reporoot, bname: string): string
 	if(terr != nil)
 		return "error: branch '" + bname + "' not found";
 
-	# Check for dirty working tree
-	(headref, herr) := repo.head();
-	if(herr != nil)
-		return "error: HEAD: " + herr;
-	(currenthash, rerr) := repo.readref(headref);
-	if(rerr == nil) {
-		(nil, cdata, cerr) := repo.readobj(currenthash);
-		if(cerr == nil) {
-			(commit, cperr) := wgit->parsecommit(cdata);
-			if(cperr == nil) {
-				(clean, cmsg) := wgit->isclean(repo, commit.tree, reporoot);
-				if(!clean)
-					return "error: working tree has uncommitted changes: " + cmsg;
-			}
-		}
-	}
-
 	# Read target commit to get tree
 	(nil, tdata, trerr) := repo.readobj(targethash);
 	if(trerr != nil)
@@ -1173,13 +1253,42 @@ workcheckout(wgit: Git, repo: ref Repo, gitdir, reporoot, bname: string): string
 	if(tcperr != nil)
 		return "error: parse commit: " + tcperr;
 
+	# Check for dirty working tree.  When HEAD's commit could not be
+	# resolved or read the check was passed over and the files written:
+	# now a commit that cannot be read is an error, and with no commit
+	# yet nothing in the work tree that differs is written over.
+	(headref, herr) := repo.head();
+	if(herr != nil)
+		return "error: HEAD: " + herr;
+	(currenthash, rerr) := repo.readref(headref);
+	if(rerr == nil) {
+		(nil, cdata, cerr) := repo.readobj(currenthash);
+		if(cerr != nil)
+			return "error: read current commit: " + cerr;
+		(commit, cperr) := wgit->parsecommit(cdata);
+		if(cperr != nil)
+			return "error: parse current commit: " + cperr;
+		(clean, cmsg) := wgit->isclean(repo, commit.tree, reporoot);
+		if(!clean)
+			return "error: working tree has uncommitted changes: " + cmsg;
+	} else {
+		for(tl0 := treeentries(wgit, repo, tcommit.tree, "", nil); tl0 != nil; tl0 = tl tl0) {
+			te := hd tl0;
+			(fok, fd) := sys->stat(reporoot + "/" + te.path);
+			if(fok >= 0 && (fd.length > big MAXHASH ||
+			   !filehash(wgit, reporoot + "/" + te.path).eq(te.hash)))
+				return "error: checkout would write over " + te.path + ", which is not committed";
+		}
+	}
+
 	# Populate the work tree before changing HEAD.  A malformed object or an
 	# I/O failure must not leave HEAD naming a branch whose tree was not
 	# installed.
 	coerr := repo.checkout(tcommit.tree, reporoot);
 	if(coerr != nil)
 		return "error: checkout: " + coerr;
-	wgit->writesymref(gitdir, "HEAD", "refs/heads/" + bname);
+	if((serr := wgit->writesymref(gitdir, "HEAD", "refs/heads/" + bname)) != nil)
+		return "error: the files of '" + bname + "' were checked out but HEAD was not moved: " + serr;
 
 	return "Switched to branch '" + bname + "'";
 }
@@ -1248,7 +1357,8 @@ workmerge(wgit: Git, repo: ref Repo, gitdir, reporoot, target: string): string
 		return "error: checkout: " + coerr;
 
 	# Publish the new ref only after its tree has been installed.
-	wgit->writeref(gitdir, headref, targethash);
+	if((werr := wgit->writeref(gitdir, headref, targethash)) != nil)
+		return "error: the files were updated but " + branch + " was not moved: " + werr;
 
 	return sprint("Updated %s: %s..%s (fast-forward)",
 		branch, localhash.hex()[:7], targethash.hex()[:7]);
@@ -1268,6 +1378,7 @@ workrm(wgit: Git, gitdir, reporoot, args: string): string
 		return ierr;
 
 	removed := 0;
+	kept := 0;
 	for(; paths != nil; paths = tl paths) {
 		(userpath, perr) := cleanrelpath(hd paths);
 		if(perr != nil)
@@ -1275,25 +1386,36 @@ workrm(wgit: Git, gitdir, reporoot, args: string): string
 		path := startdir + "/" + userpath;
 		relpath := relativepath(reporoot, path);
 
+		# Each file the index has under the name is removed by its own
+		# path.  For a directory it was the directory that was removed,
+		# once for each file in it: that failed, the files stayed, and
+		# they were counted as removed.
 		newentries: list of IndexEntry;
 		for(el := entries; el != nil; el = tl el) {
 			e := hd el;
 			if(e.path == relpath || hasprefix(e.path, relpath + "/")) {
-				removed++;
-				sys->remove(path);
+				fpath := reporoot + "/" + e.path;
+				(fok, nil) := sys->stat(fpath);
+				if(fok >= 0 && sys->remove(fpath) < 0) {
+					kept++;
+					newentries = e :: newentries;
+				} else
+					removed++;
 			} else
 				newentries = e :: newentries;
 		}
 		entries = revlist(newentries);
 	}
 
-	if(removed == 0)
+	if(removed == 0 && kept == 0)
 		return "error: no files matched";
 
 	serr := wgit->saveindex(gitdir, entries);
 	if(serr != nil)
 		return "error: saveindex: " + serr;
 
+	if(kept > 0)
+		return sprint("error: removed %d file(s); %d could not be removed and are still tracked", removed, kept);
 	return sprint("removed %d file(s)", removed);
 }
 

@@ -229,6 +229,13 @@ The
 can be changed by the group leader of the file's current group
 if he or she is the leader of the new group.
 The
+.B uid
+cannot be changed on most file servers: on the host's file system
+.RI ( fs (3))
+a
+.B wstat
+that names an owner other than the one the file has is refused, whole.
+The
 .B length
 can be changed by anyone with write permission, provided the operation
 is implemented by the server.

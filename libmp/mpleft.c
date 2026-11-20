@@ -6,7 +6,7 @@
 void
 mpleft(mpint *b, int shift, mpint *res)
 {
-	int d, l, r, i, otop;
+	int d, l, r, i, otop, bits;
 	mpdigit this, last;
 
 	res->sign = b->sign;
@@ -16,17 +16,25 @@ mpleft(mpint *b, int shift, mpint *res)
 	}
 
 	// a negative left shift is a right shift
+	// (the most negative int is its own negative: it came back here from
+	// mpright, and went there again, without end; asked of its bits, as a
+	// compiler may take shift == -shift to be true of 0 alone)
 	if(shift < 0){
-		mpright(b, -shift, res);
+		mpright(b, (uint)shift == ~(~0U>>1)? (int)(~0U>>1): -shift, res);
 		return;
 	}
 
 	// b and res may be the same so remember the old top
 	otop = b->top;
 
+	// the sum below was an int: wrapped, no room was made for the
+	// digits and they were stored anyway (and a guard that let the sum
+	// reach the largest int left DIGITS to wrap it)
+	bits = mpsizebits(otop, shift, "mpleft");
+
 	// shift
-	mpbits(res, otop*Dbits + shift);	// overkill
-	res->top = DIGITS(otop*Dbits + shift);
+	mpbits(res, bits);	// overkill
+	res->top = DIGITS(bits);
 	d = shift/Dbits;
 	l = shift - d*Dbits;
 	r = Dbits - l;

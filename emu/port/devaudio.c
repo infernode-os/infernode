@@ -94,7 +94,12 @@ audioread(Chan *c, void *va, long count, vlong offset)
 			nexterror();
 		}
 		n = ctlsummary(buf, READSTR, getaudiodev());
-		count = readstr(offset, va, n, buf);
+		/*
+		 * count, the reader's: it was n, the text's length, so a
+		 * read of one byte was given all of it, past the buffer
+		 */
+		USED(n);
+		count = readstr(offset, va, count, buf);
 		poperror();
 		free(buf);
 		return count;

@@ -1038,7 +1038,20 @@ records(prefix: string, n: ref Net, dets: array of ref Det, classes: list of str
 	return (text, found);
 }
 
+# A picture looked at, whatever becomes of the looking.  An exception
+# here (no room for the picture's pixels) was nobody's to hear: the
+# session said it was running for ever, and its readers waited.
 detector(id, gen: int, n: ref Net, eng: ref Eng, data: array of byte, thresh, iou: real, classes: list of string, resc: chan of ref Result)
+{
+	{
+		detector1(id, gen, n, eng, data, thresh, iou, classes, resc);
+	} exception e {
+	"*" =>
+		resc <-= ref Result(id, gen, nil, "the detector raised: " + e, 0, 0);
+	}
+}
+
+detector1(id, gen: int, n: ref Net, eng: ref Eng, data: array of byte, thresh, iou: real, classes: list of string, resc: chan of ref Result)
 {
 	t0 := sys->millisec();
 	(pix, w, h, err) := visnet->readpixelsdata(data, "image");
@@ -1068,7 +1081,8 @@ readfmt(f: string): (string, int, int, int)
 	wd := int hd w;
 	ht := int hd tl w;
 	fps := int hd tl tl tl w;
-	if(wd < 2 || ht < 2 || (wd|ht) & 1 || wd > 1<<14 || ht > 1<<14)
+	# as large as vid9p serves: 16384 square passed, a frame of 402MB
+	if(wd < 2 || ht < 2 || (wd|ht) & 1 || wd > 1<<13 || ht > 1<<13)
 		return (f + ": a frame of no size, odd, or too large", 0, 0, 0);
 	if(fps < 1)
 		fps = 1;
@@ -1101,6 +1115,21 @@ follower(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real
 	framec: chan of ref Frameres, pidc: chan of int)
 {
 	pidc <-= sys->pctl(0, nil);
+	# The feed is another program's, and says its own frame size: an
+	# exception here (no room for a frame of the size it says) ended
+	# the follower unheard, the session said "following" for ever and
+	# its readers waited.  It ends the following, with the reason.
+	{
+		follower1(id, fgen, src, n, eng, thresh, iou, classes, rate, framec);
+	} exception e {
+	"*" =>
+		framec <-= ref Frameres(id, fgen, nil, sys->sprint("%s: the follower raised: %s", src, e), 0, 0, 1);
+	}
+}
+
+follower1(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real, classes: list of string, rate: int,
+	framec: chan of ref Frameres)
+{
 	(err, w, h, fps) := readfmt(src + "/fmt");
 	if(err != nil){
 		framec <-= ref Frameres(id, fgen, nil, err, 0, 0, 1);

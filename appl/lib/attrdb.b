@@ -8,17 +8,26 @@ include "sys.m";
 	sys: Sys;
 
 include "bufio.m";
-	bufio: Bufio;
-	Iobuf: import bufio;
 
 include "attrdb.m";
+
+#
+# A database file is read whole when it is opened or reopened, and
+# searched in memory.  It used to be searched through one shared Iobuf
+# under a lock (a buffered channel) held for the whole scan of a file:
+# a Prog killed during a scan died holding it, and every later search
+# of that file waited for ever.  ndb/cs kills a query's Prog whenever
+# its client goes away, so one interrupted dial stopped name
+# translation for the machine.  Now a search holds nothing: it takes
+# the bytes as they were when it began, and a reopen replaces them
+# with one assignment.
+#
+Maxfile:	con 16*1024*1024;	# a database is a small text file; more is refused
+Maxerrs:	con 16;		# complaints kept for each file
 
 init(): string
 {
 	sys = load Sys Sys->PATH;
-	bufio = load Bufio Bufio->PATH;
-	if(bufio == nil)
-		return sys->sprint("can't load Bufio: %r");
 	return nil;
 }
 
@@ -35,7 +44,7 @@ parseentry(s: string, lno: int): (ref Dbentry, int, string)
 			errs = err;
 		lno++;
 	}
-	return (ref Dbentry(0, lines), lno, errs);
+	return (ref Dbentry(0, rev(lines)), lno, errs);	# in the order written (they were reversed)
 }
 
 parseline(s: string, lno: int): (ref Tuples, string)
@@ -166,7 +175,7 @@ Dbentry.find(e: self ref Dbentry, attr: string): list of (ref Tuples, list of re
 	for(lines := e.lines; lines != nil; lines = tl lines){
 		l := hd lines;
 		if((ra := l.find(attr)) != nil)
-			rrt = (l, rev(ra)) :: rrt;
+			rrt = (l, ra) :: rrt;	# Tuples.find gives them in the line's order (they were reversed again here)
 	}
 	rt: list of (ref Tuples, list of ref Attr);
 	for(; rrt != nil; rrt = tl rrt)
@@ -228,71 +237,137 @@ Dbentry.findbyattr(e: self ref Dbentry, attr: string, value: string, rattr: stri
 	return rt;
 }
 
+#
+# read a file whole; the error is also left for %r
+#
+readfile(path: string): (array of byte, ref Sys->Dir, string)
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return (nil, nil, sys->sprint("%r"));
+	dir: ref Sys->Dir;
+	(ok, d) := sys->fstat(fd);
+	if(ok >= 0)
+		dir = ref d;
+	buf := array[8192] of byte;
+	n := 0;
+	for(;;){
+		if(n == len buf){
+			if(len buf >= Maxfile){
+				sys->werrstr("database file too large");
+				return (nil, nil, "database file too large");
+			}
+			nb := array[2*len buf] of byte;
+			nb[0:] = buf;
+			buf = nb;
+		}
+		r := sys->read(fd, buf[n:], len buf-n);
+		if(r < 0)
+			return (nil, nil, sys->sprint("%r"));	# a read error is not an empty file
+		if(r == 0)
+			break;
+		n += r;
+	}
+	return (buf[0:n], dir, nil);
+}
+
+#
+# the lines of a file that are not attribute lines: an entry is still
+# made of its other lines, so say which were left out
+#
+complaints(name: string, data: array of byte): list of string
+{
+	errs: list of string;
+	nerr := 0;
+	lno := 1;
+	for(o := 0; o < len data; lno++){
+		l: string;
+		(l, o) = getline(data, o);
+		(nil, err) := parseline(l, lno);
+		if(err != nil && nerr++ < Maxerrs)
+			errs = sys->sprint("%s:%d: %s", name, lno, err) :: errs;
+	}
+	return rev(errs);
+}
+
+getline(data: array of byte, o: int): (string, int)
+{
+	if(o >= len data)
+		return (nil, o);
+	for(e := o; e < len data; e++)
+		if(data[e] == byte '\n'){
+			e++;
+			break;
+		}
+	return (string data[o:e], e);
+}
+
 Dbf.open(path: string): ref Dbf
 {
-	df := ref Dbf;
-	df.lockc = chan[1] of int;
-	df.fd = bufio->open(path, Bufio->OREAD);
-	if(df.fd == nil)
+	(data, dir, nil) := readfile(path);
+	if(data == nil)
 		return nil;
+	df := ref Dbf;
 	df.name = path;
-	(ok, d) := sys->fstat(df.fd.fd);
-	if(ok >= 0)
-		df.dir = ref d;
+	df.data = data;
+	df.dir = dir;
+	df.errs = complaints(path, data);
 	# TO DO: indices
+	return df;
+}
+
+#
+# a file a database names that cannot be read: it has no entries, says
+# why, and is looked for again at each reopen
+#
+missing(path: string, err: string): ref Dbf
+{
+	df := ref Dbf;
+	df.name = path;
+	df.errs = sys->sprint("%s: %s", path, err) :: nil;
 	return df;
 }
 
 Dbf.sopen(data: string): ref Dbf
 {
 	df := ref Dbf;
-	df.lockc = chan[1] of int;
-	df.fd = bufio->sopen(data);
-	if(df.fd == nil)
-		return nil;
+	df.data = array of byte data;
+	if(df.data == nil)
+		df.data = array[0] of byte;
 	df.name = nil;
 	df.dir = nil;
+	df.errs = complaints("<string>", df.data);
 	return df;
 }
 
 Dbf.reopen(df: self ref Dbf): int
 {
-	lock(df);
-	if(df.name == nil){
-		unlock(df);
+	if(df.name == nil)
 		return 0;
-	}
-	fd := bufio->open(df.name, Bufio->OREAD);
-	if(fd == nil){
-		unlock(df);
+	(data, dir, err) := readfile(df.name);
+	if(data == nil){
+		# the file has gone or cannot be read: it has no entries
+		# now (the entries last read used to go on being found)
+		df.data = nil;
+		df.dir = nil;
+		df.errs = sys->sprint("%s: %s", df.name, err) :: nil;
 		return -1;
 	}
-	df.fd = fd;
-	df.dir = nil;
-	(ok, d) := sys->fstat(fd.fd);
-	if(ok >= 0)
-		df.dir = ref d;
+	df.data = data;
+	df.dir = dir;
+	df.errs = complaints(df.name, data);
 	# TO DO: cache, hash tables
-	unlock(df);
 	return 0;
 }
 
 Dbf.changed(df: self ref Dbf): int
 {
-	r: int;
-
-	lock(df);
-	if(df.name == nil){
-		unlock(df);
+	if(df.name == nil)
 		return 0;
-	}
 	(ok, d) := sys->stat(df.name);
 	if(ok < 0)
-		r = df.fd != nil || df.dir == nil;
-	else
-		r = df.dir == nil || !samefile(*df.dir, d);
-	unlock(df);
-	return r;
+		return df.data != nil;	# it was there when last read
+	return df.dir == nil || !samefile(*df.dir, d);
 }
 
 samefile(d1, d2: Sys->Dir): int
@@ -331,8 +406,14 @@ Db.open(path: string): ref Db
 				if(name == path && df != nil){
 					dbs = df :: dbs;
 					df = nil;
-				}else if((tf := Dbf.open(name)) != nil)
+				}else{
+					# a file that cannot be read was left out
+					# without a word, for good
+					tf := Dbf.open(name);
+					if(tf == nil)
+						tf = missing(name, sys->sprint("%r"));
 					dbs = tf :: dbs;
+				}
 			}
 			db.dbs = rev(dbs);
 			if(df != nil)
@@ -386,53 +467,42 @@ isentry(l: string): int
 
 Dbf.readentry(dbf: self ref Dbf, offset: int, attr: string, value: string, useval: int): (ref Dbentry, int, int)
 {
-	lock(dbf);
-	# The lock is a chan[1] mutex; if a fault unwinds through the
-	# locked region it would never be released and every subsequent
-	# db access (hence every cs translation) would deadlock forever.
-	# Release on exception and re-raise so callers can recover.
-	{
-		fd := dbf.fd;
-		if(fd == nil){
-			unlock(dbf);
-			return (nil, 0, offset);
+	data := dbf.data;	# the file as it is now; a reopen does not change these bytes
+	if(data == nil || offset < 0)
+		return (nil, 0, offset);
+	# an offset kept from before a reopen need not start a line
+	# in the file as it is now: go on from the next that does
+	if(offset > 0 && offset <= len data && data[offset-1] != byte '\n')
+		(nil, offset) = getline(data, offset);
+	lines: list of ref Tuples;
+	match := attr == nil;
+	l: string;
+	o := offset;
+	(l, o) = getline(data, o);
+	while(l != nil){
+		if(!isentry(l)){
+			(l, o) = getline(data, o);
+			continue;
 		}
-		fd.seek(big offset, 0);
-		lines: list of ref Tuples;
-		match := attr == nil;
-		while((l := fd.gets('\n')) != nil){
-			while(isentry(l)){
-				lines = nil;
-				do{
-					offset = int fd.offset();
-					(t, nil) := parseline(l, 0);
-					if(t != nil){
-						lines = t :: lines;
-						if(!match){
-							if(useval)
-								match = t.haspair(attr, value);
-							else
-								match = t.hasattr(attr);
-						}
-					}
-					l = fd.gets('\n');
-				}while(l != nil && !isentry(l));
-				if(match && lines != nil){
-					rl := lines;
-					for(lines = nil; rl != nil; rl = tl rl)
-						lines = hd rl :: lines;
-					unlock(dbf);
-					return (ref Dbentry(0, lines), 1, offset);
+		lines = nil;
+		do{
+			offset = o;
+			(t, nil) := parseline(l, 0);
+			if(t != nil){
+				lines = t :: lines;
+				if(!match){
+					if(useval)
+						match = t.haspair(attr, value);
+					else
+						match = t.hasattr(attr);
 				}
 			}
-		}
-		unlock(dbf);
-		return (nil, 0, int fd.offset());
-	} exception {
-	"*" =>
-		unlock(dbf);
-		raise;
+			(l, o) = getline(data, o);
+		}while(l != nil && !isentry(l));
+		if(match && lines != nil)
+			return (ref Dbentry(0, rev(lines)), 1, offset);
 	}
+	return (nil, 0, len data);
 }
 
 nextentry(db: ref Db, ptr: ref Dbptr, attr: string, value: string, useval: int): (ref Dbentry, ref Dbptr)
@@ -487,14 +557,4 @@ rev[T](l: list of T): list of T
 	for(; l != nil; l = tl l)
 		rl = hd l :: rl;
 	return rl;
-}
-
-lock(dbf: ref Dbf)
-{
-	dbf.lockc <-= 1;
-}
-
-unlock(dbf: ref Dbf)
-{
-	<-dbf.lockc;
 }

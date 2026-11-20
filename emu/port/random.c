@@ -198,6 +198,17 @@ if(0)print("A%ld.%d.%lux|", n, rb.target, getcallerpc(&xp));
 		if(++r == rb.ep)
 			r = rb.buf;
 		rb.rp = r;
+
+		/*
+		 * Others in between: the bytes come slowly, and one read
+		 * held the lock until it had all of its own, however many
+		 * it asked for, with every other reader (a key being made,
+		 * a name being resolved) waiting where no kill reaches.
+		 */
+		if(((e - p) & 31) == 0 && p < e){
+			qunlock(&rb.l);
+			qlock(&rb.l);
+		}
 	}
 	if(rb.filled && rb.wp == rb.rp){
 		i = 2*rb.target;

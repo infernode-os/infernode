@@ -49,7 +49,8 @@ cleanup() {
 	[ -z "$EMU_PID" ] || kill -9 "$EMU_PID" 2>/dev/null || true
 	[ -z "$SERVER_PID" ] || kill "$SERVER_PID" 2>/dev/null || true
 	[ -z "$SCRIPT" ] || rm -f "$SCRIPT"
-	rm -rf "$WORK" "$ROOT/tmp/deltest" "$ROOT/usr/deltest" "$ROOT/tmp/veltro/cow/kept-1000-2-${STALEKEY:-none}" "$ROOT/tmp/veltro/cow/kept-999-1-${KEPTKEY:-none}"
+	rm -rf "$WORK" "$ROOT/tmp/deltest" "$ROOT/usr/deltest" "$ROOT/tmp/veltro/cow/kept-1000-2-${STALEKEY:-none}" "$ROOT/tmp/veltro/cow/kept-999-1-${KEPTKEY:-none}" \
+		"$ROOT/tmp/veltro/cow/.grants/1-${KEPTKEY:-none}"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -81,6 +82,10 @@ print("%08x" % h)')
 KEPT="$ROOT/tmp/veltro/cow/1-$KEPTKEY"
 rm -rf "$KEPT" "$ROOT/tmp/veltro/cow/kept-999-1-$KEPTKEY"; mkdir -p "$KEPT" "$ROOT/usr/deltest/kept"
 printf 'basepath=/usr/deltest/kept\nboot=999\n' > "$KEPT/.cowmeta"
+# with the harness's own note of the folder that task was granted, which is
+# what says where an overlay's changes may be applied (not its .cowmeta)
+mkdir -p "$ROOT/tmp/veltro/cow/.grants"
+echo /usr/deltest/kept > "$ROOT/tmp/veltro/cow/.grants/1-$KEPTKEY"
 echo old > "$ROOT/usr/deltest/kept/k.txt"
 echo new > "$KEPT/k.txt"
 # A message longer than one 9P message (msize is 8K): words, then a mark.

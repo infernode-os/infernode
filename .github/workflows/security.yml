@@ -238,6 +238,19 @@ jobs:
           libsec/ libmp/ libkeyring/ libinterp/ emu/port/ lib9/ \
           > flawfinder-results.sarif 2>/dev/null || true
 
+    # Flawfinder matches names, and some of what it matches is not a
+    # finding in this tree (lib9's strecpy and getwd take their bounds, an
+    # array named access is no call, the SARIF writer ignores --minlevel).
+    # Code scanning counted each as new whenever its line changed, and
+    # failed pull requests on them. tools/flawfinder-filter.py says what
+    # is dropped and why; the text report above is not filtered.
+    - name: Take out what is not a finding in this tree
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        python3 tools/flawfinder-filter.py flawfinder-results.sarif | tee -a $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
     - name: Upload flawfinder SARIF
       uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v3
       if: always()

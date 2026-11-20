@@ -156,7 +156,13 @@ echo activity create Main > /mnt/ui/ctl
 # draft to (queued for the user, never sent by itself), /mnt/msg/flag where
 # a message is marked seen.  nsconstruct keeps each to that.  Without them
 # meta.txt's and the message policy's ways to delegate mail were refused.
-/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm -p /mnt/msg:ro -p /mnt/msg/draft:rw -p /mnt/msg/flag:rw read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
+# git is not in the budget (-b): its worker keeps the name space tools9p
+# started in, so what it adds, removes, checks out or pushes is bounded by
+# no grant and staged by no overlay (its manifest says so).  A task given
+# it could change the user's files unasked.  Give it to an activity by hand
+# (budget-add git) where that is wanted; tests/host/default_budget_test.sh
+# holds the line.
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm -p /mnt/msg:ro -p /mnt/msg/draft:rw -p /mnt/msg/flag:rw read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 # /tmp is bound by lib/sh/profile; on Windows the bind has hit edge
 # cases where it silently failed and the redirect below produced no log
 # file (GH #230 sphynkx report). Force /tmp into existence and pre-create

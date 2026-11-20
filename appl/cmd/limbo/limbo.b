@@ -187,7 +187,7 @@ bufio:	Bufio;
 str:		String;
 
 keyring:Keyring;
-	md5: import keyring;
+	md5, sha256: import keyring;
 
 math:	Math;
 	import_real, export_real, isnan: import math;

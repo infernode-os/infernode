@@ -20,7 +20,10 @@ tool waits up to 90s for a trusted controller to approve, then
 returns "payment pending approval" — retry the fetch after approval.
 What was paid is reported in a leading "[Paid ...]" line before the
 content. Requests to internal/private network addresses are blocked;
-requests time out after 30s and bodies are truncated at 512KB.
+requests time out after 30s and bodies are truncated at 512KB (the
+result says so). A payment is made over https only: a 402 from a plain
+http address is refused. An argument that is not -a or -c with its
+value is an error.
 
 Examples:
   payfetch https://api.example.com/paid/report

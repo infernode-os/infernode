@@ -165,4 +165,12 @@ poly1305_finish(uchar tag[16], Poly1305state *s)
 	tag[4]  = h1; tag[5]  = h1>>8; tag[6]  = h1>>16; tag[7]  = h1>>24;
 	tag[8]  = h2; tag[9]  = h2>>8; tag[10] = h2>>16; tag[11] = h2>>24;
 	tag[12] = h3; tag[13] = h3>>8; tag[14] = h3>>16; tag[15] = h3>>24;
+
+	/*
+	 * The state is the one-time key (r and the pad) and is done with:
+	 * cleared here, not left to each caller to remember.  A state used
+	 * again without poly1305_setup then has a key of zero, whose tag
+	 * is zero, not a second tag under the first key.
+	 */
+	secureZero(s, sizeof(*s));
 }

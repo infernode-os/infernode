@@ -77,6 +77,7 @@ mounted   := 0;		# service already mounted; skip our mount (mounted=1)
 tsfield:   string;	# unixnanos|unixsecs|"" — timestamp derivation
 
 mountdone := 0;		# whether we have mounted (so close can clean up)
+lasterr:   string;	# why nothing is being read now (nil: reading)
 seq := 0;		# running counter for per-line unique ids
 
 stderr: ref Sys->FD;
@@ -102,6 +103,7 @@ init(config: string): string
 	mounted = 0;
 	tsfield = nil;
 	mountdone = 0;
+	lasterr = nil;
 	seq = 0;
 
 	# Parse key=value config.
@@ -148,10 +150,27 @@ status(): string {
 	src := mountdial;
 	if(mounted)
 		src = "(pre-mounted)";
-	return sys->sprint("%s: 9P events %s/%s via %s", srcname, mountpt, evfile, src);
+	st := sys->sprint("%s: 9P events %s/%s via %s", srcname, mountpt, evfile, src);
+	if(lasterr != nil)
+		st += " (not reading: " + lasterr + ")";
+	return st;
 }
 
-close(): string  { return nil; }
+# The mount is ours to drop when the source goes (it was left mounted,
+# with its connection, for as long as msg9p ran).
+close(): string
+{
+	dropmount();
+	return nil;
+}
+
+dropmount()
+{
+	if(mountdone) {
+		sys->unmount(nil, mountpt);
+		mountdone = 0;
+	}
+}
 
 # Mount the configured 9P service (no-auth) if we own the mount. Mirrors the
 # `mount -A net!addr mountpt` path: dial, then sys->mount the dialled fd with
@@ -174,19 +193,81 @@ domount(): string
 	return nil;
 }
 
-# Push interface. Mount the service, open <mountpt>/<file> ONCE (long-lived fd:
-# the events file is park-and-wake — a single blocking read returns the next
-# event batch; we do NOT open/close per event), then loop: read -> split into
-# lines -> emit one generic Message per line. Select on `stop` to terminate.
-# On a read error/EOF, attempt one reopen; if that also fails, surface a
-# kind="error" Notification (matching takmsg's behaviour) and keep retrying.
+# What the reader has for the watcher: a batch of the events file's
+# lines, or what stopped it reading.
+Ev: adt {
+	data:	string;
+	err:	string;
+};
+
+# Push interface. The events file is park-and-wake: a read returns the next
+# event batch, and may wait for ever. So a process of its own reads
+# (evreader), and watch waits for it and for `stop` together: told to stop,
+# it kills the reader and returns. It used to read here and look at `stop`
+# only between reads, so an unregistered source stayed in its read, with its
+# descriptor and its mount, and whoever sent the stop waited with it.
 watch(updates: chan of ref Notification, stop: chan of int): string
 {
-	if((e := domount()) != nil) {
-		sys->fprint(stderr, "%s\n", e);
-		updates <-= ref Notification("error", nil, e);
-		# fall through and keep trying to mount/open in the loop
+	rc := chan of ref Ev;
+	pidc := chan of int;
+	spawn evreader(rc, pidc);
+	rpid := <-pidc;
+
+	for(;;) alt {
+	<-stop =>
+		kill(rpid);
+		return nil;
+	e := <-rc =>
+		if(e.err != nil) {
+			if(!deliver(updates, stop, ref Notification("error", nil, e.err))) {
+				kill(rpid);
+				return nil;
+			}
+			continue;
+		}
+		# Split the batch into lines; emit one Message per non-empty line.
+		(nil, lines) := sys->tokenize(e.data, "\n");
+		for(; lines != nil; lines = tl lines) {
+			line := strip(hd lines);
+			if(line == "")
+				continue;
+			if(!deliver(updates, stop, ref Notification("new", mkmsg(line), ""))) {
+				kill(rpid);
+				return nil;
+			}
+		}
 	}
+}
+
+# Hand a notification on, unless told to stop first (whoever takes them
+# may have gone). Returns 0 if stopped.
+deliver(updates: chan of ref Notification, stop: chan of int, n: ref Notification): int
+{
+	alt {
+	updates <-= n =>
+		return 1;
+	<-stop =>
+		return 0;
+	}
+}
+
+kill(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+# Mount the service, open <mountpt>/<file> once (long-lived fd: we do NOT
+# open/close per event) and read it for ever. When the mount, the open or
+# two reads in a row fail, the reason is kept for status() and given to the
+# watcher once (it was repeated every second, or only printed), a mount of
+# our own is dropped so that the service is dialled again (a peer that had
+# hung up left the dead mount there for good, with status saying nothing of
+# it), and the next try is after a wait that grows to five seconds.
+evreader(rc: chan of ref Ev, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
 
 	evpath := mountpt + "/" + evfile;
 	sys->fprint(stderr, "ninepsrc: watch start; reading %s (name=%s urgent=%d)\n",
@@ -194,20 +275,13 @@ watch(updates: chan of ref Notification, stop: chan of int): string
 
 	buf := array[16384] of byte;
 	fd: ref Sys->FD;
-	reopened := 0;
+	fails := 0;
+	wait := 500;
 
 	for(;;) {
-		# Check for stop without blocking the read path.
-		alt {
-		<-stop =>
-			return nil;
-		* =>
-			;
-		}
-
 		if(mountdone == 0 && mounted == 0) {
-			if(domount() != nil) {
-				sys->sleep(500);
+			if((e := domount()) != nil) {
+				wait = trouble(rc, e, wait);
 				continue;
 			}
 		}
@@ -215,8 +289,9 @@ watch(updates: chan of ref Notification, stop: chan of int): string
 		if(fd == nil) {
 			fd = sys->open(evpath, Sys->OREAD);
 			if(fd == nil) {
-				sys->fprint(stderr, "ninepsrc: cannot open %s: %r\n", evpath);
-				sys->sleep(500);
+				e := sys->sprint("ninepsrc: cannot open %s: %r", evpath);
+				dropmount();
+				wait = trouble(rc, e, wait);
 				continue;
 			}
 		}
@@ -224,29 +299,34 @@ watch(updates: chan of ref Notification, stop: chan of int): string
 		n := sys->read(fd, buf, len buf);	# blocks until next event(s)
 		if(n <= 0) {
 			fd = nil;	# reopen next iteration
-			if(reopened) {
-				# Two consecutive failures — surface an error and back off.
-				updates <-= ref Notification("error", nil,
-					sys->sprint("%s: read %s failed", srcname, evpath));
-				reopened = 0;
-				sys->sleep(1000);
-			} else {
-				reopened = 1;
+			if(++fails >= 2) {
+				# Two consecutive failures: say so and start again.
+				fails = 0;
+				dropmount();
+				wait = trouble(rc, sys->sprint("%s: read %s failed", srcname, evpath), wait);
+			} else
 				sys->sleep(200);
-			}
 			continue;
 		}
-		reopened = 0;
-
-		# Split the batch into lines; emit one Message per non-empty line.
-		(nil, lines) := sys->tokenize(string buf[0:n], "\n");
-		for(; lines != nil; lines = tl lines) {
-			line := strip(hd lines);
-			if(line == "")
-				continue;
-			updates <-= ref Notification("new", mkmsg(line), "");
-		}
+		fails = 0;
+		wait = 500;
+		lasterr = nil;
+		rc <-= ref Ev(string buf[0:n], nil);
 	}
+}
+
+# Keep the reason, tell the watcher if it is news, wait; returns the next wait.
+trouble(rc: chan of ref Ev, e: string, wait: int): int
+{
+	if(e != lasterr) {
+		lasterr = e;
+		sys->fprint(stderr, "%s\n", e);
+		rc <-= ref Ev(nil, e);
+	}
+	sys->sleep(wait);
+	if(wait < 5000)
+		wait *= 2;
+	return wait;
 }
 
 # Generic line -> Message mapping. The body is the RAW line. The subject is a

@@ -3,9 +3,16 @@ implement Imap;
 #
 # IMAP4rev1 client (RFC 3501)
 #
-# Connects over TLS (port 993) using webclient->tlsdial(), or in clear
-# on port 143 upgraded with STARTTLS (webclient->tlsclient()).
-# Tagged command/response protocol with untagged data parsing.
+# Connects over TLS (port 993), or in clear on port 143 upgraded with
+# STARTTLS, through mailconn(2): the server's certificate is verified,
+# and every read and write has a deadline.
+#
+# What a server sends is bounded and is data: a line, a literal and the
+# whole answer to a command have limits (MAXLINE, MAXLITERAL,
+# MAXRESPONSE), past which the connection is closed with an error; a
+# literal's bytes are kept beside the line they belong to and are never
+# read as protocol.  What a caller gives is sent as a quoted string, or
+# refused if it holds a line break or a NUL.
 #
 
 include "sys.m";
@@ -13,40 +20,64 @@ include "sys.m";
 
 include "draw.m";
 
-include "bufio.m";
-	bufio: Bufio;
-	Iobuf: import bufio;
-
 include "string.m";
 	str: String;
-
-include "dial.m";
-	dial: Dial;
 
 include "keyring.m";
 
 include "tls.m";
-	tls: TLS;
-	Conn: import tls;
 
-include "webclient.m";
-	webclient: Webclient;
+include "mailconn.m";
+	mailconn: Mailconn;
+	Link: import mailconn;
 
 include "factotum.m";
 	factotum: Factotum;
 
 include "imap.m";
 
-DEBUG: con 0;
+MAXLINE:	con 1024*1024;		# one line of an answer, without its literals
+MAXLITERAL:	con 64*1024*1024;	# one literal (a message's text)
+MAXRESPONSE:	con 128*1024*1024;	# everything kept of one command's answer
+MAXLITS:	con 4096;		# literals in one line
 
 # Connection state
-fd: ref Sys->FD;
-ibuf: ref Iobuf;
+conn: ref Link;
 tagnum := 0;
 connected := 0;
 currentmbox: string;
+iotime := 30*1000;
 
-# Ensure core modules are loaded (needed for parser functions called without open())
+# An answer's line: its text, with each literal's "{count}" replaced by
+# "{k}", and the literals themselves, lits[k].  The parsers below read
+# the text; where they meet "{k}" at a string's place they take lits[k]
+# whole.  The literal's bytes used to be put into the text and parsed
+# with it: a subject sent as a literal could close the envelope's
+# parentheses and supply the From and Reply-To that followed, and a
+# second literal in one line was read as the lines after it, where
+# "A004 OK" ended the command early.
+Line: adt {
+	text:	string;
+	lits:	array of array of byte;
+};
+
+# the literals of the line being parsed (nil for a caller's bare string)
+curlits: array of array of byte;
+
+# what parsefetchdata found for a BODY[...] or RFC822 item
+fhasbody := 0;
+fbody: string;
+
+# Tagged response structure
+Response: adt {
+	status:		string;		# "OK", "NO", "BAD"
+	statusline:	string;		# full status line text
+	untagged:	list of ref Line;	# untagged * lines
+};
+
+# Each module is loaded when it is first wanted and is nil: the parsers
+# are called by tests with no connection, and used to leave the rest
+# unloaded for an open after them.
 ensureloaded()
 {
 	if(sys == nil)
@@ -55,23 +86,39 @@ ensureloaded()
 		str = load String String->PATH;
 }
 
+loadall(): string
+{
+	ensureloaded();
+	if(str == nil)
+		return "cannot load String";
+	if(mailconn == nil){
+		m := load Mailconn Mailconn->PATH;
+		if(m == nil)
+			return "cannot load Mailconn";
+		err := m->init();
+		if(err != nil)
+			return err;
+		mailconn = m;
+	}
+	return nil;
+}
+
+timeout(ms: int)
+{
+	if(ms > 0)
+		iotime = ms;
+}
+
+isup(): int
+{
+	return connected;
+}
+
 open(user, password, server: string, mode: int): string
 {
-	if(sys == nil) {
-		sys = load Sys Sys->PATH;
-		bufio = load Bufio Bufio->PATH;
-		if(bufio == nil)
-			return "cannot load Bufio";
-		str = load String String->PATH;
-		if(str == nil)
-			return "cannot load String";
-		webclient = load Webclient Webclient->PATH;
-		if(webclient == nil)
-			return "cannot load Webclient";
-		err := webclient->init();
-		if(err != nil)
-			return "webclient init: " + err;
-	}
+	lerr := loadall();
+	if(lerr != nil)
+		return lerr;
 
 	if(connected)
 		return "already connected";
@@ -100,44 +147,36 @@ open(user, password, server: string, mode: int): string
 		if(user == nil || password == nil)
 			return "no credentials: supply user/password or configure factotum";
 	}
+	if(badarg(user) || badarg(password))
+		return "LOGIN: a line break or NUL in the user name or password";
 
 	addr := "tcp!" + host + "!" + port;
-
-	if(mode == IMPLICIT_TLS) {
-		# TLS from the start (port 993)
-		(tlsfd, terr) := webclient->tlsdial(addr, host);
-		if(terr != nil)
-			return "tlsdial: " + terr;
-		fd = tlsfd;
-	} else {
+	how := Mailconn->IMPLICIT;
+	if(mode == STARTTLS)
 		# Plaintext until the server takes STARTTLS (port 143); the
 		# greeting is read before it, and nothing else is sent in clear
-		(tlsfd, serr) := starttls(addr, host);
-		if(serr != nil)
-			return serr;
-		fd = tlsfd;
+		how = Mailconn->IMAPSTARTTLS;
+	(c, derr) := Link.dial(addr, host, how, nil, iotime);
+	if(derr != nil) {
+		if(derr == "timed out")
+			derr = "connecting to " + host + " timed out";
+		return derr;
 	}
-
-	ibuf = bufio->fopen(fd, Bufio->OREAD);
-	if(ibuf == nil)
-		return "cannot open bufio on connection";
-
+	conn = c;
 	tagnum = 0;
 	connected = 1;
+	currentmbox = nil;
 
 	if(mode == IMPLICIT_TLS) {
 		# Read server greeting
-		(greeting, gerr) := readline();
-		if(gerr != nil) {
-			disconnect();
-			return "greeting: " + gerr;
-		}
-		if(DEBUG)
-			sys->print("S: %s\n", greeting);
+		conn.deadline(iotime, iotime);
+		(greeting, gerr) := conn.getline(MAXLINE);
+		if(gerr != nil)
+			return "greeting: " + down(gerr);
 
 		# Check for OK greeting
 		if(!hasprefix(greeting, "* OK")) {
-			disconnect();
+			down(nil);
 			return "bad greeting: " + greeting;
 		}
 	}
@@ -145,96 +184,30 @@ open(user, password, server: string, mode: int): string
 	# Authenticate
 	err := authenticate(user, password);
 	if(err != nil) {
-		disconnect();
+		down(nil);
 		return err;
 	}
 
 	return nil;
 }
 
-# The greeting and STARTTLS (RFC 3501 6.2.1) in clear, then TLS on the
-# same connection.  A server refusing it is refused: no LOGIN in clear.
-starttls(addr, host: string): (ref Sys->FD, string)
-{
-	(ok, c) := sys->dial(addr, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("dial %s: %r", addr));
-	(greeting, gerr) := rawline(c.dfd);
-	if(gerr != nil)
-		return (nil, "greeting: " + gerr);
-	if(!hasprefix(greeting, "* OK"))
-		return (nil, "bad greeting: " + greeting);
-	cmd := array of byte "S000 STARTTLS\r\n";
-	if(sys->write(c.dfd, cmd, len cmd) != len cmd)
-		return (nil, sys->sprint("STARTTLS write: %r"));
-	for(;;) {
-		(line, err) := rawline(c.dfd);
-		if(err != nil)
-			return (nil, "STARTTLS: " + err);
-		if(hasprefix(line, "S000 ")) {
-			if(!hasprefix(line, "S000 OK"))
-				return (nil, "STARTTLS refused: " + line[5:]);
-			break;
-		}
-	}
-	(tlsfd, terr) := webclient->tlsclient(c.dfd, host);
-	if(terr != nil)
-		return (nil, "STARTTLS: " + terr);
-	return (tlsfd, nil);
-}
-
-# A line read a byte at a time, so that nothing after it is taken from
-# the connection: after STARTTLS's OK comes the TLS handshake.
-rawline(rfd: ref Sys->FD): (string, string)
-{
-	line := "";
-	b := array[1] of byte;
-	for(;;) {
-		if(sys->read(rfd, b, 1) != 1)
-			return (nil, "connection closed");
-		if(b[0] == byte '\n')
-			break;
-		if(len line >= 8192)
-			return (nil, "line too long");
-		line[len line] = int b[0];
-	}
-	if(len line > 0 && line[len line - 1] == '\r')
-		line = line[0:len line - 1];
-	if(DEBUG)
-		sys->print("S: %s\n", line);
-	return (line, nil);
-}
-
 # Authenticate with LOGIN command
 # SASL PLAIN would be better but LOGIN works everywhere over TLS
 authenticate(user, password: string): string
 {
-	tag := nexttag();
-	cmd := tag + " LOGIN " + quote(user) + " " + quote(password);
-	err := writeline(cmd);
-	if(err != nil)
-		return "LOGIN write: " + err;
-
-	(resp, rerr) := readresponse(tag);
+	(resp, rerr) := command("LOGIN " + quote(user) + " " + quote(password));
 	if(rerr != nil)
 		return "LOGIN: " + rerr;
 	if(resp.status != "OK")
-		return "LOGIN failed: " + resp.statusline;
+		# a server may say back what it was sent
+		return "LOGIN failed: " + redact(resp.statusline, password);
 
 	return nil;
 }
 
 folders(): (list of string, string)
 {
-	if(!connected)
-		return (nil, "not connected");
-
-	tag := nexttag();
-	err := writeline(tag + " LIST \"\" *");
-	if(err != nil)
-		return (nil, "LIST write: " + err);
-
-	(resp, rerr) := readresponse(tag);
+	(resp, rerr) := command("LIST \"\" *");
 	if(rerr != nil)
 		return (nil, "LIST: " + rerr);
 	if(resp.status != "OK")
@@ -244,11 +217,12 @@ folders(): (list of string, string)
 	# * LIST (\HasNoChildren) "/" "INBOX"
 	result: list of string;
 	for(l := resp.untagged; l != nil; l = tl l) {
-		line := hd l;
-		if(!hasprefix(line, "* LIST "))
+		ln := hd l;
+		if(!hasprefix(ln.text, "* LIST "))
 			continue;
-		# Find the last quoted string or atom
-		name := parselistname(line);
+		curlits = ln.lits;
+		name := parselistname(ln.text);
+		curlits = nil;
 		if(name != nil)
 			result = name :: result;
 	}
@@ -258,15 +232,9 @@ folders(): (list of string, string)
 
 select(mailbox: string): (ref Mailbox, string)
 {
-	if(!connected)
-		return (nil, "not connected");
-
-	tag := nexttag();
-	err := writeline(tag + " SELECT " + quote(mailbox));
-	if(err != nil)
-		return (nil, "SELECT write: " + err);
-
-	(resp, rerr) := readresponse(tag);
+	if(badarg(mailbox))
+		return (nil, "SELECT: a line break or NUL in the mailbox's name");
+	(resp, rerr) := command("SELECT " + quote(mailbox));
 	if(rerr != nil)
 		return (nil, "SELECT: " + rerr);
 	if(resp.status != "OK")
@@ -276,7 +244,7 @@ select(mailbox: string): (ref Mailbox, string)
 
 	# Parse untagged responses for mailbox info
 	for(l := resp.untagged; l != nil; l = tl l) {
-		line := hd l;
+		line := (hd l).text;
 		# * 172 EXISTS
 		if(hassuffix(line, " EXISTS"))
 			mbox.exists = parsenumber(line);
@@ -300,18 +268,8 @@ select(mailbox: string): (ref Mailbox, string)
 
 msglist(first, last: int): (list of ref Msg, string)
 {
-	if(!connected)
-		return (nil, "not connected");
-
 	range := string first + ":" + string last;
-	tag := nexttag();
-	cmd := tag + " FETCH " + range +
-		" (FLAGS UID RFC822.SIZE ENVELOPE)";
-	err := writeline(cmd);
-	if(err != nil)
-		return (nil, "FETCH write: " + err);
-
-	(resp, rerr) := readresponse(tag);
+	(resp, rerr) := command("FETCH " + range + " (FLAGS UID RFC822.SIZE ENVELOPE)");
 	if(rerr != nil)
 		return (nil, "FETCH: " + rerr);
 	if(resp.status != "OK")
@@ -320,11 +278,8 @@ msglist(first, last: int): (list of ref Msg, string)
 	# Parse FETCH responses
 	msgs: list of ref Msg;
 	for(l := resp.untagged; l != nil; l = tl l) {
-		line := hd l;
-		if(!hasprefix(line, "* "))
-			continue;
 		# * N FETCH (...)
-		msg := parsefetchline(line);
+		msg := parsefetch(hd l);
 		if(msg != nil)
 			msgs = msg :: msgs;
 	}
@@ -334,15 +289,22 @@ msglist(first, last: int): (list of ref Msg, string)
 
 search(criteria: string): (list of int, string)
 {
-	if(!connected)
-		return (nil, "not connected");
+	return search1("SEARCH", criteria);
+}
 
-	tag := nexttag();
-	err := writeline(tag + " SEARCH " + criteria);
-	if(err != nil)
-		return (nil, "SEARCH write: " + err);
+uidsearch(criteria: string): (list of int, string)
+{
+	return search1("UID SEARCH", criteria);
+}
 
-	(resp, rerr) := readresponse(tag);
+# The criteria are IMAP's own syntax and are sent as written, on one
+# line: with a line break in them they were the commands after it too,
+# from whoever could ask for a search.
+search1(verb, criteria: string): (list of int, string)
+{
+	if(badarg(criteria))
+		return (nil, "SEARCH: a line break or NUL in the criteria");
+	(resp, rerr) := command(verb + " " + criteria);
 	if(rerr != nil)
 		return (nil, "SEARCH: " + rerr);
 	if(resp.status != "OK")
@@ -351,13 +313,16 @@ search(criteria: string): (list of int, string)
 	# Parse * SEARCH 2 5 7 ...
 	result: list of int;
 	for(l := resp.untagged; l != nil; l = tl l) {
-		line := hd l;
+		line := (hd l).text;
 		if(!hasprefix(line, "* SEARCH"))
 			continue;
 		rest := line[len "* SEARCH":];
 		(nil, toks) := sys->tokenize(rest, " ");
-		for(; toks != nil; toks = tl toks)
-			result = int hd toks :: result;
+		for(; toks != nil; toks = tl toks) {
+			(v, ok) := touint(hd toks);
+			if(ok)
+				result = v :: result;
+		}
 	}
 
 	return (reverseint(result), nil);
@@ -375,53 +340,59 @@ fetchhdr(seq: int): (string, string)
 
 fetchsection(seq: int, section: string): (string, string)
 {
-	if(!connected)
-		return (nil, "not connected");
+	return fetchbody(0, seq, "FETCH " + string seq + " " + section);
+}
 
-	tag := nexttag();
-	cmd := tag + " FETCH " + string seq + " " + section;
-	err := writeline(cmd);
-	if(err != nil)
-		return (nil, "FETCH write: " + err);
+uidfetch(uid: int): (string, string)
+{
+	return fetchbody(1, uid, "UID FETCH " + uidstr(uid) + " (UID BODY[])");
+}
 
-	(resp, rerr) := readresponse(tag);
+# The text asked for is the one in the FETCH line of the message asked
+# for (its sequence number, or its UID item).  The last literal of the
+# whole answer was taken, whichever line it came in: another message's
+# text, if the server said anything about another.
+fetchbody(byuid, id: int, cmd: string): (string, string)
+{
+	(resp, rerr) := command(cmd);
 	if(rerr != nil)
 		return (nil, "FETCH: " + rerr);
 	if(resp.status != "OK")
 		return (nil, "FETCH failed: " + resp.statusline);
 
-	# The body content may be in the literal data
-	# attached to the FETCH response
-	if(resp.literal != nil)
-		return (string resp.literal, nil);
-
-	# Try to extract from untagged data
 	for(l := resp.untagged; l != nil; l = tl l) {
-		line := hd l;
-		if(hasprefix(line, "* " + string seq + " FETCH"))
-			return (line, nil);
+		m := parsefetch(hd l);
+		if(m == nil || !fhasbody)
+			continue;
+		if(byuid && m.uid != id || !byuid && m.seq != id)
+			continue;
+		body := fbody;
+		fbody = nil;
+		return (body, nil);
 	}
-
+	fbody = nil;
+	if(byuid)
+		return (nil, "no message with that UID");
 	return (nil, "no content in FETCH response");
 }
 
 store(seq, flags, add: int): string
 {
-	if(!connected)
-		return "not connected";
+	return store1("STORE " + string seq, flags, add);
+}
 
+uidstore(uid, flags, add: int): string
+{
+	return store1("UID STORE " + uidstr(uid), flags, add);
+}
+
+store1(cmd: string, flags, add: int): string
+{
 	action := "-FLAGS";
 	if(add)
 		action = "+FLAGS";
 
-	flagstr := flagstostring(flags);
-	tag := nexttag();
-	cmd := tag + " STORE " + string seq + " " + action + " (" + flagstr + ")";
-	err := writeline(cmd);
-	if(err != nil)
-		return "STORE write: " + err;
-
-	(resp, rerr) := readresponse(tag);
+	(resp, rerr) := command(cmd + " " + action + " (" + flagstostring(flags) + ")");
 	if(rerr != nil)
 		return "STORE: " + rerr;
 	if(resp.status != "OK")
@@ -432,16 +403,21 @@ store(seq, flags, add: int): string
 
 copy(seqs: string, dest: string): string
 {
-	if(!connected)
-		return "not connected";
+	if(!seqset(seqs))
+		return "COPY: not a sequence set";
+	return copy1("COPY " + seqs, dest);
+}
 
-	tag := nexttag();
-	cmd := tag + " COPY " + seqs + " " + quote(dest);
-	err := writeline(cmd);
-	if(err != nil)
-		return "COPY write: " + err;
+uidcopy(uid: int, dest: string): string
+{
+	return copy1("UID COPY " + uidstr(uid), dest);
+}
 
-	(resp, rerr) := readresponse(tag);
+copy1(cmd, dest: string): string
+{
+	if(badarg(dest))
+		return "COPY: a line break or NUL in the mailbox's name";
+	(resp, rerr) := command(cmd + " " + quote(dest));
 	if(rerr != nil)
 		return "COPY: " + rerr;
 	if(resp.status != "OK")
@@ -450,46 +426,77 @@ copy(seqs: string, dest: string): string
 	return nil;
 }
 
+# IDLE (RFC 2177).  The caller's own process reads the connection, here,
+# until stop speaks; then DONE is sent and the tagged answer read, so
+# that the connection is in step when idle returns.  A second process
+# used to read, was never stopped, and went on taking lines of the next
+# command's answer.
 idle(updates: chan of string, stop: chan of int): string
 {
 	if(!connected)
 		return "not connected";
 
 	tag := nexttag();
-	err := writeline(tag + " IDLE");
+	conn.deadline(iotime, iotime);
+	err := conn.write(array of byte (tag + " IDLE\r\n"));
 	if(err != nil)
-		return "IDLE write: " + err;
+		return "IDLE write: " + down(err);
 
-	# Server sends + continuation, then untagged updates
-	# Read lines until stop channel fires
-	done := 0;
-	spawn idlereader(updates, tag, done);
-
-	<-stop;
-
-	# Send DONE to end IDLE
-	writeline("DONE");
-
-	return nil;
-}
-
-idlereader(updates: chan of string, tag: string, done: int)
-{
-	while(!done) {
-		(line, err) := readline();
-		if(err != nil)
-			return;
+	stopped := 0;
+	for(;;) {
+		line: string;
+		if(stopped)
+			(line, err) = conn.getline(MAXLINE);
+		else
+			(line, err) = conn.waitline(MAXLINE, stop);
+		if(err == Mailconn->STOPPED) {
+			stopped = 1;
+			conn.deadline(iotime, iotime);
+			err = conn.write(array of byte "DONE\r\n");
+			if(err == nil)
+				continue;
+		}
+		if(err != nil) {
+			down(err);
+			if(!stopped)
+				alt {
+				updates <-= nil =>
+					;
+				<-stop =>
+					;
+				}
+			return "IDLE: " + err;
+		}
 
 		# + continuation response - IDLE started
 		if(hasprefix(line, "+"))
 			continue;
 
 		# Tagged response - IDLE ended
-		if(hasprefix(line, tag))
-			return;
+		if(hasprefix(line, tag + " ")) {
+			if(!stopped) {
+				# refused, or ended by the server: the caller is told
+				# when it stops, and meanwhile nothing more comes
+				rest := line[len tag + 1:];
+				<-stop;
+				return "IDLE ended: " + rest;
+			}
+			return nil;
+		}
 
 		# Untagged data (EXISTS, EXPUNGE, etc.)
-		updates <-= line;
+		if(stopped)
+			continue;
+		alt {
+		updates <-= line =>
+			;
+		<-stop =>
+			stopped = 1;
+			conn.deadline(iotime, iotime);
+			err = conn.write(array of byte "DONE\r\n");
+			if(err != nil)
+				return "IDLE: " + down(err);
+		}
 	}
 }
 
@@ -498,23 +505,23 @@ logout(): string
 	if(!connected)
 		return "not connected";
 
-	tag := nexttag();
-	writeline(tag + " LOGOUT");
-	# Read BYE and tagged OK, but don't fail on errors
-	readresponse(tag);
-	disconnect();
+	# Read BYE and tagged OK, but don't fail on errors, and do not
+	# wait long for a server that has gone
+	t := iotime;
+	if(iotime > 5000)
+		iotime = 5000;
+	command("LOGOUT");
+	iotime = t;
+	down(nil);
 	return nil;
 }
 
-# ---- Protocol I/O ----
+hangup()
+{
+	down(nil);
+}
 
-# Tagged response structure
-Response: adt {
-	status:		string;		# "OK", "NO", "BAD"
-	statusline:	string;		# full status line text
-	untagged:	list of string;	# untagged * lines
-	literal:	array of byte;	# literal data from {N}
-};
+# ---- Protocol I/O ----
 
 nexttag(): string
 {
@@ -522,58 +529,43 @@ nexttag(): string
 	return sys->sprint("A%03d", tagnum);
 }
 
-writeline(s: string): string
+# The connection is over: closed, its processes gone.  The next open
+# starts again.
+down(why: string): string
 {
-	if(DEBUG)
-		sys->print("C: %s\n", s);
-	buf := array of byte (s + "\r\n");
-	n := sys->write(fd, buf, len buf);
-	if(n != len buf)
-		return sys->sprint("write failed: %r");
-	return nil;
+	if(conn != nil)
+		conn.close();
+	conn = nil;
+	connected = 0;
+	currentmbox = nil;
+	return why;
 }
 
-readline(): (string, string)
+# Send one command and read to its tagged answer.
+command(s: string): (ref Response, string)
 {
-	line := ibuf.gets('\n');
-	if(line == nil)
-		return (nil, "connection closed");
-
-	# Strip trailing \r\n
-	l := len line;
-	if(l > 0 && line[l-1] == '\n')
-		l--;
-	if(l > 0 && line[l-1] == '\r')
-		l--;
-	line = line[0:l];
-
-	if(DEBUG)
-		sys->print("S: %s\n", line);
-
-	return (line, nil);
+	if(!connected)
+		return (nil, "not connected");
+	tag := nexttag();
+	conn.deadline(iotime, 20*iotime);
+	err := conn.write(array of byte (tag + " " + s + "\r\n"));
+	if(err != nil)
+		return (nil, down(err));
+	return readresponse(tag);
 }
 
 # Read response lines until we see our tag.
-# Collects untagged * lines and handles {N} literals.
+# Collects untagged * lines, each with its literals.
 readresponse(tag: string): (ref Response, string)
 {
-	untagged: list of string;
-	literal: array of byte;
+	untagged: list of ref Line;
+	used := 0;
 
 	for(;;) {
-		(line, err) := readline();
+		(ln, size, err) := readline();
 		if(err != nil)
-			return (nil, err);
-
-		# Check for literal: line ends with {N}
-		lit := checkliteral(line);
-		if(lit > 0) {
-			literal = readliteral(lit);
-			# Read the continuation line after the literal
-			(cont, cerr) := readline();
-			if(cerr == nil && cont != nil)
-				line = line + string literal + cont;
-		}
+			return (nil, down(err));
+		line := ln.text;
 
 		# Tagged response: our tag followed by OK/NO/BAD
 		if(hasprefix(line, tag + " ")) {
@@ -582,77 +574,182 @@ readresponse(tag: string): (ref Response, string)
 			(nil, toks) := sys->tokenize(rest, " ");
 			if(toks != nil)
 				status = hd toks;
-			resp := ref Response(
-				str->toupper(status),
-				rest,
-				reversestr(untagged),
-				literal);
-			return (resp, nil);
+			rl: list of ref Line;
+			for(; untagged != nil; untagged = tl untagged)
+				rl = hd untagged :: rl;
+			return (ref Response(str->toupper(status), rest, rl), nil);
 		}
 
-		# Untagged response
-		if(hasprefix(line, "* "))
-			untagged = line :: untagged;
-		# + continuation (for IDLE, AUTHENTICATE, etc.)
-		# Just collect it
-		else if(hasprefix(line, "+"))
-			untagged = line :: untagged;
+		# Untagged response, or a + continuation: kept.  Anything
+		# else is not ours and is dropped.
+		if(hasprefix(line, "* ") || hasprefix(line, "+")) {
+			used += size;
+			if(used > MAXRESPONSE)
+				return (nil, down(sys->sprint("the server's answer to one command is more than is taken (%d bytes)", MAXRESPONSE)));
+			untagged = ln :: untagged;
+		}
 	}
 }
 
-# Check if line ends with {N} literal indicator
-checkliteral(line: string): int
+# One line of an answer with the literals inside it (RFC 3501 4.3): each
+# piece that ends "{count}" is followed by count bytes, then the line
+# goes on.  Returns the line and the memory it takes.
+readline(): (ref Line, int, string)
+{
+	text := "";
+	lits: list of array of byte;
+	nlits := 0;
+	size := 0;
+	for(;;) {
+		(frag, err) := conn.getline(MAXLINE);
+		if(err != nil)
+			return (nil, 0, err);
+		size += len frag + 64;
+		(brace, n) := litsize(frag);
+		if(brace < 0) {
+			text += frag;
+			break;
+		}
+		if(n > big MAXLITERAL)
+			return (nil, 0, sys->sprint("the server sent a literal of %bd bytes, more than is taken (%d)", n, MAXLITERAL));
+		if(nlits >= MAXLITS)
+			return (nil, 0, "the server sent a line of too many literals");
+		size += int n;
+		if(size > MAXRESPONSE)
+			return (nil, 0, sys->sprint("the server sent a line of more than is taken (%d bytes)", MAXRESPONSE));
+		(b, berr) := conn.getbytes(int n);
+		if(berr != nil)
+			return (nil, 0, berr);
+		text += frag[0:brace] + "{" + string nlits + "}";
+		lits = b :: lits;
+		nlits++;
+	}
+	a := array[nlits] of array of byte;
+	for(i := nlits - 1; lits != nil; lits = tl lits)
+		a[i--] = hd lits;
+	return (ref Line(text, a), size, nil);
+}
+
+# A line that ends "{digits}": where the brace is and the count; (-1, 0)
+# for any other line.
+litsize(line: string): (int, big)
 {
 	l := len line;
 	if(l < 3 || line[l-1] != '}')
-		return 0;
-
-	# Find matching {
+		return (-1, big 0);
 	i := l - 2;
-	while(i > 0 && line[i] != '{')
+	while(i >= 0 && line[i] >= '0' && line[i] <= '9')
 		i--;
-	if(i <= 0)
-		return 0;
-
-	numstr := line[i+1:l-1];
-	n := int numstr;
-	if(n <= 0)
-		return 0;
-	return n;
+	ndig := l - 2 - i;
+	if(i < 0 || line[i] != '{' || ndig == 0)
+		return (-1, big 0);
+	if(ndig > 12)
+		return (i, big MAXLITERAL + big 1);
+	return (i, big line[i+1:l-1]);
 }
 
-# Read exactly n bytes of literal data
-readliteral(n: int): array of byte
+# Check if line ends with {N} literal indicator (exported for testing):
+# N, or 0 if it does not, or N is 0 or more than a literal may be.
+checkliteral(line: string): int
 {
-	buf := array[n] of byte;
-	off := 0;
-	while(off < n) {
-		# Read raw bytes from the underlying FD since bufio
-		# may have buffered data -- use ibuf.read instead
-		got := ibuf.read(buf[off:], n - off);
-		if(got <= 0)
-			break;
-		off += got;
+	(brace, n) := litsize(line);
+	if(brace < 0 || n > big MAXLITERAL)
+		return 0;
+	return int n;
+}
+
+# A string a caller gave that cannot be sent as one quoted string: it
+# would end the command's line.
+badarg(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\r' || s[i] == '\n' || s[i] == 0)
+			return 1;
+	return 0;
+}
+
+# A sequence set (RFC 3501 9: numbers, ":", ",", "*") and nothing else.
+seqset(s: string): int
+{
+	if(len s == 0)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(!(c >= '0' && c <= '9') && c != ':' && c != ',' && c != '*')
+			return 0;
 	}
-	if(off < n)
-		return buf[:off];
-	return buf;
+	return 1;
 }
 
-disconnect()
+# s without secret, where a server's text is put in an error.
+redact(s, secret: string): string
 {
-	connected = 0;
-	ibuf = nil;
-	fd = nil;
-	currentmbox = nil;
+	if(len secret == 0)
+		return s;
+	for(;;) {
+		i := strindex(s, secret);
+		if(i < 0)
+			return s;
+		s = s[0:i] + "[...]" + s[i + len secret:];
+	}
+}
+
+# A UID is 32 bits unsigned (RFC 3501 2.3.1.1) and is kept in an int:
+# one past 2^31 is negative there, and is printed and compared as what
+# it is.  Each used to be read as the largest int, so they were all one.
+uidstr(uid: int): string
+{
+	return string (big uid & big 16rFFFFFFFF);
+}
+
+# Decimal digits as 32 bits unsigned: (value, 1), or (0, 0) if they are
+# not digits or do not fit.
+touint(s: string): (int, int)
+{
+	if(len s == 0 || len s > 10)
+		return (0, 0);
+	v := big 0;
+	for(i := 0; i < len s; i++) {
+		if(s[i] < '0' || s[i] > '9')
+			return (0, 0);
+		v = v * big 10 + big (s[i] - '0');
+	}
+	if(v > big 16rFFFFFFFF)
+		return (0, 0);
+	return (int v, 1);
+}
+
+# Decimal digits as a count: at most the largest int.
+tocount(s: string): int
+{
+	v := big 0;
+	for(i := 0; i < len s; i++) {
+		if(s[i] < '0' || s[i] > '9')
+			break;
+		v = v * big 10 + big (s[i] - '0');
+		if(v > big 16r7FFFFFFF)
+			return 16r7FFFFFFF;
+	}
+	return int v;
 }
 
 # ---- FETCH response parser ----
+
+# A FETCH line with its literals
+parsefetch(ln: ref Line): ref Msg
+{
+	curlits = ln.lits;
+	m := parsefetchline(ln.text);
+	curlits = nil;
+	return m;
+}
 
 # Parse "* N FETCH (...)" line into a Msg
 parsefetchline(line: string): ref Msg
 {
 	ensureloaded();
+	fhasbody = 0;
+	fbody = nil;
 	# * 1 FETCH (FLAGS (\Seen) UID 123 RFC822.SIZE 4567 ENVELOPE (...))
 	if(!hasprefix(line, "* "))
 		return nil;
@@ -660,7 +757,7 @@ parsefetchline(line: string): ref Msg
 	# Extract sequence number
 	rest := line[2:];
 	(seq, rest2) := gettoken(rest);
-	seqnum := int seq;
+	seqnum := tocount(seq);
 	if(seqnum <= 0)
 		return nil;
 
@@ -704,6 +801,13 @@ parsefetchdata(data: string, msg: ref Msg)
 		while(i < len data && data[i] == ' ')
 			i++;
 
+		# a message's text: BODY[...] or RFC822, a literal or a string
+		if(hasprefix(key, "BODY[") || key == "RFC822" || key == "RFC822.HEADER" || key == "RFC822.TEXT") {
+			(fbody, i) = parseatom(data, i);
+			fhasbody = 1;
+			continue;
+		}
+
 		case key {
 		"FLAGS" =>
 			# (flag flag ...)
@@ -711,7 +815,7 @@ parsefetchdata(data: string, msg: ref Msg)
 			msg.flags = flags;
 			i = ni;
 		"UID" =>
-			(val, ni) := getint(data, i);
+			(val, ni) := getuint(data, i);
 			msg.uid = val;
 			i = ni;
 		"RFC822.SIZE" =>
@@ -723,8 +827,12 @@ parsefetchdata(data: string, msg: ref Msg)
 			msg.envelope = env;
 			i = ni;
 		* =>
-			# Skip unknown item value
-			i = skipvalue(data, i);
+			# Skip unknown item value; a character that is no
+			# value's start (a stray parenthesis) is stepped over
+			ni := skipvalue(data, i);
+			if(ni == i && i == keystart)
+				ni++;
+			i = ni;
 		}
 	}
 }
@@ -767,7 +875,7 @@ parseenvelope(data: string, pos: int): (ref Envelope, int)
 		return (nil, pos);
 	pos++;	# skip (
 
-	env := ref Envelope(nil, nil, nil, nil, nil, nil, nil);
+	env := ref Envelope(nil, nil, nil, nil, nil, nil, nil, nil, nil);
 
 	# date
 	(env.date, pos) = parseatom(data, pos);
@@ -778,27 +886,27 @@ parseenvelope(data: string, pos: int): (ref Envelope, int)
 	pos = skipws2(data, pos);
 
 	# from (address list) -> stored in .sender
-	(env.sender, pos) = parseaddrlist(data, pos);
+	(env.sender, env.fromaddrs, pos) = parseaddrlist(data, pos);
 	pos = skipws2(data, pos);
 
 	# sender (IMAP envelope sender) - skip
-	(nil, pos) = parseaddrlist(data, pos);
+	(nil, nil, pos) = parseaddrlist(data, pos);
 	pos = skipws2(data, pos);
 
 	# reply-to
-	(env.replyto, pos) = parseaddrlist(data, pos);
+	(env.replyto, env.replytoaddrs, pos) = parseaddrlist(data, pos);
 	pos = skipws2(data, pos);
 
 	# to -> stored in .recipient
-	(env.recipient, pos) = parseaddrlist(data, pos);
+	(env.recipient, nil, pos) = parseaddrlist(data, pos);
 	pos = skipws2(data, pos);
 
 	# cc
-	(env.cc, pos) = parseaddrlist(data, pos);
+	(env.cc, nil, pos) = parseaddrlist(data, pos);
 	pos = skipws2(data, pos);
 
 	# bcc - skip
-	(nil, pos) = parseaddrlist(data, pos);
+	(nil, nil, pos) = parseaddrlist(data, pos);
 	pos = skipws2(data, pos);
 
 	# in-reply-to - skip
@@ -829,30 +937,42 @@ parseatom(data: string, pos: int): (string, int)
 		return (nil, pos + 3);
 	}
 
-	# Quoted string
+	# Quoted string: its characters, each \x the x.  One that ends in
+	# a backslash, or is not closed, ends with the data (the index ran
+	# past it: an exception in whoever had asked for the mailbox).
 	if(data[pos] == '"') {
 		pos++;
+		val := "";
 		start := pos;
 		while(pos < len data && data[pos] != '"') {
-			if(data[pos] == '\\')
-				pos++;	# skip escaped char
+			if(data[pos] == '\\') {
+				val += data[start:pos];
+				pos++;	# the escaped character is kept as it is
+				start = pos;
+				if(pos >= len data)
+					break;
+			}
 			pos++;
 		}
-		val := data[start:pos];
+		val += data[start:pos];
 		if(pos < len data)
 			pos++;	# skip closing "
 		return (val, pos);
 	}
 
-	# Literal {N}
+	# A literal: "{k}", the line's k'th (see Line).  Its bytes are the
+	# string, whatever they are.
 	if(data[pos] == '{') {
 		lend := pos + 1;
 		while(lend < len data && data[lend] != '}')
 			lend++;
-		# Literal data should already be inlined by readresponse
-		if(lend < len data)
-			return (nil, lend + 1);
-		return (nil, pos);
+		if(lend >= len data)
+			return (nil, len data);
+		val: string;
+		(k, ok) := touint(data[pos+1:lend]);
+		if(ok && k >= 0 && k < len curlits)
+			val = string curlits[k];
+		return (val, lend + 1);
 	}
 
 	# Parenthesized list - skip it
@@ -869,15 +989,13 @@ parseatom(data: string, pos: int): (string, int)
 					return (data[start:pos], pos);
 				}
 			} else if(data[pos] == '"') {
-				pos++;
-				while(pos < len data && data[pos] != '"') {
-					if(data[pos] == '\\')
-						pos++;
-					pos++;
-				}
+				pos = skipquoted(data, pos + 1);
 			}
 			pos++;
 		}
+		# not closed: what there is of it
+		if(pos > len data)
+			pos = len data;
 		return (data[start:pos], pos);
 	}
 
@@ -890,22 +1008,24 @@ parseatom(data: string, pos: int): (string, int)
 }
 
 # Parse an address list: ((name route mbox host) ...) or NIL
-# Returns a formatted string like "Name <mbox@host>"
-parseaddrlist(data: string, pos: int): (string, int)
+# Returns a formatted string like "Name <mbox@host>" for showing, and
+# the addresses themselves, "mbox@host" each, in order
+parseaddrlist(data: string, pos: int): (string, list of string, int)
 {
 	pos = skipws2(data, pos);
 	if(pos >= len data)
-		return (nil, pos);
+		return (nil, nil, pos);
 
 	# NIL
 	if(pos + 3 <= len data && str->toupper(data[pos:pos+3]) == "NIL")
-		return (nil, pos + 3);
+		return (nil, nil, pos + 3);
 
 	if(data[pos] != '(')
-		return (nil, pos);
+		return (nil, nil, pos);
 	pos++;	# skip outer (
 
 	addrs := "";
+	bare: list of string;
 	while(pos < len data && data[pos] != ')') {
 		pos = skipws2(data, pos);
 		if(pos >= len data || data[pos] == ')')
@@ -949,6 +1069,8 @@ parseaddrlist(data: string, pos: int): (string, int)
 		else if(mbox != nil)
 			addr = mbox;
 
+		if(addr != "")
+			bare = addr :: bare;
 		if(name != nil && addr != nil)
 			addr = name + " <" + addr + ">";
 
@@ -962,7 +1084,20 @@ parseaddrlist(data: string, pos: int): (string, int)
 	if(pos < len data && data[pos] == ')')
 		pos++;
 
-	return (addrs, pos);
+	return (addrs, reverse(bare), pos);
+}
+
+# From inside a quoted string to its closing quote, or the data's end.
+skipquoted(data: string, pos: int): int
+{
+	while(pos < len data && data[pos] != '"') {
+		if(data[pos] == '\\')
+			pos++;
+		pos++;
+	}
+	if(pos > len data)
+		pos = len data;
+	return pos;
 }
 
 # Skip a value in FETCH data (atom, quoted string, or paren list)
@@ -984,25 +1119,17 @@ skipvalue(data: string, pos: int): int
 					return pos;
 				}
 			} else if(data[pos] == '"') {
-				pos++;
-				while(pos < len data && data[pos] != '"') {
-					if(data[pos] == '\\')
-						pos++;
-					pos++;
-				}
+				pos = skipquoted(data, pos + 1);
 			}
 			pos++;
 		}
+		if(pos > len data)
+			pos = len data;
 		return pos;
 	}
 
 	if(data[pos] == '"') {
-		pos++;
-		while(pos < len data && data[pos] != '"') {
-			if(data[pos] == '\\')
-				pos++;
-			pos++;
-		}
+		pos = skipquoted(data, pos + 1);
 		if(pos < len data)
 			pos++;
 		return pos;
@@ -1063,37 +1190,30 @@ parseflags(s: string): int
 # Parse mailbox name from LIST response
 # * LIST (\HasNoChildren) "/" "INBOX"
 # * LIST (\HasNoChildren) "/" INBOX
+# The attributes, the delimiter, then the name: a quoted string (its
+# escapes undone), an atom or a literal.
 parselistname(line: string): string
 {
-	# Find the delimiter (second quoted string or second space-separated section)
-	# The name is the last token after the delimiter
-
-	# Strategy: find last space-separated token or quoted string
-	i := len line - 1;
-
-	# Handle trailing whitespace
-	while(i >= 0 && (line[i] == ' ' || line[i] == '\t'))
-		i--;
-
-	if(i < 0)
+	ensureloaded();
+	if(!hasprefix(line, "* LIST "))
 		return nil;
-
-	# Quoted name
-	if(line[i] == '"') {
-		end := i;
-		i--;
-		while(i >= 0 && line[i] != '"')
-			i--;
-		if(i >= 0)
-			return line[i+1:end];
+	pos := skipvalue(line, len "* LIST ");
+	(nil, pos) = parseatom(line, pos);
+	pos = skipws2(line, pos);
+	if(pos >= len line)
 		return nil;
+	name: string;
+	if(line[pos] == '"' || line[pos] == '{')
+		(name, nil) = parseatom(line, pos);
+	else {
+		# an atom runs to the line's end (a name with a parenthesis
+		# in it is not cut there)
+		e := len line;
+		while(e > pos && (line[e-1] == ' ' || line[e-1] == '\t'))
+			e--;
+		name = line[pos:e];
 	}
-
-	# Unquoted name
-	end := i + 1;
-	while(i >= 0 && line[i] != ' ')
-		i--;
-	return line[i+1:end];
+	return name;
 }
 
 # ---- Helper functions ----
@@ -1107,7 +1227,18 @@ getint(data: string, pos: int): (int, int)
 		pos++;
 	if(start == pos)
 		return (0, pos);
-	return (int data[start:pos], pos);
+	return (tocount(data[start:pos]), pos);
+}
+
+# The same for a UID: 32 bits unsigned (see uidstr); 0 if it does not fit
+getuint(data: string, pos: int): (int, int)
+{
+	pos = skipws2(data, pos);
+	start := pos;
+	while(pos < len data && data[pos] >= '0' && data[pos] <= '9')
+		pos++;
+	(v, nil) := touint(data[start:pos]);
+	return (v, pos);
 }
 
 # Get a whitespace-delimited token
@@ -1133,7 +1264,7 @@ parsenumber(line: string): int
 		return 0;
 	rest := line[2:];
 	(tok, nil) := gettoken(rest);
-	return int tok;
+	return tocount(tok);
 }
 
 # Parse "* OK [KEY N]" -- extract N for the given KEY
@@ -1147,7 +1278,7 @@ parsebracketnum(line: string, key: string): int
 	end := start;
 	while(end < len line && line[end] != ']' && line[end] != ' ')
 		end++;
-	return int line[start:end];
+	return tocount(line[start:end]);
 }
 
 # IMAP quoting: wrap in double quotes, escape \ and "
@@ -1209,11 +1340,6 @@ reverse(l: list of string): list of string
 	for(; l != nil; l = tl l)
 		r = hd l :: r;
 	return r;
-}
-
-reversestr(l: list of string): list of string
-{
-	return reverse(l);
 }
 
 reversemsg(l: list of ref Msg): list of ref Msg

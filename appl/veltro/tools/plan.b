@@ -50,8 +50,16 @@ ToolPlan: module {
 
 PLAN_DEFAULT_DIR: con "/tmp/veltro/plans";
 
-# Resolved at init from VELTRO_SESSION or PLAN_DEFAULT_DIR
+# Resolved at each call, from VELTRO_SESSION or, under PLAN_DEFAULT_DIR,
+# the activity the tool server serves (/tool/activity): each agent's
+# plans are its own. There was one directory for every agent and every
+# boot, so one activity's "plan show" was another's approved plan, and a
+# "plan create" there changed what the first took for its plan. As with
+# memory (memory.b), the main agent's plans (activity 0) are kept across
+# sessions and a task's are emptied when a new tool server first uses
+# them: task numbers begin again at each boot.
 plandir: string;
+fresh := 1;	# no call has been served by this tool server yet
 
 # Plan statuses
 STATUS_DRAFT:     con "draft";
@@ -129,8 +137,7 @@ exec(args: string): string
 {
 	if(sys == nil)
 		init();
-	if(plandir == "")
-		plandir = getplandir();
+	plandir = getplandir();
 
 	args = strip(args);
 	if(args == "")
@@ -195,7 +202,7 @@ exec(args: string): string
 # Create a new plan
 docreate(title: string): string
 {
-	title = strip(title);
+	title = oneline(strip(title));
 	if(title == "")
 		return "error: usage: plan create <title>";
 
@@ -453,7 +460,9 @@ doprogress(nstr: string): string
 
 	# Promote to active on first progress
 	if(status == STATUS_APPROVED) {
-		writefile(pdir + "/meta", idstr + "|" + STATUS_ACTIVE + "|" + title);
+		aerr := writefile(pdir + "/meta", idstr + "|" + STATUS_ACTIVE + "|" + title);
+		if(aerr != nil)
+			return "error: " + aerr;
 	}
 
 	steps := loadsteps(pdir);
@@ -689,7 +698,9 @@ docomplete(): string
 		msg += sys->sprint(" (%d steps were still pending)", npending);
 
 	# Clear current pointer
-	writefile(plandir + "/current", "");
+	cerr := writefile(plandir + "/current", "");
+	if(cerr != nil)
+		msg += "\nerror: it is still the active plan: " + cerr;
 
 	return msg;
 }
@@ -724,11 +735,13 @@ doabandon(reason: string): string
 	}
 
 	# Clear current pointer
-	writefile(plandir + "/current", "");
+	cerr := writefile(plandir + "/current", "");
 
 	msg := sys->sprint("plan %s abandoned: %s", idstr, title);
 	if(reason != "")
 		msg += " (reason: " + reason + ")";
+	if(cerr != nil)
+		msg += "\nerror: it is still the active plan: " + cerr;
 	return msg;
 }
 
@@ -905,20 +918,107 @@ getplandir(): string
 {
 	fd := sys->open("/env/VELTRO_SESSION", Sys->OREAD);
 	if(fd == nil)
-		return PLAN_DEFAULT_DIR;
+		return defaultdir();
 	buf := array[512] of byte;
 	n := sys->read(fd, buf, len buf);
 	fd = nil;
 	if(n <= 0)
-		return PLAN_DEFAULT_DIR;
+		return defaultdir();
 	sdir := string buf[0:n];
 	j := len sdir;
 	while(j > 0 && (sdir[j-1] == ' ' || sdir[j-1] == '\n' || sdir[j-1] == '\r'))
 		j--;
 	sdir = sdir[0:j];
 	if(sdir == "")
-		return PLAN_DEFAULT_DIR;
+		return defaultdir();
 	return sdir + "/plans";
+}
+
+# With no session directory: the activity's own directory of the shared
+# one, or the shared one itself when there is no tool server (a test, a
+# command). A task's starts empty.
+defaultdir(): string
+{
+	id := activity();
+	if(id == "") {
+		fresh = 0;
+		return PLAN_DEFAULT_DIR;
+	}
+	dir := PLAN_DEFAULT_DIR + "/a" + id;
+	if(fresh) {
+		fresh = 0;
+		if(id != "0")
+			removeplans(dir);
+	}
+	return dir;
+}
+
+# /tool/activity's number as text, or "" if there is none.
+activity(): string
+{
+	fd := sys->open("/tool/activity", Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	id := strip(string buf[0:n]);
+	if(!isnumber(id))
+		return "";
+	return string int id;
+}
+
+isnumber(s: string): int
+{
+	if(s == "" || len s > 9)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+# Remove a directory of plans: its "current" and each plan's files.
+removeplans(dir: string)
+{
+	for(l := names(dir); l != nil; l = tl l) {
+		sub := dir + "/" + hd l;
+		for(f := names(sub); f != nil; f = tl f)
+			sys->remove(sub + "/" + hd f);
+		sys->remove(sub);
+	}
+}
+
+names(dir: string): list of string
+{
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	l: list of string;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++)
+			if(dirs[i].name != "." && dirs[i].name != "..")
+				l = dirs[i].name :: l;
+	}
+	return l;
+}
+
+# A field of a line-oriented file is one line: a newline in a step's
+# text was a second record ("9|done|forged" read back as a step done).
+oneline(s: string): string
+{
+	o := "";
+	for(i := 0; i < len s; i++) {
+		if(s[i] == '\n' || s[i] == '\r')
+			o[len o] = ' ';
+		else
+			o[len o] = s[i];
+	}
+	return o;
 }
 
 # Get the active plan directory, or error
@@ -928,7 +1028,12 @@ activedir(): (string, string)
 	if(cerr != nil || strip(cid) == "")
 		return ("", "error: no active plan — use 'plan create' or 'plan switch'");
 
+	# The pointer is a plan's number. It was used as it stood as part of
+	# a path, so "../scratch" there made the next "plan goal" write
+	# outside the plans.
 	id := strip(cid);
+	if(!isnumber(id))
+		return ("", "error: no active plan — use 'plan create' or 'plan switch'");
 	pdir := plandir + "/" + id;
 
 	# Verify it exists
@@ -998,7 +1103,7 @@ writesteps(pdir: string, steps: list of string): string
 	for(l := steps; l != nil; l = tl l) {
 		if(content != "")
 			content += "\n";
-		content += hd l;
+		content += oneline(hd l);
 	}
 
 	return writefile(pdir + "/steps", content);

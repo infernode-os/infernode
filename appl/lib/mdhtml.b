@@ -21,6 +21,15 @@ implement Mdhtml;
 # What it is not: CommonMark.  Tables are not Markdown.pl's and are
 # left as paragraphs; headings have no ids.
 #
+# Its text may be anyone's who can write a page, so its cost is held
+# to the text's length.  Blocks nest (quotes, lists) and so do spans
+# (links, emphasis) at most Maxdepth deep; what is nested deeper is
+# written as the text it is, escaped.  (Each level of nesting kept a
+# copy of what was left of the text: 40K of "> " took 512MB.)  What an
+# opening mark looks ahead for and does not find (a closing run of
+# stars, a bracket's pair, a title's quote, a comment's end) is not
+# looked for again from further on, where it cannot be either.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -35,6 +44,24 @@ Ref: adt {
 
 Ctx: adt {
 	refs:	list of ref Ref;
+	depth:	int;	# of blocks: quotes and lists
+	idepth:	int;	# of spans: link text, emphasis
+};
+
+Maxdepth: con 32;	# of each; markdown-it's is 100, 20 in its CommonMark mode
+Maxid: con 999;	# characters of a reference's id (CommonMark's limit for a label)
+Maxparen: con 32;	# parentheses open at once in a link's destination
+Never: con 16r7fffffff;
+
+# What one text's spans have looked ahead for and not found, by where
+# the looking began: it is not there from any later place either
+Scan: adt {
+	match:	array of int;	# a ['s ], -1 if it has none; nil until a [ is met
+	norun:	array of int;	# a closing run of r of * _ ~ ((mark, r))
+	nocode:	array of int;	# a closing run of r backticks
+	notitle:	array of int;	# a title's closing quote, by the quote
+	nocomment:	int;	# a comment's -->
+	incode:	array of byte;	# places a look for a run passed over inside a code span: from there it is looked for afresh
 };
 
 Bullet, Ordered: con 1+iota;
@@ -58,7 +85,7 @@ html(text: string): string
 {
 	if(sys == nil)
 		init();
-	c := ref Ctx(nil);
+	c := ref Ctx(nil, 0, 0);
 	l := getrefs(c, splitlines(text));
 	return blocks(c, l, 0);
 }
@@ -111,9 +138,29 @@ getrefs(c: ref Ctx, l: array of string): array of string
 	out := array[len l] of string;
 	n := 0;
 	infence := "";
+	deep := 0;	# the fence was opened after a list's or quote's marker
 	for(i := 0; i < len l; i++){
 		s := l[i];
 		ind := indent(s);
+		# A block of raw HTML is its author's, definitions and all, as
+		# Markdown.pl has it (a line of a <pre> that looked like a
+		# definition was taken out of it and made a link elsewhere).
+		if(infence == nil && ind == 0 && (n == 0 || isblank(out[n-1])) && (hb := htmlblock(l, i)) > i){
+			for(; i < hb; i++)
+				out[n++] = l[i];
+			i--;
+			continue;
+		}
+		if(infence != nil && deep){
+			# closed at whatever indent its item has
+			t := marked(s);
+			t = t[indent(t):];
+			f := fence(t);
+			if(f != nil && f[0] == infence[0] && len f >= len infence && isblank(t[len f:]))
+				infence = nil;
+			out[n++] = s;
+			continue;
+		}
 		if(ind < 4){
 			f := fence(s[ind:]);
 			if(infence != nil){
@@ -121,6 +168,15 @@ getrefs(c: ref Ctx, l: array of string): array of string
 					infence = nil;
 			}else if(f != nil)
 				infence = f;
+			else if((t := marked(s)) != s && (f = fence(t[indent(t):])) != nil){
+				# a fence that opens a list item or a quote: its
+				# lines are code there too
+				infence = f;
+				deep = 1;
+				out[n++] = s;
+				continue;
+			}else
+				deep = 0;
 		}
 		if(infence == nil && ind < 4 && (r := refdef(s[ind:])) != nil){
 			if(r.title == nil && i+1 < len l){
@@ -136,6 +192,23 @@ getrefs(c: ref Ctx, l: array of string): array of string
 		out[n++] = s;
 	}
 	return out[0:n];
+}
+
+# A line without the list and quote markers it opens with
+marked(s: string): string
+{
+	for(k := 0; k < Maxdepth; k++){
+		ind := indent(s);
+		if(ind < 4 && ind < len s && s[ind] == '>'){
+			s = s[ind+1:];
+			continue;
+		}
+		(mk, nil, col, nil) := listmarker(s);
+		if(mk == 0)
+			break;
+		s = after(s, col);
+	}
+	return s;
 }
 
 refdef(s: string): ref Ref
@@ -215,6 +288,8 @@ normid(s: string): string
 
 lookup(c: ref Ctx, id: string): ref Ref
 {
+	if(c.refs == nil || len id > Maxid)
+		return nil;
 	id = normid(id);
 	for(l := c.refs; l != nil; l = tl l)
 		if((hd l).id == id)
@@ -301,6 +376,22 @@ blocks(c: ref Ctx, l: array of string, tight: int): string
 		i = j;
 	}
 	return join(out);
+}
+
+# The blocks inside a quote or a list item; past Maxdepth of them, the
+# lines as they are
+nested(c: ref Ctx, l: array of string, tight: int): string
+{
+	if(c.depth + 1 >= Maxdepth){
+		h := escape(trimright(rawlines(l)));
+		if(tight)
+			return h + "\n";
+		return "<p>" + h + "</p>\n";
+	}
+	c.depth++;
+	h := blocks(c, l, tight);
+	c.depth--;
+	return h;
 }
 
 # A paragraph's lines as one text, their indents gone
@@ -470,7 +561,7 @@ quote(c: ref Ctx, l: array of string, i: int): (string, int)
 			break;
 		inner = u :: inner;
 	}
-	return ("<blockquote>\n" + blocks(c, revarray(inner), 0) + "</blockquote>\n", j);
+	return ("<blockquote>\n" + nested(c, revarray(inner), 0) + "</blockquote>\n", j);
 }
 
 # Where a block of raw HTML starting at l[i] ends, or i if none does
@@ -616,7 +707,7 @@ listblock(c: ref Ctx, l: array of string, i: int): (string, int)
 	}
 	body: list of string;
 	for(; items != nil; items = tl items){
-		h := blocks(c, hd items, !loose);
+		h := nested(c, hd items, !loose);
 		if(!loose)
 			h = trimnl(h);
 		body = "<li>" + h + "</li>\n" :: body;
@@ -636,11 +727,24 @@ after(s: string, col: int): string
 # Inline
 #
 
+# The spans inside a span (a link's text, what is emphasised); past
+# Maxdepth of them, the text as it is
+within(c: ref Ctx, s: string): string
+{
+	if(c.idepth + 1 >= Maxdepth)
+		return escape(s);
+	c.idepth++;
+	h := inline(c, s);
+	c.idepth--;
+	return h;
+}
+
 inline(c: ref Ctx, s: string): string
 {
 	o := "";
 	n := len s;
 	i := 0;
+	sc := ref Scan(nil, array[12] of {* => Never}, array[17] of {* => Never}, array[3] of {* => Never}, Never, nil);
 	while(i < n){
 		ch := s[i];
 		case ch {
@@ -651,12 +755,12 @@ inline(c: ref Ctx, s: string): string
 				continue;
 			}
 		'`' =>
-			(h, j) := codespan(s, i);
+			(h, j) := codespan(sc, s, i);
 			o += h;
 			i = j;
 			continue;
 		'*' or '_' =>
-			(h, j) := emphasis(c, s, i);
+			(h, j) := emphasis(c, sc, s, i);
 			if(j > i){
 				o += h;
 				i = j;
@@ -670,16 +774,16 @@ inline(c: ref Ctx, s: string): string
 			continue;
 		'~' =>
 			if(i+1 < n && s[i+1] == '~' && i+2 < n && s[i+2] != ' '){
-				e := findrun(s, i+2, '~', 2);
+				e := findrun(sc, s, i+2, '~', 2);
 				if(e > 0){
-					o += "<del>" + inline(c, s[i+2:e]) + "</del>";
+					o += "<del>" + within(c, s[i+2:e]) + "</del>";
 					i = e+2;
 					continue;
 				}
 			}
 		'!' =>
 			if(i+1 < n && s[i+1] == '['){
-				(h, j) := link(c, s, i+1, 1);
+				(h, j) := link(c, sc, s, i+1, 1);
 				if(j > i+1){
 					o += h;
 					i = j;
@@ -687,14 +791,14 @@ inline(c: ref Ctx, s: string): string
 				}
 			}
 		'[' =>
-			(h, j) := link(c, s, i, 0);
+			(h, j) := link(c, sc, s, i, 0);
 			if(j > i){
 				o += h;
 				i = j;
 				continue;
 			}
 		'<' =>
-			(h, j) := angle(s, i);
+			(h, j) := angle(sc, s, i);
 			o += h;
 			i = j;
 			continue;
@@ -715,9 +819,15 @@ inline(c: ref Ctx, s: string): string
 			k := len o;
 			while(k > 0 && o[k-1] == ' ')
 				k--;
-			if(len o - k >= 2)
-				o = o[0:k] + "<br />\n";
-			else
+			if(len o - k >= 2){
+				# over the blanks, in place: o is not copied at each
+				# break of a long paragraph
+				br := "<br />\n";
+				if(len o - k > len br)
+					o = o[0:k+len br];
+				for(q := 0; q < len br; q++)
+					o[k+q] = br[q];
+			}else
 				o[len o] = '\n';
 			i++;
 			continue;
@@ -737,12 +847,14 @@ isescapable(c: int): int
 }
 
 # A code span from a run of backticks at s[i]
-codespan(s: string, i: int): (string, int)
+codespan(sc: ref Scan, s: string, i: int): (string, int)
 {
 	k := i;
 	while(k < len s && s[k] == '`')
 		k++;
 	r := k - i;
+	if(r < len sc.nocode && k >= sc.nocode[r])
+		return (s[i:k], k);
 	for(j := k; j < len s; ){
 		if(s[j] != '`'){
 			j++;
@@ -755,11 +867,13 @@ codespan(s: string, i: int): (string, int)
 			return ("<code>" + escape(trim(s[k:j])) + "</code>", e);
 		j = e;
 	}
+	if(r < len sc.nocode)
+		sc.nocode[r] = k;
 	return (s[i:k], k);
 }
 
 # Emphasis from a run of * or _ at s[i]; i if there is none
-emphasis(c: ref Ctx, s: string, i: int): (string, int)
+emphasis(c: ref Ctx, sc: ref Scan, s: string, i: int): (string, int)
 {
 	ch := s[i];
 	k := i;
@@ -773,10 +887,10 @@ emphasis(c: ref Ctx, s: string, i: int): (string, int)
 	if(run > 3)
 		return (nil, i);
 	for(r := run; r >= 1; r--){
-		e := findrun(s, k, ch, r);
+		e := findrun(sc, s, k, ch, r);
 		if(e < 0)
 			continue;
-		inner := inline(c, s[k:e]);
+		inner := within(c, s[k:e]);
 		lit := s[i:i+run-r];
 		case r {
 		3 =>	return (lit + "<strong><em>" + inner + "</em></strong>", e+3);
@@ -790,9 +904,17 @@ emphasis(c: ref Ctx, s: string, i: int): (string, int)
 # Where a run of exactly r ch's closing emphasis begins, from s[i]:
 # not after a blank, and for _ not before a letter or digit;
 # code spans and escapes skipped
-findrun(s: string, i: int, ch, r: int): int
+findrun(sc: ref Scan, s: string, i: int, ch, r: int): int
 {
 	n := len s;
+	# (ch, r)'s place in sc.norun; r is 1 to 3
+	x := r;
+	if(ch == '_')
+		x += 4;
+	else if(ch == '~')
+		x += 8;
+	if(i >= sc.norun[x] && (sc.incode == nil || sc.incode[i] == byte 0))
+		return -1;
 	for(j := i; j < n; ){
 		c := s[j];
 		if(c == '\\'){
@@ -800,7 +922,13 @@ findrun(s: string, i: int, ch, r: int): int
 			continue;
 		}
 		if(c == '`'){
-			(nil, e) := codespan(s, j);
+			(h, e) := codespan(sc, s, j);
+			if(len h > 0 && h[0] == '<'){	# a span, not a run left as it is
+				if(sc.incode == nil)
+					sc.incode = array[n+1] of {* => byte 0};
+				for(q := j+1; q < e; q++)
+					sc.incode[q] = byte 1;
+			}
 			j = e;
 			continue;
 		}
@@ -816,15 +944,17 @@ findrun(s: string, i: int, ch, r: int): int
 			return j;
 		j = e;
 	}
+	if(i < sc.norun[x])
+		sc.norun[x] = i;
 	return -1;
 }
 
-# A link or image whose text opens at s[i] ('['); i if none
-link(c: ref Ctx, s: string, i: int, img: int): (string, int)
+# Where the bracket opened at s[i] closes, or -1: escapes and code
+# spans passed over
+closing(sc: ref Scan, s: string, i: int): int
 {
 	n := len s;
 	depth := 0;
-	e := -1;
 	for(j := i; j < n; j++){
 		ch := s[j];
 		if(ch == '\\'){
@@ -832,34 +962,74 @@ link(c: ref Ctx, s: string, i: int, img: int): (string, int)
 			continue;
 		}
 		if(ch == '`'){
-			(nil, k) := codespan(s, j);
+			(nil, k) := codespan(sc, s, j);
 			j = k-1;
 			continue;
 		}
 		if(ch == '[')
 			depth++;
 		else if(ch == ']'){
-			if(--depth == 0){
-				e = j;
-				break;
-			}
+			if(--depth == 0)
+				return j;
 		}
 	}
+	return -1;
+}
+
+# The same for every bracket from s[i] on, in one pass: sc.match.  (A
+# line of 20000 ['s looked from each to the end of the line.)
+brackets(sc: ref Scan, s: string, i: int)
+{
+	n := len s;
+	sc.match = array[n] of {* => -2};
+	open: list of int;
+	for(j := i; j < n; j++){
+		ch := s[j];
+		if(ch == '\\'){
+			j++;
+			continue;
+		}
+		if(ch == '`'){
+			(nil, k) := codespan(sc, s, j);
+			j = k-1;
+			continue;
+		}
+		if(ch == '[')
+			open = j :: open;
+		else if(ch == ']' && open != nil){
+			sc.match[hd open] = j;
+			open = tl open;
+		}
+	}
+	for(; open != nil; open = tl open)
+		sc.match[hd open] = -1;
+}
+
+# A link or image whose text opens at s[i] ('['); i if none
+link(c: ref Ctx, sc: ref Scan, s: string, i: int, img: int): (string, int)
+{
+	n := len s;
+	if(sc.match == nil)
+		brackets(sc, s, i);
+	e := sc.match[i];
+	if(e == -2)
+		e = closing(sc, s, i);
 	if(e < 0)
 		return (nil, i);
-	text := s[i+1:e];
 	url, title: string;
-	j = e+1;
+	j := e+1;
 	if(j < n && s[j] == '('){
 		ok: int;
-		(url, title, j, ok) = dest(s, j+1);
+		(url, title, j, ok) = dest(sc, s, j+1);
 		if(!ok)
 			return (nil, i);
 	}else{
+		if(c.refs == nil)
+			return (nil, i);
 		k := j;
 		if(k < n && (s[k] == ' ' || s[k] == '\n'))
 			k++;
-		id := text;
+		id: string;
 		if(k < n && s[k] == '['){
 			m := k+1;
 			while(m < n && s[m] != ']')
@@ -870,21 +1040,27 @@ link(c: ref Ctx, s: string, i: int, img: int): (string, int)
 				id = s[k+1:m];
 			j = m+1;
 		}
+		if(id == nil){
+			if(e - i - 1 > Maxid)
+				return (nil, i);
+			id = s[i+1:e];
+		}
 		r := lookup(c, id);
 		if(r == nil)
 			return (nil, i);
 		(url, title) = (r.url, r.title);
 	}
+	text := s[i+1:e];
 	t := "";
 	if(title != nil)
 		t = " title=\"" + attr(title) + "\"";
 	if(img)
 		return ("<img src=\"" + attr(url) + "\" alt=\"" + escape(plain(text)) + "\"" + t + " />", j);
-	return ("<a href=\"" + attr(url) + "\"" + t + ">" + inline(c, text) + "</a>", j);
+	return ("<a href=\"" + attr(url) + "\"" + t + ">" + within(c, text) + "</a>", j);
 }
 
 # A link's (destination "title"), from after its '('
-dest(s: string, i: int): (string, string, int, int)
+dest(sc: ref Scan, s: string, i: int): (string, string, int, int)
 {
 	n := len s;
 	i = skipblank(s, i);
@@ -908,9 +1084,12 @@ dest(s: string, i: int): (string, string, int, int)
 				j++;
 				continue;
 			}
-			if(c == '(')
-				p++;
-			else if(c == ')'){
+			if(c == '('){
+				# (unbounded, each of a line of "[a](" counted the
+				# parentheses of all the rest)
+				if(++p > Maxparen)
+					return (nil, nil, i, 0);
+			}else if(c == ')'){
 				if(p == 0)
 					break;
 				p--;
@@ -923,21 +1102,37 @@ dest(s: string, i: int): (string, string, int, int)
 	title: string;
 	if(i < n && (s[i] == '"' || s[i] == '\'' || s[i] == '(')){
 		q := s[i];
-		if(q == '(')
+		x := 0;
+		if(q == '\'')
+			x = 1;
+		else if(q == '('){
 			q = ')';
+			x = 2;
+		}
+		if(i >= sc.notitle[x])
+			return (nil, nil, i, 0);
+		start := i;
 		# the last such quote before the closing ')': Markdown.pl's
 		j := i+1;
 		last := -1;
+		blank := 0;	# nothing but blanks since the last quote
 		for(; j < n; j++){
-			if(s[j] == q)
+			if(s[j] == q){
 				last = j;
-			else if(s[j] == ')' && last >= 0 && isblank(s[last+1:j]))
+				blank = 1;
+			}else if(s[j] == ')' && last >= 0 && blank)
 				break;
+			else if(s[j] != ' ' && s[j] != '\t')
+				blank = 0;
 		}
-		if(last < 0)
+		if(last >= 0){
+			title = s[i+1:last];
+			i = skipblank(s, last+1);
+		}
+		if(last < 0 || i >= n || s[i] != ')'){
+			sc.notitle[x] = start;
 			return (nil, nil, i, 0);
-		title = s[i+1:last];
-		i = skipblank(s, last+1);
+		}
 	}
 	if(i >= n || s[i] != ')')
 		return (nil, nil, i, 0);
@@ -945,7 +1140,7 @@ dest(s: string, i: int): (string, string, int, int)
 }
 
 # At a '<': an autolink, raw HTML, or a less-than sign
-angle(s: string, i: int): (string, int)
+angle(sc: ref Scan, s: string, i: int): (string, int)
 {
 	n := len s;
 	j := i+1;
@@ -958,7 +1153,7 @@ angle(s: string, i: int): (string, int)
 		if(isemail(u))
 			return ("<a href=\"mailto:" + attr(u) + "\">" + escape(u) + "</a>", j+1);
 	}
-	if((e := htmltag(s, i)) > i)
+	if((e := htmltag(sc, s, i)) > i)
 		return (s[i:e], e);
 	return ("&lt;", i+1);
 }
@@ -987,13 +1182,16 @@ isemail(u: string): int
 }
 
 # Where an HTML tag, closing tag or comment at s[i] ends; i if there is none
-htmltag(s: string, i: int): int
+htmltag(sc: ref Scan, s: string, i: int): int
 {
 	n := len s;
-	if(i+3 < n && s[i+1:i+4] == "!--"){
+	if(i+3 < n && s[i+1] == '!' && s[i+2] == '-' && s[i+3] == '-'){
+		if(i+4 >= sc.nocomment)
+			return i;
 		for(j := i+4; j+2 < n; j++)
-			if(s[j:j+3] == "-->")
+			if(s[j] == '-' && s[j+1] == '-' && s[j+2] == '>')
 				return j+3;
+		sc.nocomment = i+4;
 		return i;
 	}
 	j := i+1;

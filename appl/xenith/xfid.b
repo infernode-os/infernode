@@ -90,6 +90,7 @@ Ctlsize : con 5*12;
 
 Edel		:= "deleted window";
 Ebadctl	:= "ill-formed control message";
+Ecutctl	:= "control message cut at the message size: a write is whole lines";
 Ebadaddr	:= "bad address syntax";
 Eaddr	:= "address out of range";
 Einuse	:= "already in use";
@@ -1253,6 +1254,20 @@ Xfid.ctlwrite(x : self ref Xfid, w : ref Window)
 	err = nil;
 	scrdrw = FALSE;
 	settag = FALSE;
+	# One write is whole commands, as in Acme. A write longer than a 9P
+	# message reaches here in pieces, cut by the mount driver wherever
+	# the message ended, and each piece would be run as commands of its
+	# own: the end of a long line as a command the writer never wrote
+	# (name, put). A piece is known by filling its message; one that
+	# does not end a line is refused before anything is done, and the
+	# writer's write fails there, the rest unsent. Whole lines that
+	# fill a message are still taken.
+	nb = count(x.fcall);
+	if(nb >= fsys->messagesize-Styx->IOHDRSZ && data(x.fcall)[nb-1] != byte '\n'){
+		fc.count = 0;
+		respond(x, fc, Ecutctl);
+		return;
+	}
 	w.tag.commit(TRUE);
 	nb = sys->utfbytes(data(x.fcall), count(x.fcall));
 	r = string data(x.fcall)[0:nb];

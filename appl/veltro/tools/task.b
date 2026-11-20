@@ -37,6 +37,11 @@ ToolTask: module {
 	doc:  fn(): string;
 	exec: fn(args: string): string;
 	schema: fn(): string;
+	# What a call will do, read by the code that will do it: the arguments
+	# in the one form exec acts on, what the user must be asked to allow
+	# first ("" for nothing), or why the arguments are no call.  veltrosrv's
+	# approval gate loads this module for it.
+	effect: fn(args: string): (string, string, string);
 };
 
 UI_MOUNT: con "/mnt/ui";
@@ -56,8 +61,8 @@ createkeys: list of string;
 # verify: an adversarial "run it, don't read it" checker (exec + read tools,
 # no write/edit — read-only on the project) that emits a PASS/FAIL/PARTIAL
 # verdict backed by captured output.
-# Tools must still be in the delegation budget; missing ones are dropped at
-# provision time.
+# Tools must still be in the delegation budget; a create asking for one
+# that is not is refused.
 agentdefs: list of (string, string, string);
 
 init(): string
@@ -142,12 +147,9 @@ exec(args: string): string
 {
 	if(sys == nil)
 		return "error: not initialized";
-	args = strip(args);
-	if(args == "")
-		return "error: no command. Use: create, status, list, result, close, promote, revert";
-
-	(cmd, rest) := splitfirst(args);
-	cmd = str->tolower(cmd);
+	(cmd, rest, err) := command(args);
+	if(err != nil)
+		return "error: " + err;
 
 	case cmd {
 	"create" =>
@@ -164,14 +166,113 @@ exec(args: string): string
 		return dostaged(rest, "/promote");
 	"revert" =>
 		return dostaged(rest, "/revert");
-	* =>
-		# A create with its verb left out ("label=X tools=... brief=..."):
-		# models do this, and only a create takes these attributes.
-		if(iskeyat(args, 0) && (hasprefix(args, "label=") ||
-		   hasprefix(args, "tools=") || hasprefix(args, "brief=")))
-			return docreate(args);
-		return sys->sprint("error: unknown command '%s'. Use: create, status, list, result, close, promote, revert", cmd);
 	}
+	return "error: " + USAGE;
+}
+
+USAGE: con "Use: create, status, list, result, close, promote, revert";
+
+effect(args: string): (string, string, string)
+{
+	(cmd, rest, err) := command(args);
+	if(err != nil)
+		return (nil, nil, err);
+	ask := "";
+	# A task's staged changes reach the user's own files only on the
+	# user's word.  The words are these, with the task's number: nothing of
+	# the model's is among them.
+	if(cmd == "promote")
+		ask = "apply the changes task " + rest + " staged to your files " +
+			"(all of them: /diff in the task's tab lists them)";
+	if(rest != "")
+		cmd += " " + rest;
+	return (cmd, ask, nil);
+}
+
+# A call's arguments, read once.  The verb is the first word, in any case
+# (models send Promote); what follows is given back as exec acts on it: for
+# the verbs that take a task, its number and nothing else.  The approval
+# gate used to read the arguments for itself (a prefix "promote", in lower
+# case) while exec folded the case, so "Promote 2" applied a task's staged
+# changes to the user's files with nobody asked; and a number followed by a
+# sentence was taken for the number, the sentence shown to the user as part
+# of what they were asked to allow.  Anything this cannot read is refused,
+# by the gate and by exec alike.
+command(args: string): (string, string, string)
+{
+	if(sys == nil || str == nil)
+		return (nil, nil, "not initialized");
+	args = trim(args);
+	if(args == "")
+		return (nil, nil, "no command. " + USAGE);
+	for(i := 0; i < len args; i++)
+		if(blank(args[i]))
+			break;
+	word := args[0:i];
+	cmd := str->tolower(word);
+	rest := trim(args[i:]);
+	case cmd {
+	"create" =>
+		return (cmd, rest, nil);
+	"list" =>
+		return (cmd, "", nil);
+	"status" or "result" or "close" or "promote" or "revert" =>
+		id := tasknumber(rest);
+		if(id < 0)
+			return (nil, nil, sys->sprint("%s takes a task's number and nothing else (as: %s 2)", cmd, cmd));
+		return (cmd, string id, nil);
+	}
+	# A create with its verb left out ("label=X tools=... brief=..."):
+	# models do this, and only a create takes these attributes.
+	if(iskeyat(args, 0) && (hasprefix(args, "label=") ||
+	   hasprefix(args, "tools=") || hasprefix(args, "brief=")))
+		return ("create", args, nil);
+	return (nil, nil, sys->sprint("unknown command '%s'. %s", printable(word, 40), USAGE));
+}
+
+blank(c: int): int
+{
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+trim(s: string): string
+{
+	i := 0;
+	while(i < len s && blank(s[i]))
+		i++;
+	j := len s;
+	while(j > i && blank(s[j-1]))
+		j--;
+	return s[i:j];
+}
+
+# A task's number: decimal digits alone, as an activity is numbered.
+tasknumber(s: string): int
+{
+	if(s == "" || len s > 9)
+		return -1;
+	n := 0;
+	for(i := 0; i < len s; i++) {
+		if(s[i] < '0' || s[i] > '9')
+			return -1;
+		n = n * 10 + (s[i] - '0');
+	}
+	return n;
+}
+
+# Text of the model's, for an error message: its start, on one line.
+printable(s: string, max: int): string
+{
+	out := "";
+	for(i := 0; i < len s && i < max; i++) {
+		c := s[i];
+		if(c < ' ' || c == 16r7f)
+			c = '?';
+		out[len out] = c;
+	}
+	if(len s > max)
+		out += "...";
+	return out;
 }
 
 # Parse key=value attributes from argument string
@@ -457,40 +558,45 @@ docreate(args: string): string
 
 	# Create activity via /mnt/ui/ctl
 	ctlpath := UI_MOUNT + "/ctl";
+	before := activityids();
 	err := writefile(ctlpath, "activity create " + label);
 	if(err != nil)
 		return "error: " + err;
 
-	# Read back the new activity id (last activity in list)
-	info := readfile(UI_MOUNT + "/ctl");
-	if(info == nil)
-		return "error: cannot read /mnt/ui/ctl after create";
-
-	# Parse "activities: id1 id2 ... idN" — idN is the newest
+	# The new activity: one that was not there before the create and has
+	# this label.  It was taken to be the last in the list, whoever made
+	# that one: an activity the user made in the same moment was briefed and
+	# provisioned as this task, and deleted when provisioning was refused.
 	newid := -1;
-	lines := splitlines(strip(info));
-	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		if(hasprefix(line, "activities:")) {
-			rest := strip(line[len "activities:":]);
-			(nil, toks) := sys->tokenize(rest, " ");
-			lastid := "";
-			for(; toks != nil; toks = tl toks)
-				lastid = hd toks;
-			if(lastid != "")
-				(newid, nil) = str->toint(lastid, 10);
-		}
+	nnew := 0;
+	onlynew := -1;
+	for(al := activityids(); al != nil; al = tl al) {
+		id := hd al;
+		if(intlistcontains(before, id))
+			continue;
+		nnew++;
+		onlynew = id;
+		lbl := readfile(sys->sprint("%s/activity/%d/label", UI_MOUNT, id));
+		if(lbl != nil && samelabel(lbl, label) && id > newid)
+			newid = id;
 	}
-
+	if(newid < 0 && nnew == 1)
+		newid = onlynew;	# the one new activity, however its label is kept
 	if(newid < 0)
-		(newid, nil) = str->toint(strip(readfile(UI_MOUNT + "/activity/current")), 10);
-	if(newid < 0)
-		return "error: could not determine new activity id";
+		return "error: the activity was asked for but cannot be found in /mnt/ui/ctl; " +
+			"nothing was started (an empty activity named \"" + label + "\" may be left)";
 
 	# Set urgency if specified
-	if(urgstr != "") {
-		writefile(sys->sprint("%s/activity/%d/urgency", UI_MOUNT, newid), urgstr);
-	}
+	urgnote := "";
+	if(urgstr != "" &&
+	   writefile(sys->sprint("%s/activity/%d/urgency", UI_MOUNT, newid), urgstr) != nil)
+		urgnote = " (urgency not set: " + printable(urgstr, 20) + " was refused)";
+
+	# Activity numbers start again at each boot and /tmp is kept, so files
+	# of an earlier task of this number may be here.  They were left: a
+	# task created with no instructions= or agenttype= ran under the
+	# instructions and the role of whichever task had its number before.
+	removetaskfiles(newid);
 
 	# Write task brief to a file that lucibridge reads at startup.
 	# This goes into the LLM system prompt only — no visible chat message.
@@ -502,39 +608,26 @@ docreate(args: string): string
 			"above is your task. If you genuinely cannot proceed without a " +
 			"specific missing detail, ask one concise question; otherwise make " +
 			"a reasonable assumption and proceed.";
-	briefpath := sys->sprint("/tmp/veltro/tasks/brief.%d", newid);
-	bfd := sys->create(briefpath, Sys->OWRITE, 8r644);
-	if(bfd != nil) {
-		bb := array of byte brief;
-		sys->write(bfd, bb, len bb);
-		bfd = nil;
-	}
+	# A file that cannot be written is the task not made: it used to
+	# start all the same, on a default brief or with no instructions.
+	ferr := createfile(sys->sprint("/tmp/veltro/tasks/brief.%d", newid), brief);
 
 	# Write structured instructions if provided
 	instructions := getattr(attrs, "instructions");
-	if(instructions != "") {
-		instrpath := sys->sprint("/tmp/veltro/tasks/instructions.%d", newid);
-		ifd := sys->create(instrpath, Sys->OWRITE, 8r644);
-		if(ifd != nil) {
-			ib := array of byte instructions;
-			sys->write(ifd, ib, len ib);
-			ifd = nil;
-		}
-	}
+	if(ferr == nil && instructions != "")
+		ferr = createfile(sys->sprint("/tmp/veltro/tasks/instructions.%d", newid), instructions);
 
 	# Model and agenttype are propagated to the child lucibridge via the
 	# same /tmp/veltro/tasks/<key>.<id> pattern as brief/instructions. lucibridge
 	# reads these files at startup (before opening the LLM session). Files
 	# are only written when explicitly set so the absence still means
 	# "inherit parent session's model" / "use default task prompt".
-	if(agenttype != "") {
-		apath := sys->sprint("/tmp/veltro/tasks/agenttype.%d", newid);
-		afd := sys->create(apath, Sys->OWRITE, 8r644);
-		if(afd != nil) {
-			ab := array of byte agenttype;
-			sys->write(afd, ab, len ab);
-			afd = nil;
-		}
+	if(ferr == nil && agenttype != "")
+		ferr = createfile(sys->sprint("/tmp/veltro/tasks/agenttype.%d", newid), agenttype);
+	if(ferr != nil) {
+		removetaskfiles(newid);
+		writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
+		return sys->sprint("error: task not created — %s", ferr);
 	}
 
 	# Push metadata to dashboard if available
@@ -571,10 +664,107 @@ docreate(args: string): string
 	writefile(sys->sprint("%s/activity/%d/status", UI_MOUNT, newid), "provisioning");
 	perr := writefile("/tool/provision", provcmd[10:]);
 	if(perr != nil) {
+		removetaskfiles(newid);
 		writefile(UI_MOUNT + "/ctl", sys->sprint("activity delete %d", newid));
 		return sys->sprint("error: task not created — %s", perr);
 	}
-	return sys->sprint("created activity %d: %s%s", newid, label, modelnote);
+	return sys->sprint("created activity %d: %s%s%s", newid, label, modelnote, urgnote);
+}
+
+# The activities /mnt/ui/ctl lists, in its order.
+activityids(): list of int
+{
+	ids: list of int;
+	lines := splitlines(strip(readall(UI_MOUNT + "/ctl")));
+	for(; lines != nil; lines = tl lines) {
+		line := hd lines;
+		if(!hasprefix(line, "activities:"))
+			continue;
+		(nil, toks) := sys->tokenize(line[len "activities:":], " \t");
+		for(; toks != nil; toks = tl toks) {
+			id := tasknumber(hd toks);
+			if(id >= 0)
+				ids = id :: ids;
+		}
+	}
+	r: list of int;
+	for(; ids != nil; ids = tl ids)
+		r = hd ids :: r;
+	return r;
+}
+
+# The label an activity was created with, as the UI server kept it (it may
+# trim it): alike in letters and digits, or one the start of the other.
+samelabel(kept, asked: string): int
+{
+	k := normlabel(kept);
+	a := normlabel(asked);
+	if(k == "" || a == "")
+		return k == a;
+	return hasprefix(a, k) || hasprefix(k, a);
+}
+
+intlistcontains(l: list of int, n: int): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == n)
+			return 1;
+	return 0;
+}
+
+# What a task of this number is started from.  brief.N is written by every
+# create, so it also says an activity is a task made here (madehere).
+TASKFILES: con "brief instructions agenttype model";
+
+removetaskfiles(id: int)
+{
+	(nil, names) := sys->tokenize(TASKFILES, " ");
+	for(; names != nil; names = tl names)
+		sys->remove(sys->sprint("/tmp/veltro/tasks/%s.%d", hd names, id));
+	# An activity's memory and plans are kept by its number too
+	# (/tmp/veltro/memory/<id>, /tmp/veltro/plans/a<id>), and would be the
+	# next task's of that number.  Removed where this tool can see them.
+	removetree(sys->sprint("/tmp/veltro/memory/%d", id), 0);
+	removetree(sys->sprint("/tmp/veltro/plans/a%d", id), 0);
+}
+
+# A directory and what is in it, a few levels down (a store of files, not
+# a tree to follow anywhere).
+removetree(path: string, depth: int)
+{
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return;
+	if((d.mode & Sys->DMDIR) && depth < 8) {
+		fd := sys->open(path, Sys->OREAD);
+		while(fd != nil) {
+			(n, dirs) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++)
+				if(dirs[i].name != "." && dirs[i].name != "..")
+					removetree(path + "/" + dirs[i].name, depth + 1);
+		}
+		fd = nil;
+	}
+	sys->remove(path);
+}
+
+madehere(id: int): int
+{
+	(ok, nil) := sys->stat(sys->sprint("/tmp/veltro/tasks/brief.%d", id));
+	return ok >= 0;
+}
+
+createfile(path, data: string): string
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return sys->sprint("cannot create %s: %r", path);
+	b := array of byte data;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("cannot write %s: %r", path);
+	return nil;
 }
 
 dostatus(args: string): string
@@ -744,10 +934,13 @@ doresult(args: string): string
 		return sys->sprint("error: activity %d not found", id);
 	status = strip(status);
 
+	# Every message, each whole: the first hundred, and the first 8K of
+	# each, were looked at, so a task could bury its report under messages
+	# or have it cut.
 	last := "";
-	for(m := 0; m < 100; m++) {
-		c := readfile(sys->sprint("%s/activity/%d/conversation/%d", UI_MOUNT, id, m));
-		if(c == nil)
+	for(m := 0; m < MAXMSGS; m++) {
+		c := readall(sys->sprint("%s/activity/%d/conversation/%d", UI_MOUNT, id, m));
+		if(c == "")
 			break;
 		(role, text) := parseconvmsg(c);
 		if(role != "human" && role != "" && text != "")
@@ -760,6 +953,8 @@ doresult(args: string): string
 	}
 	return sys->sprint("task %d [%s] result:\n%s", id, status, last);
 }
+
+MAXMSGS: con 100000;	# a conversation's messages: a bound, not a limit met
 
 # Returns the id of an existing non-closed, non-hidden activity whose label
 # exactly matches, else -1. Backs the create idempotency guard (INFR-390).
@@ -799,7 +994,10 @@ findlabelledtask(label: string): int
 				st := readfile(sys->sprint("%s/activity/%d/status", UI_MOUNT, id));
 				if(lbl != nil) lbl = strip(lbl);
 				if(st != nil) st = strip(st);
-				if(lbl != nil && normlabel(lbl) == nlabel && st != "hidden" && st != "closed")
+				# A task that failed is not one under way: the guard said it
+				# was, and the work could not be started again.
+				if(lbl != nil && normlabel(lbl) == nlabel && st != "hidden" && st != "closed" &&
+				   !hasprefix(st, "failed"))
 					return id;
 			}
 		}
@@ -821,8 +1019,8 @@ dolist(): string
 			rest := strip(line[len "activities:":]);
 			(nil, toks) := sys->tokenize(rest, " ");
 			for(; toks != nil; toks = tl toks) {
-				(id, nil) := str->toint(hd toks, 10);
-				if(id < 0) continue;
+				id := tasknumber(hd toks);
+				if(id <= 0) continue;	# 0 is the agent asking, not a task
 				label := readfile(sys->sprint("%s/activity/%d/label", UI_MOUNT, id));
 				status := readfile(sys->sprint("%s/activity/%d/status", UI_MOUNT, id));
 				if(label != nil) label = strip(label); else label = "?";
@@ -849,10 +1047,16 @@ doclose(args: string): string
 		return "error: invalid activity id";
 	if(id == 0)
 		return "error: cannot close the meta-agent activity";
+	# Only a task made here: any number was taken, so the agent could
+	# delete an activity of the user's own, its conversation with it.
+	if(!madehere(id))
+		return sys->sprint("error: activity %d is not a task made with task create; " +
+			"only the user closes it", id);
 
 	err := writefile(UI_MOUNT + "/ctl", "activity delete " + string id);
 	if(err != nil)
 		return "error: " + err;
+	removetaskfiles(id);
 
 	return sys->sprint("activity %d archived", id);
 }
@@ -873,6 +1077,11 @@ dostaged(args, slash: string): string
 		return sys->sprint("error: activity %d not found", id);
 	if(strip(status) == "hidden")
 		return sys->sprint("error: task %d is closed", id);
+	# Changes are discarded only for a task made here.  (To apply them
+	# the user is asked each time: veltrosrv's gate.)
+	if(slash == "/revert" && !madehere(id))
+		return sys->sprint("error: activity %d is not a task made with task create; " +
+			"only the user discards its changes", id);
 	# The task's event file opened before its messages are counted, so
 	# a reply between the two is still heard; each open has its own
 	# queue, so this takes nothing from Lucifer's.
@@ -896,7 +1105,7 @@ dostaged(args, slash: string): string
 		spawn stagedtimer(tick, 5000);
 		for(;;) alt {
 		<-evc =>
-			if((r := stagedreply(base, nbefore)) != nil) {
+			if((r := stagedreply(base, nbefore, slash)) != nil) {
 				stop.done = 1;
 				return sys->sprint("task %d: %s", id, r);
 			}
@@ -905,22 +1114,36 @@ dostaged(args, slash: string): string
 			return sys->sprint("task %d: %s sent; the task is busy and will do it when its turn ends", id, slash[1:]);
 		}
 	}
-	if((r := stagedreply(base, nbefore)) != nil)
+	if((r := stagedreply(base, nbefore, slash)) != nil)
 		return sys->sprint("task %d: %s", id, r);
 	return sys->sprint("task %d: %s sent; the task is busy and will do it when its turn ends", id, slash[1:]);
 }
 
-# The first message since nbefore that is not the human's, nil if none.
-stagedreply(base: string, nbefore: int): string
+# The task's answer to slash: the first message since nbefore that is not
+# the human's and reads as that command's answer, nil if none.  Any message
+# was taken, so what a task still working said next was reported as the
+# outcome of the promote.
+stagedreply(base: string, nbefore: int, slash: string): string
 {
-	for(m := nbefore; ; m++) {
-		c := readfile(sys->sprint("%s/conversation/%d", base, m));
-		if(c == nil)
+	for(m := nbefore; m < nbefore + MAXMSGS; m++) {
+		c := readall(sys->sprint("%s/conversation/%d", base, m));
+		if(c == "")
 			return nil;
 		(role, text) := parseconvmsg(c);
-		if(role != "human" && text != "")
+		if(role != "human" && text != "" && stagedanswer(slash, text))
 			return text;
 	}
+	return nil;
+}
+
+# What lucibridge answers /promote and /revert with (cowpromote, cowrevert).
+stagedanswer(slash, text: string): int
+{
+	if(hasprefix(text, "error:") || hasprefix(text, "no cowfs overlay"))
+		return 1;
+	if(slash == "/promote")
+		return hasprefix(text, "promoted") || hasprefix(text, "NOT applied");
+	return hasprefix(text, "reverted") || hasprefix(text, "all changes reverted");
 }
 
 Stop: adt {
@@ -958,6 +1181,24 @@ readfile(path: string): string
 		return nil;
 	return string buf[0:n];
 }
+
+# A file to its end (readfile is one read: 8K of it).
+readall(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0) {
+		out += string buf[0:n];
+		if(len out > MAXREPORT)
+			break;
+	}
+	return out;
+}
+
+MAXREPORT: con 1024*1024;
 
 writefile(path, data: string): string
 {

@@ -63,7 +63,7 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("initrepo: " + ierr);
 
 	# Override HEAD if -b specified
-	git->writesymref(gitdir, "HEAD", "refs/heads/" + branch);
+	check(git->writesymref(gitdir, "HEAD", "refs/heads/" + branch));
 
 	sys->print("Initialized empty Git repository in %s\n", gitdir);
 }
@@ -72,4 +72,11 @@ fail(msg: string)
 {
 	sys->fprint(stderr, "git/init: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+# a ref or pack that was not written is not passed over
+check(err: string)
+{
+	if(err != nil)
+		fail(err);
 }

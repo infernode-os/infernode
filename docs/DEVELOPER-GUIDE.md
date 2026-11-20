@@ -39,6 +39,7 @@ summarises it.
 | `-pmain=1024m` | Main pool size (memory for kernel data structures) |
 | `-pimage=1024m` | Image pool size (memory for draw images/GUI) |
 | `-r../..` | Inferno root directory. Points to the project checkout. The path is concatenated directly to `-r` with no space. |
+| `-L` | (Optional, not in the command above.) Strict linking: refuse to link a module that has no type digests, rather than fall back to the 32-bit signatures. A running system is made strict by `echo 1 > /dev/strictlink`, which cannot be undone. See dis(6). |
 
 **Boot sequence (`lib/lucifer/boot.sh`):**
 

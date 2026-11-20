@@ -3579,10 +3579,31 @@ sign(Decl *d)
 	md5(sig, sigend, md5sig, nil);
 	for(i = 0; i < MD5dlen; i += 4)
 		t->sig ^= md5sig[i+0] | (md5sig[i+1]<<8) | (md5sig[i+2]<<16) | (md5sig[i+3]<<24);
+	/*
+	 * The 32 bits above are all a module file had of a type, and two
+	 * different function types with the same 32 are found in a second.
+	 * The same text's SHA-256 goes beside each (dissigs), for the
+	 * loader to compare.
+	 */
+	t->dig = allocmem(SHA256dlen);	/* its own: a copied Type has the old pointer */
+	sha256(sig, sigend, t->dig, nil);
 	if(debug['S'])
 		print("signed %D type %T len %d sig %#lux\n", d, t, sigend, t->sig);
 	free(sig);
 	return t->sig;
+}
+
+/*
+ * the digest of the text sign() folds into d's signature
+ */
+uchar*
+signdigest(Decl *d)
+{
+	Type *t;
+
+	t = d->ty;	/* the type sign() signs, whatever it does to d */
+	sign(d);
+	return t->dig;
 }
 
 enum

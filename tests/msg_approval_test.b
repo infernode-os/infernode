@@ -1,5 +1,19 @@
 implement MsgApprovalTest;
 
+#
+# A drafted reply is sent only on an exact trusted approval, once, and
+# only to the sender of the message it was drafted against.
+#
+# pending shows whoever approves the reply's body, and under it whose
+# message it answers and its subject, as the source said when the draft
+# was made (it showed the id alone: no recipient). If the source then
+# numbers its messages anew, so that the id names another message (a
+# mailbox after an expunge; mockmail with its shift file), the approval
+# is refused and nothing is sent: the approved body went to the sender
+# of whatever had that number at approve time. A draft against a message
+# the source does not have is refused.
+#
+
 include "sys.m";
 	sys: Sys;
 include "draw.m";
@@ -42,14 +56,19 @@ init(nil: ref Draw->Context, args: list of string)
 	# /mnt/msg/draft, which with no msg9p there is a file in the host tree.
 	if(tl args == nil || hd tl args != "check")
 		raise "skip:helper for tests/inferno/msg_approval.sh, which runs it";
-	sys->remove("/tmp/veltro/sent/security-test");
+	sys->remove("/tmp/veltro/sent/1");
+	sys->remove(SHIFT);
 
-	request := "email\nsecurity-test\napproved body";
+	if(writefile("/mnt/msg/draft", "email\nsecurity-test\nbody") >= 0) {
+		fail("a draft against a message the source does not have was queued");
+		return;
+	}
+	request := "email\n1\napproved body";
 	if(writefile("/mnt/msg/draft", request) < 0) {
 		fail("draft endpoint rejected safe pending reply");
 		return;
 	}
-	if(readfile("/tmp/veltro/sent/security-test") != nil) {
+	if(readfile("/tmp/veltro/sent/1") != nil) {
 		fail("message sent before approval");
 		return;
 	}
@@ -58,17 +77,21 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("pending request ID missing");
 		return;
 	}
-	if(pending != "1 email security-test 13 approved body\n") {
+	if(!contains(pending, "1 email 1 13 approved body\n")) {
 		fail("pending view did not show the exact immutable body: " + pending);
 		return;
 	}
-	request2 := "email\nsecurity-test\nchanged-body!";
+	if(pending != "1 email 1 13 approved body\n\tTo: alice@example.com\n\tSubject: Launch date?\n") {
+		fail("pending view did not show whose message the reply answers: " + pending);
+		return;
+	}
+	request2 := "email\n1\nchanged-body!";
 	if(writefile("/mnt/msg/draft", request2) < 0) {
 		fail("second equal-length draft was rejected");
 		return;
 	}
 	pending = readfile("/mnt/msg/pending");
-	if(pending == nil || !contains(pending, "2 email security-test 13 changed-body!\n")) {
+	if(pending == nil || !contains(pending, "2 email 1 13 changed-body!\n")) {
 		fail("equal-length proposals were not distinguishable: " + pending);
 		return;
 	}
@@ -77,7 +100,7 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 	sys->sleep(100);
-	if(readfile("/tmp/veltro/sent/security-test") != "approved body") {
+	if(readfile("/tmp/veltro/sent/1") != "approved body") {
 		fail("approved immutable body was not sent");
 		return;
 	}
@@ -87,7 +110,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	if(readfile("/mnt/msg/pending") != nil) {
 		pending = readfile("/mnt/msg/pending");
-		if(pending == nil || !contains(pending, "2 email security-test 13 changed-body!\n")) {
+		if(pending == nil || !contains(pending, "2 email 1 13 changed-body!\n")) {
 			fail("approval consumed or changed the other immutable proposal");
 			return;
 		}
@@ -96,8 +119,45 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("trusted denial failed");
 		return;
 	}
-	sys->print("MSGAPPROVAL PASS: draft, exact approval, consume, replay denial\n");
+
+	# The message the draft answers is no longer the one with its id.
+	sys->remove("/tmp/veltro/sent/1");
+	if(writefile("/mnt/msg/draft", "email\n1\nfor alice alone") < 0) {
+		fail("third draft was rejected");
+		return;
+	}
+	pending = readfile("/mnt/msg/pending");
+	if(pending == nil || !contains(pending, "3 email 1 15 for alice alone\n\tTo: alice@example.com\n")) {
+		fail("third draft not pending for alice: " + pending);
+		return;
+	}
+	fd := sys->create(SHIFT, Sys->OWRITE, 8r644);
+	if(fd == nil) {
+		fail(sys->sprint("cannot make %s: %r", SHIFT));
+		return;
+	}
+	fd = nil;
+	n := writefile("/mnt/msg/approve", "approve 3");
+	err := sys->sprint("%r");
+	sys->sleep(100);
+	sent := readfile("/tmp/veltro/sent/1");
+	sys->remove(SHIFT);
+	if(sent != nil) {
+		fail("a reply approved for alice was sent to whoever has her message's number now: " + sent);
+		return;
+	}
+	if(n >= 0 || !contains(err, "no longer the one")) {
+		fail("the approval of a reply to a message that has moved was not refused saying so: " + err);
+		return;
+	}
+	if(writefile("/mnt/msg/approve", "approve 3") >= 0) {
+		fail("the refused approval was not consumed");
+		return;
+	}
+	sys->print("MSGAPPROVAL PASS: draft, exact approval, consume, replay denial, recipient shown and held\n");
 }
+
+SHIFT: con "/tmp/veltro/mockmail.shift";
 
 contains(s, sub: string): int
 {

@@ -9,6 +9,8 @@ auditfs \- tamper-evident audit-log file server
 .B auditverify
 .RB [ \-k
 .IR pubkeyfile ]
+.RB [ \-a
+.IR anchorfile ]
 .RI [ chainfile ]
 .SH DESCRIPTION
 .I Auditfs
@@ -24,6 +26,17 @@ is sealed into one record: the server assigns the sequence
 number and timestamp (so a writer cannot forge ordering or
 backdate an entry) and extends a SHA-256 hash chain over the
 record. Reads return empty.
+The record is put in one canonical text before it is hashed: every
+character that is no visible mark (CR, LF, tab and the other
+controls, the Unicode spaces and line separators, the characters
+that reorder a line on display) is a blank, runs of blanks are one,
+and there is none at either end; the first two words are the source
+and the event.
+What is sealed is thus what is stored and what a replay reads.
+One write is one record: a write of more than 4096 bytes is refused.
+The event
+.B checkpoint
+is the server's own and is refused.
 .TP
 .B chain
 Read-only. The sealed records, oldest first, one per line:
@@ -35,10 +48,14 @@ Read-only. The current chain tip and last sequence number,
 suitable for publishing or shipping off-host as an anchor.
 .TP
 .B verify
-Read-only. Recomputes the chain and returns
-.RB `` ok\  \fIn\fP ''
-or
-.RB `` broken\ at\ seq\  \fIn\fP ''.
+Read-only. Recomputes the chain from the backing file and returns
+.RB `` ok\  \fIn\fP '',
+.RB `` broken\ at\ seq\  \fIn\fP ''
+(the first record that does not follow from the one before it), or
+.RB `` diverged:\  ... ''
+(the file is not what the running server wrote: it was changed
+behind it).
+A file that cannot be read is an error, not a verdict.
 .TP
 .B pubkey
 Read-only. The audit public key (when an audit signer key has been
@@ -71,9 +88,32 @@ so a recomputation that disagrees with the stored chain proves
 tampering. The chain is tamper-\fIevident\fP: an externally
 anchored
 .B head
-detects even a full rewrite of the backing file. At startup the
-chain is recomputed from the backing file and a break is reported
-on standard error.
+detects even a full rewrite of the backing file.
+.PP
+A line of the backing file is a record only if it is exactly the
+line the server writes for its fields, and a record follows from the
+one before it only if it carries the next sequence number and the
+hash of the chain so far.
+At startup the chain is recomputed from the backing file and a break
+is reported on standard error and in the
+.B "auditfs start"
+record the server then seals
+.RB ( replay=broken@\fIn\fP ).
+A file that does not verify is still served and still appended to,
+so that writers that must log can, but not as though it verified:
+sequence numbers go on from the highest in the file, the chain goes
+on from the last record's stored hash, which binds what is added to
+the file as it was found,
+.B verify
+goes on answering
+.RB `` broken\ at\ seq\  \fIn\fP '',
+and no checkpoint is signed (a write of
+.B checkpoint
+to
+.B ctl
+is an error).
+To have signed roots again, set the file aside and start a new one.
+A backing file that is there and cannot be read stops the server.
 .PP
 Access control is by namespace placement. Bind only the
 .B log
@@ -115,10 +155,19 @@ over a
 .I chainfile
 (default standard input) and reports
 .RB `` ok ''
-or the first break; with
+or the first break, with the number of breaks and the last sequence
+number it read; with
 .B \-k
 it also checks every checkpoint signature against the audit public
-key.
+key, and with
+.B \-a
+that the chain reaches a copy of
+.B head
+kept elsewhere.
+It holds a file to the same rules as the server: each line exactly a
+record, sequence numbers 1, 2, 3 and so on, and each checkpoint
+naming the head and the sequence number just before it.
+The file is read as one stream of bytes; a read error is a failure.
 .SH EXAMPLE
 .EX
 sh /lib/sh/audit-setup              # enable + factotum mints the signer key

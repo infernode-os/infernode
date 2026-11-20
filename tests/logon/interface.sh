@@ -103,7 +103,7 @@ if {~ $phase touch} {
 	shot keyed
 	cat /mnt/osk/status > /tmp/status.keyed
 }
-PW=hunter2
+PW=hunter22
 if {~ $phase setpw} {
 	sleep 10
 	unicode -t e013 > /dev/keyboard

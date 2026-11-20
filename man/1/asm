@@ -7,6 +7,7 @@ asm, disdump \- Dis assembler, Dis disassembler
 .I file
 .br
 .B disdump
+.RB [ -l ]
 .IR file ...
 .SH DESCRIPTION
 .I Asm
@@ -37,6 +38,14 @@ prints to the standard output the Dis virtual machine
 instructions in each of its Dis
 .I file
 arguments.
+With
+.BR -l ,
+it prints instead what each file is linked by: the functions it exports
+and imports, each with its 32-bit signature and, where the file has them,
+the digest of its type (see
+.IR dis (6));
+a function with no digest is shown with
+.BR - .
 .SH SOURCE
 .B /asm
 .br
@@ -51,3 +60,9 @@ There isn't a Limbo version of
 .IR asm ,
 which is therefore available only as a host command;
 but then again it is hardly used.
+.PP
+The assembly language, as
+.B "limbo -S"
+writes it, has no form for the type digests, so a module assembled from it
+has none, and is not linked by a system that requires them
+.RB ( "emu -L" ).

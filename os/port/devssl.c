@@ -66,6 +66,7 @@ struct Dstate
 
 	/* protections */
 	char*	user;
+	ulong	pgrpid;		/* the name space it was made in */
 	int	perm;
 };
 
@@ -77,7 +78,7 @@ enum
 
 Lock	dslock;
 int	dshiwat;
-int	maxdstate = 20;
+int	maxdstate = Maxdstate;	/* the whole table from the start: see sslinit */
 Dstate** dstate;
 
 enum{
@@ -202,7 +203,13 @@ sslgen(Chan *c, char *dname, Dirtab *d, int nd, int s, Dir *dp)
 static void
 sslinit(void)
 {
-	if((dstate = malloc(sizeof(Dstate*) * maxdstate)) == 0)
+	/*
+	 * All of it now (a page or two of pointers).  It began at 20 and
+	 * was doubled by realloc under dslock, while sslgen, sslopen and
+	 * the read and write paths index it with no lock: they read the
+	 * array realloc had just freed.
+	 */
+	if((dstate = mallocz(sizeof(Dstate*) * maxdstate, 1)) == 0)
 		panic("sslinit");
 	alglistinit();
 }
@@ -262,6 +269,19 @@ sslopen(Chan *c, int omode)
 			dsnew(c, pp);
 		else {
 			devpermcheck(s->user, s->perm, omode);
+			/*
+			 * #D may be attached after NODEVS, as "private secure
+			 * sockets", and it was not private: the table of
+			 * conversations is one for the whole system, and every
+			 * program runs as the same user, so a confined program
+			 * opened another's conversation by its number, read
+			 * what it had deciphered and wrote under its key.  A
+			 * program that has given up its devices opens only
+			 * conversations made in its own name space.  (One that
+			 * was handed a conversation's descriptors has them.)
+			 */
+			if(up->env->pgrp->nodevs && s->pgrpid != up->env->pgrp->pgrpid)
+				error(Eperm);
 			s->ref++;
 		}
 		unlock(&dslock);
@@ -462,9 +482,19 @@ sslbread(Chan *c, long n, ulong offset)
 	int len;
 
 	USED(offset);
+	/*
+	 * Only a conversation's data file.  Called directly by whatever
+	 * is layered on a channel (another conversation's fd ctl, the
+	 * mount driver), not through sslread's switch: given #D or a
+	 * conversation's directory, which anyone may open, it took the
+	 * conversation number from the qid and read that conversation's
+	 * data, whoever owned it; with no conversation 0, it panicked.
+	 */
+	if((c->qid.type & QTDIR) || TYPE(c->qid) != Qdata)
+		error(Ebadusefd);
 	s.s = dstate[CONV(c->qid)];
 	if(s.s == 0)
-		panic("sslbread");
+		error(Ebadusefd);
 	if(s.s->state == Sincomplete)
 		error(Ebadusefd);
 
@@ -510,6 +540,14 @@ sslbread(Chan *c, long n, ulong offset)
 			error("ssl: too many records on one key");
 		switch(s.s->state){
 		case Sdigesting:
+			/*
+			 * a record of no bytes, its header arriving alone,
+			 * leaves processed nil, and pullupblock looks at
+			 * what it is given: a fault, from two bytes sent
+			 * by anyone, before any MAC is checked
+			 */
+			if(len < s.s->diglen || s.s->processed == 0)
+				error("ssl message too short");
 			s.s->processed = pullupblock(s.s->processed, s.s->diglen);
 			if(s.s->processed == 0)
 				error("ssl message too short");
@@ -611,9 +649,16 @@ sslbwrite(Chan *c, Block *b, ulong offset)
 	uchar *p;
 
 	bb.b = b;
+	/* only a conversation's data file: see sslbread */
+	if((c->qid.type & QTDIR) || TYPE(c->qid) != Qdata){
+		freeb(b);
+		error(Ebadusefd);
+	}
 	s.s = dstate[CONV(c->qid)];
-	if(s.s == 0)
-		panic("sslbwrite");
+	if(s.s == 0){
+		freeb(b);
+		error(Ebadusefd);
+	}
 	if(s.s->state == Sincomplete){
 		freeb(b);
 		error(Ebadusefd);
@@ -808,7 +853,7 @@ static void
 alglistinit(void)
 {
 	Alg *h, *e;
-	int n;
+	int n, m;
 
 	n = 1;
 	for(e = encrypttab; e->name != nil; e++)
@@ -818,8 +863,9 @@ alglistinit(void)
 		panic("sslinit");
 	n = 0;
 	for(e = encrypttab; e->name != nil; e++){
-		strcpy(encalgs+n, e->name);
-		n += strlen(e->name);
+		m = strlen(e->name);
+		memmove(encalgs+n, e->name, m);
+		n += m;
 		if(e[1].name == nil)
 			break;
 		encalgs[n++] = ' ';
@@ -834,8 +880,9 @@ alglistinit(void)
 		panic("sslinit");
 	n = 0;
 	for(h = hashtab; h->name != nil; h++){
-		strcpy(hashalgs+n, h->name);
-		n += strlen(h->name);
+		m = strlen(h->name);
+		memmove(hashalgs+n, h->name, m);
+		n += m;
 		if(h[1].name == nil)
 			break;
 		hashalgs[n++] = ' ';
@@ -929,6 +976,13 @@ sslwrite(Chan *c, void *a, long n, vlong offset)
 		*p++ = 0;
 
 	if(strcmp(buf, "fd") == 0){
+		/*
+		 * once: a second fd replaced the channel under readers and
+		 * writers holding other locks than this, and never closed
+		 * the first
+		 */
+		if(s.s->c != 0)
+			error("ssl: fd already set");
 		s.s->c = buftochan(p);
 
 		/* default is clear (msg delimiters only) */
@@ -1131,6 +1185,13 @@ checkdigestb(Dstate *s, Block *inb)
 
 	w = &s->in;
 
+	/*
+	 * what the record's MAC is compared with, never what the stack
+	 * held: the MAC was not written when the hash had no memory for
+	 * its last step (it allocates nothing there now)
+	 */
+	memset(digest, 0, sizeof(digest));
+
 	/* hash secret */
 	macbegin(s, w, &ss);
 
@@ -1183,7 +1244,17 @@ buftochan(char *p)
 	fd = strtoul(p, 0, 0);
 	if(fd < 0)
 		error(Ebadarg);
-	c = fdtochan(up->env->fgrp, fd, -1, 0, 1);	/* error check and inc ref */
+	/*
+	 * a channel open for reading and writing, not a mount's or an
+	 * export's, not a directory, and not one of this device's own
+	 * files: a conversation pushed onto its own data file locked
+	 * itself for good at its first read
+	 */
+	c = fdtochan(up->env->fgrp, fd, ORDWR, 1, 1);	/* error check and inc ref */
+	if((c->qid.type & QTDIR) || c->type == devno('D', 0)){
+		cclose(c);
+		error(Ebadusefd);
+	}
 	return c;
 }
 
@@ -1203,8 +1274,7 @@ sslhangup(Dstate *s)
 static void
 dsclone(Chan *ch)
 {
-	Dstate **pp, **ep, **np;
-	int newmax;
+	Dstate **pp, **ep;
 
 	lock(&dslock);
 	if(waserror()) {
@@ -1218,23 +1288,8 @@ dsclone(Chan *ch)
 			break;
 		}
 	}
-	if(pp >= ep) {
-		if(maxdstate >= Maxdstate)
-			error(Enodev);
-		newmax = 2 * maxdstate;
-		if(newmax > Maxdstate)
-			newmax = Maxdstate;
-
-		np = realloc(dstate, sizeof(Dstate*) * newmax);
-		if(np == 0)
-			error(Enomem);
-		dstate = np;
-		pp = &dstate[maxdstate];
-		memset(pp, 0, sizeof(Dstate*)*(newmax - maxdstate));
-
-		maxdstate = newmax;
-		dsnew(ch, pp);
-	}
+	if(pp >= ep)
+		error(Enodev);	/* every conversation there can be is in use */
 	poperror();
 	unlock(&dslock);
 }
@@ -1254,6 +1309,7 @@ dsnew(Chan *ch, Dstate **pp)
 	s->ref = 1;
 	kstrdup(&s->user, up->env->user);
 	s->perm = 0660;
+	s->pgrpid = up->env->pgrp->pgrpid;
 	t = TYPE(ch->qid);
 	if(t == Qclonus)
 		t = Qctl;

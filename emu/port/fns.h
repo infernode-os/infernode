@@ -121,6 +121,7 @@ int		memusehigh(void);
 int		memlow(void);
 int		memlowpass(int);
 ulong		heapactivity(void);
+ulong		heaplive(void);
 void		mkqid(Qid*, vlong, ulong, int);
 Qid	mkuqid(Chan*, Uqid*);
 Chan*		mntauth(Chan*, char*);

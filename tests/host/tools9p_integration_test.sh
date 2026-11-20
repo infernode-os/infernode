@@ -306,8 +306,10 @@ fi
 if emu_c "provision_valid_subset" 14 \
     "tools9p -b diff -p /tmp:rw read list diff task & sleep 3; echo '29 tools=diff paths=/tmp:rw' > /tool/provision; echo STATE; cat /tool/provision; echo TOOLS; cat /tool.29/tools; echo PATHS; cat /mnt/toolctl.29/paths"; then
     # The write is answered once the child is confined; a child granted
-    # /tmp made its manifest in its own /tmp and was never ready.
-    if ! echo "$OUTPUT" | grep -q "^29 ready"; then
+    # /tmp made its manifest in its own /tmp and was never ready.  Its
+    # agent starts only once it is ready, and here (no model, no UI) it
+    # exits at once, which its state then says: either is past ready.
+    if ! echo "$OUTPUT" | grep -qE "^29 (ready|failed: task agent exited)"; then
         fail "a child granted /tmp:rw is ready when its provision write returns (output: $OUTPUT)"
     elif ! echo "$OUTPUT" | grep -q "^diff$"; then
         fail "valid child provision should preserve allowed diff tool"
@@ -587,7 +589,7 @@ fi
 
 if emu_c "fixed_service_tool_derived" 15 \
     "mkdir -p /mnt/matrix /mnt/vision/0 /mnt/vision/models /mnt/wikia /phone; echo 'runtime: test' > /mnt/matrix/ctl; echo 0 > /mnt/vision/clone; touch /mnt/vision/0/image; echo 'class=fakedog score=0.9 x0=1 y0=2 x1=3 y1=4' > /mnt/vision/0/detections; echo pic > /mnt/vision/models/pic; echo 'wiki status ok' > /mnt/wikia/status; touch /mnt/wikia/ctl /phone/sms; tools9p sms matrix vision wiki read & sleep 2; echo '15551234 test' > /tool/sms/ctl; cat /tool/sms/ctl; echo PHONE; cat /phone/sms; echo status > /tool/matrix/ctl; cat /tool/matrix/ctl; echo /mnt/vision/models/pic > /tool/vision/ctl; cat /tool/vision/ctl; echo status > /tool/wiki/ctl; cat /tool/wiki/ctl; echo /phone/sms > /tool/read/ctl; echo GENERICPHONE; cat /tool/read/ctl; echo /mnt/vision/clone > /tool/read/ctl; echo GENERICVISION; cat /tool/read/ctl; echo /mnt/wikia/status > /tool/read/ctl; echo GENERICWIKI; cat /tool/read/ctl; rm -r /mnt/vision/0 /mnt/vision/models /mnt/vision/clone"; then
-    if ! echo "$OUTPUT" | grep -q "sms: queued to 15551234" ||
+    if ! echo "$OUTPUT" | grep -q "sms: given to the phone to send to 15551234" ||
        ! echo "$OUTPUT" | grep -q "send 15551234 test" ||
        ! echo "$OUTPUT" | grep -q "runtime:" ||
        ! echo "$OUTPUT" | grep -q "class=fakedog score=0.9" ||

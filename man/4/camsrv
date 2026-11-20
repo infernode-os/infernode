@@ -103,7 +103,8 @@ the same for every reader, so a record keyed
 means the same frame to all of them.
 The last eight frames are kept; a read below them is refused with
 .LR "frame expired" ,
-and a read past the newest waits for that frame.
+and a read past the newest waits for that frame; one more than eight
+frames past it is refused as one below is.
 A live reader starts at the newest
 .RB ( status 's
 .B frames=
@@ -136,6 +137,11 @@ layer, stacked in the union's order
 .TP
 .B 0/ctl
 Writes, one at a time; reading gives the settings.
+It is written by the user
+.I camsrv
+runs as, who owns the files, and read by anyone.
+A write that is not one of these, or whose value is missing, is no
+number or is out of range, is refused and changes nothing.
 .RS
 .PD 0
 .TP

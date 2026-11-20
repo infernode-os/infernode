@@ -55,7 +55,8 @@ ToolPayfetch: module {
 };
 
 REQUEST_TIMEOUT: con 30000;
-MAX_BODY: con 512 * 1024;
+MAX_BODY: con 512 * 1024;	# of a response read (as webfetch: it is for a model to read)
+inited := 0;
 
 init(): string
 {
@@ -84,6 +85,7 @@ init(): string
 	base64 = load Encoding Encoding->BASE64PATH;
 	if(base64 == nil)
 		return "cannot load base64 encoding";
+	inited = 1;
 	return nil;
 }
 
@@ -105,7 +107,7 @@ doc(): string
 		"  payfetch <url> -a <account>\n" +
 		"  payfetch <url> -a <account> -c <chain>\n\n" +
 		"Arguments:\n" +
-		"  url      - Full URL (https://...)\n" +
+		"  url      - Full URL (https://...; a payment is made over https only)\n" +
 		"  -a acct  - Wallet account name (default: reads /mnt/wallet/ctl)\n" +
 		"  -c chain - Preferred chain (default: base)\n\n" +
 		"Behavior:\n" +
@@ -137,8 +139,8 @@ schema(): string
 
 exec(args: string): string
 {
-	if(sys == nil)
-		init();
+	if(!inited && (ierr := init()) != nil)
+		return "error: payfetch: " + ierr;
 
 	# Parse arguments
 	(nil, toks) := sys->tokenize(strip(args), " \t\n");
@@ -151,17 +153,23 @@ exec(args: string): string
 	chain := "base";
 	chainoverride := 0;
 
+	# A flag that is not one, or has no value, is an error.  (They were
+	# passed over: "-a" with nothing after it paid from the default
+	# account, not the one that was meant.)
 	while(toks != nil) {
 		flag := hd toks;
 		toks = tl toks;
-		if(flag == "-a" && toks != nil) {
+		if(flag != "-a" && flag != "-c")
+			return "error: unknown argument '" + flag + "'; usage: payfetch <url> [-a account] [-c chain]";
+		if(toks == nil)
+			return "error: " + flag + " needs a value; usage: payfetch <url> [-a account] [-c chain]";
+		if(flag == "-a")
 			acctname = hd toks;
-			toks = tl toks;
-		} else if(flag == "-c" && toks != nil) {
+		else {
 			chain = hd toks;
 			chainoverride = 1;
-			toks = tl toks;
 		}
+		toks = tl toks;
 	}
 
 	# If no account specified, try to read default from wallet ctl
@@ -202,12 +210,23 @@ exec(args: string): string
 
 	# ── x402 payment flow ────────────────────────────────
 
+	# A payment is asked for and made over https only.  Over plain
+	# http anyone on the path writes the 402 (the recipient, the
+	# amount) and reads the signed authorization that answers it.
+	if(!hasprefix(str->tolower(resp.url), "https://"))
+		return "error: " + resp.url + " asks for payment (HTTP 402) over plain http; " +
+			"payfetch pays over https only";
+
 	# Parse 402 response body
 	body := string resp.body;
 	(pr, perr) := x402->parse402(body);
-	if(perr != nil)
+	if(perr != nil) {
+		# (the start of what came, on one line: it was echoed whole)
+		if(len body > 300)
+			body = body[0:300] + "...";
 		return "error: cannot parse 402 response: " + perr +
-			"\nResponse body: " + body;
+			"\nResponse body: " + oneline(body);
+	}
 
 	# Note: pr.errmsg is informational (e.g. "Payment required"), not fatal
 	# Only treat it as fatal if there are no payment options
@@ -254,12 +273,21 @@ exec(args: string): string
 		Header("X-PAYMENT", enc64(payload)) ::
 		Header("PAYMENT-SIGNATURE", payload) :: nil;
 
-	(resp2, err2) := dofetch("GET", url, payhdrs, nil);
+	# (to the address that asked for payment, which a redirect may
+	# have made another than the one first asked for; webclient drops
+	# these headers if a redirect changes origin again)
+	# From here the authorization has left: whatever comes back, the
+	# result says so.  (A timeout, an error status or a settlement
+	# header that did not parse said nothing of it.)
+	sent := "The payment authorization (" + opt.amount + " to " + opt.payto + " on " + opt.network +
+		") was signed and sent before this; whether it was taken is not known." +
+		" Check the wallet before fetching this again.";
+	(resp2, err2) := dofetch("GET", resp.url, payhdrs, nil);
 	if(err2 != nil)
-		return "error: paid request failed: " + err2;
+		return "error: paid request failed: " + err2 + "\n" + sent;
 
 	if(resp2.statuscode >= 400)
-		return sys->sprint("error: paid request returned HTTP %d", resp2.statuscode);
+		return sys->sprint("error: paid request returned HTTP %d\n%s", resp2.statuscode, sent);
 
 	# Check settlement response if present
 	settlement := getheader(resp2.headers, "X-PAYMENT-RESPONSE");
@@ -273,6 +301,9 @@ exec(args: string): string
 				opt.amount, opt.payto, opt.network, sr.transaction);
 		else if(sr != nil)
 			paidmsg = "[Payment reported but settlement pending]\n";
+		else
+			paidmsg = sys->sprint("[Payment authorization for %s to %s on %s sent; the server's settlement report could not be read]\n",
+				opt.amount, opt.payto, opt.network);
 	} else {
 		paidmsg = sys->sprint("[Paid %s on %s]\n", opt.amount, opt.network);
 	}
@@ -337,33 +368,15 @@ validamount(s: string): int
 
 # ── HTTP helpers ─────────────────────────────────────────────
 
+# The request keeps its own time and limit: at the deadline its
+# connection is hung up and nothing of it is left running, and no more
+# than MAX_BODY of a response is read.
 dofetch(method, url: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	result := chan[1] of (ref Response, string);
-	spawn asyncfetch(method, url, hdrs, body, result);
-
-	timeout := chan[1] of int;
-	spawn timer(timeout, REQUEST_TIMEOUT);
-
-	alt {
-	(r, e) := <-result =>
-		return (r, e);
-	<-timeout =>
-		return (nil, "request timed out (30s)");
-	}
-}
-
-asyncfetch(method, url: string, hdrs: list of Header, body: array of byte,
-	result: chan of (ref Response, string))
-{
-	(resp, err) := webclient->requestpublic(method, url, hdrs, body);
-	result <-= (resp, err);
-}
-
-timer(ch: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	ch <-= 1;
+	(r, e) := webclient->requestbounded(method, url, hdrs, body, 1, REQUEST_TIMEOUT, MAX_BODY);
+	if(e == "request timed out")
+		e = "request timed out (30s)";
+	return (r, e);
 }
 
 formatresponse(resp: ref Response): string
@@ -371,11 +384,27 @@ formatresponse(resp: ref Response): string
 	if(resp.body == nil || len resp.body == 0)
 		return "(empty response)";
 
-	body := resp.body;
-	if(len body > MAX_BODY)
-		body = body[0:MAX_BODY];
+	text := string resp.body;
+	if(resp.truncated)
+		text += "\n[the response is longer: only its first 512KB were read]";
+	# what came is the server's words: one that begins as a failed call
+	# does ("error:") is said to be the response
+	if(len text >= 6 && str->tolower(text[0:6]) == "error:")
+		return "the response:\n" + text;
+	return text;
+}
 
-	return string body;
+# s on one line: control characters and line ends as blanks
+oneline(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < ' ' || c == 16r7F)
+			c = ' ';
+		r[len r] = c;
+	}
+	return r;
 }
 
 getheader(hdrs: list of Header, name: string): string

@@ -53,7 +53,12 @@ I420_rgb24(void *fp)
 	if(w <= 0 || h <= 0 || (w|h)&1)
 		error(exBounds);
 	w2 = w/2;
-	if(f->y->len < w*h || f->cb->len < w2*(h/2) || f->cr->len < w2*(h/2) || f->out->len < 3*w*h)
+	/*
+	 * In 64 bits: 131072 by 65536 wrapped each product to nothing, and
+	 * planes of a byte were then converted for 2^33 pixels.  A length
+	 * fits an int, so past this every product below does.
+	 */
+	if(f->y->len < (vlong)w*h || f->cb->len < (vlong)w2*(h/2) || f->cr->len < (vlong)w2*(h/2) || f->out->len < 3*(vlong)w*h)
 		error(exBounds);
 	o = f->out->data;
 	for(i = 0; i < h; i++){

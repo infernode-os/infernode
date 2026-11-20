@@ -15,6 +15,25 @@ sysmodinit(void)
 	builtinmod("$Sys", Sysmodtab, Sysmodlen);
 }
 
+enum
+{
+	Fmtroom	= 8,	/* of fmt, for a verb: "ll", a rune of UTFmax, the terminator */
+};
+
+/* the characters that end a conversion or are acted on in it (xprint's cases) */
+static int
+isverb(int c)
+{
+	switch(c){
+	case '*': case 'b': case '%': case 'q': case 's':
+	case 'E': case 'e': case 'f': case 'g': case 'G':
+	case 'd': case 'o': case 'x': case 'X': case 'c':
+	case 'r': case 'H':
+		return 1;
+	}
+	return 0;
+}
+
 /*
  * Every verb write below is guarded by b < eb, and the guard is not
  * politeness. Literal characters were always bounded, so a long format
@@ -83,6 +102,20 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 		while(nc--) {
 			c = isr ? s1->Srune[sip] : s1->Sascii[sip];
 			sip++;
+			/*
+			 * fmt holds one conversion: its flags and digits, then
+			 * its verb. The compiler lets a conversion have any
+			 * number of digits and they were copied as they came:
+			 * forty zeros in a constant format wrote past fmt, over
+			 * the stack. Flags and digits past what any conversion
+			 * needs are left out; Fmtroom is kept for the verb and
+			 * what a case below adds to it.
+			 */
+			if(f >= fmt+sizeof(fmt)-Fmtroom && !isverb(c)){
+				if(c == '*')
+					va += IBY2WD;	/* its argument is passed all the same */
+				continue;
+			}
 			*f++ = c;
 			*f = '\0';
 			switch(c) {
@@ -91,7 +124,7 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 			case '*':
 				i = *(WORD*)va;
 				f--;
-				f += snprint(f, sizeof(fmt)-(f-fmt), "%d", i);
+				f += snprint(f, sizeof(fmt)-Fmtroom-(f-fmt), "%d", i);
 				va += IBY2WD;
 				continue;
 			case 'b':
@@ -176,8 +209,13 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 					c = D2H(ptr)->ref;
 					t = D2H(ptr)->t;
 				}
+				/*
+				 * the count and the type's size: it was the
+				 * type's address, which told a program where
+				 * the emulator is in memory
+				 */
 				if(b < eb)
-					b += snprint(b, eb-b, "%d.%.8lux", c, (ulong)t);
+					b += snprint(b, eb-b, "%d.%.8lux", c, (ulong)(t != nil? t->size: 0));
 				va += IBY2WD;
 				break;
 			}
@@ -185,6 +223,35 @@ xprint(Prog *xp, void *vfp, void *vva, String *s1, char *buf, int n)
 		}
 	}
 	return b - buf;
+}
+
+/*
+ * sprint's and aprint's text when the stack's buffer is too small for
+ * it: formatted into a byte array of the Dis heap, not into malloc'd
+ * memory as bigxprint's is. What is then made of it (a string, an
+ * array) can raise for want of heap, and nothing here can catch that. A
+ * malloc'd buffer was lost for good when it did: a program printing
+ * with a width of twenty million and its heap full took the kernel's
+ * main pool tens of megabytes at a time. An array nothing refers to is
+ * the collector's to free.
+ */
+static Array*
+heapxprint(Prog *xp, void *vfp, void *vva, String *s1, int s, int *np)
+{
+	Array *a;
+	int m, n;
+
+	m = s;
+	for(;;){
+		m *= 2;
+		a = H2D(Array*, heaparray(&Tbyte, m));	/* which refuses a size that is none */
+		n = xprint(xp, vfp, vva, s1, (char*)a->data, m);
+		if(n < m-UTFmax-2)
+			break;
+		destroy(a);
+	}
+	*np = n;
+	return a;
 }
 
 int
@@ -212,34 +279,48 @@ void
 Sys_sprint(void *fp)
 {
 	int n;
-	char buf[256], *b = buf;
+	char buf[256];
+	Array *a;
 	F_Sys_sprint *f;
 
 	f = fp;
 	n = xprint(currun(), f, &f->vargs, f->s, buf, sizeof(buf));
-	if (n >= sizeof(buf)-UTFmax-2)
-		n = bigxprint(currun(), f, &f->vargs, f->s, &b, sizeof(buf));
-	b[n] = '\0';
-	retstr(b, f->ret);
-	if (b != buf)
-		free(b);
+	if (n >= sizeof(buf)-UTFmax-2){
+		a = heapxprint(currun(), f, &f->vargs, f->s, sizeof(buf), &n);
+		a->data[n] = '\0';
+		retstr((char*)a->data, f->ret);
+		destroy(a);
+		return;
+	}
+	buf[n] = '\0';
+	retstr(buf, f->ret);
 }
 
 void
 Sys_aprint(void *fp)
 {
 	int n;
-	char buf[256], *b = buf;
+	char buf[256];
+	Array *a, *r;
 	F_Sys_aprint *f;
 
 	f = fp;
 	n = xprint(currun(), f, &f->vargs, f->s, buf, sizeof(buf));
-	if (n >= sizeof(buf)-UTFmax-2)
-		n = bigxprint(currun(), f, &f->vargs, f->s, &b, sizeof(buf));
+	if (n >= sizeof(buf)-UTFmax-2){
+		a = heapxprint(currun(), f, &f->vargs, f->s, sizeof(buf), &n);
+		r = mem2array(a->data, n);
+		destroy(a);
+	}else
+		r = mem2array(buf, n);
+	/*
+	 * The new array is made before the old one is given up. The old
+	 * was destroyed first, and mem2array raises when the heap is
+	 * full: the caller's variable then still named the freed block
+	 * (a = sys->aprint(...) with a an array), which the program went
+	 * on to read, write and free.
+	 */
 	destroy(*f->ret);
-	*f->ret = mem2array(b, n);
-	if (b != buf)
-		free(b);
+	*f->ret = r;
 }
 
 static int
@@ -474,7 +555,7 @@ builtinmod(char *name, void *vr, int rlen)
 	}
 	while(r->name) {
 		t = dtype(freeheap, r->size, r->map, r->np);
-		runtime(m, l, r->name, r->sig, r->fn, t);
+		runtime(m, l, r->name, r->sig, r->dig, r->fn, t);
 		r++;
 		l++;
 	}

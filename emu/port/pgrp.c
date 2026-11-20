@@ -33,7 +33,7 @@ closepgrp(Pgrp *p)
 	for(h = p->mnthash; h < e; h++) {
 		for(f = *h; f; f = next) {
 			wlock(&f->lock);
-			cclose(f->from);
+			/* f->from is closed with the head, by putmhead */
 			mountfree(f->mount);
 			f->mount = nil;
 			next = f->hash;

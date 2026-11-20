@@ -1,0 +1,10 @@
+<!doctype html><title>align=center and center place block children: a table in a td align=center is centred</title>
+<style>
+body{margin:0}
+/* red where the green table belongs, 100px into a 300px cell: covered
+   only if the table is centred */
+.o{width:300px;border-spacing:0;background:linear-gradient(to right,white 100px,red 100px,red 200px,white 200px)}
+td{padding:0}
+.g{width:100px;height:100px;border-spacing:0;background:green}
+</style>
+<table class=o><tr><td align=center><table class=g><tr><td></td></tr></table></td></tr></table>

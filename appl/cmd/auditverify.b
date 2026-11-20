@@ -26,6 +26,14 @@ implement Auditverify;
 #   auditverify [-k pubkeyfile] [-a anchorfile] [chainfile]
 # (chainfile defaults to standard input, e.g. `cat /mnt/audit/chain | auditverify`)
 #
+# A record must be the line auditfs writes for its fields, carry the next
+# sequence number after the one before it, and the hash of the chain
+# before it; a checkpoint must name the head and the sequence number just
+# before it.  At a record that does not, the verifier says so and reads
+# on from that record's own stored hash, to say how many breaks there are
+# and how far the file goes: a server started on a broken file chains
+# from its end the same way (auditfs(4)).  Any break is a failure.
+#
 # Exit: prints "ok: ..." and succeeds, or prints the fault and raises.
 #
 # See docs/compliance/audit-log-design.md.
@@ -98,7 +106,9 @@ init(nil: ref Draw->Context, args: list of string)
 			fail("anchor file must hold '<tiphash> <seq>' (a copy of /mnt/audit/head)");
 		anchorhash = hd toks;
 		anchorseq = int hd tl toks;
-		if(len anchorhash != 2*Auditchain->HASHLEN || anchorseq < 0)
+		# a number, not whatever digits a word begins with
+		if(len anchorhash != 2*Auditchain->HASHLEN || anchorseq < 0 ||
+		   string anchorseq != hd tl toks)
 			fail("cannot parse anchor " + anchorfile);
 	}
 
@@ -123,28 +133,39 @@ init(nil: ref Draw->Context, args: list of string)
 verifychain(data: string, pk: ref Keyring->PK, anchorhash: string, anchorseq: int): (int, int, int, int, string)
 {
 	prev := ac->genesis();
-	nrec := 0;
+	nrec := 0;		# the highest sequence number so far
 	ncheck := 0;
 	nsig := 0;
+	nbreak := 0;
+	fault := "";		# the first break
 	# seq 0 anchors the empty chain: the head file reads "<genesis> 0".
 	anchored := anchorseq == 0 && anchorhash == ac->hex(prev);
 	(nil, lines) := sys->tokenize(data, "\n");
 	for(; lines != nil; lines = tl lines) {
-		line := hd lines;
-		if(line == "")
+		(seqf, tf, source, event, hashf, recmsg, okp) := ac->parse(hd lines);
+		if(!okp) {
+			if(nbreak++ == 0)
+				fault = sys->sprint("malformed record after seq %d", nrec);
 			continue;
-		(seqf, tf, source, event, hashf, recmsg, okp) := parserec(line);
-		if(!okp)
-			return (0, nrec, ncheck, nsig,
-				sys->sprint("malformed record after seq %d", nrec));
+		}
 		h := ac->extend(prev, array of byte ac->canon(seqf, tf, source, event, recmsg));
-		if(ac->hex(h) != hashf)
-			return (0, nrec, ncheck, nsig, sys->sprint("broken at seq %d", seqf));
-		if(event == "checkpoint") {
+		if(ac->hex(h) != hashf) {
+			if(nbreak++ == 0)
+				fault = sys->sprint("broken at seq %d", seqf);
+		} else if(seqf != nrec + 1) {
+			# The hash covers the number, so this is a chain made
+			# with a gap or a repeat in it: records taken out and
+			# the rest rehashed, or a server that numbered its
+			# records from before a break.
+			if(nbreak++ == 0)
+				fault = sys->sprint("broken at seq %d (it follows seq %d)", seqf, nrec);
+		} else if(nbreak == 0 && event == "checkpoint") {
 			ncheck++;
 			(head, cseq, sig) := parsecheck(recmsg);
-			# the signed tip is the chain head just before this record
-			if(head != ac->hex(prev))
+			# the signed tip is the chain head just before this
+			# record, and the number it names is that record's:
+			# the number is signed too, and was not looked at
+			if(head != ac->hex(prev) || cseq != string (seqf - 1))
 				return (0, nrec, ncheck, nsig,
 					sys->sprint("checkpoint head mismatch at seq %d", seqf));
 			if(pk != nil) {
@@ -168,15 +189,19 @@ verifychain(data: string, pk: ref Keyring->PK, anchorhash: string, anchorseq: in
 				nsig++;
 			}
 		}
-		prev = h;
-		nrec = seqf;
-		if(seqf == anchorseq) {
+		prev = ac->unhex(hashf);
+		if(seqf > nrec)
+			nrec = seqf;
+		if(nbreak == 0 && seqf == anchorseq) {
 			if(hashf != anchorhash)
 				return (0, nrec, ncheck, nsig,
 					sys->sprint("anchor mismatch at seq %d (history rewritten)", seqf));
 			anchored = 1;
 		}
 	}
+	if(nbreak > 0)
+		return (0, nrec, ncheck, nsig,
+			sys->sprint("%s (breaks: %d; the file's last record is seq %d)", fault, nbreak, nrec));
 	if(anchorseq >= 0 && !anchored)
 		return (0, nrec, ncheck, nsig,
 			sys->sprint("chain does not reach anchor seq %d (truncated?)", anchorseq));
@@ -225,30 +250,6 @@ splitkv(s: string): (string, string)
 	return (s, "");
 }
 
-parserec(line: string): (int, int, string, string, string, string, int)
-{
-	(n, toks) := sys->tokenize(line, " ");
-	if(n < 5)
-		return (0, 0, "", "", "", "", 0);
-	seqf := int hd toks; toks = tl toks;
-	tf := int hd toks; toks = tl toks;
-	source := hd toks; toks = tl toks;
-	event := hd toks; toks = tl toks;
-	hashf := hd toks; toks = tl toks;
-	return (seqf, tf, source, event, hashf, join(toks), 1);
-}
-
-join(toks: list of string): string
-{
-	s := "";
-	for(; toks != nil; toks = tl toks) {
-		if(s != "")
-			s += " ";
-		s += hd toks;
-	}
-	return s;
-}
-
 readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
@@ -257,13 +258,34 @@ readfile(path: string): string
 	return readfd(fd);
 }
 
+# The bytes are put together before they are made a string.  Each read
+# was converted by itself, so a rune cut by the end of one was two bad
+# runes, its record no longer hashed to what the server sealed, and a
+# sound chain with any text outside ASCII in it was reported broken.
+# And a read that fails is not the end of the file: what had been read
+# was verified, and "ok" said of it.
 readfd(fd: ref Sys->FD): string
 {
-	s := "";
-	buf := array[8192] of byte;
-	while((m := sys->read(fd, buf, len buf)) > 0)
-		s += string buf[0:m];
-	return s;
+	chunks: list of array of byte;
+	total := 0;
+	for(;;) {
+		buf := array[Sys->ATOMICIO] of byte;
+		m := sys->read(fd, buf, len buf);
+		if(m < 0)
+			fail(sys->sprint("read error: %r"));
+		if(m == 0)
+			break;
+		chunks = buf[0:m] :: chunks;
+		total += m;
+	}
+	all := array[total] of byte;
+	o := total;
+	for(; chunks != nil; chunks = tl chunks) {
+		c := hd chunks;
+		o -= len c;
+		all[o:] = c;
+	}
+	return string all;
 }
 
 fail(msg: string)

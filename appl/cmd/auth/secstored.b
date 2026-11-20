@@ -18,8 +18,14 @@ implement Secstored;
 # Storage layout:
 #   storedir/
 #     <user>/
-#       PAK          PAK verifier (hexHi) for this user
+#       PAK          PAK verifier (version and hexHi) for this user; two
+#                    lines while the account moves to a newer version
+#       VAULTKEY     the hash of the second factor's vault key, once one
+#                    is enrolled: the account's files then change only
+#                    in a session that has shown the key
+#       2fa/         the client's key slots (twofaslot(2)); not served
 #       <filename>   encrypted file blobs
+#     Names beginning with a dot are the server's own, while it writes.
 #
 # Setup:
 #   Use auth/secstore-setup to create user accounts.
@@ -64,6 +70,24 @@ Secstored: module
 
 VERSION1: con "secstore";
 VERSION3: con "secstore3";	# secstore2 retired: the client never offers it
+#
+# Version 4 is version 3's exchange with another verifier and another
+# session.  The verifier is made from the key the account's files are
+# encrypted under (100000 HMACs of the password), where version 3's was
+# made from one SHA-256 of it: whoever read the store could try
+# passwords against PAK at the cost of an exponentiation each, far less
+# than against the files beside it.  And a version 4 session's stores
+# and removes are answered, where the older ones were not, so it has
+# the requests this server adds: a new verifier, and the second
+# factor's lock on the account's files.
+#
+# An account at an older version logs in once more with it, is given
+# its version 4 verifier by the client (VERIFIER), and from the next
+# login is at version 4 alone: until then PAK holds both lines.  A
+# session of an older version may read and move the account, and no
+# more: it does not store or remove.
+#
+VERSION4: con "secstore4";
 Maxfilesize: con 128*1024;
 Maxmsg: con 4096;
 
@@ -124,6 +148,14 @@ auditlog(source, event, msg: string): int
 	if(audit == nil)
 		return -1;
 	return audit->log(source, event, msg);
+}
+
+# a name the client claimed, as one value of a record
+auditval(s: string): string
+{
+	if(audit == nil)
+		return "";
+	return audit->value(s);
 }
 
 # auditrequired reports whether this install opted into auditing (the
@@ -208,7 +240,7 @@ notefail(user: string)
 	if(nf == Maxfail){
 		log(sys->sprint("account %s locked after %d failed attempts (%ds cooldown)", user, nf, Locksecs));
 		auditlog("secstore", "authlock",
-			sys->sprint("user=%s fails=%d locksecs=%d", user, nf, Locksecs));
+			sys->sprint("user=%s fails=%d locksecs=%d", auditval(user), nf, Locksecs));
 	}
 }
 
@@ -318,18 +350,18 @@ serve(lconn: ref Dial->Connection)
 		log("ssl ok");
 
 	# PAK authentication
-	(user, hexHi, claimed) := pakserver(sslconn);
+	(user, ver, claimed) := pakserver(sslconn);
 	if(user == nil){
 		log("PAK auth failed");
 		if(claimed != nil)
-			auditlog("secstore", "authfail", "user=" + claimed);
+			auditlog("secstore", "authfail", "user=" + auditval(claimed));
 		else
 			auditlog("secstore", "authfail", "");
 		return;
 	}
 
 	log("authenticated: " + user);
-	if(auditlog("secstore", "authok", "user=" + user) < 0 && auditrequired()){
+	if(auditlog("secstore", "authok", "user=" + auditval(user)) < 0 && auditrequired()){
 		log("audit sink unavailable — refusing session (fail-closed)");
 		return;
 	}
@@ -338,7 +370,7 @@ serve(lconn: ref Dial->Connection)
 	sys->fprint(sslconn.dfd, "OK");
 
 	# Handle file operations
-	fileloop(sslconn, user, hexHi);
+	fileloop(sslconn, user, ver);
 }
 
 # ── PAK Server Protocol ──────────────────────────────────────
@@ -400,8 +432,7 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 
 	# Handle cansecstore probe (m=0)
 	if(hexm == "0"){
-		(nil, hexHi) := readverifier(C);
-		if(hexHi != nil)
+		if(readverifiers(C) != nil)
 			sys->fprint(fd, "!account exists");
 		else
 			sys->fprint(fd, "!no account");
@@ -414,22 +445,47 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	if(rem > 0){
 		log(sys->sprint("rejected locked account %s (%ds remaining)", C, rem));
 		writerr(fd, sys->sprint("account locked; retry in %ds", rem));
-		auditlog("secstore", "authlock", sys->sprint("user=%s reason=throttled remaining=%d", C, rem));
+		auditlog("secstore", "authlock", sys->sprint("user=%s reason=throttled remaining=%d", auditval(C), rem));
 		return (nil, nil, C);
 	}
 
 	# Look up user's PAK verifier
-	(acctver, hexHi) := readverifier(C);
-	if(hexHi == nil){
+	verifiers := readverifiers(C);
+	if(verifiers == nil){
 		writerr(fd, "no account");
 		return (nil, nil, C);
 	}
-	if(acctver != ver){
+	hexHi: string;
+	for(vl := verifiers; vl != nil; vl = tl vl)
+		if((hd vl).t0 == ver)
+			hexHi = (hd vl).t1;
+	if(hexHi == nil){
 		writerr(fd, "account version mismatch");
 		return (nil, nil, C);
 	}
 	Hi := IPint.strtoip(hexHi, 64);
+	if(!goodverifier(ver, hexHi)){
+		log(sys->sprint("the verifier kept for %s is not one", C));
+		writerr(fd, "no account");
+		return (nil, nil, C);
+	}
 	m := IPint.strtoip(hexm, 64);
+
+	# m is the client's, and must be an element of the group: 0 < m < p.
+	# Only the string "0" was looked for (the probe, above).  Any other
+	# spelling of zero, or p, or a multiple of it, made sigma below 0
+	# whatever y was, and the k sent next the hash of things the client
+	# knows and the password's verifier: one connection, and the
+	# password could be searched for with no further word to this
+	# server, the lockout never counting past one.  An m that is no
+	# number was a nil dereference.  Counted as a failed attempt.
+	if(m == nil || m.cmp(IPint.inttoip(0)) <= 0 || m.cmp(params.p) >= 0){
+		log(sys->sprint("rejected m outside the group for %s", C));
+		writerr(fd, "bad m");
+		auditlog("secstore", "authfail", sys->sprint("user=%s reason=badm", auditval(C)));
+		notefail(C);
+		return (nil, nil, C);
+	}
 
 	# Server picks random y, computes mu = g^y mod p
 	y := mod(IPint.random(exponentbits(ver), exponentbits(ver)), params.q);
@@ -525,15 +581,26 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 
 	# Authenticated: clear any accumulated failure state for this account.
 	recordok(C);
-	return (C, hexHi, C);
+	# logged in at version 4: the older verifier, kept while the
+	# account moved, is done with
+	if(ver == VERSION4 && len verifiers > 1){
+		e = writeuserfile(C, "PAK", array of byte (VERSION4 + " " + hexHi + "\n"));
+		if(e != nil)
+			log(sys->sprint("%s: can't drop the older verifier: %s", C, e));
+		else
+			log(sys->sprint("%s is at version 4 alone", C));
+	}
+	return (C, ver, C);
 }
 
 # ── File Operations ───────────────────────────────────────────
 
-fileloop(conn: ref Dial->Connection, user: string, nil: string)
+fileloop(conn: ref Dial->Connection, user: string, ver: string)
 {
 	fd := conn.dfd;
 	buf := array[Maxmsg] of byte;
+	v4 := ver == VERSION4;
+	shown := 0;	# this session has shown the account's vault key
 
 	for(;;){
 		n := sys->read(fd, buf, len buf);
@@ -561,113 +628,519 @@ fileloop(conn: ref Dial->Connection, user: string, nil: string)
 		case cmd {
 		"GET" =>
 			doget(fd, user, arg);
-		"PUT" =>
-			doput(fd, user, arg);
-		"RM" =>
-			dorm(user, arg);
+		"PUT" or "RM" =>
+			# A session of an older version reads, and moves the
+			# account to version 4, and no more: its stores and
+			# removes were never answered, so a refusal could not
+			# be said.  It is ended.
+			if(!v4){
+				log(sys->sprint("%s: %s in a %s session refused: log in at version 4", user, cmd, ver));
+				return;
+			}
+			# Once a second factor is enrolled the account's
+			# files change only in a session that has shown its
+			# vault key: the password alone proved, the vault
+			# could be replaced by one of the password holder's
+			# own making, or removed.
+			why: string;
+			if(enrolled(user) && !shown)
+				why = "second factor required: show the vault key to change this account's files";
+			if(cmd == "PUT"){
+				if(doput(fd, user, arg, why) < 0)
+					return;
+			}else
+				dorm(fd, user, arg, why);
+		"VERIFIER" =>
+			doverifier(fd, user, ver, arg);
+		"VAULT?" =>
+			if(!v4)
+				writerr(fd, "unknown command");
+			else if(enrolled(user))
+				sys->fprint(fd, "enrolled");
+			else
+				sys->fprint(fd, "none");
+		"VAULTKEY" =>
+			if(!v4){
+				writerr(fd, "unknown command");
+				break;
+			}
+			want := readvaultkey(user);
+			if(want == nil){
+				sys->fprint(fd, "none");
+				break;
+			}
+			if(!sameb(vaulthash(arg), want)){
+				log(sys->sprint("%s: wrong vault key", user));
+				auditlog("secstore", "authfail", sys->sprint("user=%s reason=vaultkey", auditval(user)));
+				writerr(fd, "wrong vault key");
+				break;
+			}
+			shown = 1;
+			sys->fprint(fd, "OK");
+		"ENROLL2FA" =>
+			if(!v4){
+				writerr(fd, "unknown command");
+				break;
+			}
+			if(enrolled(user) && !shown){
+				writerr(fd, "a second factor is already enrolled: show its vault key first");
+				break;
+			}
+			h := vaulthash(arg);
+			if(h == nil){
+				writerr(fd, "a vault key is 64 hexadecimal digits");
+				break;
+			}
+			e := writeuserfile(user, "VAULTKEY", array of byte ("sha256 " + hex(h) + "\n"));
+			if(e != nil){
+				log(sys->sprint("%s: can't enrol: %s", user, e));
+				writerr(fd, "can't record the vault key");
+				break;
+			}
+			shown = 1;
+			log(sys->sprint("%s: second factor enrolled", user));
+			auditlog("secstore", "enroll2fa", "user=" + auditval(user));
+			sys->fprint(fd, "OK");
+		"UNENROLL2FA" =>
+			if(!v4){
+				writerr(fd, "unknown command");
+				break;
+			}
+			if(!enrolled(user)){
+				sys->fprint(fd, "OK");
+				break;
+			}
+			if(!shown){
+				writerr(fd, "second factor required: show the vault key first");
+				break;
+			}
+			if(sys->remove(userpath(user, "VAULTKEY")) < 0){
+				writerr(fd, sys->sprint("can't remove the vault key's record: %r"));
+				break;
+			}
+			shown = 0;
+			log(sys->sprint("%s: second factor no longer enrolled", user));
+			auditlog("secstore", "unenroll2fa", "user=" + auditval(user));
+			sys->fprint(fd, "OK");
 		"BYE" =>
-			break;
+			return;	# break left only the case, and the session went on
 		* =>
 			writerr(fd, "unknown command");
 		}
 	}
 }
 
+#
+# GET.  The answer is a size and then that many bytes; -1 for a file the
+# account does not have; or an error.  Any file that could not be
+# opened was -1, so one that was there and could not be read (its mode,
+# an I/O error) looked like an account with nothing stored, and the
+# client saved a new file over it.
+#
 doget(fd: ref Sys->FD, user: string, name: string)
 {
-	if(name == nil || name == ""){
-		sys->fprint(fd, "-1");
-		return;
+	data: array of byte;
+	if(name == "."){
+		(l, e) := listing(user);
+		if(e != nil){
+			writerr(fd, e);
+			return;
+		}
+		data = array of byte l;
+	}else{
+		if(!safename(name) || reserved(name)){
+			writerr(fd, "not a file's name");
+			return;
+		}
+		path := userpath(user, name);
+		(ok, d) := sys->stat(path);
+		if(ok < 0){
+			e := sys->sprint("%r");
+			if(nosuchfile(e))
+				sys->fprint(fd, "-1");
+			else{
+				log(sys->sprint("%s: can't stat %s: %s", user, name, e));
+				writerr(fd, "can't read " + name);
+			}
+			return;
+		}
+		if(d.mode & Sys->DMDIR){
+			writerr(fd, "not a file's name");
+			return;
+		}
+		if(d.length > big Maxfilesize){
+			writerr(fd, name + " is too long");
+			return;
+		}
+		rfd := sys->open(path, Sys->OREAD);
+		if(rfd == nil){
+			log(sys->sprint("%s: can't open %s: %r", user, name));
+			writerr(fd, "can't read " + name);
+			return;
+		}
+		data = array[int d.length] of byte;
+		total := 0;
+		while(total < len data){
+			n := sys->read(rfd, data[total:], len data - total);
+			if(n < 0){
+				log(sys->sprint("%s: can't read %s: %r", user, name));
+				writerr(fd, "can't read " + name);
+				return;
+			}
+			if(n == 0)
+				break;
+			total += n;
+		}
+		data = data[0:total];
+		if(debug)
+			log(sys->sprint("GET %s: %d bytes", name, total));
 	}
-
-	# Sanitize filename (no slashes, no ..)
-	if(!safename(name)){
-		sys->fprint(fd, "-1");
-		return;
-	}
-
-	path := userpath(user, name);
-	rfd := sys->open(path, Sys->OREAD);
-	if(rfd == nil){
-		sys->fprint(fd, "-1");
-		return;
-	}
-
-	# Read entire file
-	data := array[Maxfilesize] of byte;
-	total := 0;
-	for(;;){
-		n := sys->read(rfd, data[total:], len data - total);
-		if(n <= 0)
-			break;
-		total += n;
-	}
-
-	if(debug)
-		log(sys->sprint("GET %s: %d bytes", name, total));
 
 	# Send size, then data
-	sys->fprint(fd, "%d", total);
-	if(total > 0){
-		for(off := 0; off < total;){
-			chunk := total - off;
-			if(chunk > Maxmsg)
-				chunk = Maxmsg;
-			sys->write(fd, data[off:off+chunk], chunk);
-			off += chunk;
-		}
+	sys->fprint(fd, "%d", len data);
+	for(off := 0; off < len data;){
+		chunk := len data - off;
+		if(chunk > Maxmsg)
+			chunk = Maxmsg;
+		sys->write(fd, data[off:off+chunk], chunk);
+		off += chunk;
 	}
 }
 
-doput(fd: ref Sys->FD, user: string, name: string)
+nosuchfile(e: string): int
 {
-	if(name == nil || name == "" || !safename(name))
-		return;
+	return contains(e, "does not exist") || contains(e, "not found");
+}
 
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+#
+# "GET ." is the account's files, a line each as Plan 9's secstore has
+# them: the name, a tab, the size, the date (24 characters), and a hash
+# of the file (here its SHA-256, in base 64).  The directory's own
+# bytes were sent, stat(5) entries and all, the verifier's among them.
+#
+listing(user: string): (string, string)
+{
+	dir := userpath(user, "");
+	dfd := sys->open(dir, Sys->OREAD);
+	if(dfd == nil)
+		return (nil, "can't list the account's files");
+	s := "";
+	for(;;){
+		(n, dirs) := sys->dirread(dfd);
+		if(n < 0)
+			return (nil, "can't list the account's files");
+		if(n == 0)
+			break;
+		for(i := 0; i < n; i++){
+			d := dirs[i];
+			if((d.mode & Sys->DMDIR) || !safename(d.name) || reserved(d.name) || d.length > big Maxfilesize)
+				continue;
+			h := filehash(dir + "/" + d.name);
+			if(h == nil)
+				continue;
+			date := "-";
+			if(daytime != nil){
+				t := daytime->text(daytime->gmt(d.mtime));
+				if(len t >= 28)
+					date = t[4:28];
+			}
+			if(len date != 24)
+				date = sys->sprint("%-24.24s", date);
+			s += sys->sprint("%s\t%bd %s %s\n", d.name, d.length, date, base64->enc(h));
+			if(len s > Maxfilesize)
+				return (nil, "too many files to list");
+		}
+	}
+	return (s, nil);
+}
+
+filehash(path: string): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[8192] of byte;
+	state: ref DigestState;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		state = kr->sha256(buf, n, nil, state);
+	if(n < 0)
+		return nil;
+	digest := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(nil, 0, digest, state);
+	return digest;
+}
+
+#
+# PUT, in a version 4 session: answered OK when the file is in place
+# (written beside the old one and renamed over it: it was truncated and
+# then written, so a stop between left an empty file), or with why not.
+# refuse, if set, is why this session may not store: the request is
+# read to its end all the same, so that what follows it is a request.
+# -1 when the session cannot go on.
+#
+doput(fd: ref Sys->FD, user: string, name: string, refuse: string): int
+{
 	# Read size
 	buf := array[64] of byte;
 	n := sys->read(fd, buf, len buf);
 	if(n <= 0)
-		return;
-	size := int string buf[0:n];
-	if(size < 0 || size > Maxfilesize)
-		return;
+		return -1;
+	ssize := string buf[0:n];
+	if(len ssize > 9 || !alldigits(ssize)){
+		writerr(fd, "bad size");
+		return -1;
+	}
+	size := int ssize;
+	if(size > Maxfilesize){
+		writerr(fd, "file too long");
+		return -1;
+	}
 
 	# Read data
 	data := array[size] of byte;
 	for(nr := 0; nr < size;){
 		n = sys->read(fd, data[nr:], size - nr);
 		if(n <= 0)
-			return;
+			return -1;
 		nr += n;
 	}
 
+	if(refuse != nil){
+		log(sys->sprint("%s: PUT %s refused: %s", user, name, refuse));
+		writerr(fd, refuse);
+		return 0;
+	}
+	if(!safename(name) || reserved(name)){
+		writerr(fd, "not a file's name");
+		return 0;
+	}
 	if(debug)
 		log(sys->sprint("PUT %s: %d bytes", name, size));
 
-	# Ensure user directory exists
-	sys->create(userpath(user, ""), Sys->OREAD, Sys->DMDIR | 8r700);
-
-	# Write file
-	path := userpath(user, name);
-	wfd := sys->create(path, Sys->OWRITE, 8r600);
-	if(wfd == nil){
-		log(sys->sprint("can't create %s: %r", path));
-		return;
+	e := writeuserfile(user, name, data);
+	if(e != nil){
+		log(sys->sprint("%s: PUT %s: %s", user, name, e));
+		writerr(fd, "can't store " + name);
+		return 0;
 	}
-	sys->write(wfd, data, len data);
+	sys->fprint(fd, "OK");
+	return 0;
 }
 
-dorm(user: string, name: string)
+dorm(fd: ref Sys->FD, user: string, name: string, refuse: string)
 {
-	if(name == nil || name == "" || !safename(name))
+	if(refuse != nil){
+		log(sys->sprint("%s: RM %s refused: %s", user, name, refuse));
+		writerr(fd, refuse);
 		return;
-
+	}
+	if(!safename(name) || reserved(name)){
+		writerr(fd, "not a file's name");
+		return;
+	}
 	if(debug)
 		log("RM " + name);
-
 	path := userpath(user, name);
-	sys->remove(path);
+	if(sys->remove(path) < 0){
+		e := sys->sprint("%r");
+		if(nosuchfile(e))
+			writerr(fd, name + " does not exist");
+		else{
+			log(sys->sprint("%s: RM %s: %s", user, name, e));
+			writerr(fd, "can't remove " + name);
+		}
+		return;
+	}
+	sys->fprint(fd, "OK");
+}
+
+#
+# VERIFIER version hexHi: the account's verifier, from a session that
+# has proved the password.  A session of an older version gives the
+# account its version 4 verifier, which is kept beside the old one
+# until a version 4 login has worked (so that a verifier made wrongly
+# locks nobody out); a version 4 session replaces its verifier (a new
+# password).  The verifier was changed by writing the file PAK, with
+# PUT or on the host: PAK is no longer a file of the account's.
+#
+doverifier(fd: ref Sys->FD, user, ver, arg: string)
+{
+	(nf, f) := sys->tokenize(arg, " \t");
+	if(nf != 2 || hd f != VERSION4 || !goodverifier(VERSION4, hd tl f)){
+		writerr(fd, "not a version 4 verifier");
+		return;
+	}
+	text := VERSION4 + " " + hd tl f + "\n";
+	if(ver != VERSION4)
+		for(vl := readverifiers(user); vl != nil; vl = tl vl){
+			(v, h) := hd vl;
+			if(v == ver){
+				if(v == VERSION1)
+					text += h + "\n";
+				else
+					text += v + " " + h + "\n";
+			}
+		}
+	e := writeuserfile(user, "PAK", array of byte text);
+	if(e != nil){
+		log(sys->sprint("%s: can't write the verifier: %s", user, e));
+		writerr(fd, "can't record the verifier");
+		return;
+	}
+	log(sys->sprint("%s: version 4 verifier recorded (in a %s session)", user, ver));
+	auditlog("secstore", "verifier", sys->sprint("user=%s session=%s", auditval(user), ver));
+	sys->fprint(fd, "OK");
+}
+
+# a verifier is a number of its group, not 0 or 1
+goodverifier(ver, hexHi: string): int
+{
+	params := pakparams(ver);
+	if(params == nil || hexHi == nil || len hexHi > 1024)
+		return 0;
+	for(i := 0; i < len hexHi; i++){
+		c := hexHi[i];
+		if(!(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/' || c == '='))
+			return 0;
+	}
+	Hi := IPint.strtoip(hexHi, 64);
+	return Hi != nil && Hi.cmp(IPint.inttoip(1)) > 0 && Hi.cmp(params.p) < 0;
+}
+
+# the account's second factor is enrolled: its vault key's hash is kept
+enrolled(user: string): int
+{
+	(ok, nil) := sys->stat(userpath(user, "VAULTKEY"));
+	return ok >= 0;
+}
+
+# the hash kept, or nil
+readvaultkey(user: string): array of byte
+{
+	fd := sys->open(userpath(user, "VAULTKEY"), Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return array[0] of byte;	# enrolled, and nothing matches
+	(nf, f) := sys->tokenize(string buf[0:n], " \t\n");
+	if(nf != 2 || hd f != "sha256")
+		return array[0] of byte;
+	h := unhex(hd tl f);
+	if(h == nil)
+		return array[0] of byte;
+	return h;
+}
+
+# SHA-256 of a vault key given as 64 hexadecimal digits; nil if it is not
+vaulthash(hexkey: string): array of byte
+{
+	k := unhex(hexkey);
+	if(k == nil || len k != 32)
+		return nil;
+	h := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(k, len k, h, nil);
+	erasekey(k);
+	return h;
+}
+
+sameb(a, b: array of byte): int
+{
+	if(a == nil || b == nil || len a != len b)
+		return 0;
+	d := 0;
+	for(i := 0; i < len a; i++)
+		d |= int (a[i] ^ b[i]);
+	return d == 0;
+}
+
+hex(a: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%.2ux", int a[i]);
+	return s;
+}
+
+unhex(s: string): array of byte
+{
+	if(len s == 0 || len s % 2 != 0)
+		return nil;
+	a := array[len s/2] of byte;
+	for(i := 0; i < len a; i++){
+		h := hexval(s[2*i]);
+		l := hexval(s[2*i+1]);
+		if(h < 0 || l < 0)
+			return nil;
+		a[i] = byte (h<<4 | l);
+	}
+	return a;
+}
+
+hexval(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+alldigits(s: string): int
+{
+	if(len s == 0)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+#
+# A file of the account's, written whole beside the one it replaces and
+# renamed over it, so that at any moment one of them is a whole file.
+# nil, or why not.
+#
+writeuserfile(user, name: string, data: array of byte): string
+{
+	sys->create(userpath(user, ""), Sys->OREAD, Sys->DMDIR | 8r700);
+	path := userpath(user, name);
+	tmp := userpath(user, ".new." + name);
+	sys->remove(tmp);
+	wfd := sys->create(tmp, Sys->OWRITE, 8r600);
+	if(wfd == nil)
+		return sys->sprint("can't create %s: %r", tmp);
+	if(sys->write(wfd, data, len data) != len data){
+		e := sys->sprint("can't write %s: %r", tmp);
+		wfd = nil;
+		sys->remove(tmp);
+		return e;
+	}
+	sys->fwstat(wfd, sys->nulldir);	# commit (stat(5))
+	wfd = nil;
+	d := sys->nulldir;
+	d.name = name;
+	if(sys->wstat(tmp, d) < 0){
+		# a file server that will not rename onto a name in use
+		sys->remove(path);
+		if(sys->wstat(tmp, d) < 0){
+			e := sys->sprint("can't rename %s to %s: %r", tmp, name);
+			sys->remove(tmp);
+			return e;
+		}
+	}
+	return nil;
 }
 
 # ── PAK Crypto (mirrors secstore.b client code) ──────────────
@@ -725,7 +1198,7 @@ initPAKparams()
 pakparams(version: string): ref PAKparams
 {
 	initPAKparams();
-	if(version == VERSION3)
+	if(version == VERSION3 || version == VERSION4)
 		return pak3;
 	if(version == VERSION1)
 		return paklegacy;
@@ -734,12 +1207,12 @@ pakparams(version: string): ref PAKparams
 
 hashis256(version: string): int
 {
-	return version == VERSION3;
+	return version == VERSION3 || version == VERSION4;
 }
 
 exponentbits(version: string): int
 {
-	if(version == VERSION3)
+	if(version == VERSION3 || version == VERSION4)
 		return 320;
 	return 240;
 }
@@ -817,34 +1290,49 @@ erasekey(a: array of byte)
 
 # ── User/File Management ─────────────────────────────────────
 
-readverifier(user: string): (string, string)
+# The account's verifiers, (version, hexHi) each: one, or two while it
+# moves to a newer version.  A line of one field is version 1's.
+readverifiers(user: string): list of (string, string)
 {
 	if(!safename(user))
-		return (nil, nil);
+		return nil;
 	path := storedir + "/" + user + "/PAK";
 	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return (nil, nil);
-	buf := array[1024] of byte;
+	if(fd == nil){
+		# A verifier being replaced was once removed before the new
+		# one, PAK.new, was renamed to it (the login screen's move
+		# of an account to a newer version): a stop between the two
+		# left an account that could neither be logged in to nor
+		# made again.  The rename is finished here.
+		(ok, nil) := sys->stat(path + ".new");
+		if(ok < 0)
+			return nil;
+		d := sys->nulldir;
+		d.name = "PAK";
+		if(sys->wstat(path + ".new", d) < 0)
+			return nil;
+		log(sys->sprint("%s: PAK.new, left by a move that stopped, is PAK again", user));
+		fd = sys->open(path, Sys->OREAD);
+		if(fd == nil)
+			return nil;
+	}
+	buf := array[4096] of byte;
 	n := sys->read(fd, buf, len buf);
 	if(n <= 0)
-		return (nil, nil);
-	s := string buf[0:n];
-	# Strip trailing whitespace
-	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' ' || s[len s-1] == '\t'))
-		s = s[:len s-1];
-	if(s == nil || s == "")
-		return (nil, nil);
-	(nf, flds) := sys->tokenize(s, " \t");
-	if(nf == 1)
-		return (VERSION1, hd flds);
-	if(nf >= 2){
-		version := hd flds;
-		hexHi := hd tl flds;
-		if(version == VERSION1 || version == VERSION3)
-			return (version, hexHi);
+		return nil;
+	vl: list of (string, string);
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, flds) := sys->tokenize(hd lines, " \t");
+		if(nf == 1)
+			vl = (VERSION1, hd flds) :: vl;
+		else if(nf >= 2){
+			version := hd flds;
+			if(version == VERSION1 || version == VERSION3 || version == VERSION4)
+				vl = (version, hd tl flds) :: vl;
+		}
 	}
-	return (nil, nil);
+	return vl;
 }
 
 userpath(user: string, name: string): string
@@ -854,16 +1342,29 @@ userpath(user: string, name: string): string
 	return storedir + "/" + user + "/" + name;
 }
 
+# One name of a directory, with nothing in it that a line of a listing
+# or of the log could be broken by.
 safename(name: string): int
 {
-	if(name == nil || len name == 0)
+	if(name == nil || len name == 0 || len array of byte name > 255)
 		return 0;
-	if(name == ".." || name[0] == '/')
+	if(name == ".." || name == ".")
 		return 0;
-	for(i := 0; i < len name; i++)
-		if(name[i] == '/' || name[i] == 0)
+	for(i := 0; i < len name; i++){
+		c := name[i];
+		if(c == '/' || c == '\\' || c <= ' ' || c == 16r7f || c == 16rFFFD)
 			return 0;
+	}
 	return 1;
+}
+
+# The names in an account's directory that are not its files: the
+# server's own records and what it writes beside a file it replaces,
+# and the client's key slots.  PAK was fetched, stored and removed like
+# any file: an account could be given another verifier with PUT.
+reserved(name: string): int
+{
+	return name[0] == '.' || name == "PAK" || name == "PAK.new" || name == "VAULTKEY" || name == "2fa";
 }
 
 # ── Utilities ─────────────────────────────────────────────────

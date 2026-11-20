@@ -11,12 +11,19 @@ unloadimage(Image *i, Rectangle r, uchar *data, int ndata)
 	Display *d;
 	int chunk;
 
-	if(!rectinrect(r, i->r)){
+	/*
+	 * rectinrect takes a rectangle whose max is before its min, and
+	 * one of no width has no bytes in a line, which is the divisor
+	 * below.
+	 */
+	if(!rectinrect(r, i->r) || r.max.x < r.min.x || r.max.y < r.min.y){
 		kwerrstr("unloadimage: bad rectangle");
 		return -1;
 	}
+	if(r.max.x == r.min.x || r.max.y == r.min.y)
+		return 0;
 	bpl = bytesperline(r, i->depth);
-	if(ndata < bpl*Dy(r)){
+	if(bpl <= 0 || ndata < (vlong)bpl*Dy(r)){
 		kwerrstr("unloadimage: buffer too small");
 		return -1;
 	}

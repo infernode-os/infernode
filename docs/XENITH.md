@@ -37,6 +37,11 @@ Unlike JSON-RPC protocols (MCP) or REST APIs, Xenith exposes everything as files
 
 An AI agent reads and writes files. No SDK required. No parsing required. LLMs understand filesystem operations naturally.
 
+A write to `ctl` is one or more whole commands, each ended by a newline (the
+last may go without), as in Acme. Keep a write under 8192 bytes: a longer one
+is sent in pieces, and a piece that fills its message without ending a line is
+refused (`control message cut at the message size`), with nothing of it run.
+
 ### Namespace-Based Security
 
 Inferno®'s namespace model provides capability-based security:

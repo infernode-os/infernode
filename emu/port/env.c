@@ -35,13 +35,15 @@ void
 egrpcpy(Egrp *to, Egrp *from)
 {
 	Evalue *e, *ne, **last;
+	int n;
 
 	last = &to->entries;
 	qlock(&from->l);
 	for (e = from->entries; e != nil; e = e->next) {
 		ne = smalloc(sizeof(Evalue));
-		ne->var = smalloc(strlen(e->var)+1);
-		strcpy(ne->var, e->var);
+		n = strlen(e->var)+1;
+		ne->var = smalloc(n);
+		memmove(ne->var, e->var, n);
 		if (e->val) {
 			ne->val = smalloc(e->len);
 			memmove(ne->val, e->val, e->len);

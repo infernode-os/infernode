@@ -290,6 +290,18 @@ Style: module
 		objx, objy:	Len;	# object-position: px, and pct of the room left over
 		imgorient:	int;	# image-orientation: 0 from-image, 1 none (inherited)
 		clipinset:	array of Len;	# clip-path: inset(), top right bottom left; nil for none or another shape
+		textfill:	int;	# -webkit-text-fill-color: the glyphs' colour, Ccurrent for color's (inherited)
+		kidalign:	int;	# where block children go when their margins leave room: 0, or Aleft, Acenter, Aright, by text-align -webkit-center and kin, which <center> and align= give (inherited)
+		clippoly:	array of Len;	# clip-path: polygon(), x and y alternately, against the border box; nil for none or another shape
+		clipwind:	int;	# its fill rule, as fillpath's: ~0 nonzero, 1 evenodd
+		cqtype:	int;	# container-type: 0 normal, 1 inline-size, 2 size
+		cqnames:	list of string;	# container-name
+		# OpenType features (inherited): font-variant-ligatures, -caps,
+		# -numeric, -east-asian and -position, as (tag, value); nil for normal
+		fvlig, fvcaps, fvnum, fvea, fvpos:	list of (string, int);
+		fvalt:	list of (string, string);	# font-variant-alternates: (function, name), "historical-forms" with no name; resolved by @font-feature-values
+		ffs:	list of (string, int);	# font-feature-settings, in order; nil for normal
+		langover:	string;	# font-language-override: an OpenType language system tag, four characters ("TRK "); nil for normal
 
 		new:	fn(): ref St;		# initial values
 	};
@@ -330,6 +342,7 @@ Style: module
 		anc:	array of int;	# Bloom bits an element's ancestors must have
 		mark:	int;	# candidate-gathering generation
 		key:	string;	# the id, class or tag it is indexed by; nil if several (or none)
+		cq:	list of (string, array of ref Css->Tok);	# the @container conditions it is under: (name or nil, query)
 	};
 
 	# Computed styles for d's elements, indexed by node; before[n] and
@@ -361,4 +374,10 @@ Style: module
 	resolveurl:	fn(base, rel: string): string;	# RFC 3986 reference resolution
 	anon:	fn(parent: ref St, display: int): ref St;	# an anonymous box's style
 	addimport:	fn(url: string, sh: ref Css->Sheet);	# the sheet fetched for an @import
+	# the size of each query container (container-type) as the last
+	# layout made it, by node: content width and height, -1 unknown;
+	# @container conditions are of these (the viewport's until known)
+	setcontainers:	fn(sizes: array of (int, int));
+	containersasked:	fn(): int;	# whether a condition was evaluated since the last call
+	tracklen:	fn(t: ref Css->Tok): (int, Len);	# a calc(), min(), max() or clamp() kept in a track list, as a Len against the grid's width
 };

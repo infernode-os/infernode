@@ -74,7 +74,13 @@ static struct {
 #endif
 	Queue	*enc_q;		/* encoded frames waiting for a reader */
 	Queue	*dec_q;		/* decoded PCM waiting for a reader */
-	uchar	enc_pcm[8192];	/* PCM bytes accumulated between encodes */
+	/*
+	 * PCM bytes accumulated between encodes: room for the longest
+	 * frame there is, 60 ms of 48 kHz stereo (11520 bytes). It held
+	 * 8192, and a frame set longer than that never filled it: the
+	 * writer went round for ever, holding the device's lock.
+	 */
+	uchar	enc_pcm[16384];
 	int	enc_pcm_len;
 	uchar	dec_in[8192];	/* opus bytes accumulated between decodes */
 	int	dec_in_len;
@@ -128,6 +134,7 @@ ensure_encoder(void)
 					     OPUS_APPLICATION_VOIP, &err);
 	if(err != OPUS_OK || opus_state.enc == nil) {
 		print("devopus: opus_encoder_create failed: %d\n", err);
+		opus_state.enc = nil;
 		return 0;
 	}
 	opus_encoder_ctl(opus_state.enc, OPUS_SET_BITRATE(opus_state.bitrate));
@@ -144,6 +151,7 @@ ensure_decoder(void)
 					     &err);
 	if(err != OPUS_OK || opus_state.dec == nil) {
 		print("devopus: opus_decoder_create failed: %d\n", err);
+		opus_state.dec = nil;
 		return 0;
 	}
 	return 1;
@@ -244,8 +252,18 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 			error(Enomem);
 		memmove(cmd, va, n);
 		cmd[n] = 0;
+		/*
+		 * The values are held to what Opus has: any others were
+		 * taken, and the sizes worked out from them were then used
+		 * as they came. (strncmp: memcmp read past a short command.)
+		 */
 		qlock(&opus_state.l);
-		if(memcmp(cmd, "rate ", 5) == 0 && (v = atoi(cmd+5)) > 0) {
+		if(strncmp(cmd, "rate ", 5) == 0 && (v = atoi(cmd+5)) > 0) {	/* Flawfinder: ignore — the value is held to Opus's own just below */
+			if(v != 8000 && v != 12000 && v != 16000 && v != 24000 && v != 48000){
+				qunlock(&opus_state.l);
+				free(cmd);
+				error("opus: rate is 8000, 12000, 16000, 24000 or 48000");
+			}
 			opus_state.rate = v;
 			if(opus_state.enc) {
 				opus_encoder_destroy(opus_state.enc);
@@ -255,7 +273,12 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 				opus_decoder_destroy(opus_state.dec);
 				opus_state.dec = nil;
 			}
-		} else if(memcmp(cmd, "chans ", 6) == 0 && (v = atoi(cmd+6)) > 0) {
+		} else if(strncmp(cmd, "chans ", 6) == 0 && (v = atoi(cmd+6)) > 0) {	/* Flawfinder: ignore — the value is held to Opus's own just below */
+			if(v != 1 && v != 2){
+				qunlock(&opus_state.l);
+				free(cmd);
+				error("opus: chans is 1 or 2");
+			}
 			opus_state.chans = v;
 			if(opus_state.enc) {
 				opus_encoder_destroy(opus_state.enc);
@@ -265,9 +288,20 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 				opus_decoder_destroy(opus_state.dec);
 				opus_state.dec = nil;
 			}
-		} else if(memcmp(cmd, "frame_ms ", 9) == 0 && (v = atoi(cmd+9)) > 0) {
+		} else if(strncmp(cmd, "frame_ms ", 9) == 0 && (v = atoi(cmd+9)) > 0) {	/* Flawfinder: ignore — the value is held to Opus's own just below */
+			if(v != 5 && v != 10 && v != 20 && v != 40 && v != 60){
+				qunlock(&opus_state.l);
+				free(cmd);
+				error("opus: frame_ms is 5, 10, 20, 40 or 60");
+			}
 			opus_state.frame_ms = v;
-		} else if(memcmp(cmd, "bitrate ", 8) == 0 && (v = atoi(cmd+8)) > 0) {
+			opus_state.enc_pcm_len = 0;	/* what was gathered was for the old length */
+		} else if(strncmp(cmd, "bitrate ", 8) == 0 && (v = atoi(cmd+8)) > 0) {	/* Flawfinder: ignore — the value is held to Opus's own just below */
+			if(v < 500 || v > 512000){
+				qunlock(&opus_state.l);
+				free(cmd);
+				error("opus: bitrate is 500 to 512000");
+			}
 			opus_state.bitrate = v;
 			if(opus_state.enc)
 				opus_encoder_ctl(opus_state.enc, OPUS_SET_BITRATE(v));
@@ -282,11 +316,30 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 		 * frame, encode it and push the bytes (with a 2-byte big-
 		 * endian length prefix) onto enc_q. */
 		qlock(&opus_state.l);
+		/*
+		 * The encoder may have gone since this file was opened: a
+		 * rate or chans written to ctl takes it away, and nil was
+		 * then given to libopus.
+		 */
+		if(!ensure_encoder() || opus_state.enc_q == nil) {
+			qunlock(&opus_state.l);
+			error("opus encoder unavailable");
+		}
 		fpb = frame_pcm_bytes();
+		if(fpb <= 0 || fpb > sizeof opus_state.enc_pcm) {
+			qunlock(&opus_state.l);
+			error("opus: frame does not fit");
+		}
 		got = 0;
 		while(got < n) {
 			int take = sizeof opus_state.enc_pcm - opus_state.enc_pcm_len;
 			if(take > n - got) take = n - got;
+			if(take <= 0) {
+				/* no room and no frame: not to be, and not to be gone round on */
+				opus_state.enc_pcm_len = 0;
+				qunlock(&opus_state.l);
+				error("opus: encoder input overrun");
+			}
 			memmove(opus_state.enc_pcm + opus_state.enc_pcm_len,
 				p + got, take);
 			opus_state.enc_pcm_len += take;
@@ -322,10 +375,19 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 		/* Accumulate opus bytes; consume one length-prefixed frame
 		 * at a time, decode it, push PCM onto dec_q. */
 		qlock(&opus_state.l);
+		if(!ensure_decoder() || opus_state.dec_q == nil) {
+			qunlock(&opus_state.l);
+			error("opus decoder unavailable");
+		}
 		got = 0;
 		while(got < n) {
 			int take = sizeof opus_state.dec_in - opus_state.dec_in_len;
 			if(take > n - got) take = n - got;
+			if(take <= 0) {
+				opus_state.dec_in_len = 0;
+				qunlock(&opus_state.l);
+				error("opus: decoder input overrun");
+			}
 			memmove(opus_state.dec_in + opus_state.dec_in_len,
 				p + got, take);
 			opus_state.dec_in_len += take;
@@ -336,7 +398,14 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 				if(opus_state.dec_in_len < 2)
 					break;
 				flen = (opus_state.dec_in[0] << 8) | opus_state.dec_in[1];
-				if(flen > Max_Enc_Frame) {
+				if(flen > Max_Enc_Frame || 2 + flen > sizeof opus_state.dec_in) {
+					/*
+					 * what is held is thrown away with it: left
+					 * at the head, the same length was read again
+					 * by every write after, and the decoder was
+					 * stopped for everyone until the emulator went
+					 */
+					opus_state.dec_in_len = 0;
 					qunlock(&opus_state.l);
 					error("opus frame length absurd");
 				}
@@ -348,6 +417,11 @@ opuswrite(Chan *c, void *va, long n, vlong off)
 					opus_state.rate * 120 / 1000,
 					0);
 				if(dec_n < 0) {
+					/* the bad frame is passed over, not kept to fail again */
+					memmove(opus_state.dec_in,
+						opus_state.dec_in + 2 + flen,
+						opus_state.dec_in_len - 2 - flen);
+					opus_state.dec_in_len -= 2 + flen;
 					qunlock(&opus_state.l);
 					error("opus_decode failed");
 				}

@@ -234,6 +234,14 @@ tfreelater(n: ref Node)
 	}
 }
 
+#
+# are temporaries waiting for tfreenow?
+#
+tpending(): int
+{
+	return ntoz != nil;
+}
+
 tfreenow()
 {
 	nn: ref Node;
@@ -636,6 +644,31 @@ sameaddr(n, m: ref Node): int
 	a := genaddr(n);
 	b := genaddr(m);
 	return a.offset == b.offset && a.reg == b.reg && a.decl == b.decl;
+}
+
+#
+# can n's address be kept while other code runs: by a receive, a send
+# or an alt while they block, by a load while it reads the file, by a
+# call as where its result goes?  The frame and the module's data stay
+# where they are.  So does an object that a pointer temporary of this
+# frame holds (one being built, a call's result): nothing else can
+# reach the temporary to drop it.  And so does where this function's
+# own result goes: its caller asked the same.  An array's element, or
+# a field of what a variable names, does not: the array or the object
+# can be freed meanwhile, and the address is then of freed memory.
+#
+stayput(n: ref Node): int
+{
+	if(n.addable < Ralways)
+		return 1;
+	if(n.addable != Radr)
+		return 0;
+	d := genaddr(n).decl;
+	if(d == nil)
+		return 0;
+	if(d == retnode.decl)
+		return 1;
+	return d.tref != 0 && tattr[d.ty.kind].isptr;
 }
 
 resolvedesc(mod: ref Decl, length: int, id: ref Decl): int

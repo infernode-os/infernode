@@ -47,6 +47,8 @@ tensormodinit(void)
 	builtinmod("$Tensor", Tensormodtab, Tensormodlen);
 }
 
+static int	overlap(Array*, Array*);
+
 /* an array as n floats, or an error; called before release() */
 static float*
 floats(Array *a, uvlong n)
@@ -503,7 +505,12 @@ Tensor_conv(void *fp)
 	v.wt = floats(f->wt, (uvlong)v.oc * icg * v.kh * v.kw);
 	v.bias = floats(f->bias, v.oc);
 	v.out = floats(f->out, (uvlong)v.oc * v.oh * v.ow);
-	if(f->out == f->in)
+	/*
+	 * Their bytes, not their Arrays: a slice is another Array over the
+	 * same bytes, and out as a slice of in (or of the weights) was
+	 * taken.
+	 */
+	if(overlap(f->out, f->in) || overlap(f->out, f->wt) || overlap(f->out, f->bias))
 		error(exBounds);
 
 	release();
@@ -577,7 +584,7 @@ Tensor_maxpool(void *fp)
 	ow = (w + 2*p - k) / s + 1;
 	in = floats(f->in, (uvlong)c*h*w);
 	o = floats(f->out, (uvlong)c*oh*ow);
-	if(f->in == f->out)
+	if(overlap(f->in, f->out))
 		error(exBounds);
 	col = malloc((uvlong)w * sizeof(float));
 	if(col == nil)
@@ -633,7 +640,7 @@ Tensor_up2(void *fp)
 	dims(c, 2*h, 2*w);
 	in = floats(f->in, (uvlong)c*h*w);
 	o = floats(f->out, (uvlong)c*4*h*w);
-	if(f->in == f->out)
+	if(overlap(f->in, f->out))
 		error(exBounds);
 	release();
 	for(ch = 0; ch < c; ch++)
@@ -664,7 +671,7 @@ Tensor_s2d(void *fp)
 	w2 = w/2;
 	in = floats(f->in, (uvlong)c*h*w);
 	o = floats(f->out, (uvlong)c*h*w);
-	if(f->in == f->out)
+	if(overlap(f->in, f->out))
 		error(exBounds);
 	release();
 	for(q = 0; q < 4; q++)
@@ -696,8 +703,9 @@ Tensor_letterbox(void *fp)
 		error(exBounds);
 	pix = f->pix->data;
 	o = floats(f->out, (uvlong)3*ow*oh);
-	rw = (int)(w * scale);
-	rh = (int)(h * scale);
+	/* (a real past an int converted to one is the host's choice) */
+	rw = w * scale >= ow? ow: (int)(w * scale);
+	rh = h * scale >= oh? oh: (int)(h * scale);
 	if(rw > ow)
 		rw = ow;
 	if(rh > oh)
@@ -812,8 +820,9 @@ Tensor_letterboxi420(void *fp)
 	pu = f->cb->data;
 	pv = f->cr->data;
 	o = floats(f->out, (uvlong)3*ow*oh);
-	rw = (int)(w * scale);
-	rh = (int)(h * scale);
+	/* (a real past an int converted to one is the host's choice) */
+	rw = w * scale >= ow? ow: (int)(w * scale);
+	rh = h * scale >= oh? oh: (int)(h * scale);
 	if(rw > ow)
 		rw = ow;
 	if(rh > oh)

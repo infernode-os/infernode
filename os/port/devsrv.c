@@ -225,16 +225,34 @@ srvwalk(Chan *c, Chan *nc, char **name, int nname)
 
 	w = devwalk(c, nc, name, nname, nil, 0, srvgen);
 	if(w != nil && w->clone != nil){
-		if(nname != 0){
+		if(nname != 0 && w->clone->qid.path != pd->qid.path){
 			for(d = pd->entry; d != nil; d = d->entry)
 				if(d->qid.path == w->clone->qid.path)
 					break;
-			if(d == nil)
-				panic("srvwalk");
+			if(d == nil){
+				/* not to be: srvgen made the qid from this list, under this lock */
+				if(w->clone != c){
+					w->clone->aux = pd;
+					pd->ref++;
+					cclose(w->clone);
+				}
+				free(w);
+				error(Enonexist);
+			}
 			if(w->clone == c)
 				pd->ref--;
-		}else
+		}else{
+			/*
+			 * the directory itself: no names, or a walk to "..",
+			 * which srvgen answers with the directory. That was
+			 * looked for among the directory's files, not found,
+			 * and a panic: stat("#s/..") from any program, #s
+			 * being a device it keeps after NODEVS.
+			 */
 			d = pd;
+			if(nname != 0 && w->clone == c)
+				pd->ref--;
+		}
 		w->clone->aux = d;
 		d->ref++;
 	}
@@ -383,6 +401,23 @@ srvrelease(Vm *home)
 {
 	release();
 	up->vm = home;
+}
+
+/*
+ * A server is given the offset as a Limbo int.  An offset past the
+ * largest was cut to its low 32 bits: from 2^31 a negative number, which
+ * a server slicing its data by it took as an array bounds error and
+ * died of, from any client that can read or write the file; from 2^32 a
+ * small one again.  The largest int stands for all of them.
+ */
+static int
+srvoffset(vlong offset)
+{
+	if(offset < 0)
+		return 0;
+	if(offset > 0x7fffffffLL)
+		return 0x7fffffff;
+	return offset;
 }
 
 static void
@@ -548,8 +583,16 @@ srvclunk(Chan *c, int remove)
 	opens = 0;
 	if(c->flag & COPEN){
 		opens = sf->opens--;
-		if(sf->read != H || sf->write != H)
-			srvunblock(sf, c->fid);
+		if(sf->read != H || sf->write != H){
+			/*
+			 * a clunk finishes whatever becomes of telling the
+			 * server: an error here left dev.l held, for good
+			 */
+			if(!waserror()){
+				srvunblock(sf, c->fid);
+				poperror();
+			}
+		}
 	}
 
 	sf->ref--;
@@ -584,6 +627,54 @@ srvremove(Chan *c)
 	srvclunk(c, 1);
 }
 
+/*
+ * A request that will not be waited for any longer: its reader or
+ * writer was interrupted (killed, or its 9P request flushed) before
+ * the server answered.  The server was not told.  Its answer, when it
+ * came, went into the reply channel's buffer and nowhere else, which
+ * is right for a file that answers each request on its own; but a
+ * server that hands out a stream (a posted 9P connection's replies,
+ * post9p(2)) took the next piece of it for the request that had gone,
+ * and the reader after it waited for a reply that had been spent.
+ *
+ * The reply channel now says so.  It has room for two: when the
+ * request is given up, (nil, "interrupted") is put there (for a write,
+ * (0, "interrupted")), which the server can take with a receive that
+ * does not wait:
+ *
+ *	alt{
+ *	<-rc =>	the reader has gone: keep what was for it
+ *	* =>	rc <-= (data, nil);
+ *	}
+ *
+ * A server that does not look is as before: its answer still goes into
+ * the buffer, never waits, and reaches nobody.  Each request has a
+ * channel of its own, so an answer that comes late is never a later
+ * request's.
+ */
+static char Einterrupted[] = "interrupted";
+
+static void
+gaveup(Channel *rc, Channel *wc)
+{
+	Sys_Rread rreply;
+	Sys_Rwrite wreply;
+
+	if(waserror())
+		return;		/* no memory to say so with */
+	if(rc != nil){
+		rreply.t0 = H;
+		rreply.t1 = c2string(Einterrupted, strlen(Einterrupted));
+		csend(rc, &rreply);
+	}
+	if(wc != nil){
+		wreply.t0 = 0;
+		wreply.t1 = c2string(Einterrupted, strlen(Einterrupted));
+		csend(wc, &wreply);
+	}
+	poperror();
+}
+
 static void
 addwaiting(SrvFile *sp, Pending *w)
 {
@@ -601,6 +692,16 @@ delwaiting(Pending *w)
 {
 	w->next->prev = w->prev;
 	w->prev->next = w->next;
+	/*
+	 * Left pointing at itself, so that taking it off again changes
+	 * nothing. srvcancelreqs takes each waiter off the list and wakes
+	 * it, and the waiter takes itself off on its way out: with its
+	 * links as they were, that second time stored through them, into
+	 * a neighbour that had since gone, a Pending on its own process's
+	 * stack.
+	 */
+	w->next = w;
+	w->prev = w;
 }
 
 static long
@@ -641,7 +742,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 	if(rd == H)
 		error(Ehungup);
 
-	rc = cnewc(dev.Rread, movtmp, 1);
+	rc = cnewc(dev.Rread, movtmp, 2);	/* the answer, and "interrupted": see gaveup */
 	ptradd(D2H(rc));
 	if(waserror()){
 		ptrdel(D2H(rc));
@@ -649,7 +750,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	req.t0 = offset;
+	req.t0 = srvoffset(offset);
 	req.t1 = count;
 	req.t2 = c->fid;
 	req.t3 = rc;
@@ -670,6 +771,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 	addwaiting(sp, &wait);
 	if(waserror()){
 		delwaiting(&wait);
+		gaveup(rc, nil);
 		nexterror();
 	}
 	crecv(rc, r);
@@ -729,7 +831,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	if(wr == H)
 		error(Ehungup);
 
-	wc = cnewc(dev.Rwrite, movtmp, 1);
+	wc = cnewc(dev.Rwrite, movtmp, 2);	/* the answer, and "interrupted": see gaveup */
 	ptradd(D2H(wc));
 	if(waserror()){
 		ptrdel(D2H(wc));
@@ -737,7 +839,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	req.t0 = offset;
+	req.t0 = srvoffset(offset);
 	req.t1 = mem2array(va, count);
 	req.t2 = c->fid;
 	req.t3 = wc;
@@ -772,6 +874,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	addwaiting(sp, &wait);
 	if(waserror()){
 		delwaiting(&wait);
+		gaveup(nil, wc);
 		nexterror();
 	}
 	crecv(wc, w);
@@ -793,6 +896,9 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	srvrelease(home);
 	if(l < 0)
 		l = 0;
+	/* the server's count is its own: no more was written than was given */
+	if(l > count)
+		l = count;
 	return l;
 }
 

@@ -87,19 +87,43 @@ init(nil: ref Draw->Context, nil: list of string)
 	emptyusr := base + "-usr";
 	emptydev := base + "-dev";
 	if(mkdir(jail) < 0 || mkdir(emptyusr) < 0 ||
-	   mkdir(emptydev) < 0)
+	   mkdir(emptydev) < 0){
+		unmake(base);
 		err(sys->sprint("cannot make restricted namespace: %r"));
+	}
 	p := array[2] of ref Sys->FD;
-	if(sys->pipe(p) < 0)
+	if(sys->pipe(p) < 0){
+		unmake(base);
 		err(sys->sprint("cannot make namespace pipe: %r"));
+	}
 	nssync := chan[1] of string;
-	spawn serverexport(p[1], emptyusr, emptydev, jail, nssync);
+	spawn serverexport(p[1], emptyusr, emptydev, nssync);
 	p[1] = nil;
 	e := <-nssync;
-	if(e != nil)
+	if(e != nil){
+		unmake(base);
 		err(e);
+	}
 
-	if(sys->chdir(jail) < 0 || sys->pctl(Sys->NEWNS, nil) < 0)
+	# The jail is the root of the session's name space for as long as
+	# there is a session: every fork of that name space clones its root,
+	# so it cannot go before the session does (removed on entry, it was
+	# gone from a memfs /tmp at once, and the native kernel's sessions
+	# were refused: "clone failed").  Nor can the session remove it: its
+	# end kills everything in it, the exporter that used to be left the
+	# job included, so every session left a directory in /tmp.  A sweeper
+	# outside the session's process group, with the name space as it was
+	# before the session narrowed its own, removes it when the group has
+	# no process left.
+	swsync := chan of int;
+	spawn sweeper(pid, base, swsync);
+	if(<-swsync < 0){
+		unmake(base);
+		err(sys->sprint("cannot watch the session's end: %r"));
+	}
+	if(sys->chdir(jail) < 0)
+		err(sys->sprint("cannot enter empty namespace: %r"));
+	if(sys->pctl(Sys->NEWNS, nil) < 0)
 		err(sys->sprint("cannot enter empty namespace: %r"));
 	if(sys->mount(p[0], nil, "/", Sys->MREPL|Sys->MCREATE, "") < 0)
 		err(sys->sprint("cannot mount restricted server namespace: %r"));
@@ -154,7 +178,38 @@ mkdir(path: string): int
 	return 0;
 }
 
-serverexport(fd: ref Sys->FD, emptyusr, emptydev, jail: string,
+# the session's three directories, whichever of them are still there
+unmake(base: string)
+{
+	sys->remove(base + "-root");
+	sys->remove(base + "-usr");
+	sys->remove(base + "-dev");
+}
+
+# Removes the session's directories once the session's process group
+# (pid's) has no process left, however it ended.  It is in a group of its
+# own, so the session's end does not take it too, and it keeps none of
+# the session's descriptors: the caller's connection is not held open by
+# it.
+sweeper(pid: int, base: string, sync: chan of int)
+{
+	if(sys->pctl(Sys->NEWPGRP, nil) < 0){
+		sync <-= -1;
+		return;
+	}
+	fd := sys->open("#p/" + string pid + "/grpwait", Sys->OREAD);
+	if(fd == nil || sys->pctl(Sys->NEWFD, fd.fd :: nil) < 0){
+		sync <-= -1;
+		return;
+	}
+	fd = sys->fildes(fd.fd);
+	sync <-= 0;
+	buf := array[64] of byte;
+	sys->read(fd, buf, len buf);
+	unmake(base);
+}
+
+serverexport(fd: ref Sys->FD, emptyusr, emptydev: string,
 		sync: chan of string)
 {
 	if(sys->pctl(Sys->FORKNS, nil) < 0) {
@@ -195,7 +250,6 @@ serverexport(fd: ref Sys->FD, emptyusr, emptydev, jail: string,
 	sys->unmount(nil, "/dev");
 	sys->unmount(nil, "/mnt/factotum");
 	sys->unmount(nil, "/tmp/factotum");
-	sys->remove(jail);
 }
 
 hideifpresent(empty, path: string): int

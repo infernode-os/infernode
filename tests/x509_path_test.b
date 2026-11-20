@@ -88,7 +88,7 @@ chain(t: ref T, names: list of string): list of array of byte
 
 accept(t: ref T, names: list of string, what: string)
 {
-	(ok, err) := x509->verify_certchain(chain(t, names));
+	(ok, err) := x509->verify_certchain(chain(t, names), X509->Usage_Any);
 	if(!ok)
 		t.log("error: " + err);
 	t.asserteq(ok, 1, what);
@@ -96,7 +96,7 @@ accept(t: ref T, names: list of string, what: string)
 
 reject(t: ref T, names: list of string, want, what: string)
 {
-	(ok, err) := x509->verify_certchain(chain(t, names));
+	(ok, err) := x509->verify_certchain(chain(t, names), X509->Usage_Any);
 	t.asserteq(ok, 0, what);
 	t.log("rejected: " + err);
 	if(want != nil)
@@ -138,7 +138,7 @@ testTamperedSignature(t: ref T)
 	leaf := array [len hd c] of byte;
 	leaf[0:] = hd c;
 	leaf[len leaf - 5] ^= byte 16r01;
-	(ok, err) := x509->verify_certchain(leaf :: tl c);
+	(ok, err) := x509->verify_certchain(leaf :: tl c, X509->Usage_Any);
 	t.asserteq(ok, 0, "tampered leaf signature");
 	t.log("rejected: " + err);
 }

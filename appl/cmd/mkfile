@@ -360,6 +360,7 @@ SYSMODULES=\
 	tensor.m\
 	parread.m\
 	mdhtml.m\
+	sdrdsp.m\
 
 DISBIN=$ROOT/dis
 

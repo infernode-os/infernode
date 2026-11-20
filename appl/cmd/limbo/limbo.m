@@ -475,6 +475,7 @@ Type: adt
 	flags:	byte;
 	sbl:		int;		# slot in .sbl adt table
 	sig:		int;		# signature for dynamic type check
+	dig:		array of byte;	# SHA-256 of the text sig is folded from
 	size:		int;		# storage required, in bytes
 	align:		int;		# alignment in bytes
 	decl:		cyclic ref Decl;

@@ -95,9 +95,14 @@ init(nil: ref Draw->Context, args: list of string)
 	dhcpclient->tracing(trace);
 	e: string;
 	lease: ref Lease;
+	# What is asked for is kept apart from what comes back.  A failed
+	# attempt comes back nil, and that was the next attempt's request:
+	# under -r, the address, host name and the rest given on the command
+	# line were asked for once and never again.
+	req := cfg;
 	for(;;){
 		if(bootp){
-			(cfg, e) = dhcpclient->bootp(netdir, ifcctl, etherdir+"/addr", cfg);
+			(cfg, e) = dhcpclient->bootp(netdir, ifcctl, etherdir+"/addr", req);
 			if(e == nil){
 				if(cfg != nil)
 					dhcpclient->applycfg(netdir, ifcctl, cfg);
@@ -106,7 +111,7 @@ init(nil: ref Draw->Context, args: list of string)
 				break;
 			}
 		}else{
-			(cfg, lease, e) = dhcpclient->dhcp(netdir, ifcctl, etherdir+"/addr", cfg, nil);	# last is array of int options
+			(cfg, lease, e) = dhcpclient->dhcp(netdir, ifcctl, etherdir+"/addr", req, nil);	# last is array of int options
 			if(e == nil){
 				if(pcfg)
 					printcfg(cfg);
@@ -117,7 +122,7 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 		if(!retry)
 			err("failed to configure network: "+e);
-		sys->fprint(sys->fildes(2), "dhcp: failed to configure network: %s; retrying", e);
+		sys->fprint(sys->fildes(2), "dhcp: failed to configure network: %s; retrying\n", e);
 		sys->sleep(RetryTime);
 	}
 }
@@ -127,8 +132,11 @@ leasemon(configs: chan of (ref Bootconf, string), pcfg: int)
 	for(;;){
 		(cfg, e) := <-configs;
 		if(e != nil)
-			sys->fprint(sys->fildes(2), "dhcp: %s", e);
-		if(pcfg)
+			sys->fprint(sys->fildes(2), "dhcp: %s\n", e);
+		# a lease lost comes with no configuration: printing it was a
+		# nil dereference, and the end of this process, at any
+		# renewal a server (or anyone on the wire) refused
+		if(pcfg && cfg != nil)
 			printcfg(cfg);
 	}
 }

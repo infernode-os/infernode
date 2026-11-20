@@ -83,14 +83,37 @@ restrictdirx(target: string, allowed: list of string,
 	# Create unique shadow dir using PID + sequence + millisec
 	# The millisec component prevents collisions from concurrent goroutines
 	pid := sys->pctl(0, nil);
-	seq := shadowseq++;
-	shadowdir := sys->sprint("%s/%d-%d-%d", SHADOW_BASE, pid, seq, sys->millisec());
-	err := mkdirp(shadowdir);
+	err := mkdirp(SHADOW_BASE);
 	if(err != nil)
 		return err;
+	# The shadow is made here and must be new: one that was already there
+	# was taken as it stood, with whatever an earlier call (or anyone who
+	# can write /tmp) had left in it, and became part of this view.
+	# (Names repeat: a later emulator has the same pids at the same
+	# times, and /tmp outlives it.  The next free one is taken.)
+	shadowdir := "";
+	for(try := 0; try < 100000 && shadowdir == ""; try++) {
+		name := sys->sprint("%s/%d-%d-%d", SHADOW_BASE, pid, shadowseq++, sys->millisec());
+		(sok, nil) := sys->stat(name);
+		if(sok >= 0)
+			continue;
+		sfd := sys->create(name, Sys->OREAD, DIR_MODE);
+		if(sfd != nil)
+			shadowdir = name;
+		else if(sys->stat(name).t0 < 0)
+			break;	# not a name taken meanwhile: it cannot be made
+	}
+	if(shadowdir == "")
+		return sys->sprint("cannot create a shadow directory in %s: %r", SHADOW_BASE);
 
 	for(a := allowed; a != nil; a = tl a) {
 		item := hd a;
+		# An entry is one name of the target.  Names come from callers
+		# and, for a service's own listing, from its server: "..", or a
+		# name with a slash, bound the target's parent (or anything)
+		# into the view.
+		if(!safename(item))
+			return sys->sprint("cannot restrict %s: %s is not an entry name", target, item);
 		# Avoid double-slash when target is "/"
 		srcpath: string;
 		if(target == "/")
@@ -157,10 +180,16 @@ restrictdirx(target: string, allowed: list of string,
 	return nil;
 }
 
+# Who the name space is for.  The coordinator's (restrictns) is the
+# agent loop's own.  A tool worker's (restricttoolns) is one call's, made
+# by tools9p.  A child's (restrictchildns) is a spawned subagent's, made
+# inside its parent's restricted name space from what the model asked for.
+Kcoord, Ktool, Kchild: con iota;
+
 # Apply full namespace restriction policy
 restrictns(caps: ref Capabilities): string
 {
-	return restrictnsx(caps, 0);
+	return restrictnsx(caps, Kcoord, 0);
 }
 
 # Tool workers must finish every shadow-backed restriction before the final
@@ -168,44 +197,27 @@ restrictns(caps: ref Capabilities): string
 # /tmp/.veltro-ns inside the restricted writable view.
 restricttoolns(caps: ref Capabilities): string
 {
-	return restrictnsx(caps, 1);
+	return restrictnsx(caps, Ktool, 0);
 }
 
-# The current directory is a channel taken before the restriction: left
-# so, a relative name was resolved outside it, from the directory the
-# process started in (an agent asked for ../file read beside its grant,
-# in the host's own tree).  It is taken again, by its name, in the
-# restricted name space, or / if that name is not there.
-restrictnsx(caps: ref Capabilities, hidemetadata: int): string
+# A spawned subagent's name space.  It is made from inside the parent's
+# restricted name space, where the install's audit switch cannot be seen,
+# so the caller says whether auditing is required (it has it from the
+# tool server).  It differs from restrictns in what a child may not hold:
+# its parent's tool server, and the model service.
+restrictchildns(caps: ref Capabilities, auditrequired: int): string
 {
-	if(sys == nil)
-		init();
-	dot := "";
-	dfd := sys->open(".", Sys->OREAD);
-	if(dfd != nil)
-		dot = sys->fd2path(dfd);
-	dfd = nil;
-	err := restrictnsx0(caps, hidemetadata);
+	return restrictnsx(caps, Kchild, auditrequired);
+}
+
+# The refusals of restrictnsx for a child that need nothing done to find:
+# the same checks, in the same order.
+checkchildcaps(caps: ref Capabilities): string
+{
+	err := validatecapnames(caps.tools, "tool");
 	if(err != nil)
 		return err;
-	if(dot == "" || sys->chdir(dot) < 0)
-		sys->chdir("/");
-	return nil;
-}
-
-restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
-{
-
-	# Preserve only the append capability while constructing the namespace.
-	# /mnt is restricted below, so opening Audit->LOGFILE afterward cannot work;
-	# keeping the FD local also avoids exposing the audit tree to the tool worker.
-	(auditon, nil) := sys->stat(Audit->ONFILE);
-	auditrequired := auditon >= 0;
-	auditfd := sys->open(Audit->LOGFILE, Sys->OWRITE);
-	if(auditrequired && auditfd == nil)
-		return "required audit sink unavailable";
-
-	err := validatecapnames(caps.tools, "tool");
+	err = validatetoolnames(caps.tools);
 	if(err != nil)
 		return err;
 	err = validatecapnames(caps.shellcmds, "shell command");
@@ -217,6 +229,82 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 	err = validatepaths(caps.writepaths, "write path", caps.tools);
 	if(err != nil)
 		return err;
+	err = validatechildpaths(caps.paths);
+	if(err != nil)
+		return err;
+	return validatechildtools(caps.tools);
+}
+
+# The current directory is a channel taken before the restriction: left
+# so, a relative name was resolved outside it, from the directory the
+# process started in (an agent asked for ../file read beside its grant,
+# in the host's own tree).  It is taken again, by its name, in the
+# restricted name space, or / if that name is not there.
+restrictnsx(caps: ref Capabilities, kind: int, auditreq: int): string
+{
+	if(sys == nil)
+		init();
+	dot := "";
+	dfd := sys->open(".", Sys->OREAD);
+	if(dfd != nil)
+		dot = sys->fd2path(dfd);
+	dfd = nil;
+	err := restrictnsx0(caps, kind, auditreq);
+	if(err != nil)
+		return err;
+	if(dot == "" || sys->chdir(dot) < 0)
+		sys->chdir("/");
+	return nil;
+}
+
+restrictnsx0(caps: ref Capabilities, kind: int, auditreq: int): string
+{
+	hidemetadata := kind != Kcoord;
+	# The spawn tool's own worker: the parent of the subagents it starts.
+	spawnworker := kind == Ktool && inlist("spawn", caps.tools);
+
+	# Preserve only the append capability while constructing the namespace.
+	# /mnt is restricted below, so opening Audit->LOGFILE afterward cannot work;
+	# keeping the FD local also avoids exposing the audit tree to the tool worker.
+	# The switch is a file of the install's, which a child, made inside a
+	# restricted name space, cannot see: there it is the caller's word.
+	# (A child asked the file, did not find it, and ran unrecorded.)
+	(auditon, nil) := sys->stat(Audit->ONFILE);
+	auditrequired := auditon >= 0 || auditreq;
+	auditfd := sys->open(Audit->LOGFILE, Sys->OWRITE);
+	if(auditrequired && auditfd == nil)
+		return "required audit sink unavailable";
+
+	err := validatecapnames(caps.tools, "tool");
+	if(err != nil)
+		return err;
+	err = validatetoolnames(caps.tools);
+	if(err != nil)
+		return err;
+	err = validatecapnames(caps.shellcmds, "shell command");
+	if(err != nil)
+		return err;
+	err = validatepaths(caps.paths, "path", caps.tools);
+	if(err != nil)
+		return err;
+	err = validatepaths(caps.writepaths, "write path", caps.tools);
+	if(err != nil)
+		return err;
+	if(kind == Kchild) {
+		err = validatechildpaths(caps.paths);
+		if(err != nil)
+			return err;
+		err = validatechildtools(caps.tools);
+		if(err != nil)
+			return err;
+	}
+	# What a child's /tool says of it, read while the parent's is there.
+	childactivity := "";
+	if(kind == Kchild) {
+		childactivity = readfile("/tool/activity");
+		while(len childactivity > 0 && childactivity[len childactivity - 1] == '\n')
+			childactivity = childactivity[0:len childactivity - 1];
+	}
 
 	# Set up infrastructure directories first (before any restrictdir calls).
 	# These must exist because: (1) restrictdir creates shadow dirs under
@@ -306,6 +394,14 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 				nallow = "pres-winname" :: nallow;
 				nallow = "pres-clone" :: nallow;
 			}
+		}
+
+		# /n/dashboard — the task board (taskboard9p), where the task
+		# tool posts a new task's label.  Fixed-function: only that tool.
+		if(inlist("task", caps.tools)) {
+			(dashok, nil) := sys->stat("/n/dashboard");
+			if(dashok >= 0)
+				nallow = "dashboard" :: nallow;
 		}
 
 		# /n/local — only if /n/local/ subpaths granted via caps.paths
@@ -435,8 +531,14 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
 	# whole /mnt/ui; the subtree is then narrowed below (activity/ always; ctl if
 	# the task tool is granted), preserving the old /mnt/ui least-privilege.
+	# A spawned child has one name space for all its tools.  One that can
+	# run commands (exec, shell) beside a UI tool would hold the UI's
+	# files for those commands to write, an activity's conversation
+	# input among them: it gets none, and its UI tool says so.  (A
+	# tools9p call is one tool's, so exec's never had them.)
 	uimnt := 0;
-	if(needsui(caps.tools)) {
+	runscode := inlist("exec", caps.tools) || inlist("shell", caps.tools) || caps.shellcmds != nil;
+	if(needsui(caps.tools) && !(kind == Kchild && runscode)) {
 		(uimntok, nil) := sys->stat("/mnt/ui");
 		if(uimntok >= 0 && !inlist("ui", mntpaths)) {
 			mntpaths = "ui" :: mntpaths;
@@ -473,6 +575,8 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 				if(inlist("task", caps.tools))
 					uiallow = "ctl" :: uiallow;
 				uerr := filterdir("/mnt/ui", uiallow, 0);
+				if(uerr == nil && !inlist("task", caps.tools))
+					uerr = ownactivity(caps.actid, kind);
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
 			}
@@ -558,7 +662,17 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 	# sibling namespaces, descriptors, status, stacks and writable control files.
 	# Exec receives its own pre-opened wait descriptor from the trusted wrapper,
 	# so it needs no /prog entries even when named shell commands are granted.
+	# The spawn tool's worker is the exception: it is the parent of the
+	# subagents it starts, and stops each (its whole group) by that one's
+	# ctl file, so /prog stays whole for it.  It runs no code of the
+	# model's; a subagent's own /prog is narrowed here like anyone's.
 	(progok, nil) := sys->stat("/prog");
+	if(spawnworker)
+		progok = -1;
+	# The name space file is opened while it can be: read when the record
+	# is made, it is the name space as it then is.  (Exec's /prog is
+	# emptied here, and its record had no name space in it.)
+	nsfd := sys->open(sys->sprint("/prog/%d/ns", sys->pctl(0, nil)), Sys->OREAD);
 	if(progok >= 0) {
 		progallow: list of string;
 		# The exec wrapper supplies sh with a pre-opened wait FD. Its command
@@ -588,7 +702,10 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 	# fixed-function tools that dial directly receive them. In particular, an
 	# exec/shell invocation remains networkless even when the same agent also
 	# has a web tool available; tools9p passes only the invoked tool in caps.
-	if(needsnet(caps.tools)) {
+	# The spawn tool's worker, where the install audits, dials the
+	# provenance store for itself and for each subagent (which keeps the
+	# connection, not the network).
+	if(needsnet(caps.tools) || (spawnworker && auditfd != nil)) {
 		safe = "net" :: safe;
 		(netaltok, nil) := sys->stat("/net.alt");
 		if(netaltok >= 0)
@@ -646,12 +763,29 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 	# Restrict /tool itself so the confined agent sees a stable capability view
 	# without the generic root control file. User/UI mutations happen through the
 	# trusted /mnt/toolctl* alias outside the restricted root.
+	#
+	# A spawned child gets none of it.  Its tools are modules it calls in
+	# its own name space; the tool server here is its parent's, which runs
+	# every call with the parent's grants and keeps each tool's last
+	# result.  With /tool/<tool>/ctl in its view (it was: every name in
+	# caps.tools is added below) a child given read and no paths read its
+	# parent's files through it, and one given exec ran commands there.
+	# What a child's tools read of /tool (their grants, the activity) is
+	# put in files of its own.
 	(toolok, nil) := sys->stat("/tool");
-	if(toolok >= 0) {
+	if(toolok >= 0 && kind == Kchild) {
+		terr := childtoolview(caps, childactivity, auditrequired);
+		if(terr != nil)
+			return sys->sprint("restrict /tool: %s", terr);
+	} else if(toolok >= 0) {
 		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" ::
 			"budget" :: "activity" :: nil;
 		if(inlist("task", caps.tools))
 			toolallow = "provision" :: toolallow;
+		# The spawn tool asks the server whether the install audits
+		# (meta/audit): its children cannot see the install's switch.
+		if(spawnworker)
+			toolallow = "meta" :: toolallow;
 		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)
 			if(!inlist(hd tl2, toolallow))
 				toolallow = hd tl2 :: toolallow;
@@ -728,7 +862,37 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 			return sys->sprint("restrict task metadata: %s", err);
 	}
 
+	# The memory and plan tools keep one store an activity
+	# (memory/<id>, plans/a<id>; the id is /tool/activity's), as the
+	# scratch is one an activity: a call of either sees its own
+	# activity's and no other's.  The directories were whole, so one
+	# task's agent read and rewrote another's memory and plans.
+	storeid := caps.actid;
+	if(kind == Kchild && storeid < 0 && alldigits(childactivity))
+		storeid = int childactivity;
+	if(storeid >= 0) {
+		if(inlist("memory", caps.tools)) {
+			own := string storeid;
+			err = mkdirp("/tmp/veltro/memory/" + own);
+			if(err == nil)
+				err = restrictdir("/tmp/veltro/memory", own :: nil, 1);
+			if(err != nil)
+				return sys->sprint("restrict agent memory: %s", err);
+		}
+		if(inlist("plan", caps.tools)) {
+			own := "a" + string storeid;
+			err = mkdirp("/tmp/veltro/plans/" + own);
+			if(err == nil)
+				err = restrictdir("/tmp/veltro/plans", own :: nil, 1);
+			if(err != nil)
+				return sys->sprint("restrict agent plans: %s", err);
+		}
+	}
+
 	err = restrictdir("/tmp/veltro", tmpveltroallow(caps), 1);
+	if(err != nil)
+		return sys->sprint("restrict /tmp/veltro: %s", err);
+	err = restricttmpveltrogrants(caps);
 	if(err != nil)
 		return sys->sprint("restrict /tmp/veltro: %s", err);
 	if(hidemetadata) {
@@ -751,10 +915,16 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 		("tools=" + joincsv(caps.tools)) :: nil;
 	if(hidemetadata)
 		auditops = "restrict /tmp/veltro/.ns -> empty" :: auditops;
-	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd, 0) != 0 &&
+	# A child's capabilities carry no activity (it stages nothing): its
+	# record is its parent's activity's, as its /tool said.
+	recactid := caps.actid;
+	if(kind == Kchild && recactid < 0 && alldigits(childactivity))
+		recactid = int childactivity;
+	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), recactid, auditops, auditfd, 0, nsfd) != 0 &&
 	   auditrequired)
 		return "required namespace audit write failed";
 	auditfd = nil;
+	nsfd = nil;
 
 	# 10. Restrict /tmp last. All bind-replace shadows and COW mounts must be
 	# constructed first; their backing channels remain valid after the trusted
@@ -764,6 +934,16 @@ restrictnsx0(caps: ref Capabilities, hidemetadata: int): string
 		return sys->sprint("restrict /tmp: %s", err);
 
 	return nil;
+}
+
+alldigits(s: string): int
+{
+	if(len s == 0 || len s > 9)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
 }
 
 joincsv(l: list of string): string
@@ -800,6 +980,164 @@ tmpveltroallow(caps: ref Capabilities): list of string
 		allow = "todo.txt" :: allow;
 
 	return allow;
+}
+
+# Path grants under /tmp/veltro.  tmpveltroallow puts each grant's first
+# component in the view, whole and writable, which is right for a tool's
+# own state and wrong for a grant: /tmp/veltro/proj/a showed all of proj,
+# and a grant /tool/paths called ro could be written.  Each is cut down
+# to what was granted, and bound read-only unless a write path covers it.
+restricttmpveltrogrants(caps: ref Capabilities): string
+{
+	tops: list of string;
+	for(p := filterpaths(caps.paths, "/tmp/veltro/"); p != nil; p = tl p) {
+		(first, nil) := splitfirst(hd p);
+		if(first == "" || first == "scratch" || first == ".ns" || inlist(first, tops))
+			continue;
+		# a tool's own state, whole, when the tool is there to use it
+		if((first == "memory" && inlist("memory", caps.tools)) ||
+		   (first == "plans" && inlist("plan", caps.tools)) ||
+		   (first == "todo.txt" && inlist("todo", caps.tools)) ||
+		   (first == "tasks" && inlist("task", caps.tools)))
+			continue;
+		tops = first :: tops;
+	}
+	for(; tops != nil; tops = tl tops) {
+		top := "/tmp/veltro/" + hd tops;
+		(ok, nil) := sys->stat(top);
+		if(ok < 0)
+			continue;
+		err: string;
+		if(inlist(top, caps.paths))
+			err = readonlygrant(top, caps.writepaths);
+		else
+			err = drillgrant(top, filterpaths(caps.paths, top + "/"), caps.writepaths);
+		if(err != nil)
+			return err;
+	}
+	return nil;
+}
+
+# dir shows only the granted names beneath it; a name granted whole is
+# read-only unless it is to be written.
+drillgrant(dir: string, subs: list of string, wpaths: list of string): string
+{
+	allow: list of string;
+	for(p := subs; p != nil; p = tl p) {
+		(first, nil) := splitfirst(hd p);
+		if(first != "" && !inlist(first, allow))
+			allow = first :: allow;
+	}
+	err := filterdir(dir, allow, 0);
+	if(err != nil)
+		return err;
+	for(; allow != nil; allow = tl allow) {
+		child := dir + "/" + hd allow;
+		(ok, nil) := sys->stat(child);
+		if(ok < 0)
+			continue;
+		if(inlist(hd allow, subs))
+			err = readonlygrant(child, wpaths);
+		else {
+			rest: list of string;
+			for(q := subs; q != nil; q = tl q) {
+				(first, more) := splitfirst(hd q);
+				if(first == hd allow && more != "")
+					rest = more :: rest;
+			}
+			err = drillgrant(child, rest, wpaths);
+		}
+		if(err != nil)
+			return err;
+	}
+	return nil;
+}
+
+readonlygrant(path: string, wpaths: list of string): string
+{
+	for(; wpaths != nil; wpaths = tl wpaths)
+		if(pathwithin(hd wpaths, path))
+			return nil;
+	if(sys->bind(path, path, Sys->MREPL|Sys->MREADONLY) < 0)
+		return sys->sprint("cannot protect %s: %r", path);
+	return nil;
+}
+
+# A spawned child's /tool: files of its own, saying what it holds, where
+# its parent's tool server was.  Made in the trusted backing tree, which
+# the last step hides.
+childtoolview(caps: ref Capabilities, activity: string, auditrequired: int): string
+{
+	base := "/tmp/.veltro-ns/tool";
+	err := mkdirp(base);
+	if(err != nil)
+		return err;
+	dir := "";
+	for(try := 0; try < 100000 && dir == ""; try++) {
+		name := sys->sprint("%s/%d-%d-%d", base, sys->pctl(0, nil), shadowseq++, sys->millisec());
+		if(sys->stat(name).t0 >= 0)
+			continue;
+		fd := sys->create(name, Sys->OREAD, DIR_MODE);
+		if(fd != nil)
+			dir = name;
+		else if(sys->stat(name).t0 < 0)
+			break;
+	}
+	if(dir == "")
+		return sys->sprint("cannot create %s: %r", base);
+	tools := "";
+	for(t := caps.tools; t != nil; t = tl t)
+		tools += hd t + "\n";
+	# A child writes nowhere but its scratch: its grants are bound
+	# read-only, whatever its parent may do with the same path.
+	paths := "/tmp/veltro/scratch cow";
+	for(p := caps.paths; p != nil; p = tl p)
+		if(hd p != "/tmp/veltro/scratch" && hd p != Audit->LOGFILE)
+			paths += "\n" + hd p + " ro";
+	asw := "off\n";
+	if(auditrequired)
+		asw = "required\n";
+	fd := sys->create(dir + "/meta", Sys->OREAD, DIR_MODE);
+	if(fd == nil)
+		return sys->sprint("cannot create %s/meta: %r", dir);
+	fd = nil;
+	files := array[] of {
+		("tools", tools),
+		("_registry", joinsp(caps.tools)),
+		("paths", paths),
+		("budget", ""),
+		("grantable", ""),
+		("activity", activity),
+		("meta/role", "child\n"),
+		("meta/nodevs", "set\n"),
+		("meta/audit", asw),
+	};
+	for(i := 0; i < len files; i++) {
+		(name, text) := files[i];
+		if(name == "activity" && text == "")
+			continue;
+		fd = sys->create(dir + "/" + name, Sys->OWRITE, 8r444);
+		if(fd == nil)
+			return sys->sprint("cannot create %s/%s: %r", dir, name);
+		b := array of byte text;
+		if(len b > 0 && sys->write(fd, b, len b) != len b)
+			return sys->sprint("cannot write %s/%s: %r", dir, name);
+		fd = nil;
+	}
+	if(sys->bind(dir, "/tool", Sys->MREPL|Sys->MREADONLY) < 0)
+		return sys->sprint("cannot replace /tool: %r");
+	return nil;
+}
+
+joinsp(l: list of string): string
+{
+	s := "";
+	for(; l != nil; l = tl l) {
+		if(s != "")
+			s += " ";
+		s += hd l;
+	}
+	return s;
 }
 
 # Filter paths that start with a given prefix, stripping the prefix.
@@ -854,6 +1192,61 @@ restrictlocal(paths: list of string): string
 	return nil;
 }
 
+# The UI as a tool other than task has it: its own activity, and of
+# that what the UI tools use (what is presented, the context zone, the
+# label, status and urgency), never a conversation.  Every activity's
+# files were there, each with the input file its agent reads the user's
+# words from: a tool that writes a path it is given wrote "/promote"
+# into a task's.  The activity is the capabilities' (a child's is its
+# parent's, as /tool/activity has it); current, which names the activity
+# on show, reads as the tool's own, so a tool that asks it acts on its
+# own agent's activity and not on whichever the user is looking at.
+ownactivity(actid, kind: int): string
+{
+	if(actid < 0 && kind == Kchild) {
+		a := readfile("/tool/activity");
+		while(len a > 0 && a[len a - 1] == '\n')
+			a = a[0:len a - 1];
+		if(alldigits(a))
+			actid = int a;
+	}
+	if(actid < 0)
+		return nil;	# no activity to keep it to: as it was
+	if(sys->stat("/mnt/ui/activity").t0 < 0)
+		return nil;	# no UI served there
+	own := string actid;
+	base := "/tmp/.veltro-ns/ui";
+	err := mkdirp(base);
+	if(err != nil)
+		return err;
+	cur := "";
+	for(try := 0; try < 100000 && cur == ""; try++) {
+		name := sys->sprint("%s/%d-%d-%d", base, sys->pctl(0, nil), shadowseq++, sys->millisec());
+		if(sys->stat(name).t0 >= 0)
+			continue;
+		fd := sys->create(name, Sys->OWRITE, 8r444);
+		if(fd == nil)
+			return sys->sprint("cannot create %s: %r", name);
+		sys->fprint(fd, "%s\n", own);
+		cur = name;
+	}
+	if(cur == "")
+		return "cannot name the activity";
+	err = filterdir("/mnt/ui/activity", own :: "current" :: nil, 0);
+	if(err != nil)
+		return err;
+	if(sys->stat("/mnt/ui/activity/current").t0 >= 0 &&
+	   sys->bind(cur, "/mnt/ui/activity/current", Sys->MREPL|Sys->MREADONLY) < 0)
+		return sys->sprint("cannot replace /mnt/ui/activity/current: %r");
+	if(sys->stat("/mnt/ui/activity/" + own).t0 >= 0) {
+		err = filterdir("/mnt/ui/activity/" + own,
+			"presentation" :: "context" :: "label" :: "status" :: "urgency" :: nil, 0);
+		if(err != nil)
+			return err;
+	}
+	return nil;
+}
+
 restrictwallet(): string
 {
 	accts := walletaccounts();
@@ -874,8 +1267,15 @@ restrictwallet(): string
 		"pay" :: "authorize" :: "history" :: nil;
 	for(a = accts; a != nil; a = tl a) {
 		err = restrictdir("/mnt/wallet/" + hd a, acctallow, 1);
-		if(err != nil)
+		if(err != nil) {
+			# Not left half made: the accounts not yet narrowed
+			# still have their ctl.  The caller refuses the whole
+			# name space on this error; the view is emptied all the
+			# same, so that it is not usable if one does not.
+			if(restrictdir("/mnt/wallet", nil, 0) != nil)
+				sys->bind("/dev/null", "/mnt/wallet", Sys->MREPL);
 			return err;
+		}
 	}
 	return nil;
 }
@@ -892,9 +1292,15 @@ walletaccounts(): list of string
 	s := string buf[:n];
 	(nil, toks) := sys->tokenize(s, " \t\r\n");
 	out: list of string;
+	# An account's name is an entry of the wallet's root beside the
+	# wallet's own files.  The list is the server's word: an account
+	# named for one of those files put that file (the trusted ctl, the
+	# approval queue) in the agent's view.  wallet9p makes no such
+	# account; the view does not depend on it.
+	own := "ctl" :: "accounts" :: "default" :: "new" :: "pending" :: "network" :: "event" :: nil;
 	for(; toks != nil; toks = tl toks) {
 		name := hd toks;
-		if(safename(name) && !inlist(name, out))
+		if(safename(name) && !inlist(name, own) && !inlist(name, out))
 			out = name :: out;
 	}
 	return out;
@@ -1089,6 +1495,15 @@ validatepaths(paths: list of string, what: string, tools: list of string): strin
 			return sys->sprint("invalid %s %s: %s", what, p, err);
 		if(!grantpathallowed(p, tools))
 			return sys->sprint("invalid %s %s: privileged path not grantable", what, p);
+		# A service's mount is named in lower case, and its narrowing
+		# (msg's read surface, the wallet's, the audit sink) is found by
+		# that name.  On a host whose file names fold case /mnt/Msg is
+		# the same directory under a name no narrowing knows.
+		if(len p > 5 && asciilower(p[0:5]) == "/mnt/") {
+			(first, nil) := splitfirst(p[5:]);
+			if(p[0:5] != "/mnt/" || first != asciilower(first))
+				return sys->sprint("invalid %s %s: a service mount is named in lower case", what, p);
+		}
 	}
 	return nil;
 }
@@ -1101,6 +1516,56 @@ validatecapnames(names: list of string, what: string): string
 			return sys->sprint("invalid %s %s: must be a simple capability name", what, n);
 	}
 	return nil;
+}
+
+# A tool's name becomes an entry of /tool beside the server's own files:
+# one named for a control file kept that file in the worker's view.
+validatetoolnames(names: list of string): string
+{
+	reserved := "ctl" :: "ns" :: "event" :: "view" :: "provision" :: "meta" ::
+		"tools" :: "grantable" :: "help" :: "_registry" :: "paths" ::
+		"budget" :: "activity" :: nil;
+	for(; names != nil; names = tl names)
+		if(inlist(asciilower(hd names), reserved))
+			return sys->sprint("invalid tool %s: the name of a file of the tool server", hd names);
+	return nil;
+}
+
+# What a spawned child may not be granted, whatever its parent holds.  The
+# paths are the model's own request.  The model service is the harness's:
+# a child talks to the one session opened for it, through files opened
+# before its name space is made, and the mount itself holds every other
+# session's conversation.  (The coordinator is granted it; a child asked
+# for it and got it.)  The rest of the harness's mounts are refused to
+# everyone by privilegedcontrolpath.
+validatechildpaths(paths: list of string): string
+{
+	for(; paths != nil; paths = tl paths) {
+		p := asciilower(hd paths);
+		if(p == "/mnt/llm" || prefix(p, "/mnt/llm/") ||
+		   p == "/mnt/veltro" || prefix(p, "/mnt/veltro/"))
+			return sys->sprint("invalid path %s: a subagent is not granted the agent's own services", hd paths);
+	}
+	return nil;
+}
+
+# Tools whose effect needs the user's approval: the coordinator asks
+# before its agent's call of one runs.  A child calls its tools as
+# modules, which no coordinator sees, so it holds none of them, whatever
+# the delegation budget says.  (task is here for promote, which applies
+# a task's staged changes to the user's files.)
+validatechildtools(tools: list of string): string
+{
+	for(; tools != nil; tools = tl tools)
+		if(gatedtool(hd tools))
+			return sys->sprint("invalid tool %s: its effect needs the user's approval, which a subagent's calls do not pass", hd tools);
+	return nil;
+}
+
+gatedtool(name: string): int
+{
+	name = asciilower(name);
+	return name == "sms" || name == "dial" || name == "task";
 }
 
 validcapname(n: string): int
@@ -1224,6 +1689,8 @@ privilegedcontrolpath(path: string, tools: list of string): int
 		return 1;
 	if(tmpveltrointernalpath(path))
 		return 1;
+	if(tmpveltrotoolstate(path, tools))
+		return 1;
 	if(appipccontrolpath(path) && !appipctoolpath(path, tools))
 		return 1;
 	if(uiagentcontrolpath(path))
@@ -1317,6 +1784,21 @@ tmpveltrointernalpath(path: string): int
 	return path == "/tmp/veltro/.ns" || prefix(path, "/tmp/veltro/.ns/") ||
 		path == "/tmp/veltro/cow" || prefix(path, "/tmp/veltro/cow/") ||
 		path == "/tmp/veltro/tasks" || prefix(path, "/tmp/veltro/tasks/");
+}
+
+# The memory, plan and todo tools keep the agent's own state here, and
+# each is given its directory by its tool.  As a path grant it handed
+# that state, whole and writable, to tools that are not the one: a child
+# given read and /tmp/veltro/memory/x had its parent's memory.
+tmpveltrotoolstate(path: string, tools: list of string): int
+{
+	if(path == "/tmp/veltro/memory" || prefix(path, "/tmp/veltro/memory/"))
+		return !inlist("memory", tools);
+	if(path == "/tmp/veltro/plans" || prefix(path, "/tmp/veltro/plans/"))
+		return !inlist("plan", tools);
+	if(path == "/tmp/veltro/todo.txt" || prefix(path, "/tmp/veltro/todo.txt/"))
+		return !inlist("todo", tools);
+	return 0;
 }
 
 appipccontrolpath(path: string): int
@@ -1538,21 +2020,26 @@ markboot(overlaydir: string, boot: int)
 setasidestale(overlaydir: string): string
 {
 	init();
-	return setaside(overlaydir, bootstamp());
+	(kept, nil) := setaside(overlaydir, bootstamp());
+	return kept;
 }
 
-setaside(overlaydir: string, boot: int): string
+# Returns where the overlay was kept ("" if it is this start's, or
+# empty), and an error when one that had to be set aside could not be:
+# it was then used, an earlier session's unapproved changes and all,
+# and stamped as this start's.
+setaside(overlaydir: string, boot: int): (string, string)
 {
 	(ok, nil) := sys->stat(overlaydir);
 	if(ok < 0 || boot == 0)
-		return "";
+		return ("", nil);
 	was := 0;
 	(nil, lines) := sys->tokenize(readfile(overlaydir + "/.cowmeta"), "\n");
 	for(; lines != nil; lines = tl lines)
 		if(prefix(hd lines, "boot="))
 			was = int (hd lines)[len "boot=":];
 	if(was != 0 && was - boot <= BOOTSLACK && boot - was <= BOOTSLACK)
-		return "";
+		return ("", nil);
 	# Nothing staged in it: nothing to keep.
 	staged := 0;
 	fd := sys->open(overlaydir, Sys->OREAD);
@@ -1568,18 +2055,19 @@ setaside(overlaydir: string, boot: int): string
 		fd = nil;
 	}
 	if(!staged)
-		return "";	# nothing in it to keep apart: used as it is
+		return ("", nil);	# nothing in it to keep apart: used as it is
 	# Kept beside the others, under a name no activity's overlay has.
 	(nil, base) := splitlast(overlaydir);
 	dir := sys->nulldir;
 	dir.name = sys->sprint("kept-%d-%s", was, base);
 	if(sys->wstat(overlaydir, dir) < 0) {
-		sys->fprint(sys->fildes(2), "nsconstruct: cannot set aside %s: %r\n", overlaydir);
-		return "";
+		e := sys->sprint("%s holds an earlier session's changes and cannot be set aside: %r", overlaydir);
+		sys->fprint(sys->fildes(2), "nsconstruct: %s\n", e);
+		return ("", e);
 	}
 	sys->fprint(sys->fildes(2), "nsconstruct: %s is from an earlier session: kept as %s, not used\n", overlaydir, dir.name);
 	(parent, nil) := splitlast(overlaydir);
-	return parent + "/" + dir.name;
+	return (parent + "/" + dir.name, nil);
 }
 
 splitlast(path: string): (string, string)
@@ -1613,7 +2101,9 @@ overlaywritepaths(paths: list of string, actid: int): string
 		# writable path shares one overlay and sees the same files.
 		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%s", actid, overlaykey(fullpath));
 		boot := bootstamp();
-		setaside(overlaydir, boot);
+		(nil, serr) := setaside(overlaydir, boot);
+		if(serr != nil)
+			return serr;
 		merr := mkdirp(overlaydir);
 		if(merr != nil)
 			return sys->sprint("cowfs overlay %s: %s", overlaydir, merr);
@@ -1835,11 +2325,16 @@ emitauditlog(id: string, ops: list of string)
 	# -1: a direct caller outside restrictns has no activity to attribute the
 	# restriction to. The field is still emitted so a reader can tell an
 	# unattributed record from one written before attribution existed.
-	emitauditlogto(id, -1, ops, nil, 1);
+	emitauditlogto(id, -1, ops, nil, 1, nil);
 }
 
+# The manifests of one emulator are numbered, so that a later process
+# with an earlier one's pid does not write over the file a sealed record
+# names.
+manifestseq := 0;
+
 emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD,
-	allowfallback: int): int
+	allowfallback: int, nsfd: ref Sys->FD): int
 {
 	if(sys == nil)
 		init();
@@ -1855,13 +2350,25 @@ emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD
 	for(; revops != nil; revops = tl revops)
 		content += (hd revops) + "\n";
 
-	# Dump current namespace state
-	pid := sys->pctl(0, nil);
-	nscontent := readfile(sys->sprint("/prog/%d/ns", pid));
+	# Dump current namespace state: through the file the caller opened
+	# while /prog still held it, or by name.
+	nscontent: string;
+	if(nsfd != nil)
+		nscontent = readfd(nsfd);
+	else
+		nscontent = readfile(sys->sprint("/prog/%d/ns", sys->pctl(0, nil)));
 	if(nscontent != "")
 		content += "\n# Current namespace:\n" + nscontent;
 
-	auditpath := AUDIT_DIR + "/" + id + ".ns";
+	# A sealed record's manifest keeps its name: the file is the pid's
+	# first (id.ns, as before) or, that taken, the next free of id.N.ns.
+	mname := id;
+	auditpath := AUDIT_DIR + "/" + mname + ".ns";
+	if(auditfd != nil)
+		for(try := 0; try < 64 && sys->stat(auditpath).t0 >= 0; try++) {
+			mname = sys->sprint("%s.%d", id, ++manifestseq);
+			auditpath = AUDIT_DIR + "/" + mname + ".ns";
+		}
 	fd := sys->create(auditpath, Sys->OWRITE, FILE_MODE);
 	if(fd != nil) {
 		b := array of byte content;
@@ -1896,7 +2403,7 @@ emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD
 		# own it cannot tie a restriction to the agent it restricted
 		# (INFR-409). Carry the activity explicitly.
 		msg := sys->sprint("id=%s activity=%d manifest=%s.ns sha256=%s size=%d",
-			id, actid, id, hex, len mb);
+			id, actid, mname, hex, len mb);
 		if(auditfd != nil) {
 			line := array of byte ("veltro nsrestrict " + msg + "\n");
 			if(sys->write(auditfd, line, len line) != len line)
@@ -1968,7 +2475,11 @@ readfile(path: string): string
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return "";
+	return readfd(fd);
+}
 
+readfd(fd: ref Sys->FD): string
+{
 	result := "";
 	buf := array[8192] of byte;
 	for(;;) {
@@ -1999,32 +2510,37 @@ cleanup()
 			break;
 		for(i := 0; i < n; i++) {
 			name := dirs[i].name;
-			if(len name >= len prefix && name[0:len prefix] == prefix) {
-				# Remove shadow directory contents then directory itself
-				rmdir(SHADOW_BASE + "/" + name);
-			}
+			if(len name >= len prefix && name[0:len prefix] == prefix)
+				rmshadow(SHADOW_BASE + "/" + name);
 		}
 	}
 }
 
-# Helper: recursively remove a directory and its contents
-rmdir(path: string)
+# Remove one shadow: its placeholders, then itself.  In the name space
+# that made it each placeholder has the real file or directory bound on
+# it, and removing by name through that bind removed the real thing (a
+# granted directory's files, then the directory).  What is bound there is
+# taken off first; a placeholder is an empty file or directory, and
+# nothing below one is touched.
+rmshadow(path: string)
 {
+	names: list of string;
 	fd := sys->open(path, Sys->OREAD);
 	if(fd != nil) {
 		for(;;) {
 			(n, dirs) := sys->dirread(fd);
 			if(n <= 0)
 				break;
-			for(i := 0; i < n; i++) {
-				child := path + "/" + dirs[i].name;
-				if(dirs[i].mode & Sys->DMDIR)
-					rmdir(child);
-				else
-					sys->remove(child);
-			}
+			for(i := 0; i < n; i++)
+				names = dirs[i].name :: names;
 		}
 		fd = nil;
+	}
+	for(; names != nil; names = tl names) {
+		child := path + "/" + hd names;
+		while(sys->unmount(nil, child) >= 0)
+			;
+		sys->remove(child);
 	}
 	sys->remove(path);
 }

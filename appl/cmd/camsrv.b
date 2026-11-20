@@ -356,12 +356,19 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 		case int c.path {
 		Qroot or Qstream or Qlayer =>
 			srv.read(tm);
-		Qfmt =>
-			srv.reply(styxservers->readstr(tm, sys->sprint("%d %d i420 %d\n", fw(), fh(), fps)));
-		Qstatus =>
-			srv.reply(styxservers->readstr(tm, status()));
-		Qctl =>
-			srv.reply(styxservers->readstr(tm, settings()));
+		Qfmt or Qstatus or Qctl =>
+			# One open reads one text, as vid9p's: made at a read at
+			# offset 0 and kept with the fid (made at every read and
+			# cut at its offset, a status that moved between two
+			# reads gave the second the newer one's tail).
+			if(tm.offset == big 0 || c.data == nil){
+				case int c.path {
+				Qfmt =>	c.data = array of byte sys->sprint("%d %d i420 %d\n", fw(), fh(), fps);
+				Qstatus =>	c.data = array of byte status();
+				Qctl =>	c.data = array of byte settings();
+				}
+			}
+			srv.reply(styxservers->readbytes(tm, c.data));
 		Qframe or Qraw =>
 			s := find(tm.fid);
 			if(s == nil)
@@ -1261,12 +1268,35 @@ ctlset(fd: ref Sys->FD, s: string): int
 	return sys->fprint(fd, "%s", s);
 }
 
-# an open of i2c0data keeps the device ctl named when it was opened
+# The sensor's bus in #J: the receiver's ctl names it ("i2c i2c4" on a
+# Pi 5, a connector's own bus); the Pi 4's says nothing, and its camera
+# bus is i2c0.
+i2cbus := "i2c0";
+
+sensorbus(): string
+{
+	fd := sys->open("/dev/unicam/ctl", Sys->OREAD);
+	if(fd == nil)
+		return "i2c0";
+	b := array[1024] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return "i2c0";
+	(nil, lines) := sys->tokenize(string b[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "i2c")
+			return hd tl f;
+	}
+	return "i2c0";
+}
+
+# an open of i2cNdata keeps the device ctl named when it was opened
 opendev(addr, sub: int): ref Sys->FD
 {
 	if(sys->fprint(i2cctl, "addr %d", addr) < 0 || sys->fprint(i2cctl, "subaddress %d", sub) < 0)
 		return nil;
-	return sys->open("/dev/i2c0data", Sys->ORDWR);
+	return sys->open("/dev/" + i2cbus + "data", Sys->ORDWR);
 }
 
 rd8(reg: int): int
@@ -1340,24 +1370,51 @@ lens(pos: int)
 	sys->pwrite(lensfd, b, 2, big 3);
 }
 
+# The receiver's ctl, held open for writing from sensoron to sensoroff:
+# the Pi 5's #V takes one writer, so a second camsrv is refused there
+# rather than powering off this one's camera, and its close turns off
+# what a killed camsrv left on.
+unicamfd: ref Sys->FD;
+
 unicam(s: string): string
 {
-	fd := sys->open("/dev/unicam/ctl", Sys->OWRITE);
-	if(fd == nil || sys->fprint(fd, "%s", s) < 0)
+	if(unicamfd == nil || sys->fprint(unicamfd, "%s", s) < 0)
 		return sys->sprint("camsrv: unicam %s: %r", s);
 	return nil;
 }
 
-sensoron(): string
+# The receiver's connectors, if it has more than one to choose from (a
+# Pi 5's "port" line in its ctl); nil for one (the Pi 4's).
+ports(): list of string
 {
-	unicam("stream off");		# what a killed server left, if it did
-	lastst = -1;
-	e := unicam(sys->sprint("format %d %d", Sw, Sh));
-	if(e == nil)
-		e = unicam("power on");
+	fd := sys->open("/dev/unicam/ctl", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[1024] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return nil;
+	(nil, lines) := sys->tokenize(string b[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "port"){
+			# the one it is on first: where the camera was found last
+			if(hd tl f == "1")
+				return "1" :: "0" :: nil;
+			return "0" :: "1" :: nil;
+		}
+	}
+	return nil;
+}
+
+# Power and find the sensor on a connector: nil, or why not.
+sensorfind(): string
+{
+	e := unicam("power on");
 	if(e != nil)
 		return e;
-	i2cctl = sys->open("/dev/i2c0ctl", Sys->ORDWR);
+	i2cbus = sensorbus();
+	i2cctl = sys->open("/dev/" + i2cbus + "ctl", Sys->ORDWR);
 	if(i2cctl == nil)
 		return sys->sprint("camsrv: i2c: %r");
 	sensorfd = opendev(Sensor, 2);
@@ -1374,6 +1431,29 @@ sensoron(): string
 	}
 	if(id != Chip)
 		return sys->sprint("camsrv: not an IMX708: %.4x", id);
+	return nil;
+}
+
+sensoron(): string
+{
+	unicamfd = sys->open("/dev/unicam/ctl", Sys->OWRITE);
+	if(unicamfd == nil)
+		return sys->sprint("camsrv: the camera: %r");
+	unicam("stream off");		# what a killed server left, if it did
+	lastst = -1;
+	e := unicam(sys->sprint("format %d %d", Sw, Sh));
+	if(e != nil)
+		return e;
+	pl := ports();
+	if(pl == nil)
+		e = sensorfind();
+	for(; pl != nil; pl = tl pl){
+		unicam("power off");
+		if((e = unicam("port " + hd pl)) == nil && (e = sensorfind()) == nil)
+			break;
+	}
+	if(e != nil)
+		return e;
 	if(sensormode() < 0)
 		return "camsrv: the sensor will not take its settings: " + badreg;
 	e = unicam("stream on");
@@ -1453,4 +1533,5 @@ sensoroff()
 	unicam("stream off");
 	unicam("power off");
 	i2cctl = sensorfd = lensfd = nil;
+	unicamfd = nil;
 }

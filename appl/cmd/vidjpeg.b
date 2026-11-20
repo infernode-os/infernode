@@ -180,15 +180,24 @@ serve(tc: chan of ref Tmsg, tree: ref Tree)
 			Qfmt =>
 				srv.reply(styxservers->readstr(tm, sys->sprint("%d %d i420 %d\n", w, h, fps)));
 			Qstatus or Qctl =>
-				# the feed's own, read through
-				f := "/status";
-				if(int c.path == Qctl)
-					f = "/ctl";
-				s := readfile(src + f);
-				if(s == nil)
-					srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("%r")));
-				else
-					srv.reply(styxservers->readstr(tm, s));
+				# the feed's own, read through: read whole at
+				# offset 0 and kept with the fid, so that one
+				# open reads one text (read again for each read
+				# and cut at its offset, a status that moved
+				# between two reads gave the second the newer
+				# one's tail)
+				if(tm.offset == big 0 || c.data == nil){
+					f := "/status";
+					if(int c.path == Qctl)
+						f = "/ctl";
+					s := readfile(src + f);
+					if(s == nil){
+						srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("%r")));
+						break;
+					}
+					c.data = array of byte s;
+				}
+				srv.reply(styxservers->readbytes(tm, c.data));
 			Qframe =>
 				readframe(tm);
 			* =>

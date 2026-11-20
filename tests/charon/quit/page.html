@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html><head><title>quitgui</title></head>
+<body>
+<p id="n">0</p>
+<script>
+// a page that never stops: a timer for as long as its realm lives
+let n = 0;
+setInterval(() => { n++; document.getElementById("n").textContent = String(n); }, 100);
+</script>
+</body></html>

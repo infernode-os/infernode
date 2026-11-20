@@ -1747,9 +1747,10 @@ keydb
 	signed
 lib
 	legal
-		GPL
-		LGPL
-		LICENCE.liberal
+		NOTICE.app
+		NOTICE.ffal
+		NOTICE.liberal
+		calderalic.pdf
 		lucent
 	acid
 		+

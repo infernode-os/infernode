@@ -221,6 +221,105 @@ testStack(t: ref T)
 		sys->remove(hd l);
 }
 
+# the Layers procs in this test's process group: its stacks' watchers
+# (and readers, while they read)
+watchers(): int
+{
+	grp := field(readall("/prog/" + string sys->pctl(0, nil) + "/status"), 1);
+	n := 0;
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	for(;;){
+		(k, d) := sys->dirread(fd);
+		if(k <= 0)
+			break;
+		for(i := 0; i < k; i++){
+			st := readall("/prog/" + d[i].name + "/status");
+			m := field(st, 6);
+			if(field(st, 1) == grp && len m >= 6 && m[0:6] == "Layers")
+				n++;
+		}
+	}
+	return n;
+}
+
+field(s: string, i: int): string
+{
+	(nil, l) := sys->tokenize(s, " \t\n");
+	for(; l != nil && i > 0; l = tl l)
+		i--;
+	if(l == nil)
+		return nil;
+	return hd l;
+}
+
+readall(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[512] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return nil;
+	return string b[0:n];
+}
+
+emptydir(t: ref T): string
+{
+	d := sys->sprint("/tmp/layers_test.%d.%d", sys->pctl(0, nil), sys->millisec());
+	if(sys->create(d, Sys->OREAD, Sys->DMDIR | 8r777) == nil)
+		t.fatal(sys->sprint("mkdir %s: %r", d));
+	return d;
+}
+
+# stop while the watcher sleeps between listings, where it nearly always
+# is: it stops. The stop was sent on an unbuffered channel, without
+# waiting, and dropped unless the watcher was in its alt at that moment.
+testStopAsleep(t: ref T)
+{
+	if(watchers() < 0)
+		t.skip("no /prog");
+	d := emptydir(t);
+	sys->sleep(1200);	# an earlier test's stacks settled (a stop takes a listing)
+	n0 := watchers();
+	s := Stack.watch(d);
+	sys->sleep(200);	# listed, and asleep
+	t.asserteq(watchers(), n0 + 1, "a watcher while it is watched");
+	s.stop();
+	sys->sleep(1200);	# past the next listing
+	t.asserteq(watchers(), n0, "stopped: no watcher left");
+	sys->remove(d);
+}
+
+# The proc that started the watching gone, never having said stop (a
+# window died of an exception): the watcher goes too, at its next look.
+testOwnerGone(t: ref T)
+{
+	if(watchers() < 0)
+		t.skip("no /prog");
+	d := emptydir(t);
+	sys->sleep(1200);	# an earlier test's stacks settled (a stop takes a listing)
+	n0 := watchers();
+	done := chan of ref Stack;
+	spawn owner(d, done);
+	s := <-done;
+	sys->sleep(200);
+	t.assert(s != nil, "watched");
+	t.asserteq(watchers(), n0 + 1, "a watcher while its owner lives");
+	sys->sleep(1200);	# the owner has returned: the next listing sees it gone
+	t.asserteq(watchers(), n0, "owner gone: no watcher left");
+	sys->remove(d);
+}
+
+owner(d: string, done: chan of ref Stack)
+{
+	s := Stack.watch(d);
+	done <-= s;
+	sys->sleep(100);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -244,6 +343,8 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	run("Parse", testParse);
 	run("Stack", testStack);
+	run("StopAsleep", testStopAsleep);
+	run("OwnerGone", testOwnerGone);
 	run("ClassColour", testClassColour);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

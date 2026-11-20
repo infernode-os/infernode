@@ -29,6 +29,7 @@ TARG=\
 	visnet_run.dis\
 	charonsite.dis\
 	feedrate.dis\
+	idlepoll.dis\
 	trtcheck.dis\
 	bayer_test.dis\
 	camsrv_test.dis\

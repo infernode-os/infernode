@@ -300,8 +300,13 @@ testRotate(t: ref T)
 		t.fatal(sys->sprint("open frame: %r"));
 	a := array[FS] of byte;
 	# the frames still kept are of before the turn, each said to be its
-	# own size: the next one made is turned
-	(got, e) := readat(fd, a, newest() + 1);
+	# own size: the next one made is turned. A runner that stalls longer
+	# than the window kept can let that number pass before the read is
+	# served ("frame expired", macOS ARM64 CI): take the newest's next again.
+	got := 0;
+	e := "frame expired";
+	for(try := 0; try < 5 && e == "frame expired"; try++)
+		(got, e) = readat(fd, a, newest() + 1);
 	t.asserteq(got, FS, "a whole frame, turned: " + e);
 	# turned clockwise, the bars run top (white) to bottom (black), and
 	# the picture's bottom, away from the moving band, is at the left

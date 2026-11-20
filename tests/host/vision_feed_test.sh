@@ -18,6 +18,8 @@
 #     while a reader has the file open: that reader goes on to the next
 #     frames (it was told the feed had ended, and a layer bound into a
 #     camera's froze until bound again)
+#   - the camera turned while followed (rotate while streaming): the
+#     session takes the new format and reads on
 #   - src none back to idle; a feed that is not one refused
 #
 # Needs a model directory and a picture of a dog (as vision_test.sh) and
@@ -88,6 +90,17 @@ visionfs load m $M
 		n1=\`{wc -l < /tmp/vision_feed_cat}
 		echo '-- cam restarted'
 		echo \$n0 \$n1
+		# the camera turned while the session follows it (camsrv's rotate
+		# while streaming): the session is told the new format and reads on
+		echo rotate 90 > /mnt/cam/0/ctl
+		sleep 3
+		r0=\`{wc -l < /tmp/vision_feed_cat}
+		sleep 3
+		r1=\`{wc -l < /tmp/vision_feed_cat}
+		echo '-- cam turned'
+		echo \$r0 \$r1
+		cat /mnt/vision/\$id/status
+		tail -1 /tmp/vision_feed_cat
 	} < /mnt/vision/\$id/detections
 	echo src none > /mnt/vision/\$id/ctl
 } < /mnt/vision/clone
@@ -126,4 +139,7 @@ okcam=$(echo "$cam" | awk -v f="$camframes" '{n=0; for(i=1;i<=NF;i++){ if($i !~ 
 [ "$okcam" = 1 ] && ok "a camera: the session's frames are the camera's own numbers ($cam< frames=$camframes)" || bad "a camera's frames: '$cam' camsrv frames=$camframes"
 read n0 n1 <<< "$(part 'cam restarted' | tail -1)"
 [ -n "$n1" ] && [ "$n1" -gt "$n0" ] && ok "a setting changed under a waiting reader (thresh: a new follower): it reads on ($n0 then $n1 lines)" || bad "a setting changed under a waiting reader: it stopped at $n0 then $n1 lines (told the feed had ended: a bound layer froze)"
+read r0 r1 <<< "$(part 'cam turned' | sed -n 1p)"
+turned=$(part 'cam turned' | sed -n 2p)
+[ -n "$r1" ] && [ "$r1" -gt "$r0" ] && ! echo "$turned" | grep -q error && ok "the camera turned while followed: it reads on ($r0 then $r1 lines; $turned)" || bad "the camera turned while followed: $r0 then $r1 lines; $turned"
 exit $fail

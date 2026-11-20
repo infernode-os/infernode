@@ -20,7 +20,12 @@ implement Videnc;
 # for a frame the feed has not made yet waits for it, as the feed's frame
 # does; one the feed no longer keeps, or that has left this cache (the
 # last 64 frames encoded), is "frame expired".  A changed quality starts
-# the cache again.  Union-mounted after the feed, with export(4) in front,
+# the cache again.  A feed turned while it is read (camsrv(4)'s rotate)
+# has frames of another width and height from some frame on: each is
+# encoded at its own (a JPEG says its size), jpeg/fmt says the newest's,
+# and vidjpeg(1) follows.  Each encoder reads through a descriptor of its
+# own, as the feed says a change once to each.
+# Union-mounted after the feed, with export(4) in front,
 # a remote viewer reads jpeg/ where a local one reads frame; vidjpeg(1)
 # turns it back into frames there.
 #
@@ -61,8 +66,16 @@ Job: adt {
 
 stderr: ref Sys->FD;
 src: string;
-srcframe: ref Sys->FD;
 w, h, fps, framesize: int;
+
+# an encoder's way to the feed: its own descriptor, and the format the feed
+# last said to it (a quarter turn keeps framesize)
+Slot: adt {
+	fd:	ref Sys->FD;
+	w, h:	int;
+	busy:	int;
+};
+slots: array of ref Slot;
 quality := 75;
 gen := 0;		# bumped when the quality changes: older work is dropped
 cache: list of ref Ent;	# newest first
@@ -71,7 +84,7 @@ nextoff := big 0;
 busy: list of int;	# frames being encoded
 waiting: list of ref Tmsg.Read;	# index reads for frames being encoded
 srv: ref Styxserver;
-done: chan of (int, int, array of byte, string);	# n, gen, jpeg, error
+done: chan of (int, int, array of byte, string, int);	# n, gen, jpeg, error, slot
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -97,11 +110,15 @@ init(nil: ref Draw->Context, args: list of string)
 	if(e != nil)
 		fatal(e);
 	framesize = w*h + 2 * ((w+1)/2) * ((h+1)/2);
-	srcframe = sys->open(src + "/frame", Sys->OREAD);
-	if(srcframe == nil)
-		fatal(sys->sprint("can't open %s/frame: %r", src));
+	slots = array[NWORK] of ref Slot;
+	for(i := 0; i < NWORK; i++){
+		fd := sys->open(src + "/frame", Sys->OREAD);
+		if(fd == nil)
+			fatal(sys->sprint("can't open %s/frame: %r", src));
+		slots[i] = ref Slot(fd, w, h, 0);
+	}
 	sys->pctl(Sys->NEWPGRP, nil);
-	done = chan of (int, int, array of byte, string);
+	done = chan of (int, int, array of byte, string, int);
 
 	(tree, treeop) := nametree->start();
 	tree.create(big Qroot, dir(".", Sys->DMDIR|8r555, Qroot));
@@ -206,9 +223,13 @@ serve(tc: chan of ref Tmsg, tree: ref Tree)
 		* =>
 			srv.default(tmsg);
 		}
-	(n, g, j, e) := <-done =>
-		if(g >= 0)	# a worker's result, not later()'s reminder
+	(n, g, j, e, si) := <-done =>
+		if(g >= 0){	# a worker's result, not later()'s reminder
 			busy = remove(busy, n);
+			slots[si].busy = 0;
+			if(j != nil)
+				(w, h) = (slots[si].w, slots[si].h);	# jpeg/fmt: the newest frame's
+		}
 		if(g == gen && j != nil)
 			add(n, j);
 		still, again: list of ref Tmsg.Read;
@@ -275,19 +296,26 @@ start(n: int, tm: ref Tmsg.Read, nil: int)
 	waiting = tm :: waiting;
 	if(member(busy, n))
 		return;		# its worker's result will answer it
-	if(len busy >= NWORK){
+	si := -1;
+	for(i := 0; i < NWORK; i++)
+		if(!slots[i].busy){
+			si = i;
+			break;
+		}
+	if(si < 0){
 		spawn later(n);	# every worker busy: asked for again shortly
 		return;
 	}
 	busy = n :: busy;
-	spawn encode(n, gen, quality);
+	slots[si].busy = 1;
+	spawn encode(n, gen, quality, slots[si], si);
 }
 
 # a frame wanted while every worker was busy: asked for again shortly
 later(n: int)
 {
 	sys->sleep(5);
-	done <-= (n, -1, nil, nil);
+	done <-= (n, -1, nil, nil, -1);
 }
 
 replyrec(tm: ref Tmsg.Read, e: ref Ent)
@@ -349,27 +377,52 @@ add(n: int, j: array of byte)
 	}
 }
 
-# read frame n of the feed (waiting for it at the live edge) and encode it
-encode(n, g, q: int)
+# read frame n of the feed (waiting for it at the live edge) through slot
+# sl and encode it at the width and height the feed gave it
+encode(n, g, q: int, sl: ref Slot, si: int)
 {
 	b := array[framesize] of byte;
 	got := 0;
 	while(got < framesize){
-		k := sys->pread(srcframe, b[got:], framesize - got, big n * big framesize + big got);
+		k := sys->pread(sl.fd, b[got:], framesize - got, big n * big framesize + big got);
 		if(k < 0){
-			done <-= (n, g, nil, sys->sprint("%r"));
+			e := sys->sprint("%r");
+			if(got == 0 && (nw := fmtchanged(e)) != nil){
+				(sl.w, sl.h) = (hd nw, hd tl nw);
+				continue;	# the same frame, at its own size
+			}
+			done <-= (n, g, nil, e, si);
 			return;
 		}
 		if(k == 0){
-			done <-= (n, g, nil, "videnc: no such frame");
+			done <-= (n, g, nil, "videnc: no such frame", si);
 			return;
 		}
 		got += k;
 	}
-	cw := (w+1)/2;
-	ch := (h+1)/2;
-	(j, e) := enc->encode(w, h, b[0:w*h], b[w*h:w*h+cw*ch], b[w*h+cw*ch:], q);
-	done <-= (n, g, j, e);
+	fw := sl.w;
+	fh := sl.h;
+	cw := (fw+1)/2;
+	ch := (fh+1)/2;
+	(j, e) := enc->encode(fw, fh, b[0:fw*fh], b[fw*fh:fw*fh+cw*ch], b[fw*fh+cw*ch:], q);
+	done <-= (n, g, j, e, si);
+}
+
+# "format changed: <w> <h> i420 <fps>" from the feed, of a size that keeps
+# framesize: its width and height, else nil
+fmtchanged(e: string): list of int
+{
+	p := "format changed:";
+	if(len e <= len p || e[0:len p] != p)
+		return nil;
+	(nf, fl) := sys->tokenize(e[len p:], " ");
+	if(nf < 2)
+		return nil;
+	nw := int hd fl;
+	nh := int hd tl fl;
+	if(nw <= 0 || nh <= 0 || nw*nh + 2 * ((nw+1)/2) * ((nh+1)/2) != framesize)
+		return nil;
+	return nw :: nh :: nil;
 }
 
 member(l: list of int, n: int): int

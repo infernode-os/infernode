@@ -122,7 +122,7 @@ haveframe: int;			# a frame has been decoded into `frame`
 # live-sequential source state (status without pos= / no status at all)
 seqmode := 0;			# 1: stream the frame file, server-paced
 seqprobed := 0;			# transport-vs-stream decided
-framech: chan of (int, array of byte);	# reader -> pane, filled frames and their numbers
+framech: chan of (int, array of byte, int, int);	# reader -> pane, filled frames, their numbers and sizes
 freech: chan of array of byte;	# pane -> reader, recycled buffers
 rdpid := -1;			# reader proc, killed on shutdown
 stopreader := 0;
@@ -252,7 +252,7 @@ ensureopen(): int
 			seqprobed = 1;
 		}
 		if(seqprobed && seqmode) {
-			framech = chan[1] of (int, array of byte);
+			framech = chan[1] of (int, array of byte, int, int);
 			freech = chan[2] of array of byte;
 			freech <-= array[framesize] of byte;
 			freech <-= array[framesize] of byte;
@@ -283,6 +283,7 @@ streamreader()
 	rdpid = sys->pctl(0, nil);
 	fd := sys->open(mountpath + "/frame", Sys->OREAD);
 	f := livestart();
+	(fw, fh) := (vw, vh);	# the size the feed last said, to this reader
 	for(;;) {
 		if(stopreader)
 			return;
@@ -298,14 +299,29 @@ streamreader()
 			freech <-= fb;
 			if(e == "frame expired")
 				f = livestart();
+			else if((nw := fmtchanged(e)) != nil && (hd nw)*(hd tl nw) == fw*fh)
+				(fw, fh) = (hd nw, hd tl nw);	# turned: this frame again, at its size
 			else
 				fd = nil;	# source went away; reopen joins live
 			continue;
 		}
 		if(stopreader)
 			return;
-		framech <-= (f++, fb);
+		framech <-= (f++, fb, fw, fh);
 	}
+}
+
+# "format changed: <w> <h> i420 <fps>", as a feed turned while it is read
+# says it (camsrv(4)): the width and height, else nil
+fmtchanged(e: string): list of int
+{
+	p := "format changed:";
+	if(len e <= len p || e[0:len p] != p)
+		return nil;
+	(nt, t) := sys->tokenize(e[len p:], " ");
+	if(nt < 2 || int hd t <= 0 || int hd tl t <= 0)
+		return nil;
+	return int hd t :: int hd tl t :: nil;
 }
 
 # where a live reader starts: the newest frame (status frames= less one)
@@ -438,7 +454,15 @@ update(): int
 		# arrived since the last tick; never block the GUI loop.
 		changed := 0;
 		alt {
-		(fno, fb) := <-framech =>
+		(fno, fb, fw, fh) := <-framech =>
+			if(fw != vw || fh != vh){
+				# the feed turned: the staging image at the new size
+				(vw, vh) = (fw, fh);
+				m := ref Mpegi;
+				m.width = vw; m.height = vh;
+				remap->init(m);
+				frame = display_g.newimage(Rect((0,0),(vw,vh)), drawm->RGB24, 0, drawm->Black);
+			}
 			convertframe(fb);
 			lastshown = fno;
 			freech <-= fb;

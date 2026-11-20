@@ -4,7 +4,7 @@
 # Hide sends the window "visible 0", wm/camera closes the feed, and with no
 # other reader camsrv(4) stops streaming; unhidden, it takes the feed back.
 # A feed turned (camsrv's rotate) while the window was hidden is shown at
-# its new size. Over camsrv -t, so no camera is needed; driven by
+# its new size, and one turned while it is shown follows at once. Over camsrv -t, so no camera is needed; driven by
 # tests/wm/camera.sh.
 #
 set -e
@@ -41,5 +41,13 @@ if grep -q "^R turned 0 0 0 170 296" "$LOG"; then
 	echo "PASS: turned while hidden, the window takes the turned size"
 else
 	echo "FAIL: turned while hidden -- $(grep '^R turned' "$LOG" | head -1)"; failed=1
+fi
+# turned back (rotate 0) while shown: still streaming, the window the
+# unturned size (296 by 170 with its border) wherever it is
+check live on "turned while shown, it goes on streaming"
+if grep "^R live " "$LOG" | awk '{ if ($6-$4 == 296 && $7-$5 == 170) ok = 1 } END { exit !ok }'; then
+	echo "PASS: turned while shown, the window follows"
+else
+	echo "FAIL: turned while shown -- $(grep '^R live' "$LOG" | head -1)"; failed=1
 fi
 exit $failed

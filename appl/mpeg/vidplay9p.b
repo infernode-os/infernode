@@ -130,6 +130,23 @@ init(ctxt: ref Draw->Context, args: list of string)
             n = livestart(mnt + "/status") - 1;
             continue;
         }
+        if(!ok && (nw := fmtchanged(e)) != nil && (hd nw)*(hd tl nw) == wh){
+            # the feed turned (camsrv's rotate): this frame again, at its
+            # size; a quarter turn keeps the bytes
+            (w, h) = (hd nw, hd tl nw);
+            m.width = w; m.height = h;
+            remap->init(m);
+            vr = Rect((0,0),(w,h));
+            frame = display.newimage(vr, draw->RGB24, 0, draw->Black);
+            matte = mkmatte(shape, w, h);
+            win.reshape(Rect((0,0),(w+8,h+8)));
+            win.image.draw(win.image.r, display.black, nil, (0,0));
+            org = win.image.r.min;
+            dst = Rect(org, org.add((w,h)));
+            cw = w/2; ch = h/2;
+            n--;
+            continue;
+        }
         if(!ok)
             break;                          # EOF / short read = end of stream
         p := ref YCbCr(buf[0:wh], buf[wh:wh+csz], buf[wh+csz:wh+2*csz]);
@@ -151,6 +168,19 @@ init(ctxt: ref Draw->Context, args: list of string)
     }
     stack.stop();
     sys->fprint(stderr, "vidplay9p: end of stream\n");
+}
+
+# "format changed: <w> <h> i420 <fps>", as a feed turned while it is read
+# says it (camsrv(4)): the width and height, else nil
+fmtchanged(e: string): list of int
+{
+    p := "format changed:";
+    if(len e <= len p || e[0:len p] != p)
+        return nil;
+    (nt, t) := sys->tokenize(e[len p:], " ");
+    if(nt < 2 || int hd t <= 0 || int hd tl t <= 0)
+        return nil;
+    return int hd t :: int hd tl t :: nil;
 }
 
 # whether the feed's status has a playhead (pos=), as vid9p's does:

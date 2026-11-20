@@ -285,7 +285,8 @@ testRaw(t: ref T)
 	t.asserteq(int b[o] | int b[o+1]<<8, 1023, "a raw sample of the white bar");
 }
 
-# A camera on its side: the feed served turned, sized as turned.
+# A camera on its side: the feed served turned, sized as turned, and
+# turned back while it streams.
 testRotate(t: ref T)
 {
 	t.assert(ctl("rotate 45") < 0, "only quarter turns");
@@ -298,17 +299,62 @@ testRotate(t: ref T)
 	if(fd == nil)
 		t.fatal(sys->sprint("open frame: %r"));
 	a := array[FS] of byte;
-	t.asserteq(readframe(fd, a), FS, "a whole frame, turned");
-	t.assert(ctl("rotate 0") < 0, "no turning while streaming");
+	# the frames still kept are of before the turn, each said to be its
+	# own size: the next one made is turned. A runner that stalls longer
+	# than the window kept can let that number pass before the read is
+	# served ("frame expired", macOS ARM64 CI): take the newest's next again.
+	got := 0;
+	e := "frame expired";
+	for(try := 0; try < 5 && e == "frame expired"; try++)
+		(got, e) = readat(fd, a, newest() + 1);
+	t.asserteq(got, FS, "a whole frame, turned: " + e);
 	# turned clockwise, the bars run top (white) to bottom (black), and
 	# the picture's bottom, away from the moving band, is at the left
 	col := 7;
 	t.assert(int a[(W/16)*H + col] > 200, sys->sprint("white bar at the top: %d", int a[(W/16)*H + col]));
 	t.assert(int a[(W-W/16)*H + col] < 30, sys->sprint("black bar at the bottom: %d", int a[(W-W/16)*H + col]));
+
+	# turned back while it streams: taken, and the reader told once, at
+	# the first frame of the new size, what it is; framesize is the same,
+	# so the frame is where it was, and read again it is whole
+	before := newest();
+	t.assert(ctl("rotate 0") > 0, "a turn taken while streaming");
+	t.assert(has(file("fmt"), sys->sprint("%d %d i420", W, H)), "fmt is as it was: " + file("fmt"));
+	t.assert(ctl("flip 1") > 0, "a flip taken while streaming");
+	want := sys->sprint("format changed: %d %d i420 10", W, H);
+	told := 0;
+	n := before + 1;
+	for(i := 0; i < 20 && !told; i++){
+		(got, e) = readat(fd, a, n);
+		if(e == want)
+			told = 1;
+		else if(e == "frame expired")
+			n = newest();
+		else if(e != nil)
+			t.fatal("read after the turn: " + e);
+		else{
+			t.asserteq(got, FS, "a frame of the old size, whole");
+			n++;
+		}
+	}
+	t.assert(told, "the reader told the new format: " + want);
+	(got, e) = readat(fd, a, n);
+	t.asserteq(got, FS, "the same frame read again, whole: " + e);
+	row := H-8;
+	t.assert(int a[row*W + W/16] > 200, sys->sprint("unturned, the white bar at the left: %d", int a[row*W + W/16]));
+	(got, e) = readat(fd, a, n + 1);
+	t.asserteq(got, FS, "the next with nothing more said: " + e);
+	# a frame still kept from before the turn is of its own size, and said so
+	(nil, e) = readat(fd, a, before);
+	t.assert(e == "frame expired" || e == sys->sprint("format changed: %d %d i420 10", H, W), "an older frame, at its own size: " + e);
+	# a second reader, opened now, has fmt's size: nothing said
+	fd2 := sys->open(MNT + "/0/frame", Sys->OREAD);
+	(got, e) = readat(fd2, a, newest());
+	t.asserteq(got, FS, "a reader opened after the turn reads at once: " + e);
+	fd2 = nil;
 	fd = nil;
 	sys->sleep(300);
-	t.assert(ctl("rotate 0") > 0, "rotate 0 once the stream is off");
-	t.assert(has(file("fmt"), sys->sprint("%d %d i420", W, H)), "and fmt is as it was");
+	t.assert(ctl("flip 3") > 0, "flip back");
 }
 
 init(nil: ref Draw->Context, args: list of string)

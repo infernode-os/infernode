@@ -27,6 +27,44 @@ boardname(void)
 }
 
 /*
+ * The board, as the firmware's revision code names it. The banner
+ * above is printed before the mailbox has been tried, so it can name
+ * only the SoC; boardprobe's line names the board. Asked once: the
+ * revision does not change while the machine runs.
+ */
+int
+boardtype(void)
+{
+	static int type = -2;
+	u32int v[1];
+
+	if(type != -2)
+		return type;
+	type = Btunknown;
+	v[0] = 0;
+	if(mboxprop(Taggetrev, v, 0, 1) == 0 && (v[0] & (1<<23)) != 0)
+		type = (v[0] >> 4) & 0xFF;
+	return type;
+}
+
+char*
+boardmodel(void)
+{
+	switch(boardtype()){
+	case Bt3b:	return "Raspberry Pi 3B";
+	case Btzerow:	return "Raspberry Pi Zero W";
+	case Bt3bplus:	return "Raspberry Pi 3B+";
+	case Bt3aplus:	return "Raspberry Pi 3A+";
+	case Bt4b:	return "Raspberry Pi 4B";
+	case Btzero2w:	return "Raspberry Pi Zero 2 W";
+	case Bt400:	return "Raspberry Pi 400";
+	case Bt5:	return "Raspberry Pi 5";
+	case Btunknown:	return "board unknown";
+	}
+	return "board not known to this kernel";
+}
+
+/*
  * Ask the firmware what board this is.  Cheap, and it is the first
  * confirmation that the mailbox round trip works at all -- worth having
  * before anything depends on the mailbox for something harder to debug.
@@ -41,6 +79,9 @@ boardprobe(void)
 	if(mboxprop(Taggetrev, v, 0, 1) == 0){
 		uartputstr("board rev ");
 		uartputx(v[0]);
+		uartputstr(" (");
+		uartputstr(boardmodel());
+		uartputstr(")");
 	}else{
 		uartputstr("board rev query FAILED");
 	}

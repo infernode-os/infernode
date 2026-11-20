@@ -7,7 +7,7 @@
  * become virtual addresses and only this file should need to change.
  */
 
-#define BOARDNAME	"BCM2837 / Raspberry Pi 3B+"
+#define BOARDNAME	"BCM2837 / Raspberry Pi 3B+, 3A+, Zero 2 W"
 
 enum
 {

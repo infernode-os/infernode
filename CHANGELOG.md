@@ -14,6 +14,9 @@ All notable changes to InferNode are documented in this file.
   writer at a time, its close powering the camera off. `#J` gains
   i2c4 and i2c6, the connectors' buses, and each open of a data file
   keeps its own address (the sensor's reads went to the lens).
+- **The Pi 5 in Raspberry Pi Imager's list.** The release's
+  `os_list_infernode.json` has a Pi 5 item (`pi5-64bit`) beside the
+  3B+ and 4B.
 
 ## [0.11.0] - 2026-11-19
 
@@ -823,9 +826,7 @@ installation, especially bare-metal nodes and systems that ran
 - **A Pi 5 card image is attached to the release.**
   `infernode-0.10.0-rpi5.img.xz` is built by the release job and
   checked as the boot ROM and firmware read a card (`piromcheck`), and
-  by `piimage_test` as the other boards' cards are (#1125). It is not in
-  Raspberry Pi Imager, whose entry lists the 3B+ and 4B only: write it
-  by hand, and treat it as a preview.
+  by `piimage_test` as the other boards' cards are (#1125).
 - **Shared kernel fixes the Pi 5 found (#1046).** Core 0 idled in `wfi`,
   which the `sev` that wakes a core does not end, so a process that had
   to run there waited for a clock tick; with #1032's IP hardening

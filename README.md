@@ -33,7 +33,7 @@ Every tagged release ships signed binaries for macOS, Linux, and Windows on the 
   ```bash
   docker run -it ghcr.io/infernode-os/infernode:latest
   ```
-- **Raspberry Pi (bare metal)** — `infernode-*-rpi3bplus.img.xz`, `infernode-*-rpi4b.img.xz` and `infernode-*-rpi5.img.xz` are SD-card images of InferNode as the operating system, with nothing underneath. The 3B+ and 4B images are in Raspberry Pi Imager's format (the release attaches `os_list_infernode.json`); the Pi 5 image is a preview, written by hand. See [docs/BAREMETAL.md](docs/BAREMETAL.md#4-putting-it-on-a-raspberry-pi-3b).
+- **Raspberry Pi (bare metal)** — `infernode-*-rpi3bplus.img.xz`, `infernode-*-rpi4b.img.xz` and `infernode-*-rpi5.img.xz` are SD-card images of InferNode as the operating system, with nothing underneath. All three are in Raspberry Pi Imager's format (the release attaches `os_list_infernode.json`). See [docs/BAREMETAL.md](docs/BAREMETAL.md#4-putting-it-on-a-raspberry-pi-3b).
 
 ```bash
 tar xzf infernode-*-linux-*-gui.tar.gz

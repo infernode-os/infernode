@@ -74,6 +74,22 @@ echo "stand-in hcd" > "$tmp/fw/BCM4345C0.hcd"
 	echo "commit $commit"
 	echo "file BCM4345C0.hcd $(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp/fw/BCM4345C0.hcd") $(wc -c < "$tmp/fw/BCM4345C0.hcd" | tr -d ' ') test https://example.invalid/$commit/BCM4345C0.hcd"
 } > "$tmp/btmanifest"
+# the Zero 2 W's radio and Bluetooth patches, its own manifests
+sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+{
+	echo "commit $commit"
+	for f in brcmfmac43436-sdio.bin brcmfmac43436-sdio.clm_blob brcmfmac43436-sdio.txt brcmfmac43436s-sdio.bin brcmfmac43436s-sdio.txt; do
+		echo "stand-in radio $f" > "$tmp/fw/$f"
+		echo "file $f $(sha256 "$tmp/fw/$f") $(wc -c < "$tmp/fw/$f" | tr -d ' ') test https://example.invalid/$commit/$f"
+	done
+} > "$tmp/zradiomanifest"
+{
+	echo "commit $commit"
+	for f in SYN43430A1.hcd SYN43430B0.hcd; do
+		echo "stand-in hcd $f" > "$tmp/fw/$f"
+		echo "file $f $(sha256 "$tmp/fw/$f") $(wc -c < "$tmp/fw/$f" | tr -d ' ') test https://example.invalid/$commit/$f"
+	done
+} > "$tmp/zbtmanifest"
 head -c 300000 /dev/urandom > "$tmp/kernel.img"
 echo "a developer's own file" > "$ROOT/$untracked"
 
@@ -146,9 +162,13 @@ has() {
 	return 1
 }
 
-for board in rpi3bplus rpi4b rpi5; do
+for board in rpi3bplus rpizero2w rpi4b rpi5; do
+	radio=$tmp/radiomanifest bt=$tmp/btmanifest
 	case $board in
 	rpi3bplus) soc=bcm2837; own="bootcode.bin start.elf fixup.dat"; other="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb" ;;
+	# the 3B+'s boot files and card files, its own radio's firmware
+	rpizero2w) soc=bcm2837; own="bootcode.bin start.elf fixup.dat"; other="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb"
+		radio=$tmp/zradiomanifest bt=$tmp/zbtmanifest ;;
 	rpi4b)     soc=bcm2711; own="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb"; other="bootcode.bin start.elf fixup.dat bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb" ;;
 	# the Pi 5 boots from its EEPROM's firmware: on the card only its
 	# device trees (the C1 and D0 steppings), and none of the others' boot files
@@ -156,7 +176,7 @@ for board in rpi3bplus rpi4b rpi5; do
 	esac
 	img=$tmp/$board.img
 	if sh tools/mkpiimage.sh --size 256 --firmware "$tmp/fw" --manifest "$tmp/manifest" \
-		--radio-manifest "$tmp/radiomanifest" --bt-manifest "$tmp/btmanifest" \
+		--radio-manifest "$radio" --bt-manifest "$bt" \
 		$board "$tmp/kernel.img" "$img" > "$tmp/$board.log" 2>&1; then
 		pass "$board: mkpiimage builds a card"
 	else
@@ -173,13 +193,24 @@ for board in rpi3bplus rpi4b rpi5; do
 	for f in $own LICENCE.broadcom; do has "$L" "/$f" "$tmp/fw/$f" || ok=0; done
 	[ $ok = 1 ] && pass "$board: its firmware and LICENCE.broadcom are on it" || failed "$board: its firmware"
 	ok=1
-	has "$L" /firmware/brcmfmac43455-sdio.bin "$tmp/fw/cyfmac43455-sdio-standard.bin" || ok=0
-	has "$L" /firmware/brcmfmac43455-sdio.clm_blob "$tmp/fw/cyfmac43455-sdio.clm_blob" || ok=0
-	has "$L" /firmware/brcmfmac43455-sdio.txt "$tmp/fw/brcmfmac43455-sdio.txt" || ok=0
-	has "$L" /firmware/BCM4345C0.hcd "$tmp/fw/BCM4345C0.hcd" || ok=0
-	has "$L" /firmware/LICENCE.cypress os/bcm/card/LICENCE.cypress || ok=0
-	[ "$(grep -c '^/firmware/.' "$L")" = 5 ] || { echo "    firmware/ holds $(grep -c '^/firmware/.' "$L") files, not 5"; ok=0; }
-	[ $ok = 1 ] && pass "$board: firmware/ is the radio's firmware, by the driver's names, its Bluetooth patch, and LICENCE.cypress" \
+	if [ $board = rpizero2w ]; then
+		for f in brcmfmac43436-sdio.bin brcmfmac43436-sdio.clm_blob brcmfmac43436-sdio.txt \
+			brcmfmac43436s-sdio.bin brcmfmac43436s-sdio.txt SYN43430A1.hcd SYN43430B0.hcd; do
+			has "$L" /firmware/$f "$tmp/fw/$f" || ok=0
+		done
+		has "$L" /firmware/LICENCE.synaptics-wifi os/bcm/card/LICENCE.synaptics-wifi || ok=0
+		has "$L" /firmware/LICENCE.synaptics-bt os/bcm/card/LICENCE.synaptics-bt || ok=0
+		want=9 what="both radios' firmware (43436, 43436s), their Bluetooth patches, and Synaptics' licences"
+	else
+		has "$L" /firmware/brcmfmac43455-sdio.bin "$tmp/fw/cyfmac43455-sdio-standard.bin" || ok=0
+		has "$L" /firmware/brcmfmac43455-sdio.clm_blob "$tmp/fw/cyfmac43455-sdio.clm_blob" || ok=0
+		has "$L" /firmware/brcmfmac43455-sdio.txt "$tmp/fw/brcmfmac43455-sdio.txt" || ok=0
+		has "$L" /firmware/BCM4345C0.hcd "$tmp/fw/BCM4345C0.hcd" || ok=0
+		has "$L" /firmware/LICENCE.cypress os/bcm/card/LICENCE.cypress || ok=0
+		want=5 what="the radio's firmware, by the driver's names, its Bluetooth patch, and LICENCE.cypress"
+	fi
+	[ "$(grep -c '^/firmware/.' "$L")" = $want ] || { echo "    firmware/ holds $(grep -c '^/firmware/.' "$L") files, not $want"; ok=0; }
+	[ $ok = 1 ] && pass "$board: firmware/ is $what" \
 		|| failed "$board: the radio's firmware"
 	ok=1
 	# every file on the card that boot reads as a setting (BAREMETAL.md

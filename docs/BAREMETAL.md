@@ -428,6 +428,37 @@ half is not (`RAMLIMIT`). **Displays**: [below](#displays); the short
 version is that with the 7" panel attached a monitor belongs on HDMI0,
 the socket beside the USB-C.
 
+### And on a Raspberry Pi Zero 2 W
+
+**Not yet run on a board.** The Zero 2 W (`rpizero2w`) is a BCM2837 with
+512 MB, so it takes the 3B+'s kernel, boot firmware and `config.txt`
+unchanged; `tools/mkpiimage.sh rpizero2w` makes its card. What has
+run is QEMU's `raspi3ap` (a 3A+: the same SoC, 512 MB, no Ethernet),
+which boots the kernel and passes `tests/host/piimage_boot_test.sh` on
+the card. The mailbox line names the board from its revision code
+(`mbox: board rev … (Raspberry Pi Zero 2 W)`).
+
+What differs is the radio. A Zero 2 W has a CYW43436 or a CYW43436s,
+by when it was made; `cat '#l1/ether1/ifstats'` says which (`chip:
+0xa9a6 rev 2` the 43436, `rev 1` the 43436s). Init picks the Wi-Fi
+firmware by it (`brcmfmac43436-sdio.*` or `brcmfmac43436s-sdio.*`, the
+card has both); the card's `bt` file names the Bluetooth patch,
+`SYN43430B0.hcd` for the 43436 and `SYN43430A1.hcd` for the 43436s:
+
+    firmware /n/dos/firmware/SYN43430B0.hcd
+
+They are Synaptics's, not Cypress's, under two licences
+(`os/bcm/card/LICENCE.synaptics-wifi`, `-bt`), pinned by
+`tools/pi-firmware-manifest-zero2w.txt` and
+`tools/pi-btfw-manifest-zero2w.txt`. There is no Zero 2 W image in a
+release yet: the Bluetooth patches' terms are narrower than the Cypress
+licence the other cards rely on, and that is not decided.
+
+No Ethernet: the network is Wi-Fi, or a USB adapter on the OTG port
+(micro-USB, through an OTG adapter), which is the DWC2's root port with
+no hub between. The console is the mini-UART on header pins 8 and 10
+(GPIO 14 and 15), as on the 3B+.
+
 ### Displays
 
 The firmware decides what is a display, **once, at power-on**, and the

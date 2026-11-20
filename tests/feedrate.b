@@ -3,8 +3,11 @@ implement Feedrate;
 #
 # feedrate feed secs: a feed read as a live viewer reads it, for secs
 # seconds: from the newest frame, each next one whole at its offset, on
-# from the newest when it falls behind ("frame expired"). Prints
+# from the newest when it falls behind ("frame expired"), and the frame
+# again when its format changed under it ("format changed: w h ...",
+# the camera turned; a quarter turn keeps the frame's size). Prints
 #	frames=N secs=S fps=F missed=M mbps=B
+# and turns=T after it if the format changed T times.
 # For comparing ways of reaching a feed (direct, or through post(1)).
 #
 
@@ -42,6 +45,7 @@ init(nil: ref Draw->Context, args: list of string)
 	first := -1;
 	frames := 0;
 	missed := 0;
+	turns := 0;
 	t0 := sys->millisec();
 	while(sys->millisec() - t0 < 1000*secs){
 		(got, e) := readat(fd, buf, f);
@@ -49,6 +53,14 @@ init(nil: ref Draw->Context, args: list of string)
 			g := start(feed);
 			missed += g - f;
 			f = g;
+			continue;
+		}
+		if(len e > 15 && e[0:15] == "format changed:"){
+			(nil, t) := sys->tokenize(e[15:], " ");
+			if(len t < 2 || (nw := int hd t)*(nh := int hd tl t) + 2*(nw/2)*(nh/2) != fs)
+				break;	# a size this reader has no room for
+			(w, h) = (nw, nh);
+			turns++;
 			continue;
 		}
 		if(got < fs)
@@ -63,6 +75,8 @@ init(nil: ref Draw->Context, args: list of string)
 		ms = 1;
 	sys->print("frames=%d secs=%.1f fps=%.1f missed=%d mbps=%.1f\n", frames, real ms / 1000.0,
 		1000.0 * real frames / real ms, missed, real frames * real fs / (1000.0 * real ms));
+	if(turns)
+		sys->print("turns=%d %dx%d\n", turns, w, h);
 }
 
 readat(fd: ref Sys->FD, b: array of byte, f: int): (int, string)

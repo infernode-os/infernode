@@ -6918,7 +6918,7 @@ run_bcm2712() {
 PLAT=bcm2712
 SRC="$ROOT/os/$PLAT"
 SHARED="$ROOT/os/bcm"
-SHAREDSKIP="audiopwm.c devtouch.c dma.c emmc.c gpio.c sdhost.c timers.c uart.c.none uartmini.c uartpl011.c usbdwc.c"
+SHAREDSKIP="audiopwm.c devcam.c devi2c.c devtouch.c dma.c emmc.c gpio.c sdhost.c timers.c uart.c.none uartmini.c uartpl011.c usbdwc.c"
 ARCHSKIP=""
 PORTSKIP="devaudio.c ethermii.c pci.c usbxhcipci.c"
 platform_flags

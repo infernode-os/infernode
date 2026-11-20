@@ -7,6 +7,8 @@
  * become virtual addresses and only this file should need to change.
  */
 
+/* the camera receiver's clock, from PLLD (500 MHz here): 100 MHz, ../bcm/devcam.c */
+#define CAMCLKDIV	5
 #define BOARDNAME	"BCM2837 / Raspberry Pi 3B+, 3A+, Zero 2 W"
 
 enum
@@ -74,6 +76,7 @@ enum
 	IRQsdhost	= 56,		/* the BCM2835 SDHOST controller */
 	IRQuart		= 57,		/* the PL011 */
 	IRQmmc		= 62,		/* the Arasan SDHCI controller */
+	IRQunicam	= 39,		/* Unicam 1, the camera connector's CSI1 (../bcm/devcam.c) */
 	IRQbasic	= 64,		/* first ARM-private source */
 	IRQtimerArm	= IRQbasic + 0,	/* the ARM-side timer below */
 };

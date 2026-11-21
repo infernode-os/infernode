@@ -210,7 +210,7 @@ def ref(d):
     for site, path in pages():
         for size, w, h in SIZES:
             png = os.path.join(tmp, 'shot.png')
-            r = subprocess.run(['node', os.path.join(HERE, 'shot.js'), bases[site] + path, png, str(w), str(h)],
+            r = subprocess.run(['node', os.path.join(HERE, 'shot.js'), '-local', bases[site] + path, png, str(w), str(h)],
                                capture_output=True, text=True, timeout=180)
             if not os.path.exists(png):
                 sys.exit('corpus: Chromium made no picture of %s %s: %s' % (site, path, r.stderr))

@@ -1,0 +1,14 @@
+<!doctype html><title>a grid's min-content takes an item's min-width, not its content</title>
+<!-- Bootstrap's docs: .bd-content { min-width: 1px } in a grid (4fr 1fr) itself in 1fr 5fr.  An item's
+     minimum contribution to an auto minimum is its min-width when it has one (Grid §6.6), so a long
+     line in it does not widen the inner grid's min-content, and the outer 1fr column keeps its
+     share: 100px of 400.  Charon took the line's width, and the first column went to nothing,
+     leaving the red at x 0 to 100 uncovered. -->
+<style>body{margin:0} .o{display:grid;grid-template-columns:1fr 3fr;width:400px}
+.i{display:grid;grid-template-columns:1fr} .c{min-width:1px}
+.r{width:100px;height:100px;background:red} pre{margin:0;font:10px monospace;color:transparent}
+.m{position:absolute;left:100px;top:0;width:100px;height:100px;background:green;z-index:1}</style>
+<div class=m></div>
+<div class=o><aside></aside><main class=i><div class=c><div class=r></div><pre>
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+</pre></div></main></div>

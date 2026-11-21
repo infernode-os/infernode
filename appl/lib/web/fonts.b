@@ -219,8 +219,14 @@ facevar(families: list of string, weight, style: int, slant, stretch, size: real
 				return c;
 		}
 		o := parts[0].outline;
-		asc := real o.ascent * size / real o.upem;
-		desc := real -o.descent * size / real o.upem;
+		# whole pixels, as Blink rounds a web font's ascent and descent
+		# when it loads it: a line of two fonts (code in a paragraph of
+		# Open Sans, Rust's book) takes each one's, and was a pixel
+		# taller.  (The faces shipped keep Arial's and Times's metrics as
+		# they are, which their normal line height already rounds as
+		# Chromium does; rounded again, Python's text moved off its.)
+		asc := real int (real o.ascent * size / real o.upem);	# (int rounds)
+		desc := real int (real -o.descent * size / real o.upem);
 		f := ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), parts, nil, 0, emb, nil, nil, nil);
 		f.next = next;
 		f.space = advance(f, ' ');

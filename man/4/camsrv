@@ -132,6 +132,20 @@ less one, if that is not below
 .BR first= )
 and goes on from the newest again when it falls behind.
 Numbers run on across the sensor going off and on.
+Each frame has the width and height it was made at.
+A reader asking for one of another size than the reader last had
+(its
+.B fmt
+when it opened
+.BR frame ,
+or the last change it was told of) is refused once with
+.LR "format changed: \fIw h\fP i420 \fIfps\fP" ,
+that frame's format; it takes it and reads the frame again.
+This is what
+.B rotate
+while streaming gives: a quarter turn keeps the frame size, so frame
+.I N
+stays where it was.
 .TP
 .B 0/raw
 A frame as the sensor gave it, 16 bits a sample, little-endian, at the
@@ -192,14 +206,19 @@ says which.
 .BI flip " n
 1 mirrors, 2 turns upside down. 3, the default, is right way up as the
 module usually sits. This is the sensor's own register: it changes the
-raw frames too. Not while streaming.
+raw frames too. Taken while streaming: the sensor reads out the new
+mirror from its next frame, and the colours are merged in its order from
+then.
 .TP
 .BI rotate " degrees
 Turn the picture clockwise: 0, 90, 180 or 270. A quarter turn swaps
 .B fmt 's
 width and height.
 .B raw
-is not turned. Not while streaming.
+is not turned. Taken while streaming: frames made after it are turned,
+and readers are told
+.L "format changed"
+at the first of them.
 .PD
 .RE
 .SH EXAMPLES
@@ -207,6 +226,10 @@ A video with known answers to point the camera at during a soak:
 exposure steps, white balance, a focus chart, motion:
 .IP
 .B tools/camera-test-pattern.py loop.mp4
+.PP
+Its segments, their times and the code on every frame that names its
+segment and frame are in
+.BR docs/CAMERA-TEST-VIDEO.md .
 .PP
 .I Camsrv
 runs in a process group of its own. To stop it, unmount it; to kill

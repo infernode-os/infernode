@@ -46,6 +46,11 @@
 #                timerintr() arms its deadline, not after; every overdue
 #                tick is counted. Each ARM board lost 2.6 to 4.5 s an
 #                hour (2026-11-13).
+#   unbind       devether's unbind empties the output queue (a hung-up
+#                queue still gives what it holds: the writer sent a full
+#                queue to a device being reset), and bind waits for the
+#                last data path's reader and writer to go (it freed the
+#                buffer an old writer was sending from) (2026-11-21).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -118,5 +123,23 @@ if echo "$sec" | grep -q 'todget' && ! grep -q 'boottime' os/port/devcons.c; the
 else no "seconds() is not todget()'s: the time of day loses every missed tick"; fi
 if sed -n '/^timerintr(Ureg/,/^}/p' os/port/portclock.c | grep -q 'm->ticks += callhzclock - 1'; then ok "timerintr counts every overdue tick"
 else no "timerintr runs hzclock once however many ticks were due"; fi
+
+# A Prog killed in a USB transfer: waittd's Stop Endpoint goes through
+# ctlrcmd, whose wait raised at once for the killed caller (upkilled),
+# aborting the command ring; the next pass took that for a dead
+# controller and reset the bus (a Wi-Fi adapter's reader killed, Pi 5).
+cc=$(sed -n '/^ctlrcmd(Ctlr \*ctlr, u32int c, u32int s, u64int p, u32int \*er)$/,/^}/p' os/port/usbxhci.c | grep -v '^[[:space:]]*\*\|/\*')
+if echo "$cc" | grep -q 'up->killing = 1' && echo "$cc" | grep -q 'up->killing = okilling'; then ok "an xHCI command waits under up->killing"
+else no "ctlrcmd's wait must be made under up->killing, or a killed caller's Stop Endpoint resets the controller"; fi
+wt=$(sed -n '/^waittd(Wait \*w, int tmout)$/,/^}/p' os/port/usbxhci.c)
+if echo "$wt" | grep -q 'if(serr == nil){' && echo "$wt" | grep -A3 'if(serr == nil){' | grep -q 'return ccerrstr'; then ok "a transfer stopped for a kill is returned, not waited for again"
+else no "waittd must return a transfer its Stop Endpoint finished, or a killed Prog's next wait calls for recovery"; fi
+unb=$(sed -n '/^etherunbind(Ether \*e)/,/^}/p' os/port/devether.c)
+if echo "$unb" | grep -q 'qhangup(e->oq' && echo "$unb" | grep -q 'qflush(e->oq)'; then ok "devether's unbind hangs up and empties the output queue"
+else no "devether's unbind leaves frames in the output queue for the writer to send after it"; fi
+gone=$(grep -c 'etherprocgone(e);' os/port/devether.c)
+if [ "$gone" -ge 2 ] && grep -q 'e->nproc = 2;' os/port/devether.c && grep -q 'e->nproc > 0)' os/port/devether.c
+then ok "devether's bind waits for the last reader and writer to go"
+else no "devether's bind can start a data path beside an old writer still sending from the buffer it frees"; fi
 
 exit $fail

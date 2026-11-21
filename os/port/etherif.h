@@ -48,6 +48,7 @@ struct Ether
 	/* the USB-endpoint data path: instance 0, or Firstusbx and up */
 	QLock	bindlk;		/* one bind, ever */
 	int	bound;
+	int	nproc;		/* the data path's processes still running */
 	int	family;
 	long	burst;		/* how much one bulk IN may carry */
 	Chan	*inchan;	/* the endpoints, held open forever */

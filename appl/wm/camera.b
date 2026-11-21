@@ -226,7 +226,9 @@ show(w: ref Window, frame: ref Image)
 # over them (a detector's, keyed to frames now) has nothing for them.
 # After each frame it waits to be told to go on (1) or to let go of the
 # feed (0), in which case it closes it and waits for resume. Each time
-# it takes the feed it asks its size, which may have changed meanwhile.
+# it takes the feed it asks its size, which may have changed meanwhile;
+# turned while it reads, the feed says so ("format changed") and it reads
+# the frame again at the size given.
 reader(got: chan of (string, ref Pic), more, resume: chan of int)
 {
 	for(;;){
@@ -249,6 +251,13 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 				f = newest();
 				continue;
 			}
+			if((nw := fmtchanged(e)) != nil && (hd nw)*(hd tl nw) == w*h){
+				# turned while shown: the same frame again, at its new size
+				# (a quarter turn keeps the bytes; the window follows)
+				(w, h) = (hd nw, hd tl nw);
+				(pic.w, pic.h) = (w, h);
+				continue;
+			}
 			if(n < len buf){
 				if(e == nil)
 					e = "end of the feed";
@@ -268,6 +277,19 @@ reader(got: chan of (string, ref Pic), more, resume: chan of int)
 }
 
 Behind: con 3;	# frames behind the newest that a reader may be
+
+# "format changed: <w> <h> i420 <fps>", as a feed turned while it is read
+# says it (camsrv(4)): the width and height, else nil
+fmtchanged(e: string): list of int
+{
+	p := "format changed:";
+	if(len e <= len p || e[0:len p] != p)
+		return nil;
+	(nt, t) := sys->tokenize(e[len p:], " ");
+	if(nt < 2 || int hd t <= 0 || int hd tl t <= 0)
+		return nil;
+	return int hd t :: int hd tl t :: nil;
+}
 
 # frame f, whole, at its offset, with WAYS reads in flight (parread(2)):
 # (bytes, error)

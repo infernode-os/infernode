@@ -45,6 +45,28 @@ renders one test and its reference: test | reference | differences.
 `wptserve.py wptroot` serves the tree as wptrun does (XHTML as XHTML,
 `?pipe=status(N)`), for looking at tests by hand.
 
+**Real sites, no network: the corpus.** `corpus.py` holds Charon to
+real sites that need no site to answer: documentation and project sites
+published as files (`corpus/sources`: Python's docs, Rust's book and
+standard library, ECMA-262, Bootstrap's site), each fetched by a hash
+(an archive's SHA-256, a git commit), served on the loopback at a root of
+its own, the same bytes every run.  `corpus/pages` names the pages; each
+is rendered at a laptop's and a phone's size and scored as `compare.py`'s
+"layout" against Chromium's rendering, which is kept as its 8px cells
+(`baseline/corpus/`, a few kilobytes a page), so a run needs no Chromium
+and the reference does not move with Chromium's releases.
+`baseline/corpus-scores.txt` holds the scores; `gate` fails a page that
+moves further from Chromium than it by more than 0.01, and `--update`
+moves it with the commit that earns it.  `wpt.yml` runs it after the
+reftests.
+
+```sh
+tools/ref/corpus.py fetch tmp/corpussrc       # by the pins: about 250 MB
+tools/ref/corpus.py run tmp/corpussrc tmp/corpus
+tools/ref/corpus.py gate tmp/corpus           # tmp/corpus/index.html: Charon beside the cells
+tools/ref/corpus.py ref tmp/corpussrc         # Chromium's cells again (Playwright): when the pins change
+```
+
 **Real pages: Chromium.** `compare.py` renders a URL in headless Chromium
 (scripts off, which is the fair comparison) and in Charon, and writes
 `<n>.png`: Chromium | Charon | differences in red, with an exact and a
@@ -60,9 +82,10 @@ tools/ref/compare.py -o /tmp/live http://127.0.0.1:8780/pypi.org/
 Chromium's, in document order: the first wrong one usually explains the
 rest.  `acid2.py wptroot` checks Acid2 against Chromium.
 
-The reference Chromium is given Charon's typefaces (`fonts.conf`: the
-generic families and Arial, Times and Courier as DejaVu), so text width
-measures layout, not the choice of font.
+The reference Chromium is given Charon's typefaces (`fonts.conf`: Arial,
+Helvetica, sans-serif and the system stacks as TeX Gyre Heros, Times and
+serif as TeX Gyre Termes, the rest as DejaVu, as `appl/lib/web/fonts.b`
+chooses them), so text width measures layout, not the choice of font.
 
 `mirror.py` fetches live sites on the host and caches them, rewriting
 their URLs to point back at itself, so both browsers render the same

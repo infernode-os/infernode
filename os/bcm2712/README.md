@@ -68,7 +68,8 @@ programming of the bridge. The 3-pin debug
 connector is `uart10`, on the SoC itself, at `0x107D001000`, and needs
 nothing from RP1: it is what will still talk when PCIe does not. So the console goes to
 all of them: UART0, UART4 on pins 32 and 33 (an M.2 board covers pins 1
-to 12), and, output only, uart10.
+to 12), and, output only, uart10 -- or both ways with `uart10rx=1` in
+`cmdline.txt`, for a board whose only cable is a Debug Probe there.
 
 ## What is different in kind from a Pi 4
 

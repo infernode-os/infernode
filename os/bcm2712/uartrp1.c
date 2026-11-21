@@ -34,9 +34,10 @@ enum
 /*
  * And on the 3-pin debug connector: uart10, on the SoC itself, which
  * the firmware leaves at 115200 and which needs nothing of PCIe. It is
- * what will still talk when RP1 does not. Output only: with nothing
- * plugged in, its receiver fills with noise that would be typed at the
- * shell.
+ * what will still talk when RP1 does not. Output only by default: with
+ * nothing plugged in, its receiver fills with noise that would be typed
+ * at the shell. uart10rx=1 on the command line (cmdline.txt) reads it
+ * too, for a board whose only cable is a Debug Probe on that connector.
  */
 ulong
 miniconsinit(void)
@@ -101,9 +102,42 @@ rxinterrupt(Ureg*, void *arg)
 		consuartputc(nil, u[Dr/4] & 0xFF);
 }
 
+/*
+ * uart10's input, polled: its interrupt is the SoC's, not RP1's, and a
+ * console typed at by hand needs no more than a look every 10 ms (the
+ * FIFO holds 32 characters, 2.7 ms at 115200; pasted text loses what
+ * overflows, as a terminal's would)
+ */
+static void
+uart10poll(void)
+{
+	while((R10(Fr) & Rxfe) == 0)
+		consuartputc(nil, R10(Dr) & 0xFF);
+}
+
+static int
+cmdflag(char *name)
+{
+	char *p, *q;
+	int n;
+
+	p = boardcmdline();
+	n = strlen(name);
+	for(q = p; q != nil && (q = strstr(q, name)) != nil; q += n)
+		if((q == p || q[-1] == ' ') && strncmp(q+n, "=1", 2) == 0 && (q[n+2] == 0 || q[n+2] == ' ' || q[n+2] == '\n'))
+			return 1;
+	return 0;
+}
+
 void
 rp1uartlink(void)
 {
+	if(cmdflag("uart10rx")){
+		while((R10(Fr) & Rxfe) == 0)
+			(void)R10(Dr);		/* what came before it was asked for */
+		addclock0link(uart10poll, 10);
+		print("uart10: console input on the debug connector\n");
+	}
 	rp1intrenable(RP1intuart0, rxinterrupt, (void*)(uintptr)RP1UART0, 1, "uart0");
 	rp1intrenable(RP1intuart4, rxinterrupt, (void*)(uintptr)RP1UART4, 1, "uart4");
 	R(Imsc) |= Imrx | Imrt;

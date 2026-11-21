@@ -56,7 +56,7 @@ has the feature, which is what parity means.
 | Fan connector | RP1 PWM1 channel 3, `#P/fan`, `#P/fanrpm` | **Proved**: follows temperature by the device tree's trips; a written level overrides, `auto` restores |
 | Power button | SoC GPIO 20, `#P/button`; init halts on a press | **Proved** by a person: press, drive shut down, PSCI off, red LED; a press starts it again. `POWER_OFF_ON_HALT=0` leaves it in standby, not fully off |
 | Status LEDs | ACT AON GPIO 9, `#P/led`; PWR RP1 GPIO 44, `#G` | ACT **proved** by a person. PWR written, not watched |
-| Debug UART connector | `uart10` | Output only, unread: see above |
+| Debug UART connector | `uart10` | Output; input too with `uart10rx=1` in `cmdline.txt` (polled every 10 ms) |
 | Second console | RP1 UART4, GPIO 12, 13 (pins 32, 33) | **Proved**, in and out |
 | Two HDMI, DSI/CSI connectors | HVS, RP1 | Either HDMI, one at a time; a camera on either CAM/DISP connector (`#V`). Two HDMI together and DSI not done |
 | RTC battery charging | the firmware, `trickle-charge-microvolt` | Not done; off unless asked for, which is right for a primary cell |

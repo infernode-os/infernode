@@ -727,6 +727,23 @@ class Run:
             self.log('TLS server started on %s:%d (shared; it stays up for other runs)' % (self.jetson, self.tlsport))
         else:
             self.log('TLS server already up on :%d (shared)' % self.tlsport)
+        #
+        # Whatever is listening must be the run's server: on 2026-11-21 a
+        # hosted emulator's export held 8443, reset every handshake, and
+        # the load counted 87 failures that were the port's, not the
+        # board's. A handshake from here, verified against the run's CA,
+        # says whether it is.
+        #
+        chk = subprocess.run(['openssl', 's_client', '-connect', '%s:%d' % (self.jetson, self.tlsport),
+                              '-CAfile', os.path.join(d, 'ca.pem'), '-verify_return_error', '-brief'],
+                             input='', capture_output=True, text=True, timeout=15)
+        if chk.returncode != 0:
+            who = subprocess.run(['ss', '-ltnp'], capture_output=True, text=True).stdout
+            who = [l for l in who.splitlines() if ':%d ' % self.tlsport in l]
+            self.log('TLS port %d is held by something that is not the run\'s server (%s); tls not run'
+                     % (self.tlsport, (who[0].split('users:')[-1] if who else 'unknown').strip()))
+            self.tlsup = False
+            return
         self.tlsup = True
         if self.cons:
             self.cons.sh(['mkdir -p /tmp/soak/certs'])

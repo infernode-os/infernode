@@ -751,8 +751,28 @@ etherunbind(Ether *e)
 	e->bound = 0;
 	e->nif.link = 0;
 	qhangup(e->oq, "unbound");
+	/*
+	 * and emptied: a hung-up queue still gives what it holds, so the
+	 * writer went on sending a full queue's frames to a device being
+	 * reset, unplugged or reconfigured by whoever unbound it
+	 */
+	qflush(e->oq);
 	qunlock(&e->bindlk);
 	print("%s: kernel data path unbound\n", e->nif.name);
+}
+
+/*
+ * A data-path process is gone, its channel closed. A bind waits for
+ * both: it frees the buffers they use and opens the endpoints they
+ * held, so a new data path started beside an old writer still inside
+ * a transfer sent freed memory to the device.
+ */
+static void
+etherprocgone(Ether *e)
+{
+	qlock(&e->bindlk);
+	e->nproc--;
+	qunlock(&e->bindlk);
 }
 
 static void
@@ -770,6 +790,7 @@ etherrxproc(void *a)
 		print("%s: reader exits: %s\n", e->nif.name, up->env->errstr);
 		etherunbind(e);
 		cclose(in);
+		etherprocgone(e);
 		pexit("hangup", 1);
 	}
 	for(;;){
@@ -935,6 +956,7 @@ ethertxproc(void *a)
 		etherunbind(e);
 		if(out != in)
 			cclose(out);
+		etherprocgone(e);
 		pexit("hangup", 1);
 	}
 	for(;;){
@@ -1092,13 +1114,16 @@ etherbindctl(Ether *e, char *args)
 	if(txmax > 0xFFFF)
 		txmax = 0xFFFF;
 
+	/* the last data path's processes: a few seconds to finish */
+	for(i = 0; i < 100 && !e->bound && e->nproc > 0; i++)
+		tsleep(&up->sleep, return0, nil, 50);
 	qlock(&e->bindlk);
 	if(waserror()){
 		qunlock(&e->bindlk);
 		nexterror();
 	}
-	if(e->bound || e->transmit != nil)
-		error(Einuse);	/* bound already, or a link driver's */
+	if(e->bound || e->transmit != nil || e->nproc > 0)
+		error(Einuse);	/* bound already, a link driver's, or not yet let go */
 
 	if(parsemac(e->nif.addr, f[2]) < 0)
 		error(Ebadarg);
@@ -1156,6 +1181,7 @@ etherbindctl(Ether *e, char *args)
 	qnoblock(e->oq, 1);	/* qreopen cleared it; see etherreset */
 	e->nif.link = 1;
 	e->bound = 1;
+	e->nproc = 2;
 
 	snprint(pname, sizeof pname, "%srx", e->nif.name);
 	kproc(pname, etherrxproc, e, 0);

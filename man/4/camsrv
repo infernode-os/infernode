@@ -15,7 +15,8 @@ camsrv \- a camera as a live video feed
 .B } /mnt/video
 .SH DESCRIPTION
 .I Camsrv
-serves a Raspberry Pi Camera Module 3 in the schema of
+serves a Raspberry Pi Camera Module 3 (Sony IMX708) or Camera Module 2
+(IMX219) in the schema of
 .IR vid9p ,
 so what shows a video feed shows a camera, here or across a mount:
 .BR wm/camera ,
@@ -26,6 +27,25 @@ With
 .B -t
 it serves a simulated sensor, on any machine: colour bars and a moving
 band, as raw samples, through the same code.
+.PP
+Which camera is attached is found when
+.I camsrv
+starts: it powers the sensor long enough to ask the Camera Module 3's
+address and then the Camera Module 2's, and
+.B status
+says which
+.RB ( sensor=imx708
+or
+.BR sensor=imx219 ).
+Each is read out two by two binned, RAW10 on two lanes: 2304\(mu1296 on
+the Camera Module 3, 1640\(mu1232 on the Camera Module 2, and
+.B mode
+takes those divided by an even number. The Camera Module 2's lens is
+fixed: it refuses
+.BR focus ,
+and its
+.B gain
+codes are 0 to 232 (the analogue gain 256/(256\-code)).
 .PP
 To run the camera in one Dis VM
 .RI ( vm (1))

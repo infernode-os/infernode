@@ -48,7 +48,11 @@ implement Camsrv;
 # rotate turns what that gives, as it is merged.
 #
 # The kernel gives raw frames (#V) and an I2C bus (#J); all that is known
-# about the Camera Module 3 is here. The bus is shared with the firmware,
+# about the cameras is here. Two are known, told apart by which answers
+# on the bus when camsrv starts: the Camera Module 3 (Sony IMX708, at
+# 0x1A, with a focus lens at 0x0C) and the Camera Module 2 (IMX219, at
+# 0x10, fixed focus: focus is refused). Each is read out 2x2 binned,
+# RAW10 on two lanes; smaller frames are merged from that. The bus is shared with the firmware,
 # which polls a DSI panel's touch controller on it with no way to take
 # turns: a transfer can fail and a read or a write can be silently wrong.
 # So every write is read back, and the chip's id is asked until it is right.
@@ -74,9 +78,12 @@ Camsrv: module {
 
 Qroot, Qstream, Qctl, Qfmt, Qframe, Qraw, Qstatus, Qlayer: con iota;
 
-# the sensor's one mode; smaller frames are merged from it
-Sw: con 2304;
-Sh: con 1296;
+# the sensor's one mode; smaller frames are merged from it. The IMX708's
+# until a probe finds otherwise (sensorprobe), and always for -t.
+Imx708, Imx219: con iota;
+sensor := Imx708;
+Sw := 2304;
+Sh := 1296;
 Black: con 64;
 Maxsample: con 1023;
 Maxexposure: con 65535;	# lines: the register's sixteen bits
@@ -86,6 +93,8 @@ Aeevery: con 4;		# frames: what is written shows two later
 Chip: con 16r0708;
 Sensor: con 16r1A;
 Lens: con 16r0C;
+Chip219: con 16r0219;
+Sensor219: con 16r10;
 
 Sim: con 2;		# the simulated sensor's raw is this much smaller
 
@@ -163,6 +172,8 @@ init(nil: ref Draw->Context, args: list of string)
 			width = 288;
 			height = 162;
 		}
+	if(!sim)
+		sensorprobe();
 	fsize = framesize();
 	framec = chan of array of byte;
 	rawc = chan of array of byte;
@@ -524,6 +535,8 @@ status(): string
 	s := sys->sprint("camera w=%d h=%d framesize=%d frames=%d first=%d stream=%s", fw(), fh(), fsize, seq, first, on);
 	if(sim)
 		s += " sim=1";
+	else
+		s += " sensor=" + sensorname();
 	s += sys->sprint(" rawformat=rggb10:%d:%d", Sw/simdivr(), Sh/simdivr());
 	if(linkbad)
 		s += sys->sprint(" linkbad=%d", linkbad);
@@ -607,11 +620,13 @@ doctl(s: string): string
 		exposure = a;
 		tell("ae");
 	"gain" =>
-		if(n != 2 || a < 0 || a > 960)
-			return "camsrv: gain 0..960";
+		if(n != 2 || a < 0 || a > Gainmax)
+			return sys->sprint("camsrv: gain 0..%d", Gainmax);
 		gain = a;
 		tell("ae");
 	"focus" =>
+		if(sensor == Imx219)
+			return "camsrv: the Camera Module 2 has a fixed-focus lens";
 		if(n != 2)
 			return "camsrv: focus N|auto";
 		if(hd tl f == "auto"){
@@ -905,11 +920,10 @@ abs(v: int): int
 }
 
 Gain1: con 256;
-Gainmaxq: con 16*Gain1;
 
 gaintoq(code: int): int
 {
-	return Gain1*1024/(1024-code);
+	return Gain1*Gainfull/(Gainfull-code);
 }
 
 # One step of auto-exposure, from the green cells' mean over the last
@@ -938,8 +952,8 @@ aestep(green, lines, q: int): (int, int)
 	if(l > maxl){
 		l = maxl;
 		g = int (total / big l);
-		if(g > Gainmaxq)
-			g = Gainmaxq;
+		if(g > gaintoq(Gainmax))
+			g = gaintoq(Gainmax);
 	}
 	# a change of less than an eighth is no change
 	nt := big l * big g;
@@ -1211,11 +1225,18 @@ backoff(i: int)
 	sys->sleep(1<<i);
 }
 i2cctl, sensorfd, lensfd: ref Sys->FD;
-Exposureoff: con 48;		# lines: the exposure is at most frame length less this
-Linelen: con 7824;		# pixel clocks a line, at Pixrate
-Pixrate: con 585600000;		# the video timing PLL's pixel rate
-Vblankmin: con 40;		# lines: the least vertical blank a frame needs
+# The IMX708's timing; sensorprobe sets the IMX219's.
+Exposureoff := 48;		# lines: the exposure is at most frame length less this
+Linelen := 7824;		# pixel clocks a line, at Pixrate
+Pixrate := 585600000;		# the video timing PLL's pixel rate
+Vblankmin := 40;		# lines: the least vertical blank a frame needs
 framelen := 0;
+# the registers auto-exposure writes, which a read-back check leaves out
+Regexposure := 16r0202;
+Reggain := 16r0204;
+Gainbits := 16;
+Gainmax := 960;			# the highest gain code
+Gainfull := 1024;		# gain = Gainfull/(Gainfull-code)
 
 ctlset(fd: ref Sys->FD, s: string): int
 {
@@ -1249,7 +1270,7 @@ badreg := "";		# the last register that would not take a write, for errors
 wr8(reg, v: int): int
 {
 	nwrites++;
-	if(reg != 16r0100 && reg != 16r0202 && reg != 16r0203 && reg != 16r0204 && reg != 16r0205)
+	if(reg != 16r0100 && reg != Regexposure && reg != Regexposure+1 && reg != Reggain && reg != Reggain+1)
 		written = (reg, v&16rff) :: written;
 	b := array[1] of byte;
 	b[0] = byte v;
@@ -1278,13 +1299,20 @@ wr16(reg, v: int): int
 
 setexposure(lines, q: int)
 {
-	code := 1024 - 1024*Gain1/q;
-	if(code > 960)
-		code = 960;
+	code := Gainfull - Gainfull*Gain1/q;
+	if(code > Gainmax)
+		code = Gainmax;
+	if(code < 0)
+		code = 0;
 	gain = code;
 	if(lines > framelen-Exposureoff)
 		lines = framelen-Exposureoff;
-	if(wr16(16r0202, lines) < 0 || wr16(16r0204, code) < 0)
+	r := wr16(Regexposure, lines);
+	if(Gainbits == 8)
+		r |= wr8(Reggain, code);
+	else
+		r |= wr16(Reggain, code);
+	if(r < 0)
 		sys->fprint(sys->fildes(2), "camsrv: exposure: %r\n");
 }
 
@@ -1321,18 +1349,31 @@ sensoron(): string
 	i2cctl = sys->open("/dev/i2c0ctl", Sys->ORDWR);
 	if(i2cctl == nil)
 		return sys->sprint("camsrv: i2c: %r");
+	if(sensor == Imx219){
+		sensorfd = opendev(Sensor219, 2);
+		if(sensorfd == nil)
+			return sys->sprint("camsrv: i2c: %r");
+		id := chipid(16r0000, Chip219);
+		if(id < 0)
+			return "camsrv: nothing answers at the IMX219's address";
+		if(id != Chip219)
+			return sys->sprint("camsrv: not an IMX219: %.4x", id);
+		if(sensormode219() < 0)
+			return "camsrv: the sensor will not take its settings: " + badreg;
+		e = unicam("stream on");
+		if(e != nil)
+			return e;
+		if(wr8(16r0100, 1) < 0)
+			return "camsrv: the sensor will not start";
+		return nil;
+	}
 	sensorfd = opendev(Sensor, 2);
 	lensfd = opendev(Lens, 1);
 	if(sensorfd == nil || lensfd == nil)
 		return sys->sprint("camsrv: i2c: %r");
-	id := 0;
-	for(i := 0; i < Tries && id != Chip; i++){
-		a := rd8(16r0016);
-		b := rd8(16r0017);
-		if(a < 0 || b < 0)
-			return "camsrv: nothing answers at the sensor's address";
-		id = a<<8 | b;
-	}
+	id := chipid(16r0016, Chip);
+	if(id < 0)
+		return "camsrv: nothing answers at the sensor's address";
 	if(id != Chip)
 		return sys->sprint("camsrv: not an IMX708: %.4x", id);
 	if(sensormode() < 0)
@@ -1405,6 +1446,158 @@ sensormode(): int
 		l = exposure;
 	r |= wr16(16r0202, l);
 	r |= wr16(16r0204, gain);
+	return r;
+}
+
+# The chip's id, from its two id registers, asked until it is the one
+# wanted or Tries have passed (the bus is shared: one read can be
+# wrong); -1 if nothing answers.
+chipid(reg, want: int): int
+{
+	id := 0;
+	for(i := 0; i < Tries && id != want; i++){
+		a := rd8(reg);
+		b := rd8(reg+1);
+		if(a < 0 || b < 0)
+			return -1;
+		id = a<<8 | b;
+	}
+	return id;
+}
+
+sensorname(): string
+{
+	case sensor {
+	Imx219 =>
+		return "imx219";
+	}
+	return "imx708";
+}
+
+# Which camera is on the connector: powered for as long as it takes to
+# ask the IMX708's address and then the IMX219's. Nothing answering
+# leaves the IMX708, whose errors then say so when a reader starts it.
+sensorprobe()
+{
+	if(unicam("power on") != nil)
+		return;
+	i2cctl = sys->open("/dev/i2c0ctl", Sys->ORDWR);
+	if(i2cctl != nil){
+		sensorfd = opendev(Sensor, 2);
+		if(sensorfd == nil || chipid(16r0016, Chip) != Chip){
+			sensorfd = opendev(Sensor219, 2);
+			if(sensorfd != nil && chipid(16r0000, Chip219) == Chip219)
+				imx219();
+		}
+	}
+	unicam("power off");
+	i2cctl = sensorfd = lensfd = nil;
+}
+
+# The IMX219's mode and timing: the Raspberry Pi firmware's mode 4,
+# 1640x1232 of its 3280x2464, 2x2 binned, RAW10 on two lanes at 912
+# Mbit/s a lane; a 182.4 MHz pixel rate over lines of 3448 clocks.
+imx219()
+{
+	sensor = Imx219;
+	Sw = 1640;
+	Sh = 1232;
+	Exposureoff = 4;
+	Linelen = 3448;
+	Pixrate = 182400000;
+	Vblankmin = 32;
+	Regexposure = 16r015A;
+	Reggain = 16r0157;
+	Gainbits = 8;
+	Gainmax = 232;		# analogue gain 256/(256-code): at most 10.7
+	Gainfull = 256;
+	gain = 0;
+	width = Sw/4;
+	height = Sh/4;
+	fsize = framesize();
+}
+
+# a write the sensor does not read back as written: its access
+# sequence, and registers whose reading is not what was set
+wrraw(reg, v: int): int
+{
+	nwrites++;
+	b := array[1] of byte;
+	b[0] = byte v;
+	for(i := 0; i < Tries; i++){
+		if(sys->pwrite(sensorfd, b, 1, big reg) == 1)
+			return 0;
+		i2cerrs++;
+		backoff(i);
+	}
+	badreg = sys->sprint("%.4x not written", reg);
+	return -1;
+}
+
+# The IMX219's registers, as the firmware sets them for mode 4 (and the
+# Linux driver after it): the MIPI CCS names below except 3000-5fff, the
+# manufacturer's, opened by the sequence on 30eb and not documented.
+sensormode219(): int
+{
+	written = nil;
+	fl := Pixrate / (Linelen * fps);
+	if(fl < Sh + Vblankmin)
+		fl = Sh + Vblankmin;
+	framelen = fl;
+	r := 0;
+	r |= wr8(16r0100, 0);			# mode_select: standby
+	r |= wrraw(16r30EB, 16r05);		# the manufacturer's registers, opened
+	r |= wrraw(16r30EB, 16r0C);
+	r |= wrraw(16r300A, 16rFF);
+	r |= wrraw(16r300B, 16rFF);
+	r |= wrraw(16r30EB, 16r05);
+	r |= wrraw(16r30EB, 16r09);
+	r |= wrraw(16r455E, 16r00);		# and set, as the firmware sets them
+	r |= wrraw(16r471E, 16r4B);
+	r |= wrraw(16r4767, 16r0F);
+	r |= wrraw(16r4750, 16r14);
+	r |= wrraw(16r4540, 16r00);
+	r |= wrraw(16r47B4, 16r14);
+	r |= wrraw(16r4713, 16r30);
+	r |= wrraw(16r478B, 16r10);
+	r |= wrraw(16r478F, 16r10);
+	r |= wrraw(16r4793, 16r10);
+	r |= wrraw(16r4797, 16r0E);
+	r |= wrraw(16r479B, 16r0E);
+	r |= wr16(16r0162, Linelen);		# line_length_pck
+	r |= wr8(16r0170, 1);			# x_odd_inc
+	r |= wr8(16r0171, 1);			# y_odd_inc
+	r |= wr8(16r0128, 0);			# dphy_ctrl: automatic timing
+	r |= wr16(16r012A, 24<<8);		# exck_freq: the board's 24 MHz, in 8.8
+	# the PLLs: 24 MHz / 3 * 57 = 456 MHz, the pixel path over 5;
+	# 24 / 3 * 114 = 912 Mbit/s a lane
+	r |= wr8(16r0301, 5);			# vtpxck_div
+	r |= wr8(16r0303, 1);			# vtsyck_div
+	r |= wr8(16r0304, 3);			# prepllck_vt_div
+	r |= wr8(16r0305, 3);			# prepllck_op_div
+	r |= wr16(16r0306, 57);			# pll_vt_mpy
+	r |= wr8(16r030B, 1);			# opsyck_div
+	r |= wr16(16r030C, 114);		# pll_op_mpy
+	r |= wr8(16r0114, 1);			# csi_lane_mode: two lanes
+	r |= wr16(16r0164, 0);			# x_add_sta: the whole array
+	r |= wr16(16r0166, 2*Sw-1);		# x_add_end
+	r |= wr16(16r0168, 0);			# y_add_sta
+	r |= wr16(16r016A, 2*Sh-1);		# y_add_end
+	r |= wr16(16r016C, Sw);			# x_output_size
+	r |= wr16(16r016E, Sh);			# y_output_size
+	r |= wr16(16r0624, Sw);			# tp_window_width
+	r |= wr16(16r0626, Sh);			# tp_window_height
+	r |= wr16(16r0174, 16r0101);		# binning_mode: two by two, both ways
+	r |= wr16(16r018C, 16r0A0A);		# csi_data_format: RAW10
+	r |= wr8(16r0309, 10);			# oppxck_div: for ten bits
+	r |= wr8(16r0172, flip);		# image_orientation: mirror and flip
+	r |= wr16(16r0160, fl);			# frame_length_lines: sets the fps
+	l := fl - Exposureoff;
+	if(exposure != 0)
+		l = exposure;
+	r |= wr16(16r015A, l);			# coarse_integration_time
+	r |= wr8(16r0157, gain);		# analogue gain
+	r |= wr16(16r0158, 16r0100);		# digital gain: 1
 	return r;
 }
 

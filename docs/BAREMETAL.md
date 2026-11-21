@@ -697,7 +697,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 
 **The camera** on a Pi 4 follows the rule that device protocols live
 outside the kernel. `#V` receives raw frames and `#J` is its I2C; all
-that is known about the Camera Module 3 is in `camsrv(4)`, a Limbo
+that is known about the Camera Modules 3 and 2 is in `camsrv(4)`, a Limbo
 program that serves the camera as a live video feed in `vid9p`'s schema,
 with `$Bayer`, built-in C, for the pixel loop Limbo cannot keep up with:
 

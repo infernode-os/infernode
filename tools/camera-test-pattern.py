@@ -15,6 +15,9 @@
 # in from the bottom and repeated at the top, so a capture can be placed in
 # the sequence even when focus breathing crops an edge.
 #
+# docs/CAMERA-TEST-VIDEO.md is all of it for a reader: the timeline, the
+# patterns' sizes and the code's layout. Change it with this file.
+#
 # Needs numpy and ffmpeg with libx264. Nothing here ships: it makes a file.
 import subprocess,sys,numpy as np
 W,H,F=1280,720,30

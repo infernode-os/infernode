@@ -11,6 +11,7 @@ TARG=\
 	browser.dis\
 	charonfs.dis\
 	wordbreak.dis\
+	hyphen.dis\
 	originfs.dis\
 
 MODULES=
@@ -30,6 +31,7 @@ SYSMODULES=\
 	web/browser.m\
 	web/charonfs.m\
 	web/wordbreak.m\
+	web/hyphen.m\
 	web/originfs.m\
 	styx.m\
 	styxservers.m\

@@ -31,6 +31,8 @@ include "bufio.m";
 	bufio: Bufio;
 include "web/wordbreak.m";
 	wordbreak: Wordbreak;
+include "web/hyphen.m";
+	hyphen: Hyphen;
 include "imagefile.m";
 	readsvg: RImagefile;
 	imageremap: Imageremap;
@@ -63,6 +65,7 @@ init(d: ref Display): string
 	style = load Style Style->PATH;
 	fonts = load Fonts Fonts->PATH;
 	wordbreak = load Wordbreak Wordbreak->PATH;	# (without it, Thai breaks only at spaces)
+	hyphen = load Hyphen Hyphen->PATH;	# (without it, hyphens: auto is manual)
 	bidi = load Bidi Bidi->PATH;
 	if(bidi != nil && bidi->init() != nil)
 		bidi = nil;
@@ -10528,6 +10531,12 @@ textsegs(b: ref Box, st: ref St, fc: ref Typeface, lang: string, space0: int): l
 	ls := st.letterspacing;
 	if(collapsesp)
 		s = segbreaks(s, keepnl, cjklang(lang));
+	# hyphens: auto: a soft hyphen where the language's patterns allow
+	# a break in a word, as a browser does with a known language
+	# (not under line-break: anywhere, which applies none: Text 3 ยง5.3,
+	# line-break-anywhere-002)
+	if(st.hyphens == 2 && st.breakall != 2 && hyphen != nil && lang != nil && lang != Nolang && hyphen->known(lang))
+		s = hyphen->hyphenate(s, lang);
 	# Thai: between the words a dictionary finds (UAX #14 SA)
 	thai: array of byte;
 	if(wordbreak != nil && st.keepall != 2)
@@ -10975,6 +10984,7 @@ Ifc: adt {
 	strut:	int;		# the block's own line height, for float bands
 	ch:	int;		# b's content height if definite, else -1: for floats' percentages
 	slack:	real;		# how far its lines may reach past cw and fit: fitslack
+	frac:	real;		# how far the next line's top is below y, its fraction: lines' heights summed unrounded
 };
 
 # Set ln's edges from the floats beside the line at f.y.
@@ -11041,6 +11051,7 @@ movedown(f: ref Ifc, ln: ref Ln): int
 	if(n < 0)
 		return 0;
 	f.y = n - f.oy;
+	f.frac = 0.0;
 	linestart(f, ln);
 	return 1;
 }
@@ -11140,7 +11151,7 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	autospacepass(items);
 	st := b.st;
 	lines: list of ref Line;
-	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch, fitslack(b, cw));
+	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch, fitslack(b, cw), 0.0);
 	x0 := b.bl + b.pl;
 	para := 0;
 	joinruns(items);
@@ -11370,11 +11381,28 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	return f.y - b.bt - b.pt;
 }
 
+finishh := -1.0;	# the height finish gave its line, unrounded; -1 where it is no sum of text's
+
 endline(f: ref Ifc, ln: ref Ln, x0, first, forced: int): ref Line
 {
 	if(balancecount != nil && balancegroup < len balancecount)
 		balancecount[balancegroup]++;
 	line := finish(f.l, f.b, ln, f.y, x0, first, forced);
+	# a line's height in fractions of a pixel (16px text at 1.6 is
+	# 25.6): the next line goes where they add up to, rounded, as
+	# Chromium keeps the fraction to 1/64 px; rounded a line at a time,
+	# seven lines were 182px where Chromium's are 179, and a long page
+	# drifted down a line in each few screens (Python's documentation)
+	if(finishh >= 0.0) {
+		end := real f.y + f.frac + finishh;
+		ny := ir(end);
+		if(ny > f.y) {
+			line.h = ny - f.y;
+			f.frac = end - real ny;
+		} else
+			f.frac = 0.0;
+	} else
+		f.frac = 0.0;
 	f.y += line.h;
 	for(bl := ln.below; bl != nil; bl = tl bl)
 		(hd bl).sy = f.y;
@@ -11854,6 +11882,7 @@ lineheight(st: ref St, f: ref Typeface): real
 # align vertically (baselines, line-height) and horizontally.
 finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 {
+	finishh = -1.0;
 	# trailing collapsible white space hangs; so does preserved
 	# white space at the end of a line (white-space: pre-wrap), which
 	# keeps its width but takes no part in alignment (Text 3 ยง4.1.3)
@@ -11958,15 +11987,19 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			below = d + shift;
 	}
 	h := ir(above + below);
+	finishh = above + below;	# its height unrounded, for endline
 	if(markerline(b, frags)) {
 		h = 0;	# shiftmarkers puts the marker at the next block's first baseline
 		above = 0.0;
+		finishh = -1.0;
 	}
 	# top- and bottom-aligned things may make the line taller
 	for(sl := subtrees; sl != nil; sl = tl sl) {
 		(nil, sa, sd) := hd sl;
-		if(ir(sa + sd) > h)
+		if(ir(sa + sd) > h) {
 			h = ir(sa + sd);
+			finishh = -1.0;
+		}
 	}
 	base := ir(above);
 	line := ref Line(y, h, y + base, frags, nil);
@@ -13047,13 +13080,13 @@ face(st: ref St): ref Typeface
 	return f;
 }
 
-# The OpenType features a style sets (Fonts 4 ง7.2): font-variant's,
+# The OpenType features a style sets (Fonts 4 ยง7.2): font-variant's,
 # then font-feature-settings', a later setting of a tag winning
 fontfeats(st: ref St): list of (string, int)
 {
 	r: list of (string, int);
 	# letters spaced apart, by letter-spacing or justification between
-	# them, are not joined by the optional ligatures (Text 3 ง8.2, ง7.3);
+	# them, are not joined by the optional ligatures (Text 3 ยง8.2, ยง7.3);
 	# font-feature-settings may still turn one on
 	if(spaced(st))
 		r = ("calt", 0) :: ("hlig", 0) :: ("dlig", 0) :: ("clig", 0) :: ("liga", 0) :: nil;
@@ -13081,7 +13114,7 @@ optlig(t: string): int
 
 # font-variant-alternates' functions, through the values
 # @font-feature-values gives their names for the style's families
-# (Fonts 4 ง6.8); a name none defines sets nothing
+# (Fonts 4 ยง6.8); a name none defines sets nothing
 altfeats(st: ref St): list of (string, int)
 {
 	r: list of (string, int);

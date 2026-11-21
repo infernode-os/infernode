@@ -82,10 +82,15 @@ tools/ref/compare.py -o /tmp/live http://127.0.0.1:8780/pypi.org/
 Chromium's, in document order: the first wrong one usually explains the
 rest.  `acid2.py wptroot` checks Acid2 against Chromium.
 
-The reference Chromium is given Charon's typefaces (`fonts.conf`: Arial,
-Helvetica, sans-serif and the system stacks as TeX Gyre Heros, Times and
-serif as TeX Gyre Termes, the rest as DejaVu, as `appl/lib/web/fonts.b`
-chooses them), so text width measures layout, not the choice of font.
+The reference Chromium is given Charon's typefaces as Charon lays them
+out (`fonts.conf`): Arial, Helvetica, sans-serif and the system stacks
+as Liberation Sans, Times and serif as Liberation Serif (Charon draws
+them with TeX Gyre Heros's and Termes's advances and Arial's and Times's
+vertical metrics, which Liberation has both of; Heros itself gave
+Chromium a taller line), the rest as DejaVu, as `appl/lib/web/fonts.b`
+chooses them, so text width measures layout, not the choice of font.
+Making the corpus's references needs the host's Liberation fonts
+(`fonts-liberation`).
 
 `mirror.py` fetches live sites on the host and caches them, rewriting
 their URLs to point back at itself, so both browsers render the same

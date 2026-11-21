@@ -119,4 +119,15 @@ else no "seconds() is not todget()'s: the time of day loses every missed tick"; 
 if sed -n '/^timerintr(Ureg/,/^}/p' os/port/portclock.c | grep -q 'm->ticks += callhzclock - 1'; then ok "timerintr counts every overdue tick"
 else no "timerintr runs hzclock once however many ticks were due"; fi
 
+# A Prog killed in a USB transfer: waittd's Stop Endpoint goes through
+# ctlrcmd, whose wait raised at once for the killed caller (upkilled),
+# aborting the command ring; the next pass took that for a dead
+# controller and reset the bus (a Wi-Fi adapter's reader killed, Pi 5).
+cc=$(sed -n '/^ctlrcmd(Ctlr \*ctlr, u32int c, u32int s, u64int p, u32int \*er)$/,/^}/p' os/port/usbxhci.c | grep -v '^[[:space:]]*\*\|/\*')
+if echo "$cc" | grep -q 'up->killing = 1' && echo "$cc" | grep -q 'up->killing = okilling'; then ok "an xHCI command waits under up->killing"
+else no "ctlrcmd's wait must be made under up->killing, or a killed caller's Stop Endpoint resets the controller"; fi
+wt=$(sed -n '/^waittd(Wait \*w, int tmout)$/,/^}/p' os/port/usbxhci.c)
+if echo "$wt" | grep -q 'if(serr == nil){' && echo "$wt" | grep -A3 'if(serr == nil){' | grep -q 'return ccerrstr'; then ok "a transfer stopped for a kill is returned, not waited for again"
+else no "waittd must return a transfer its Stop Endpoint finished, or a killed Prog's next wait calls for recovery"; fi
+
 exit $fail

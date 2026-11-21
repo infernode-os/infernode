@@ -970,6 +970,17 @@ waittd(Wait *w, int tmout)
 				abortring(r);
 				return Eaborted;
 			}
+			/*
+			 * Stopped, and the transfer finished (or was posted
+			 * Stopped) before the command's completion: it is done.
+			 * Waiting for it again would only raise again for a
+			 * killed Prog -- and with the ring marked stopped, the
+			 * next pass would call that a dead controller.
+			 */
+			if(serr == nil){
+				r->stopped = 1;
+				return ccerrstr(w->er[2]>>24);
+			}
 		}
 		r->stopped = 1;
 
@@ -993,6 +1004,7 @@ ctlrcmd(Ctlr *ctlr, u32int c, u32int s, u64int p, u32int *er)
 {
 	Wait w[1];
 	char *err;
+	int okilling;
 
 	qlock(&ctlr->cmdlock);
 	if(needrecover(ctlr)){
@@ -1005,7 +1017,22 @@ ctlrcmd(Ctlr *ctlr, u32int c, u32int s, u64int p, u32int *er)
 	}
 	ctlr->cr->stopped = 0;
 	queuetd(ctlr->cr, c, s, p, w);
+	/*
+	 * A command is the controller's housekeeping, bounded by its own
+	 * five seconds, and not the caller's to give up: least of all the
+	 * Stop Endpoint that waittd sends for a transfer whose Prog was
+	 * killed. For such a caller every sleep raised at once (upkilled),
+	 * so the command's wait aborted the command ring, marked it
+	 * stopped, and the next pass took that for a dead controller: the
+	 * bus was reset and every device on it went (a reader of a USB
+	 * Wi-Fi adapter killed, on the Pi 5). As devmnt's clunks for a
+	 * dying Prog, the wait is made under up->killing.
+	 */
+	okilling = up->killing;
+	if(okilling == 0)
+		up->killing = 1;
 	err = waittd(w, 5000);
+	up->killing = okilling;
 	qunlock(&ctlr->cmdlock);
 
 	if(er != nil)

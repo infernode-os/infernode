@@ -2539,6 +2539,12 @@ isbfc(b: ref Box): int
 		return 1;
 	if(st.overflowx != Style->Ovisible || st.overflowy != Style->Ovisible)
 		return 1;
+	# layout or paint containment makes an independent formatting
+	# context (Contain 2 §3.2, 3.4), and a query container has layout
+	# containment: Bootstrap's .bd-toc, container-type: inline-size,
+	# kept its button's margin (Charon let it through, 8px short)
+	if(st.contain & (Style->CTlayout | Style->CTpaint) || st.cqtype != 0)
+		return 1;
 	case st.display {
 	Style->Dflowroot or Style->Dtablecell or Style->Dtablecaption or Style->Dinlineblock =>
 		return 1;

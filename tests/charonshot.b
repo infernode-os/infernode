@@ -3,7 +3,7 @@ implement Charonshot;
 #
 # charonshot - render one URL with Charon, headlessly, to an image file.
 #
-#	charonshot [-d|-b|-c] [-y scroll] width[xheight] outimg url
+#	charonshot [-d|-b|-c] [-t] [-y scroll] width[xheight] outimg url
 #
 # Renders with Charon's engine (page(2): parse, style, lay out, paint).
 # -d prints the box tree (kind node x y w h) on standard error, -b the
@@ -13,7 +13,8 @@ implement Charonshot;
 # width the canvas is up to Maxheight tall and the image is cropped to the
 # page, so long pages are captured whole; with widthxheight the viewport is
 # exactly that and the whole of it is written, as for conformance
-# fixtures.  Extracted page text lands in outimg+".txt".
+# fixtures.  Extracted page text lands in outimg+".txt".  -t prints the
+# time to load and lay out the page and to paint it, on standard error.
 #
 # Host wrapper: tools/charon-shot.sh (decodes the image to PNG).
 # When run as emu's initial program it halts the emulator when done,
@@ -48,6 +49,7 @@ Maxheight: con 12000;
 dumpboxes := 0;
 
 yscroll := 0;	# -y
+timing := 0;	# -t
 pxscale := 1.0;	# -s
 
 init(nil: ref Draw->Context, argv: list of string)
@@ -62,6 +64,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		"-d" => dumpboxes = 1;
 		"-b" => dumpboxes = 2;
 		"-c" => dumpboxes = 3;
+		"-t" => timing = 1;	# "load+layout N ms, paint M ms" on standard error
 		"-y" =>
 			# scrolled down so far, as the window would be
 			argv = tl argv;
@@ -178,7 +181,7 @@ newengine(disp: ref Display, w, h, crop: int, outimg, url: string): string
 		return sys->sprint("writeimage: %r");
 	for(l := p.errors; l != nil; l = tl l)
 		sys->fprint(sys->fildes(2), "charonshot: %s\n", hd l);
-	if(sys->open("/env/charonshot-timing", Sys->OREAD) != nil)
+	if(timing || sys->open("/env/charonshot-timing", Sys->OREAD) != nil)
 		sys->fprint(sys->fildes(2), "load+layout %d ms, paint %d ms\n", t1-t0, t2-t1);
 	return nil;
 }

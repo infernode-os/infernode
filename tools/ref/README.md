@@ -57,8 +57,12 @@ is rendered at a laptop's and a phone's size and scored as `compare.py`'s
 and the reference does not move with Chromium's releases.
 `baseline/corpus-scores.txt` holds the scores; `gate` fails a page that
 moves further from Chromium than it by more than 0.01, and `--update`
-moves it with the commit that earns it.  `wpt.yml` runs it after the
-reftests.
+moves it with the commit that earns it.  Each page is timed too (load
+and layout, then paint), into `times.txt`, and held to
+`baseline/corpus-times.txt` scaled by the run's total over its own (a
+CI runner is not the machine the baseline was taken on): a page that
+takes 1.6 times its share and 150 ms more fails.  `wpt.yml` runs it
+after the reftests.
 
 ```sh
 tools/ref/corpus.py fetch tmp/corpussrc       # by the pins: about 250 MB

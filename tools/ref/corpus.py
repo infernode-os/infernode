@@ -31,8 +31,16 @@ size, and index.html with Charon's picture beside the reference's cells.
 `gate` holds the scores to tools/ref/baseline/corpus-scores.txt: a page
 whose score grows by more than SLACK fails; what improves is reported,
 and --update moves the baseline to the run, in the commit that earns it.
+
+`run` also times each page (charonshot -t: loading and laying it out,
+then painting it) into OUT/times.txt, and `gate` holds them to
+tools/ref/baseline/corpus-times.txt.  A machine is not another, so the
+baseline is scaled by the run's total over its own (printed): a page
+that takes SLOWER times its share and SLOWERMS more fails.  That finds a
+page made slow; a change that slows every page alike shows only as the
+ratio of totals.
 """
-import argparse, hashlib, html, os, shutil, subprocess, sys, tarfile, threading, functools
+import argparse, hashlib, html, os, re, shutil, subprocess, sys, tarfile, threading, functools
 import http.server, socketserver
 import numpy as np
 from PIL import Image
@@ -43,6 +51,10 @@ SOURCES = os.path.join(HERE, 'corpus', 'sources')
 PAGES = os.path.join(HERE, 'corpus', 'pages')
 REFDIR = os.path.join(HERE, 'baseline', 'corpus')
 BASELINE = os.path.join(HERE, 'baseline', 'corpus-scores.txt')
+TIMES = os.path.join(HERE, 'baseline', 'corpus-times.txt')
+SLOWER = 1.6	# a page this much slower than its share of the run's time fails...
+SLOWERMS = 150	# ...when it is this many milliseconds more too
+TIMERE = re.compile(r'load\+layout (\d+) ms, paint (\d+) ms')
 SIZES = [('laptop', 1280, 800), ('phone', 390, 844)]
 CELL = 8
 THRESH = 24	# a cell differs when a channel's mean differs by more than this (compare.py's)
@@ -213,15 +225,18 @@ def ref(d):
 def run(d, out):
     bases = serve(d)
     os.makedirs(out, exist_ok=True)
-    rows, lines = [], []
+    rows, lines, tlines = [], [], []
     for site, path in pages():
         for size, w, h in SIZES:
             s = slug(site, path, size)
             refpng = os.path.join(REFDIR, s + '.png')
             png = os.path.join(out, s + '.png')
             os.makedirs(os.path.dirname(png), exist_ok=True)
-            r = subprocess.run([os.path.join(ROOT, 'tools', 'charon-shot.sh'), bases[site] + path, png, '%dx%d' % (w, h)],
+            r = subprocess.run([os.path.join(ROOT, 'tools', 'charon-shot.sh'), '-t', bases[site] + path, png, '%dx%d' % (w, h)],
                                capture_output=True, text=True, timeout=600)
+            m = TIMERE.search(r.stderr)
+            if m:
+                tlines.append('%d %s %s %s' % (int(m.group(1)) + int(m.group(2)), site, path, size))
             if not os.path.exists(png):
                 score = 1.0
                 note = 'no picture: ' + (r.stderr.strip().splitlines() or ['?'])[-1]
@@ -235,6 +250,7 @@ def run(d, out):
             rows.append((score, site, path, size, s))
             print(lines[-1], flush=True)
     open(os.path.join(out, 'scores.txt'), 'w').write('\n'.join(lines) + '\n')
+    open(os.path.join(out, 'times.txt'), 'w').write('\n'.join(tlines) + '\n')
     with open(os.path.join(out, 'index.html'), 'w') as f:
         f.write('<!doctype html><meta charset=utf-8><title>corpus</title><style>img{border:1px solid #888;vertical-align:top;image-rendering:pixelated}</style>\n')
         for score, site, path, size, s in sorted(rows, reverse=True):
@@ -251,10 +267,34 @@ def scores(path):
     return out
 
 
+def timegate(out):
+    """the pages made slow; 0 if none (or nothing to compare)"""
+    tn = os.path.join(out, 'times.txt')
+    if not os.path.exists(TIMES) or not os.path.exists(tn):
+        return 0
+    base, now = scores(TIMES), scores(tn)
+    common = [k for k in base if k in now]
+    tb = sum(base[k] for k in common)
+    tt = sum(now[k] for k in common)
+    if not common or tb <= 0:
+        return 0
+    f = tt / tb
+    bad = 0
+    for k in common:
+        want = base[k] * f
+        if now[k] > want * SLOWER and now[k] - want > SLOWERMS:
+            print('SLOWER %s %s %s: %d ms, %d ms its share' % (k[0], k[1], k[2], now[k], want))
+            bad += 1
+    print('corpus: %d ms for the pages, %d ms in the baseline (x%.2f); %d slower than their share' % (tt, tb, f, bad))
+    return bad
+
+
 def gate(out, update):
     now = scores(os.path.join(out, 'scores.txt'))
     if update:
         shutil.copy(os.path.join(out, 'scores.txt'), BASELINE)
+        if os.path.exists(os.path.join(out, 'times.txt')):
+            shutil.copy(os.path.join(out, 'times.txt'), TIMES)
         print('corpus: baseline updated')
         return 0
     base = scores(BASELINE)
@@ -274,8 +314,12 @@ def gate(out, update):
     mb = sum(base.values()) / max(1, len(base))
     mn = sum(now.values()) / max(1, len(now))
     print('corpus: mean %.4f -> %.4f; %d worse, %d better' % (mb, mn, len(worse), len(better)))
+    slow = timegate(out)
     if worse:
         print('corpus: FAIL: a page is further from Chromium than the baseline (OUT/index.html shows it)')
+        return 1
+    if slow:
+        print('corpus: FAIL: a page takes much longer than its share (OUT/times.txt)')
         return 1
     if better:
         print('corpus: move the baseline with --update in the commit that earns it')

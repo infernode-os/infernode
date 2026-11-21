@@ -11323,7 +11323,10 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			}
 			while(!ln.content && ln.x + it.w > real ln.avail + rmax(0.01, f.slack) && movedown(f, ln))
 				;
-			if(!ln.content && ln.x + it.w > real ln.avail && (it.box.st.anywhere || keptall(it)) && len it.text > 1 && !it.nowrap) {
+			# (with the slack the breaking above has: a box shrunk to its
+			# text fits it; rustdoc's Option<T>, 86.4px in an inline-block
+			# of 86 under overflow-wrap: anywhere, was split before >)
+			if(!ln.content && ln.x + it.w > real ln.avail + rmax(0.01, f.slack) && (it.box.st.anywhere || keptall(it)) && len it.text > 1 && !it.nowrap) {
 				# (keep-all is relaxed to normal breaking when the line
 				# has no other opportunity, as browsers do: overflow-wrap-normal-keep-all-001)
 				# overflow-wrap: break the word where it must, if the

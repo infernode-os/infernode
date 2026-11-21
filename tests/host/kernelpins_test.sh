@@ -46,6 +46,11 @@
 #                timerintr() arms its deadline, not after; every overdue
 #                tick is counted. Each ARM board lost 2.6 to 4.5 s an
 #                hour (2026-11-13).
+#   unbind       devether's unbind empties the output queue (a hung-up
+#                queue still gives what it holds: the writer sent a full
+#                queue to a device being reset), and bind waits for the
+#                last data path's reader and writer to go (it freed the
+#                buffer an old writer was sending from) (2026-11-21).
 #
 # Usage: tests/host/kernelpins_test.sh
 #
@@ -118,5 +123,13 @@ if echo "$sec" | grep -q 'todget' && ! grep -q 'boottime' os/port/devcons.c; the
 else no "seconds() is not todget()'s: the time of day loses every missed tick"; fi
 if sed -n '/^timerintr(Ureg/,/^}/p' os/port/portclock.c | grep -q 'm->ticks += callhzclock - 1'; then ok "timerintr counts every overdue tick"
 else no "timerintr runs hzclock once however many ticks were due"; fi
+
+unb=$(sed -n '/^etherunbind(Ether \*e)/,/^}/p' os/port/devether.c)
+if echo "$unb" | grep -q 'qhangup(e->oq' && echo "$unb" | grep -q 'qflush(e->oq)'; then ok "devether's unbind hangs up and empties the output queue"
+else no "devether's unbind leaves frames in the output queue for the writer to send after it"; fi
+gone=$(grep -c 'etherprocgone(e);' os/port/devether.c)
+if [ "$gone" -ge 2 ] && grep -q 'e->nproc = 2;' os/port/devether.c && grep -q 'e->nproc > 0)' os/port/devether.c
+then ok "devether's bind waits for the last reader and writer to go"
+else no "devether's bind can start a data path beside an old writer still sending from the buffer it frees"; fi
 
 exit $fail

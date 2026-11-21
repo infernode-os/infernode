@@ -1,0 +1,13 @@
+<!doctype html><title>text-wrap: balance balances six lines at most, as Chromium does</title>
+<!-- Bootstrap 6's home page: a seven-line lead with text-wrap: balance.  Chromium balances only the
+     lines before the first forced break, and only six or fewer; past that the lines break as they
+     would.  The first paragraph (61 boxes of 20px in 200px, seven lines) keeps ten on its first
+     line, its tenth covering the red at x 180; Charon balanced it to nine a line and the red
+     showed.  The second (41 boxes, five lines) is still balanced, nine a line, so its red tenth
+     box starts the second line under the green cover; unbalanced it would end the first. -->
+<style>body{margin:0} p{margin:0;width:200px;font-size:0;text-wrap:balance;position:relative}
+i{display:inline-block;width:20px;height:20px;background:green} i.x{background:red}
+.r{position:absolute;left:180px;top:0;width:20px;height:20px;background:red;z-index:-1}
+.c{position:absolute;left:0;top:20px;width:20px;height:20px;background:green;z-index:1}</style>
+<p><span class=r></span><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></p>
+<p><span class=c></span><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class=x></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></p>

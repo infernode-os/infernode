@@ -10238,7 +10238,17 @@ lbbreak(a, b: int): int
 		if(cb == Bidi->LBJT)
 			return 0;
 	}
+	# an em dash (B2, which lbclass takes for AL): a break before it and
+	# after it (LB31), none between two (LB17); "anyone—human" was one
+	# word, and Bootstrap's lead took a line more than Chromium's
+	if(isb2(a) || isb2(b))
+		return !(isb2(a) && isb2(b));
 	return lbideo(ca) || lbideo(cb);
+}
+
+isb2(c: int): int
+{
+	return c == 16r2014 || c == 16r2E3A || c == 16r2E3B;
 }
 
 # an SVG viewBox attribute's four numbers, or nil
@@ -11132,8 +11142,11 @@ placepending(f: ref Ifc, ln: ref Ln)
 
 # text-wrap: balance (Text 4 §6.3): the lines are broken at a width
 # cut back as far as it can be without one more line, so that they
-# come out about equal; each run of lines between forced breaks is
-# balanced on its own.  The cut is found by bisection, the block laid
+# come out about equal.  As Chromium has it (the spec lets a UA limit
+# it), only the lines before the first forced break are balanced, and
+# only when they are six or fewer: Bootstrap's seven-line lead was
+# narrowed to a column Chromium never drew, and took a line more.
+# The cut is found by bisection, the block laid
 # out again each time: what a trial lays out (floats, pending
 # absolutes) is put back before the next, and the lines are still
 # aligned in their full width.
@@ -11141,7 +11154,8 @@ balancing: int;			# a block is being balanced
 balancecuts: array of int;	# the cut per forced-break group, nil when none applies
 balancegroup: int;		# the group of the line being laid
 balancecount: array of int;	# lines laid per group, nil when not counting
-Maxgroups: con 64;		# forced-break groups balanced at most
+Maxgroups: con 64;		# forced-break groups counted at most
+Maxbalance: con 6;		# lines balanced at most (Chromium's)
 
 layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 {
@@ -11175,7 +11189,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 		ngroups = Maxgroups;
 	cuts := array[ngroups] of {* => 0};
 	for(g := 0; g < ngroups; g++) {
-		if(want[g] < 2)
+		if(g > 0 || want[g] < 2 || want[g] > Maxbalance)
 			continue;
 		lo := 0;
 		hi := cw;

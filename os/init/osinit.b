@@ -987,6 +987,7 @@ rootwalk(name: string, nports: int): int
 	}
 
 	found := 0;
+	hubs := 0;	# root ports with a hub on them
 	devs := array[nports+1] of { * => "" };	# port -> the device on it
 	seen := array[nports+1] of { * => 0 };	# port -> was anything there when this looked
 	for(port := 1; port <= nports; port++){
@@ -1040,17 +1041,24 @@ rootwalk(name: string, nports: int): int
 			detachdev(dev);
 		else
 			devs[port] = dev;
+		if(ok >= 0 && enumhub)
+			hubs++;
 	}
 
 	#
 	# Root ports that are sockets get the watcher a hub's ports get: the
 	# same code, since a root hub answers the same requests. A controller
-	# with ONE root port is a DWC OTG, and on the boards this runs on
-	# that port has a hub soldered to it -- it is left as it always was,
-	# unwatched. An xHCI's ports are where things are plugged in: all of
+	# with ONE root port is a DWC OTG. On a 3B+ that port has a hub
+	# soldered to it (its Ethernet's) -- left as it always was, unwatched.
+	# On a Zero 2 W it is the OTG socket: nothing on it at boot, or a
+	# device that is no hub, means a socket, and it is watched, so what
+	# is plugged in after boot is set up (it was never seen). A hub
+	# plugged into a Zero's socket before boot is walked and its ports
+	# watched, as on a 3B+; the hub's own unplugging is not.
+	# An xHCI's ports are where things are plugged in: all of
 	# them under QEMU, the SuperSpeed ones on a Raspberry Pi 4.
 	#
-	if(nports > 1)
+	if(nports > 1 || hubs == 0)
 		spawn hubwatch(d, name, nports, "", devs, seen);
 	return found;
 }
@@ -1103,8 +1111,12 @@ reresetport(d: ref Sys->FD, port: int, indent: string): int
 # has to be able to detach it. Nothing about the device is kept in a
 # global: this runs concurrently, once per hub watcher.
 #
+# Set by enumerate when the device it brought up was a hub.
+enumhub := 0;
+
 enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): (int, string)
 {
+	enumhub = 0;
 	c := sys->open(hubctl, Sys->ORDWR);
 	if(c == nil){
 		sys->print("init: cannot open %s: %r\n", hubctl);
@@ -1284,6 +1296,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 
 	if(class == Clhub){
 		hubwalk(name, d, dctl, indent + "  ");
+		enumhub = 1;		# after the walk: its own enumerates clear it
 		return (0, name);
 	}
 

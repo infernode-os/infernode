@@ -11142,11 +11142,10 @@ placepending(f: ref Ifc, ln: ref Ln)
 
 # text-wrap: balance (Text 4 §6.3): the lines are broken at a width
 # cut back as far as it can be without one more line, so that they
-# come out about equal.  As Chromium has it (the spec lets a UA limit
-# it), only the lines before the first forced break are balanced, and
-# only when they are six or fewer: Bootstrap's seven-line lead was
-# narrowed to a column Chromium never drew, and took a line more.
-# The cut is found by bisection, the block laid
+# come out about equal; each run of lines between forced breaks is
+# balanced on its own, and only a run of six lines or fewer (the spec
+# lets a UA limit it, and Chromium's limit is six: seven-line runs are
+# broken as they come).  The cut is found by bisection, the block laid
 # out again each time: what a trial lays out (floats, pending
 # absolutes) is put back before the next, and the lines are still
 # aligned in their full width.
@@ -11189,7 +11188,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 		ngroups = Maxgroups;
 	cuts := array[ngroups] of {* => 0};
 	for(g := 0; g < ngroups; g++) {
-		if(g > 0 || want[g] < 2 || want[g] > Maxbalance)
+		if(want[g] < 2 || want[g] > Maxbalance)
 			continue;
 		lo := 0;
 		hi := cw;

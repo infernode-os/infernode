@@ -1784,11 +1784,60 @@ radiosetup()
 		sys->print("init: radio: %r\n");
 		return;
 	}
-	if(sys->fprint(fd, "firmware %s/brcmfmac43455-sdio.bin %s/brcmfmac43455-sdio.txt %s/brcmfmac43455-sdio.clm_blob",
-			Firmwaredir, Firmwaredir, Firmwaredir) < 0)
-		sys->print("init: radio: firmware: %r\n");
+	base := radiofirmware();
+	if(base == nil)
+		return;
+	f := Firmwaredir + "/" + base;
+	cmd := "firmware " + f + ".bin " + f + ".txt";
+	if(sys->stat(f + ".clm_blob").t0 >= 0)
+		cmd += " " + f + ".clm_blob";
+	if(sys->fprint(fd, "%s", cmd) < 0)
+		sys->print("init: radio: firmware %s: %r\n", base);
 	else
-		sys->print("init: radio: firmware loaded\n");
+		sys->print("init: radio: firmware %s loaded\n", base);
+}
+
+#
+# Which firmware the radio takes, by the chip the driver found
+# ("chip: 0xa9a6 rev 2" in ifstats); the base of the file names on the
+# card, nil if the chip is none this knows. The regulatory table
+# (.clm_blob) goes with it when the card has one.
+#
+#	0x4345 rev 6	CYW43455: the 3B+, 3A+ and Pi 4
+#	43430 rev 2	CYW43436: a Zero 2 W
+#	43430 rev 1	CYW43436s (a Zero 2 W) or CYW43438 (a 3B, a Zero W):
+#			the same id. Linux tells them apart by the board;
+#			here the card does, as it does the Bluetooth patch:
+#			a Zero 2 W card has the 43436s's files and no 43430's.
+#
+radiofirmware(): string
+{
+	(st, nil) := slurp("#l1/ether1/ifstats");
+	(nil, ws) := sys->tokenize(st, " \t\n");
+	for(; ws != nil && tl ws != nil; ws = tl ws){
+		if(hd ws != "chip:")
+			continue;
+		chip := hd tl ws;
+		rev := "";
+		if(tl tl ws != nil && tl tl tl ws != nil && hd tl tl ws == "rev")
+			rev = hd tl tl tl ws;
+		case chip {
+		"0x4345" =>
+			return "brcmfmac43455-sdio";
+		"0xa9a6" =>
+			if(rev == "2")
+				return "brcmfmac43436-sdio";
+			if(rev == "1"){
+				if(sys->stat(Firmwaredir + "/brcmfmac43436s-sdio.bin").t0 >= 0)
+					return "brcmfmac43436s-sdio";
+				return "brcmfmac43430-sdio";
+			}
+		}
+		sys->print("init: radio: chip %s rev %s: no firmware known for it\n", chip, rev);
+		return nil;
+	}
+	sys->print("init: radio: ifstats names no chip\n");
+	return nil;
 }
 
 #

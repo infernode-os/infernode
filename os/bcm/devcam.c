@@ -15,9 +15,15 @@
  * and camsrv's frames arrive as 16-bit samples with no work here.
  *
  * THE CONNECTOR IS CSI1 to the chip: a two-lane Unicam at 0x7E801000,
- * GIC SPI 103, the firmware's power domain 13. The sensor's enable is
- * line 5 of the firmware's GPIO expander, driven here and not left to
- * #G because the desktop's namespace has no #G.
+ * VideoCore interrupt 39 (the board's IRQunicam: GIC SPI 103 on a
+ * BCM2711), the firmware's power domain 13, on the Pi 4, the 3B+ and the
+ * Zero 2 W alike. Its clock is PLLD's over the board's CAMCLKDIV.
+ * The sensor's enable differs by board: line 5 of the firmware's GPIO
+ * expander on the Pi 4 and the 3B+, GPIO 40 on the Zero 2 W (each
+ * board's device tree, cam1_reg). Driven here and not left to #G
+ * because the desktop's namespace has no #G.
+ *
+ * Run on the Pi 4 with a Camera Module 3. Not yet on a 3B+ or a Zero 2 W.
  *
  * THE FIRMWARE'S DOMAIN IS NOT ENOUGH. It powers the registers and not
  * the analogue side, which has its own regulator in the power manager;
@@ -56,8 +62,9 @@ enum
 	UNICAMGATE	= PHYSIO + 0x802004,
 	CMBASE		= PHYSIO + 0x101000,
 
-	IRQunicam	= IRQspi + 103,
-	Camenable	= 128 + 5,
+	Camenable	= 128 + 5,	/* the firmware's expander, line 5 */
+	Camenablez2w	= 40,		/* the Zero 2 W's own pin */
+	Fsout		= 1,
 	Tagsetdomain	= 0x00038030,
 	Domunicam1	= 13,
 
@@ -73,7 +80,7 @@ enum
 	Cmen		= 1<<4,
 	Cmkill		= 1<<5,
 	Cmplld		= 6,
-	Cmdiv		= 8,		/* PLLD's 750 MHz to 94 MHz */
+	Cmdiv		= CAMCLKDIV,	/* the board's io.h: PLLD to about 100 MHz */
 
 	Uctrl		= 0x000,
 		Ucpe		= 1<<0,
@@ -259,6 +266,17 @@ domain(int on)
 }
 
 static void
+camenable(int on)
+{
+	if(boardtype() == Btzero2w){
+		gpioout(Camenablez2w, on);
+		gpiofunc(Camenablez2w, Fsout);
+		return;
+	}
+	mboxsetgpio(Camenable, on);
+}
+
+static void
 campower(int on)
 {
 	if(on == u.power)
@@ -271,7 +289,7 @@ campower(int on)
 			if(w > 0)
 				tsleep(&up->sleep, return0, nil, w);
 		}
-		mboxsetgpio(Camenable, 1);
+		camenable(1);
 		tsleep(&up->sleep, return0, nil, Powerms);
 		domain(1);
 		ldo(1);
@@ -280,7 +298,7 @@ campower(int on)
 		clock(0);
 		ldo(0);
 		domain(0);
-		mboxsetgpio(Camenable, 0);
+		camenable(0);
 		u.offat = TK2MS(MACHP(0)->ticks);
 		if(u.offat == 0)
 			u.offat = 1;

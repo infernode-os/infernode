@@ -80,6 +80,7 @@ on:
       - 'tools/piromcheck.py'
       - 'tools/pi-firmware.sh'
       - 'tools/pi-*manifest.txt'
+      - 'tools/pi-*manifest-*.txt'
       - 'tests/host/piimage_boot_test.sh'
       - 'tests/host/qemu/**'
       - '.github/workflows/baremetal.yml'
@@ -95,6 +96,7 @@ on:
       - 'tools/piromcheck.py'
       - 'tools/pi-firmware.sh'
       - 'tools/pi-*manifest.txt'
+      - 'tools/pi-*manifest-*.txt'
       - 'tests/host/piimage_boot_test.sh'
       - '.github/workflows/baremetal.yml'
   workflow_dispatch:

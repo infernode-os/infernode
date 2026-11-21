@@ -102,6 +102,7 @@ iface := 0;		# the HID interface: class requests and the report descriptor go to
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	usbtrace = sys->stat("/n/dos/usbtrace").t0 >= 0;
 
 	args = tl args;
 	if(args == nil){
@@ -611,6 +612,8 @@ poll(fd, kbd: ref Sys->FD, ival, maxpkt: int)
 		#
 		# Time the read.
 		n := sys->read(fd, buf, len buf);
+		if(usbtrace && n > 0)
+			tracerep("kbdusb", dev, buf[0:n]);
 		if(n < 0){
 			if(isdetached()){
 				sys->print("kbdusb: %s detached\n", dev);
@@ -690,6 +693,19 @@ press(kbd: ref Sys->FD, mod: int, down: list of int)
 	lastreport = sys->millisec();
 
 	#
+	# ErrorRollOver (1), POSTFail (2), ErrorUndefined (3) in a key
+	# slot: the keyboard cannot say which keys are down -- more than
+	# it can report, a phantom -- and the HID specification (1.11,
+	# 8.3 and appendix C) has the host ignore the report and keep the
+	# state it had. Taken as a report, it released every key held,
+	# and the next report pressed them again: a keyboard mashed by a
+	# hand on a Zero 2 W typed its held keys twice.
+	#
+	for(e := down; e != nil; e = tl e)
+		if(hd e >= 1 && hd e <= 3)
+			return;
+
+	#
 	# Alt is a PREFIX, not a held modifier.
 	#
 	# Emitted once when it goes down, which is what devcons
@@ -759,6 +775,8 @@ pollreport(fd, kbd: ref Sys->FD, ival, maxpkt: int, keys: list of ref Keys)
 	nerr := 0;
 	for(;;){
 		n := sys->read(fd, buf, len buf);
+		if(usbtrace && n > 0)
+			tracerep("kbdusb", dev, buf[0:n]);
 		if(n < 0){
 			if(isdetached()){
 				sys->print("kbdusb: %s detached\n", dev);
@@ -1009,4 +1027,19 @@ isinuse(): int
 		if(e[i:i+6] == "in use")
 			return 1;
 	return 0;
+}
+
+#
+# /n/dos/usbtrace on the card: every report this driver reads is printed
+# on the console, raw, with the time in milliseconds -- for testing a
+# device by hand while nobody is watching (the serial capture keeps it).
+#
+usbtrace := 0;
+
+tracerep(who, dev: string, b: array of byte)
+{
+	s := "";
+	for(i := 0; i < len b; i++)
+		s += sys->sprint(" %.2ux", int b[i]);
+	sys->print("%s: %s report t=%d%s\n", who, dev, sys->millisec(), s);
 }

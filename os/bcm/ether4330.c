@@ -2400,7 +2400,15 @@ wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
 	else
 		p = put4(p, 2);		/* flags = Primarykey */
 	p += 3*4;
-	p = put4(p, 0);		/* iv initialised */
+	/*
+	 * A group key comes with the receive sequence counter the
+	 * handshake gave (the RSC): it is marked as set, as Linux's
+	 * brcmfmac marks it. Left 0, a Zero 2 W's CYW43436 (firmware
+	 * 9.88.4.77) took a CCMP group key and then delivered no
+	 * group-addressed frame at all -- no DHCP offer, no ARP request
+	 * -- while a TKIP group key worked; the 3B+'s 43455 did not mind.
+	 */
+	p = put4(p, pairwise? 0: 1);	/* iv initialised */
 	p += 4;
 	p = put4(p, iv>>16);	/* iv high */
 	p = put2(p, iv&0xFFFF);	/* iv low */

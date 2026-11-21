@@ -1365,15 +1365,13 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
 			string hidproto :: nil);
 	#
-	# A disk. Only on a machine with an xHCI controller, for now: the
-	# driver has run on QEMU's xHCI and nowhere else, and a Raspberry
-	# Pi 3 gets no new behaviour on emulator evidence (#679 says why).
-	# On a Pi 3 the disk is enumerated, listed, and left alone.
+	# A disk, on any controller. It was xHCI's alone until it had run on
+	# a DWC OTG board (#679: no new Pi 3 behaviour on emulator evidence):
+	# on a Zero 2 W, a disk on its OTG socket read back whole (16 MB,
+	# the same MD5 as the image) and its FAT mounted.
 	#
-	else if(isdisk && havexhci)
-		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 	else if(isdisk)
-		sys->print("init: %s%s is a USB disk; diskusb is not started on this machine\n", indent, name);
+		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 
 	#
 	# Hand it to a class driver, which is a program. The bus walk's
@@ -1399,14 +1397,13 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# A serial port: a CDC-ACM control interface that is not part of a
 	# network adapter (the Jetson's gadget is serial AND Ethernet, and
 	# stays etherusb's), or a vendor interface on an FTDI or CP210x.
-	# usbserial serves it as /dev/eiaU<n>. On an xHCI machine only, as
-	# with disks: it has not run on a Pi 3's controller, and a Pi 3
-	# keeps what it did before -- an ACM device goes to etherusb, which
-	# refuses it.
+	# usbserial serves it as /dev/eiaU<n>, on any controller: it was
+	# xHCI's alone (as disks were, #679) until it had run on a DWC OTG
+	# board, the Zero 2 W's socket.
 	#
 	serial := (isacm && !isether) ||
 		(isvendorif && (vendor == Vftdi || vendor == Vsilabs));
-	if(serial && havexhci)
+	if(serial)
 		startdriver("/dis/usbserial.dis", name, -1, 0, 0, nil);
 	#
 	# Ethernet by the device's class (2), or by an Ethernet interface
@@ -1421,8 +1418,6 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	#
 	else if(class == Clcomm || isether && !isdisk || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name, -1, 0, 0, nil);
-	if(serial && !havexhci)
-		sys->print("init: %s%s is a USB serial port; usbserial is not started on this machine\n", indent, name);
 	return (0, name);
 }
 

@@ -159,11 +159,17 @@ debug := 0;
 dev: string;
 
 #
-# The RSN information element for WPA2-PSK with CCMP: element 0x30,
-# twenty bytes, version 1, group cipher CCMP, one pairwise cipher
-# CCMP, one authentication suite PSK, no capabilities.
+# The RSN information element offered: WPA2-PSK, pairwise CCMP, and a
+# group cipher that starts as CCMP and becomes TKIP when the access
+# point refuses CCMP's (802.11 status 41, "invalid group cipher", in
+# ifstats' assocfail): a network in WPA/WPA2 mixed mode keys its group
+# traffic with TKIP. The driver does not publish the access point's
+# own element, so its refusal is how this learns.
 #
-RSNE: con "30140100000fac040100000fac040100000fac020000";
+rsne: array of byte;
+group := "ccmp";
+supp: ref Supp;
+Invalidgroup: con "41";
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -250,7 +256,9 @@ init(nil: ref Draw->Context, args: list of string)
 		# driver that published what the access point advertised
 		# would let us echo that instead, and ours does not yet.
 		#
-		if(sys->fprint(cfd, "auth %s", RSNE) < 0)
+		if(rsne == nil)
+			rsne = wpakey->rsnie();
+		if(sys->fprint(cfd, "auth %s", wpakey->hex(rsne)) < 0)
 			fatal(sys->sprint("auth: %r"));
 		#
 		# Quoted, because the kernel's ctl parser splits on
@@ -258,8 +266,20 @@ init(nil: ref Draw->Context, args: list of string)
 		# driver as two fields and be refused. Its tokenizer
 		# takes rc-style single quotes, which is what %q emits.
 		#
-		if(sys->fprint(cfd, "essid %q", essid) < 0)
-			fatal(sys->sprint("essid %q: %r", essid));
+		if(sys->fprint(cfd, "essid %q", essid) < 0){
+			#
+			# Refused for its group cipher: a network in WPA/WPA2
+			# mixed mode. The same join once more, offering the other.
+			#
+			if(ifstats("assocfail:") != Invalidgroup)
+				fatal(sys->sprint("essid %q: %r", essid));
+			othergroup();
+			sys->fprint(cfd, "essid default");
+			if(sys->fprint(cfd, "auth %s", wpakey->hex(rsne)) < 0)
+				fatal(sys->sprint("auth: %r"));
+			if(sys->fprint(cfd, "essid %q", essid) < 0)
+				fatal(sys->sprint("essid %q: %r", essid));
+		}
 	}else{
 		essid = ifstats("essid:");
 		if(essid == nil || essid == "")
@@ -281,8 +301,9 @@ init(nil: ref Draw->Context, args: list of string)
 	if(debug)
 		report(sys->sprint("pmk %s", wpakey->hex(pmk)));
 
-	rsne := wpakey->rsnie();
-	supp := Supp.mk(pmk, smac, rsne);
+	if(rsne == nil)
+		rsne = wpakey->rsnie();
+	supp = Supp.mk(pmk, smac, rsne);
 
 	#
 	# One association attempt per turn of this loop, for as long as
@@ -361,13 +382,13 @@ init(nil: ref Draw->Context, args: list of string)
 		if(everkeyed && !connected()){
 			if(sys->fprint(cfd, "essid default") < 0 && say.due(retry))
 				report(sys->sprint("essid default: %r"));
-			if(sys->fprint(cfd, "auth %s", RSNE) < 0 && say.due(retry))
+			if(sys->fprint(cfd, "auth %s", wpakey->hex(rsne)) < 0 && say.due(retry))
 				report(sys->sprint("auth: %r"));
 			if(sys->fprint(cfd, "essid %q", essid) < 0 && say.due(retry))
 				report(sys->sprint("essid %q: %r", essid));
 		}
 
-		waited := associate(cfd, rsne, announce, essid);
+		waited := associate(cfd, announce, essid);
 		announce = 0;
 		supp.reset();
 		began := sys->millisec();
@@ -580,7 +601,7 @@ addms(a, b: int): int
 	return a + b;
 }
 
-associate(cfd: ref Sys->FD, rsne: array of byte, announce: int, essid: string): int
+associate(cfd: ref Sys->FD, announce: int, essid: string): int
 {
 	waited := 0;
 	sincejoin := 0;
@@ -608,8 +629,10 @@ associate(cfd: ref Sys->FD, rsne: array of byte, announce: int, essid: string): 
 		#
 		if(sincejoin >= Rejoin && essid != nil){
 			sincejoin = 0;
+			if(ifstats("assocfail:") == Invalidgroup)
+				othergroup();
 			sys->fprint(cfd, "essid default");
-			sys->fprint(cfd, "auth %s", RSNE);
+			sys->fprint(cfd, "auth %s", wpakey->hex(rsne));
 			if(sys->fprint(cfd, "essid %q", essid) < 0 && say.due(Assocpoll))
 				report(sys->sprint("essid %q: %r", essid));
 		}
@@ -644,6 +667,20 @@ associate(cfd: ref Sys->FD, rsne: array of byte, announce: int, essid: string): 
 #	associated, so that a driver reporting a state this program has
 #	not heard of does not wedge it.
 #
+# The access point refused the group cipher offered: offer the other.
+othergroup()
+{
+	was := group;
+	if(group == "ccmp")
+		group = "tkip";
+	else
+		group = "ccmp";
+	rsne = wpakey->rsniegroup(group);
+	if(supp != nil)
+		supp.rsne = rsne;
+	report(sys->sprint("the access point refuses group cipher %s; offering %s", was, group));
+}
+
 connected(): int
 {
 	s := ifstats("status:");

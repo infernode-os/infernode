@@ -240,6 +240,7 @@ struct WKey
 {
 	ushort	len;
 	char	dat[WKeyLen];
+	int	algo;		/* a WPA key's cipher, as wpaparsekey read it: 2 TKIP, 4 AES; 0 not said */
 };
 
 typedef struct Ctlr Ctlr;
@@ -254,6 +255,7 @@ struct Ctlr
 	Rendez	cmdr;
 	Rendez	joinr;
 	int	joinstatus;	/* 1 + the firmware's E_SET_SSID status */
+	long	assocfail;	/* the 802.11 status of the last refused association (E_ASSOC); 0 after a join */
 	Lock	rsplock;	/* rsp, handed from rproc to wlcmd */
 	Block	*rsp;		/* the response rproc caught for wlcmd */
 	Block	*scanb;		/* the scan being assembled, one line per network */
@@ -2087,6 +2089,8 @@ bcmevent(Ctlr *ctl, uchar *p, int len)
 			break;
 		/* fall through */
 	case 0:		/* E_SET_SSID: the answer to a join */
+		if(status == 0)
+			ctl->assocfail = 0;
 		ctl->joinstatus = 1 + status;
 		wakeup(&ctl->joinr);
 		break;
@@ -2106,6 +2110,14 @@ bcmevent(Ctlr *ctl, uchar *p, int len)
 			wlscanresult(ctl->edev, p + 48, len - 48);
 		break;
 	default:
+		/*
+		 * E_ASSOC refused: its reason is the access point's 802.11
+		 * status code (41 an invalid group cipher, 42 pairwise, 43
+		 * the authentication suite), which says what a supplicant
+		 * offered that it will not take. Kept for ifstats.
+		 */
+		if(event == 7 && status != 0)
+			ctl->assocfail = reason;
 		if(status){
 			if(!EVENTDEBUG)
 				print("ether4330: [%s] error status %ld flags %#x reason %ld\n",
@@ -2369,7 +2381,17 @@ wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
 	p = put4(p, ctl->keys[0].len);
 	memmove((char*)p, ctl->keys[0].dat, ctl->keys[0].len);
 	p += 32 + 18*4;		/* keydata, pad */
-	if(ctl->cryptotype == Wpa)
+	/*
+	 * The cipher the supplicant named for this key. A WPA2 network
+	 * in mixed mode has a TKIP group key beside an AES pairwise one,
+	 * so the connection's type alone cannot say. A TKIP key is given
+	 * as the access point sent it (temporal key, then its transmit
+	 * and receive Michael keys): the firmware takes that order, which
+	 * is why Linux's brcmfmac undoes wpa_supplicant's swap.
+	 */
+	if(ctl->keys[0].algo != 0)
+		p = put4(p, ctl->keys[0].algo);
+	else if(ctl->cryptotype == Wpa)
 		p = put4(p, 2);		/* algo = TKIP */
 	else
 		p = put4(p, 4);		/* algo = AES_CCM */
@@ -2982,10 +3004,13 @@ wpaparsekey(WKey *key, uvlong *ivp, char *a)
 	int len;
 	char *e;
 
-	if(cistrncmp(a, "tkip:", 5) == 0 || cistrncmp(a, "ccmp:", 5) == 0)
-		a += 5;
+	if(cistrncmp(a, "tkip:", 5) == 0)
+		key->algo = 2;
+	else if(cistrncmp(a, "ccmp:", 5) == 0)
+		key->algo = 4;
 	else
 		return -1;
+	a += 5;
 	len = parsehex(key->dat, sizeof key->dat, a);
 	if(len <= 0)
 		return -1;
@@ -3044,7 +3069,15 @@ setauth(Ctlr *ctlr, uchar *wpaie, int i)
 	}else{
 		wlsetint(ctlr, "wpa_auth", 0x80|0x40);	/* psk | unspecified */
 		wlsetint(ctlr, "auth", 0);
-		wlsetint(ctlr, "wsec", 4);		/* aes */
+		/*
+		 * aes, and tkip as well when the element's group cipher
+		 * (00-0F-AC-02, at bytes 4-7) is TKIP: a network in WPA/WPA2
+		 * mixed mode keys its group traffic with it.
+		 */
+		if(i >= 8 && wpaie[4] == 0x00 && wpaie[5] == 0x0F && wpaie[6] == 0xAC && wpaie[7] == 2)
+			wlsetint(ctlr, "wsec", 4|2);
+		else
+			wlsetint(ctlr, "wsec", 4);
 		wlsetint(ctlr, "wpa_auth", 0x80);	/* psk */
 	}
 }
@@ -3155,6 +3188,7 @@ etherbcmctl(Ether *edev, void *a, long n)
 		nexterror();
 	}
 	ct = lookupcmd(cb, cmds, nelem(cmds));
+	memset(&kbuf, 0, sizeof kbuf);
 	switch(ct->index){
 	case CMfirmware:
 		if(!ctl->present)
@@ -3352,6 +3386,8 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 		l += snprint(p+l, 512-l, "firmware bytes: %d\n", ctl->fwbytes);
 	l += snprint(p+l, 512-l, "channel: %d\n", ctl->chanid);
 	l += snprint(p+l, 512-l, "essid: %s\n", ctl->essid);
+	if(ctl->assocfail != 0)
+		l += snprint(p+l, 512-l, "assocfail: %ld\n", ctl->assocfail);
 	l += snprint(p+l, 512-l, "bssid: %E\n", ctl->bssid);
 	l += snprint(p+l, 512-l, "crypt: %s\n", cryptoname[ctl->cryptotype]);
 	l += snprint(p+l, 512-l, "scan: %d\n", ctl->scansecs);

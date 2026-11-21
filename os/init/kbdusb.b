@@ -56,6 +56,9 @@ Riface:		con 1;
 Rgetdesc:	con 6;
 Rsetproto:	con 11;		# HID: SET_PROTOCOL
 Rsetidle:	con 10;		# HID: SET_IDLE
+Rsetreport:	con 9;		# HID: SET_REPORT (the LEDs, an output report)
+Capslock:	con 16r39;	# HID usage
+Ledcaps:	con 1<<1;	# LED report: Num 0, Caps 1, Scroll 2
 
 Dconf:		con 2;
 
@@ -722,6 +725,11 @@ press(kbd: ref Sys->FD, mod: int, down: list of int)
 		k := hd l;
 		if(member(prevdown, k))
 			continue;
+		if(k == Capslock){
+			caps = !caps;
+			setleds();
+			continue;
+		}
 		c := decode(k, mod);
 		if(c > 0){
 			emit(kbd, c);
@@ -882,7 +890,7 @@ decode(k, mod: int): int
 		c := k - 16r04 + 'a';
 		if(ctrl)
 			return c - 'a' + 1;	# control characters
-		if(shift)
+		if(shift != caps)
 			return c - 'a' + 'A';
 		return c;
 	}
@@ -992,6 +1000,54 @@ ctlout(rtype, req, value, index: int): int
 	return 0;
 }
 
+#
+# Caps Lock: a state the keyboard does not keep, so the host does, and
+# says so on the keyboard's LED (an output report, SET_REPORT). Letters
+# only, as a keyboard's own Caps Lock means; Shift inverts it. A
+# keyboard that has no LED report refuses SET_REPORT, and that is said
+# once and ignored.
+#
+caps := 0;
+ledsaid := 0;
+
+setleds()
+{
+	data := array[1] of byte;
+	data[0] = byte 0;
+	if(caps)
+		data[0] = byte Ledcaps;
+	if(ctloutd(Rh2d|Rclass|Riface, Rsetreport, 16r0200, iface, data) < 0 && !ledsaid){
+		sys->print("kbdusb: %s keeps no LEDs (SET_REPORT: %r)\n", dev);
+		ledsaid = 1;
+	}
+	if(usbtrace)
+		sys->print("kbdusb: %s caps lock %s\n", dev, (array[] of {"off", "on"})[caps]);
+}
+
+#
+# A control transfer with an OUT data stage: devusb takes the setup
+# packet and its data as one write (mouseusb's ctloutd).
+#
+ctloutd(rtype, req, value, index: int, data: array of byte): int
+{
+	buf := array[8 + len data] of byte;
+	buf[0] = byte rtype;
+	buf[1] = byte req;
+	buf[2] = byte value;
+	buf[3] = byte (value >> 8);
+	buf[4] = byte index;
+	buf[5] = byte (index >> 8);
+	buf[6] = byte (len data);
+	buf[7] = byte ((len data) >> 8);
+	buf[8:] = data;
+	if(sys->write(ep0, buf, len buf) != len buf)
+		return -1;
+	rep := array[8] of byte;
+	if(sys->read(ep0, rep, len rep) < 0)
+		return -1;
+	return 0;
+}
+
 ctlin(rtype, req, value, index: int, data: array of byte): int
 {
 	buf := array[8] of byte;
@@ -1046,8 +1102,8 @@ tracerep(who, dev: string, b: array of byte)
 	s := "";
 	for(i := 0; i < len b; i++)
 		s += sys->sprint(" %.2ux", int b[i]);
-	# a report the same as the last one is no news: some keyboards
-	# repeat theirs every 100 ms, SET_IDLE or not
+	# a report the same as the last one is no news: kbdusb asks for
+	# the keyboard's state every Idlems (SET_IDLE), changed or not
 	if(s == lasttrace)
 		return;
 	lasttrace = s;

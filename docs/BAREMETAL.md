@@ -460,9 +460,9 @@ card has both); the card's `bt` file names the Bluetooth patch,
 They are Synaptics's, not Cypress's, under two licences
 (`os/bcm/card/LICENCE.synaptics-wifi`, `-bt`), pinned by
 `tools/pi-firmware-manifest-zero2w.txt` and
-`tools/pi-btfw-manifest-zero2w.txt`. There is no Zero 2 W image in a
-release yet: the Bluetooth patches' terms are narrower than the Cypress
-licence the other cards rely on, and that is not decided.
+`tools/pi-btfw-manifest-zero2w.txt`. A release carries
+`infernode-<version>-rpizero2w.img.xz`, made and checked as the other
+boards' are (`piromcheck.py`, then booted under QEMU's `raspi3ap`).
 
 No Ethernet: the network is Wi-Fi, or a USB adapter on the OTG port
 (micro-USB, through an OTG adapter), which is the DWC2's root port with

@@ -45,9 +45,11 @@
 # skipped (no QEMU, or one without the board's machine).
 
 BOARD=$1 IMAGE=$2 KERNEL=$3
-[ $# -eq 3 ] || { echo "usage: piimage_boot_test.sh rpi3bplus|rpi4b IMAGE KERNEL" >&2; exit 2; }
+[ $# -eq 3 ] || { echo "usage: piimage_boot_test.sh rpi3bplus|rpizero2w|rpi4b IMAGE KERNEL" >&2; exit 2; }
 case $BOARD in
 rpi3bplus) MACH=raspi3b; BANNER="InferNode bare-metal (BCM2837" ;;
+# QEMU has no Zero 2 W: its 3A+ is the same SoC with 512 MB and no LAN
+rpizero2w) MACH=raspi3ap; BANNER="InferNode bare-metal (BCM2837" ;;
 rpi4b)     MACH=raspi4b; BANNER="InferNode bare-metal (BCM2711" ;;
 *) echo "piimage_boot_test: unknown board $BOARD" >&2; exit 2 ;;
 esac

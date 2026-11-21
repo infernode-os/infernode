@@ -838,6 +838,47 @@ testGroupKeyShape(t: ref T)
 	t.asserteq(nctl(a), 0, "and half of it is not installed as a CCMP key");
 }
 
+# A WPA/WPA2 mixed-mode network keys its group traffic with TKIP: the
+# element offered names that group cipher, and the group key is put in
+# as TKIP's 32 bytes, whole (the temporal key and both Michael keys, as
+# sent), not cut down to CCMP's 16. The element is otherwise the same.
+testGroupKeyTkip(t: ref T)
+{
+	c := wpakey->rsnie();
+	k := wpakey->rsniegroup("tkip");
+	t.asserteq(len k, len c, "the TKIP-group element is the CCMP one's length");
+	t.asserteq(int k[7], 2, "its group cipher is 00-0F-AC-02, TKIP");
+	k[7] = c[7];
+	t.assertseq(wpakey->hex(k), wpakey->hex(c), "and nothing else differs");
+	t.assertseq(wpakey->hex(wpakey->rsniegroup("ccmp")), wpakey->hex(c), "ccmp is rsnie()'s");
+	t.assert(wpakey->rsniegroup("wep104") == nil, "a cipher not implemented is nil");
+
+	supp := keyed(t);
+	supp.rsne = wpakey->rsniegroup("tkip");
+	snonce := wpakey->unhex(Snonce);
+	k32 := array[32] of byte;
+	for(i := 0; i < 32; i++)
+		k32[i] = byte (16r40 + i);
+	(a, e) := supp.recv(rekeywith(supp.ptk, 1, k32, big 5), snonce);
+	t.assertnil(e, "a TKIP group rekey is accepted");
+	t.asserteq(nctl(a), 1, "and its key installed");
+	ctl := "";
+	for(; a != nil; a = tl a)
+		if((hd a).kind == Wpakey->Actl)
+			ctl = (hd a).text;
+	t.assert(len ctl > 6 && ctl[0:6] == "rxkey1", "in group slot 1: " + ctl);
+	want := "tkip:" + wpakey->hex(k32) + "@";
+	found := 0;
+	for(i = 0; i + len want <= len ctl; i++)
+		if(ctl[i:i+len want] == want)
+			found = 1;
+	t.assert(found, "as tkip, all 32 bytes in the order sent: " + ctl);
+	k16 := wpakey->unhex("202122232425262728292a2b2c2d2e2f");
+	(a, e) = supp.recv(rekeywith(supp.ptk, 2, k16, big 6), snonce);
+	t.assertnil(e, "a 16-byte key under a TKIP group is acknowledged");
+	t.asserteq(nctl(a), 0, "and not installed: it is not a TKIP key");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -873,6 +914,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ForgedMessage1", testForgedMessage1);
 	run("Retransmissions", testRetransmissions);
 	run("GroupKeyShape", testGroupKeyShape);
+	run("GroupKeyTkip", testGroupKeyTkip);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

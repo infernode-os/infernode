@@ -69,6 +69,29 @@ int	mboxcmdline(char*, int);
 int	mboxreboot(int);
 
 /*
+ * board.c: which board of the SoC's this is, from the firmware's
+ * revision code (new-style, bit 23 set: bits 11:4 the type). One SoC
+ * is several boards -- a BCM2837 is a 3B+, a 3A+ or a Zero 2 W -- and
+ * what differs between them (the radio's firmware, the camera's enable
+ * line) is asked of boardtype(), never of the revision directly.
+ * Btunknown for an old-style code or no answer.
+ */
+enum
+{
+	Btunknown	= -1,
+	Bt3b		= 0x08,
+	Btzerow		= 0x0c,
+	Bt3bplus	= 0x0d,
+	Bt3aplus	= 0x0e,
+	Bt4b		= 0x11,
+	Btzero2w	= 0x12,
+	Bt400		= 0x13,
+	Bt5		= 0x17,
+};
+int	boardtype(void);
+char*	boardmodel(void);
+
+/*
  * board.c: the boot watchdog's reload. The tick is core 0's clockintr;
  * the poll is microdelay's, for the boot path before interrupts run.
  */

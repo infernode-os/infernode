@@ -24,6 +24,8 @@
  * on the GIC unless config.txt says enable_gic=0. Do not say that.
  */
 
+/* the camera receiver's clock, from PLLD (750 MHz here): 94 MHz, ../bcm/devcam.c */
+#define CAMCLKDIV	8
 #define BOARDNAME	"BCM2711 / Raspberry Pi 4B"
 
 enum
@@ -65,6 +67,7 @@ enum
 	IRQgpio2	= IRQvc + 51,	/* bank 2 */
 	IRQsdhost	= IRQvc + 56,	/* SDHOST: present, and wired to nothing on this board */
 	IRQuart		= IRQvc + 57,	/* the PL011s, all of them, share this */
+	IRQunicam	= IRQvc + 39,	/* Unicam 1, CSI1: GIC SPI 103 (../bcm/devcam.c) */
 	IRQmmc		= IRQvc + 62,	/* both SDHCI controllers share this */
 
 	/*

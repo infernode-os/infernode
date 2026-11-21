@@ -428,6 +428,49 @@ half is not (`RAMLIMIT`). **Displays**: [below](#displays); the short
 version is that with the 7" panel attached a monitor belongs on HDMI0,
 the socket beside the USB-C.
 
+### And on a Raspberry Pi Zero 2 W
+
+The Zero 2 W (`rpizero2w`) is a BCM2837 with 512 MB, so it takes the
+3B+'s kernel, boot firmware and `config.txt` unchanged;
+`tools/mkpiimage.sh rpizero2w` makes its card. **Run on a board** (a
+Zero 2 W Rev 1.0, revision `902120`, 2026-11-21), booted by tryboot
+beside Raspberry Pi OS on its card:
+
+| what | the boot says |
+|---|---|
+| the board | `mbox: board rev … 902120 (Raspberry Pi Zero 2 W), ARM memory 448MB`, `now 1000 MHz` |
+| Wi-Fi | `init: radio: firmware brcmfmac43436-sdio loaded`, `init: wifi: authenticated to …`, an address by DHCP, the network console on it |
+| Bluetooth | `init: bt: 98:fe:54:…` with `firmware /n/dos/firmware/SYN43430B0.hcd` in the card's `bt` file; 3 Mbaud, inquiry finds devices |
+| the camera | a Camera Module 2 (NoIR): `init: camera: /mnt/video 410 308 i420 30`, `camsrv` status `sensor=imx219`, 30 frames a second |
+
+Not yet run: the HDMI output (no display attached; the firmware's
+656x416 without one), a device on the OTG port, HDMI audio (#1216; the
+board has no jack, and `audiopwm` refuses to start on it: the jack's
+pins, GPIO 40 and 41, are its camera's enable and its radio's power).
+
+What differs is the radio. A Zero 2 W has a CYW43436 or a CYW43436s,
+by when it was made; `cat '#l1/ether1/ifstats'` says which (`chip:
+0xa9a6 rev 2` the 43436, `rev 1` the 43436s). Init picks the Wi-Fi
+firmware by it (`brcmfmac43436-sdio.*` or `brcmfmac43436s-sdio.*`, the
+card has both); the card's `bt` file names the Bluetooth patch,
+`SYN43430B0.hcd` for the 43436 and `SYN43430A1.hcd` for the 43436s:
+
+    firmware /n/dos/firmware/SYN43430B0.hcd
+
+They are Synaptics's, not Cypress's, under two licences
+(`os/bcm/card/LICENCE.synaptics-wifi`, `-bt`), pinned by
+`tools/pi-firmware-manifest-zero2w.txt` and
+`tools/pi-btfw-manifest-zero2w.txt`. There is no Zero 2 W image in a
+release yet: the Bluetooth patches' terms are narrower than the Cypress
+licence the other cards rely on, and that is not decided.
+
+No Ethernet: the network is Wi-Fi, or a USB adapter on the OTG port
+(micro-USB, through an OTG adapter), which is the DWC2's root port with
+no hub between. A router in WPA/WPA2 mixed mode (a TKIP group cipher)
+is joined: `ip/wpa` offers TKIP for the group when the access point
+refuses CCMP (wpa(8)). The console is the mini-UART on header pins 8
+and 10 (GPIO 14 and 15), as on the 3B+.
+
 ### Displays
 
 The firmware decides what is a display, **once, at power-on**, and the
@@ -505,7 +548,7 @@ bench machine depending on what these say. All are optional.
 | `wifi` | `essid <name>` and `password <phrase>`, one per line; the value is the rest of the line | Join at boot, before anyone logs in. **The card is FAT: no permissions, and this is a passphrase in clear text.** Absent = the radio is left alone. |
 | `bt` | one `/net/bt` ctl line per line (`#` comments). Typically `firmware /n/dos/firmware/BCM4345C0.hcd`, `up`, `name …`, `pairable on`, `discoverable on`, `baud 3000000` | Bluetooth, via `bt9p` on `/dev/eia0`. `firmware` must precede `up`; `baud` follows it (115200 without it: about 94 kbit/s). Absent = no Bluetooth. See [BLUETOOTH.md](BLUETOOTH.md). |
 | `btkeys` | factotum key syntax | Where `bt9p` keeps link keys so pairings survive a reboot. |
-| `camera` | one `camsrv` ctl line per line (`#` comments). Typically `rotate 90` for a camera mounted on its side; also `focus`, `fps`, `mode`, `flip` | Pi 4 and Pi 5 (a kernel with `#V`): `camsrv` started at boot on `/mnt/video`, for every session, and the lines written to `/mnt/video/0/ctl`, so every reader gets the picture the right way up. The sensor is powered only while something reads. Absent = nothing started; `wm/camera` starts `camsrv` itself, unturned. See camsrv(4). |
+| `camera` | one `camsrv` ctl line per line (`#` comments). Typically `rotate 90` for a camera mounted on its side; also `focus`, `fps`, `mode`, `flip` | Pi 4, Pi 5, the 3B+ and the Zero 2 W (a kernel with `#V`; run on the Pi 4, Pi 5 and Zero 2 W): `camsrv` started at boot on `/mnt/video`, for every session, and the lines written to `/mnt/video/0/ctl`, so every reader gets the picture the right way up. The sensor is powered only while something reads. Absent = nothing started; `wm/camera` starts `camsrv` itself, unturned. See camsrv(4). |
 | `netconsole` | first line: empty, or a token; a later line `interface ether0` (recommended) | A shell on **TCP 17010**, section 7. With `interface`, only connections arriving at that interface's addresses are served; without it, every interface, Wi-Fi included. Absent = off. |
 | `cpulisten` | empty, or an address (`tcp!*!17030`) on the first line | The remote-desktop listener: `cpu(1)` from another InferNode runs programs here that draw on its screen, authenticated by certificate and encrypted (AES-256). Needs this machine's certificate in `usr/inferno/keyring/default`, or it refuses to start. Runs in the desktop's narrowed namespace, headless or not. Empty = `tcp!*!rstyx` (6668). Absent = off. See [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md). |
 | `usbquirks` | one line per USB pointer or keyboard that needs it: `vid:pid word…`, the IDs in hex as the boot log prints them (`0eef:0005`). Words: `swapxy`, `invertx`, `inverty` (a touchscreen mounted turned or mirrored), `boot` (ignore the report descriptor and use the boot protocol), `report` (a keyboard: read its reports by its descriptor even though it has a boot protocol — every key at once on an n-key-rollover board, not six), `touch` / `notouch` (a pointer is / is not a touch screen, whatever its descriptor suggests), `ignore` (no driver at all) | How `mouseusb` and `kbdusb` treat that device. `mouseusb` reads every pointer's own report descriptor, so a mouse, a tablet and a touchscreen that calls itself a mouse all work without an entry (#927). A touch screen — a digitizer that says it is one or reports fingers (put into multi-touch mode when it has a Device Mode feature), or an absolute pointer with one button and no wheel — gets the Pi panel's gestures, `touchgest(2)`: a finger held still is button 3 (the context menus), two dragged the wheel, and each finger goes to `/dev/fingers` for the keyboard on the screen. A tablet with a mouse's buttons and wheel (QEMU's `usb-tablet`) is a pointer; `touch` makes a panel that declares more buttons a touch screen, `notouch` a one-button tablet a plain pointer. `kbdusb` reads a keyboard with the boot protocol when it has one and by its report descriptor when it has not, so this is only for a boot keyboard whose reports are wanted. `kbdusb=report` on the kernel's command line does that for every keyboard. Absent = no exceptions. |
@@ -659,14 +702,14 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#G` | `/dev/gpio/N/` | `ctl` (`function in\|out\|alt0-5`, `pull up\|down\|none`, `edge rising\|falling\|both\|none`), `level`, `event` (blocks for an edge; `<µs> <level>`) | Pi |
 | `#T` | `/dev` | `touch` — the DSI panel's raw buffer; `touch.dis` turns it into pointer events | Pi |
 | `#A` | `/dev` | `audio audioctl` — the 3.5 mm jack | Pi |
-| `#V` | `/dev/unicam/` | `ctl` (`format W H`, `power on\|off`, `stream on\|off`; read for the state), `frame` (one raw frame an open): the camera receiver and nothing beyond it; on a Pi 5 also `port 0\|1` (the connector), and a read names the sensor's bus (`i2c i2cN`) | Pi 4, Pi 5 |
-| `#J` | `/dev` | `i2c0ctl`, `i2c0data`: the bus on the ribbon connectors (Pi 4); `i2cNctl`, `i2cNdata` for the header's i2c0 and i2c1 and the camera connectors' i2c4 and i2c6 (Pi 5) | Pi 4, Pi 5 |
+| `#V` | `/dev/unicam/` | `ctl` (`format W H`, `power on\|off`, `stream on\|off`; read for the state), `frame` (one raw frame an open): the camera receiver and nothing beyond it; on a Pi 5 also `port 0\|1` (the connector), and a read names the sensor's bus (`i2c i2cN`) | Pi 4, Pi 5, bcm2837 (run on the Zero 2 W) |
+| `#J` | `/dev` | `i2c0ctl`, `i2c0data`: the bus on the ribbon connectors (Pi 4, bcm2837); `i2cNctl`, `i2cNdata` for the header's i2c0 and i2c1 and the camera connectors' i2c4 and i2c6 (Pi 5) | Pi 4, Pi 5, bcm2837 (run on the Zero 2 W) |
 | `#X` | `/dev/vm` | `ctl`, and `N/run`, `N/status` for each Dis VM: `vm(3)` | both |
 | `#p #e #s #M #\| #D` | `/prog /env /chan` … | processes, environment, served names, mounts, pipes, TLS records | both |
 
 **The camera** on a Pi 4 or 5 follows the rule that device protocols live
 outside the kernel. `#V` receives raw frames and `#J` is its I2C; all
-that is known about the Camera Module 3 is in `camsrv(4)`, a Limbo
+that is known about the Camera Modules 3 and 2 is in `camsrv(4)`, a Limbo
 program that serves the camera as a live video feed in `vid9p`'s schema,
 with `$Bayer`, built-in C, for the pixel loop Limbo cannot keep up with:
 

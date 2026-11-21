@@ -334,6 +334,13 @@ start(Ctlr *c)
 
 	if(c->running)
 		return;
+	/*
+	 * The jack's pins are the 3B+'s and the Pi 4's. A Zero 2 W has no
+	 * jack, and its GPIO 40 and 41 are the camera's enable and the
+	 * radio's power (WL_ON): taking them for PWM would cut the Wi-Fi.
+	 */
+	if(boardtype() == Btzero2w)
+		error("audio: this board has no jack (GPIO 40 and 41 are the camera's and the radio's)");
 	if(c->cb == nil){
 		c->cb = dmaalloc(Nbuf * sizeof(Cb), 32);	/* the DMA engine reads these: dmamem.c */
 		for(i = 0; i < Nbuf; i++)

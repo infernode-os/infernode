@@ -356,16 +356,31 @@ aesunwrap(kek, data: array of byte): array of byte
 #
 #	The RSN information element a WPA2-PSK/CCMP station offers.  The
 #	driver does not publish the access point's, so there is nothing
-#	to negotiate against and nothing to choose: this is the only
-#	suite this supplicant implements.
+#	to negotiate against: pairwise is always CCMP, and the group
+#	cipher is CCMP unless the caller learned (from the access point
+#	refusing this one) that it is TKIP -- rsniegroup.
 #
 rsnie(): array of byte
 {
+	return rsniegroup("ccmp");
+}
+
+rsniegroup(group: string): array of byte
+{
+	g: byte;
+	case group {
+	"ccmp" =>
+		g = byte 16r04;
+	"tkip" =>
+		g = byte 16r02;
+	* =>
+		return nil;
+	}
 	return array[] of {
 		byte 16r30,				# RSN element
 		byte 16r14,				# 20 bytes follow
 		byte 16r01, byte 16r00,			# version 1
-		byte 16r00, byte 16r0F, byte 16rAC, byte 16r04,	# group cipher CCMP
+		byte 16r00, byte 16r0F, byte 16rAC, g,	# group cipher
 		byte 16r01, byte 16r00,			# one pairwise cipher
 		byte 16r00, byte 16r0F, byte 16rAC, byte 16r04,	# CCMP
 		byte 16r01, byte 16r00,			# one authentication suite
@@ -606,17 +621,22 @@ Supp.recv(s: self ref Supp, frame, snonce: array of byte): (list of ref Action, 
 		return (nil, nil);
 
 	#
-	# The group key: CCMP's, which is the only cipher offered, so a
-	# key of another length is not cut down to fit.  And a key that
+	# The group key, in the group cipher offered (the element's
+	# bytes 4-7): CCMP's 16 bytes or TKIP's 32 (the temporal key and
+	# the two Michael keys, as the access point sent them), so a key
+	# of another length is not cut down to fit.  And a key that
 	# is already in is not put in again: the access point sends a
 	# rekey again when it missed our answer, each copy with a fresh
 	# replay counter, and installing the same key twice would set
 	# its receive counter back to where frames already seen are new.
 	#
-	if(gtk != nil && len gtk == TKlen && gtkkid >= 0 &&
+	(gcipher, glen) := ("ccmp", TKlen);
+	if(len s.rsne >= 8 && int s.rsne[7] == 16r02)
+		(gcipher, glen) = ("tkip", 2*TKlen);
+	if(gtk != nil && len gtk == glen && gtkkid >= 0 &&
 	   !(s.gtk != nil && gtkkid == s.gtkkid && eqct(gtk, s.gtk))){
 		acts = ref Action(Actl, nil,
-			sys->sprint("rxkey%d %s ccmp:%s@%bux", gtkkid, eaddr(s.amac),
+			sys->sprint("rxkey%d %s %s:%s@%bux", gtkkid, eaddr(s.amac), gcipher,
 				hex(gtk), rsc), 0) :: acts;
 		s.gtk = gtk;
 		s.gtkkid = gtkkid;

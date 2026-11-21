@@ -1,0 +1,35 @@
+# tools/pi-btfw-manifest-zero2w.txt -- the Raspberry Pi Zero 2 W's
+# Bluetooth patches, pinned by commit and SHA256.  Read by
+# tools/pi-firmware.sh, which tools/mkpiimage.sh runs for rpizero2w.
+#
+# Format: tools/pi-firmware-manifest.txt's.
+#
+# WHICH ONE
+#
+# One per radio (tools/pi-firmware-manifest-zero2w.txt): Raspberry Pi's
+# packaging (debian/bluez-firmware.links) links
+# BCM43430A1.raspberrypi,model-zero-2-w.hcd to SYN43430A1.hcd (the
+# CYW43436s) and BCM43430B0.raspberrypi,model-zero-2-w.hcd to
+# SYN43430B0.hcd (the CYW43436).  The controller names itself over HCI
+# (Read Local Name: BCM43430A1 or BCM43430B0) before a patch is sent;
+# the card's bt file names the one that board takes.
+#
+# LICENCE, AND WHAT IS NOT YET DECIDED
+#
+# debian/copyright: debian/firmware/synaptics/* under
+# SYNAPTICS-END-USER-SOFTWARE-TOOL-LICENSE, whose text (LICENSE.synaptics
+# beside them) is os/bcm/card/LICENCE.synaptics-bt.  Not the Wi-Fi
+# firmware's terms: it allows copying and redistribution in object code
+# "for use in connection with Synaptics integrated circuits" (2(c)), but
+# limits use to configuration and testing of one's products (2(b)),
+# excludes products whose failure could cause injury (4(h)), and may be
+# ended by Synaptics on notice (10).  These files are on a card
+# mkpiimage.sh makes; whether a release's Zero 2 W image carries them is
+# not decided.
+#
+# REPINNING: as tools/pi-btfw-manifest.txt says.
+
+commit cdf61dc691a49ff01a124752bd04194907f0f9cd
+
+file SYN43430A1.hcd 55071227c94d86369d04f9aff3bbfd4197a78a53dc350295123e1a8b048bba8f 46979 binary-redist-Synaptics https://raw.githubusercontent.com/RPi-Distro/bluez-firmware/cdf61dc691a49ff01a124752bd04194907f0f9cd/debian/firmware/synaptics/SYN43430A1.hcd
+file SYN43430B0.hcd 338c2c6631131f516bfc7e64ef0872bd0402e1f98ef9d0c900eef0c814d90a25 44376 binary-redist-Synaptics https://raw.githubusercontent.com/RPi-Distro/bluez-firmware/cdf61dc691a49ff01a124752bd04194907f0f9cd/debian/firmware/synaptics/SYN43430B0.hcd

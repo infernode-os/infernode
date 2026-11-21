@@ -1,6 +1,8 @@
 /*
- * #J -- the Pi 4's camera and display I2C: BSC0, on GPIO 44 and 45 at
- * ALT1, the bus on the board's two ribbon connectors.
+ * #J -- the camera and display I2C: BSC0, on GPIO 44 and 45 at ALT1,
+ * the bus on the board's ribbon connectors. The same on the Pi 4, the
+ * 3B+ and the Zero 2 W (each device tree's i2c0mux_0_44); the Pi 5 has
+ * its own, ../bcm2712/devi2c.c.
  *
  *	#J/i2c0ctl	write "addr N", "subaddress N"; read them
  *	#J/i2c0data	read and write the device at addr

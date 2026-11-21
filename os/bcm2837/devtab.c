@@ -45,6 +45,8 @@ extern Dev touchdevtab;
 extern Dev uartdevtab;
 extern Dev audiodevtab;
 extern Dev archdevtab;
+extern Dev camdevtab;
+extern Dev i2cdevtab;
 
 Dev*	devtab[] =
 {
@@ -70,5 +72,7 @@ Dev*	devtab[] =
 	&uartdevtab,		/* 't' -- #t, serial ports: eia0 the PL011, eia1 the mini-UART */
 	&audiodevtab,		/* 'A' -- #A, /dev/audio: the jack, PWM through DMA (os/bcm/audiopwm.c) */
 	&archdevtab,		/* 'P' -- #P, the firmware's temperature and throttling flags (os/bcm/devarch.c) */
+	&camdevtab,		/* 'V' -- #V, the camera receiver (os/bcm/devcam.c) */
+	&i2cdevtab,		/* 'J' -- #J, I2C on the camera connector (os/bcm/devi2c.c) */
 	nil,
 };

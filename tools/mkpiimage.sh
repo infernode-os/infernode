@@ -8,7 +8,7 @@
 #     tools/mkpiimage.sh [--size MB] [--firmware DIR] [--manifest FILE] [--radio-manifest FILE]
 #                        [--bt-manifest FILE] BOARD KERNEL OUT.img
 #
-#     BOARD      rpi3bplus (the kernel is bcm2837-kernel.img),
+#     BOARD      rpi3bplus or rpizero2w (bcm2837-kernel.img),
 #                rpi4b (bcm2711-kernel.img) or
 #                rpi5 (bcm2712-kernel.img). One board per image: the
 #                kernels differ, and so do the firmware and config.txt.
@@ -30,13 +30,17 @@
 #                tools/pi-firmware-manifest.txt); for tests.
 #     --bt-manifest FILE
 #                the Bluetooth patch's manifest (default
-#                tools/pi-btfw-manifest.txt); for tests.
+#                tools/pi-btfw-manifest.txt; for rpizero2w the
+#                -zero2w manifests, radio and Bluetooth both); for tests.
 #
 # What goes on the card, and from where:
 #   - the boot firmware this board needs, and LICENCE.broadcom, fetched
 #     and checked by tools/pi-firmware.sh against the manifest;
-#   - in firmware/, the CYW43455 radio's firmware (both boards have that
-#     radio) and its Bluetooth patch, BCM4345C0.hcd, fetched and checked
+#   - in firmware/, the CYW43455 radio's firmware (every board but the
+#     Zero 2 W has that radio; the Zero 2 W's CYW43436 or 43436s takes
+#     the -zero2w manifests' files, SYN43430A1.hcd and SYN43430B0.hcd,
+#     and os/bcm/card/LICENCE.synaptics-wifi and -bt in place of
+#     LICENCE.cypress) and its Bluetooth patch, BCM4345C0.hcd, fetched and checked
 #     the same way, and os/bcm/card/LICENCE.cypress, the licence they are
 #     distributed under:
 #     for use with Cypress parts, which is what this card is for. The
@@ -66,8 +70,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SIZE=1024
 FWFROM=
 MANIFEST="$ROOT/tools/pi-bootfw-manifest.txt"
-RADIOMANIFEST="$ROOT/tools/pi-firmware-manifest.txt"
-BTMANIFEST="$ROOT/tools/pi-btfw-manifest.txt"
+RADIOMANIFEST=
+BTMANIFEST=
 
 usage() {
 	sed -n '/^# Usage:/,/^# What goes on the card/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d' >&2
@@ -118,6 +122,13 @@ rpi3bplus)
 	SOC=bcm2837
 	FIRMWARE="bootcode.bin start.elf fixup.dat"
 	CARDFILES="config.txt tryboot.txt tryboot.cmd" ;;
+rpizero2w)
+	# The 3B+'s SoC, kernel and card files; its own radio, which is a
+	# CYW43436 or a CYW43436s by the board, under Synaptics' licences.
+	SOC=bcm2837
+	FIRMWARE="bootcode.bin start.elf fixup.dat"
+	CARDFILES="config.txt tryboot.txt tryboot.cmd"
+	RADIO=zero2w ;;
 rpi4b)
 	SOC=bcm2711
 	FIRMWARE="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb"
@@ -127,8 +138,24 @@ rpi5)
 	FIRMWARE="bcm2712-rpi-5-b.dtb bcm2712d0-rpi-5-b.dtb"
 	CARDFILES="config.txt tryboot.txt tryboot.cmd" ;;
 *)
-	echo "mkpiimage: unknown board $BOARD (rpi3bplus, rpi4b or rpi5)" >&2
+	echo "mkpiimage: unknown board $BOARD (rpi3bplus, rpizero2w, rpi4b or rpi5)" >&2
 	usage ;;
+esac
+
+# The radio: its Wi-Fi firmware and Bluetooth patches, by manifest, and
+# the licences they are under. Every board but the Zero 2 W has the
+# CYW43455.
+case ${RADIO:-43455} in
+43455)
+	: "${RADIOMANIFEST:=$ROOT/tools/pi-firmware-manifest.txt}"
+	: "${BTMANIFEST:=$ROOT/tools/pi-btfw-manifest.txt}"
+	BTFILES="BCM4345C0.hcd"
+	LICENCES="LICENCE.cypress" ;;
+zero2w)
+	: "${RADIOMANIFEST:=$ROOT/tools/pi-firmware-manifest-zero2w.txt}"
+	: "${BTMANIFEST:=$ROOT/tools/pi-btfw-manifest-zero2w.txt}"
+	BTFILES="SYN43430A1.hcd SYN43430B0.hcd"
+	LICENCES="LICENCE.synaptics-wifi LICENCE.synaptics-bt" ;;
 esac
 
 [ -f "$KERNEL" ] || die "no kernel at $KERNEL"
@@ -156,7 +183,9 @@ getfirmware() {	# getfirmware <manifest> <dir> <what>
 getfirmware "$MANIFEST" "$STAGE/boot" boot
 getfirmware "$RADIOMANIFEST" "$STAGE/radio" radio
 getfirmware "$BTMANIFEST" "$STAGE/bt" Bluetooth
-[ -f "$ROOT/os/bcm/card/LICENCE.cypress" ] || die "no os/bcm/card/LICENCE.cypress"
+for l in $LICENCES; do
+	[ -f "$ROOT/os/bcm/card/$l" ] || die "no os/bcm/card/$l"
+done
 
 # lib/, fonts/ and icons/ as git has them.
 mkdir -p "$STAGE/tree"
@@ -178,9 +207,13 @@ set -- "/infernode8.img=$KERNEL" \
 	"/README.txt=$ROOT/os/bcm/card/README.txt" \
 	"/LICENSE=$ROOT/LICENSE" "/NOTICE=$ROOT/NOTICE" \
 	"/LICENCE.broadcom=$STAGE/boot/firmware/LICENCE.broadcom" \
-	"/firmware=$STAGE/radio/firmware" \
-	"/firmware/BCM4345C0.hcd=$STAGE/bt/firmware/BCM4345C0.hcd" \
-	"/firmware/LICENCE.cypress=$ROOT/os/bcm/card/LICENCE.cypress"
+	"/firmware=$STAGE/radio/firmware"
+for f in $BTFILES; do
+	set -- "$@" "/firmware/$f=$STAGE/bt/firmware/$f"
+done
+for l in $LICENCES; do
+	set -- "$@" "/firmware/$l=$ROOT/os/bcm/card/$l"
+done
 for f in $FIRMWARE; do
 	set -- "$@" "/$f=$STAGE/boot/firmware/$f"
 done

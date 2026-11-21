@@ -943,6 +943,14 @@ decode(k, mod: int): int
 	16r52 =>	return 16rE012;		# Up
 
 	#
+	# Print Screen, Scroll Lock and Pause, as keyboard.m names them
+	# (Print, Scroll, Pause: Spec|0x65, 0x62, 0x66).
+	#
+	16r46 =>	return 16rE065;		# Print Screen
+	16r47 =>	return 16rE062;		# Scroll Lock
+	16r48 =>	return 16rE066;		# Pause
+
+	#
 	# Keypad, always as digits: there is no Num Lock state to keep
 	# and a keypad that types numbers is what everyone reaches for.
 	#
@@ -956,6 +964,15 @@ decode(k, mod: int): int
 	}
 	if(k >= 16r59 && k <= 16r61)		# keypad 1-9
 		return k - 16r59 + '1';
+	#
+	# Function keys, as KF|n (keyboard.m: KF is Spec|0x40, so F1 is
+	# 16rE041), what the hosted emulator sends for them. They were
+	# not here, and F1 on a board typed nothing.
+	#
+	if(k >= 16r3A && k <= 16r45)		# F1-F12
+		return 16rE040 + k - 16r3A + 1;
+	if(k >= 16r68 && k <= 16r73)		# F13-F24
+		return 16rE040 + k - 16r68 + 13;
 	return 0;
 }
 

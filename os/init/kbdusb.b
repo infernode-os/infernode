@@ -863,6 +863,8 @@ emit(kbd: ref Sys->FD, c: int)
 {
 	b := array of byte sys->sprint("%c", c);
 	sys->write(kbd, b, len b);
+	if(usbtrace)
+		sys->print("kbdusb: %s typed t=%d %#ux\n", dev, sys->millisec(), c);
 }
 
 #

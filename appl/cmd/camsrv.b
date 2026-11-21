@@ -1481,6 +1481,7 @@ sensorprobe()
 {
 	if(unicam("power on") != nil)
 		return;
+	errs := i2cerrs;	# an address nothing answers at is the probe's answer, not a bus error
 	i2cctl = sys->open("/dev/i2c0ctl", Sys->ORDWR);
 	if(i2cctl != nil){
 		sensorfd = opendev(Sensor, 2);
@@ -1492,6 +1493,7 @@ sensorprobe()
 	}
 	unicam("power off");
 	i2cctl = sensorfd = lensfd = nil;
+	i2cerrs = errs;
 }
 
 # The IMX219's mode and timing: the Raspberry Pi firmware's mode 4,

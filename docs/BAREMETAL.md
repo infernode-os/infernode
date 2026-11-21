@@ -430,13 +430,23 @@ the socket beside the USB-C.
 
 ### And on a Raspberry Pi Zero 2 W
 
-**Not yet run on a board.** The Zero 2 W (`rpizero2w`) is a BCM2837 with
-512 MB, so it takes the 3B+'s kernel, boot firmware and `config.txt`
-unchanged; `tools/mkpiimage.sh rpizero2w` makes its card. What has
-run is QEMU's `raspi3ap` (a 3A+: the same SoC, 512 MB, no Ethernet),
-which boots the kernel and passes `tests/host/piimage_boot_test.sh` on
-the card. The mailbox line names the board from its revision code
-(`mbox: board rev … (Raspberry Pi Zero 2 W)`).
+The Zero 2 W (`rpizero2w`) is a BCM2837 with 512 MB, so it takes the
+3B+'s kernel, boot firmware and `config.txt` unchanged;
+`tools/mkpiimage.sh rpizero2w` makes its card. **Run on a board** (a
+Zero 2 W Rev 1.0, revision `902120`, 2026-11-21), booted by tryboot
+beside Raspberry Pi OS on its card:
+
+| what | the boot says |
+|---|---|
+| the board | `mbox: board rev … 902120 (Raspberry Pi Zero 2 W), ARM memory 448MB`, `now 1000 MHz` |
+| Wi-Fi | `init: radio: firmware brcmfmac43436-sdio loaded`, `init: wifi: authenticated to …`, an address by DHCP, the network console on it |
+| Bluetooth | `init: bt: 98:fe:54:…` with `firmware /n/dos/firmware/SYN43430B0.hcd` in the card's `bt` file; 3 Mbaud, inquiry finds devices |
+| the camera | a Camera Module 2 (NoIR): `init: camera: /mnt/video 410 308 i420 30`, `camsrv` status `sensor=imx219`, 30 frames a second |
+
+Not yet run: the HDMI output (no display attached; the firmware's
+656x416 without one), a device on the OTG port, HDMI audio (#1216; the
+board has no jack, and `audiopwm` refuses to start on it: the jack's
+pins, GPIO 40 and 41, are its camera's enable and its radio's power).
 
 What differs is the radio. A Zero 2 W has a CYW43436 or a CYW43436s,
 by when it was made; `cat '#l1/ether1/ifstats'` says which (`chip:
@@ -456,8 +466,10 @@ licence the other cards rely on, and that is not decided.
 
 No Ethernet: the network is Wi-Fi, or a USB adapter on the OTG port
 (micro-USB, through an OTG adapter), which is the DWC2's root port with
-no hub between. The console is the mini-UART on header pins 8 and 10
-(GPIO 14 and 15), as on the 3B+.
+no hub between. A router in WPA/WPA2 mixed mode (a TKIP group cipher)
+is joined: `ip/wpa` offers TKIP for the group when the access point
+refuses CCMP (wpa(8)). The console is the mini-UART on header pins 8
+and 10 (GPIO 14 and 15), as on the 3B+.
 
 ### Displays
 

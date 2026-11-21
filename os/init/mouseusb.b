@@ -1845,13 +1845,21 @@ selftest()
 # /n/dos/usbtrace on the card: every report this driver reads is printed
 # on the console, raw, with the time in milliseconds -- for testing a
 # device by hand while nobody is watching (the serial capture keeps it).
+# A report the same as the one before it is not printed again.
 #
 usbtrace := 0;
+
+lasttrace := "";
 
 tracerep(who, dev: string, b: array of byte)
 {
 	s := "";
 	for(i := 0; i < len b; i++)
 		s += sys->sprint(" %.2ux", int b[i]);
+	# a report the same as the last one is no news: some keyboards
+	# repeat theirs every 100 ms, SET_IDLE or not
+	if(s == lasttrace)
+		return;
+	lasttrace = s;
 	sys->print("%s: %s report t=%d%s\n", who, dev, sys->millisec(), s);
 }

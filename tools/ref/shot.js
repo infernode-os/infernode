@@ -31,8 +31,11 @@ const { chromium } = require('playwright');
 	}
 	const [url, out, w, h] = args;
 	// the faces Charon has (see fonts.conf)
-	// no scrollbar: Charon's viewport is the whole window
-	const opts = { args: ['--hide-scrollbars'], env: { ...process.env, FONTCONFIG_FILE: require('path').join(__dirname, 'fonts.conf') } };
+	// no scrollbar: Charon's viewport is the whole window.  Overlay
+	// scrollbars, as Charon's take no room from the page: a hidden
+	// classic one still did, and scrollbar-gutter: stable on :root
+	// (Bootstrap 6's) laid the page out 15px narrower
+	const opts = { args: ['--hide-scrollbars', '--enable-features=OverlayScrollbar'], env: { ...process.env, FONTCONFIG_FILE: require('path').join(__dirname, 'fonts.conf') } };
 	if (process.env.CHROMIUM_PATH) opts.executablePath = process.env.CHROMIUM_PATH;
 	const browser = await chromium.launch(opts);
 	const ctx = await browser.newContext({

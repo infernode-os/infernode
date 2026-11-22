@@ -461,7 +461,7 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 			replies = mkreply(xid, mac, Ouraddr, bootpopts(),
 				array of byte "/boot/kernel", nil) :: nil;
 		Discover =>
-			if(mode == "nakrenew" && cmdphase == 2 && !told){
+			if(mode == "nakrenew" && cmdphase == 1 && !told){	# after the renewal's NAK
 				# looking again after the lease was lost: from an
 				# interface made speakable again, or from one the
 				# stack would send nothing from

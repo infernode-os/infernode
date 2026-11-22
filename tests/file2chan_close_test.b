@@ -29,6 +29,9 @@ implement File2chanCloseTest;
 #   be closed, and at the end it knows of nobody
 # - WriteOnly: a server that never receives on read is told of every
 #   close on write, and leaving with notices waiting harms nothing
+# - ServerLeaves: a server that goes while its files are being closed,
+#   thirty times: the closes end, the file goes, and the next server's
+#   file works (under tools/sanemu, nothing freed is used)
 #
 
 include "sys.m";
@@ -378,6 +381,59 @@ testWriteOnly(t: ref T)
 	t.asserteq(ok, 0, "and the directory still answers");
 }
 
+closer(fds: array of ref Sys->FD, c: chan of int)
+{
+	for(i := 0; i < len fds; i++){
+		fds[i] = nil;
+		if(i%8 == 7)
+			sys->sleep(0);
+	}
+	c <-= 1;
+}
+
+testServerLeaves(t: ref T)
+{
+	K: con 40;
+	buf := array[8] of byte;
+	for(round := 0; round < 30; round++){
+		name := sys->sprint("leaves%d", round);
+		file := DIR + "/" + name;
+		s := mksrv(name, 0, round%2);
+		fds := array[K] of ref Sys->FD;
+		for(i := 0; i < K; i++){
+			fds[i] = sys->open(file, Sys->ORDWR);
+			if(fds[i] == nil || sys->write(fds[i], array of byte "x", 1) != 1)
+				t.fatal(sys->sprint("round %d: open and write %d: %r", round, i));
+			if(round%2 && sys->read(fds[i], buf, len buf) != 1)
+				t.fatal(sys->sprint("round %d: read %d: %r", round, i));
+		}
+		# half the rounds with notices already waiting when it leaves
+		if(round%4 >= 2){
+			pause(s);
+			for(i = 0; i < K/2; i++)
+				fds[i] = nil;
+			resume(s);
+		}
+		c := chan of int;
+		spawn closer(fds, c);
+		s.ctl <-= -1;
+		<-s.ack;
+		<-c;
+		for(i = 0; i < 20 && sys->open(file, Sys->OREAD) != nil; i++)
+			sys->sleep(10);
+		if(sys->open(file, Sys->OREAD) != nil)
+			t.fatal(sys->sprint("round %d: the file outlived its server", round));
+	}
+	t.log("thirty servers left while their files were closed");
+
+	s := mksrv("after", 0, 1);
+	fd := sys->open(DIR + "/after", Sys->ORDWR);
+	t.assert(fd != nil && sys->write(fd, array of byte "x", 1) == 1, "a new server's file is written");
+	fd = nil;
+	settle(s, 0, 1);
+	t.asserteq(s.w.closes, 1, "and its server is told of the close");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -402,6 +458,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Reuse", testReuse);
 	run("Churn", testChurn);
 	run("WriteOnly", testWriteOnly);
+	run("ServerLeaves", testServerLeaves);
 
 	sys->unmount(nil, DIR);
 	sys->remove(DIR);

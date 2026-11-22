@@ -16,7 +16,9 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 include "keyring.m";
+include "security.m";
 	kr: Keyring;
+	IPint: import kr;
 
 Authnode: module { init: fn(ctxt: ref Draw->Context, argv: list of string); };
 
@@ -116,7 +118,15 @@ init(nil: ref Draw->Context, argv: list of string)
 	signersk := kr->strtosk(readfile(skfile));
 	if(signersk == nil){ sys->print("FAIL: cannot load signer from %s\n", skfile); return; }
 	signerpk := kr->sktopk(signersk);
+	# an ML-DSA-87 signer's realm has the 3072-bit group, as
+	# createsignerkey gives it one: CNSA mode takes no smaller
 	(alpha, p) := kr->dhparams(2048);
+	if(signersk.sa.name == "mldsa87"){
+		login := load Login Login->PATH;
+		if(login == nil){ sys->print("FAIL: load login: %r\n"); return; }
+		(p, nil) = login->group(Login->CNSAgroup);
+		alpha = IPint.inttoip(2);
+	}
 	if(alpha == nil || p == nil){ sys->print("FAIL: dhparams\n"); return; }
 	ai := mkauthinfo(signersk, signerpk, alpha, p, myname);
 

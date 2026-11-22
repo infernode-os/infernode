@@ -133,6 +133,8 @@ reason.
 | login client (`login(2)`, `getauthinfo`) | Suite 2 alone; refuses a signer's key that is not ML-DSA-87, a signer's modulus under 3072 bits, a certificate not ML-DSA-87's under SHA-384/512. |
 | `auth/signer` | As logind for its key; certifies only keys of its own algorithm. Not started by default (signer(8)). |
 | `auth/factotum` | `genkey` makes ML-DSA-87 alone; `proto=sign` signs with an ML-DSA-87 key alone. |
+| `Keyring->auth` (every authenticated connection) | By the emulator's own switch (`CNSAMODE`): a key file that is not CNSA's whole is refused, each end told which part; the peer's key and certificate are held to the same; the exchange is signed over SHA-384 and a peer's signature over another hash is refused. (It took any key file and signed over SHA-256.) |
+| `auth(2)` (`client`, `server`, `auth`) | By `/env/cnsamode`: a key file that is not CNSA's whole is refused before anything is sent, with `cnsakey`'s reason. |
 
 Known limits, stated rather than hidden:
 

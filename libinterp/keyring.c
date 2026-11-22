@@ -1151,7 +1151,7 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	SigAlg *sa;
 	SigAlgVec *vec;
 	DigestState ds0;
-	uchar digest[SHA256dlen];
+	uchar digest[SHA512dlen];
 	char *buf;
 	String *hastr;
 	void *signa;
@@ -1174,6 +1174,10 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 		sha256(a, len, 0, &ds0);
 		sha256((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA256dlen;
+	} else if(strcmp(ha, "sha384") == 0){
+		sha384(a, len, 0, &ds0);
+		sha384((uchar*)buf, n, digest, &ds0);
+		n = Keyring_SHA384dlen;
 	} else if(strcmp(ha, "sha") == 0 || strcmp(ha, "sha1") == 0){
 		sha1(a, len, 0, &ds0);
 		sha1((uchar*)buf, n, digest, &ds0);
@@ -2275,6 +2279,37 @@ cnsamode(void)
 }
 
 /*
+ * The mode's rule for the keys of an authentication, as login(2)'s
+ * cnsakey has it for the programs that make and issue them (CNSA 2.0):
+ * ML-DSA-87 for every signature, SHA-384 or SHA-512 under one, and a
+ * Diffie-Hellman modulus of 3072 bits or more.  The mode chose
+ * ML-KEM-1024 below and took whatever key file it was given: a node in
+ * it authenticated with an Ed25519 key over a 2048-bit group, and to a
+ * peer that had one, and each signed the exchange over SHA-256.
+ */
+enum
+{
+	CNSAdhbits	= 3072,
+};
+
+static int
+cnsasig(Keyring_SigAlg *sa)
+{
+	return sa != H && sa->name != H && strcmp(string2c(sa->name), "mldsa87") == 0;
+}
+
+static int
+cnsahash(String *ha)
+{
+	char *s;
+
+	if(ha == H)
+		return 0;
+	s = string2c(ha);
+	return strcmp(s, "sha384") == 0 || strcmp(s, "sha512") == 0;
+}
+
+/*
  * The ML-KEM material of one authentication, in one heap block. It was
  * seven arrays on Keyring_auth's C stack, 9,440 bytes of them, which the
  * hosted emulator's 32KB thread stacks carried and the native kernel's
@@ -2383,6 +2418,17 @@ Keyring_auth(void *fp)
 			argerr = "-ve modulus";
 		else if(p->top == 0 || mpsignif(p) > Maxdhbits)
 			argerr = "bad diffie hellman mod";
+		else if(cnsa){
+			/* said to the peer as well, after the versions */
+			if(!cnsasig(mysk->x.sa) || !cnsasig(mypk->x.sa))
+				argerr = "CNSA mode: the key is not ML-DSA-87";
+			else if(!cnsasig(spk->x.sa) || !cnsasig(cert->x.sa))
+				argerr = "CNSA mode: the signer's key or the certificate is not ML-DSA-87";
+			else if(!cnsahash(cert->x.ha))
+				argerr = "CNSA mode: the certificate is not over SHA-384 or SHA-512";
+			else if(mpsignif(p) < CNSAdhbits)
+				argerr = "CNSA mode: the Diffie-Hellman modulus is under 3072 bits";
+		}
 	}
 
 	/*
@@ -2579,6 +2625,16 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 
+	/*
+	 * the peer's key file is held to the mode's rule as ours is (its
+	 * certificate is our signer's, but its own key is whatever the
+	 * signer certified)
+	 */
+	if(cnsa && (!cnsasig(hispk->x.sa) || !cnsasig(hiscert->x.sa) || !cnsahash(hiscert->x.ha))){
+		err = "CNSA mode: the peer's key or certificate is not ML-DSA-87 over SHA-384 or SHA-512";
+		goto out;
+	}
+
 	/* check expiration date - in seconds of epoch */
 
 	now = osusectime()/1000000;
@@ -2657,7 +2713,8 @@ Keyring_auth(void *fp)
 	}
 	memmove(buf+n, myek, pklen); n += pklen;
 	memmove(buf+n, hisek, pklen); n += pklen;
-	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
+	/* the exchange is signed over SHA-384 in CNSA mode, as the certificates are */
+	alphacert = sign(mysk, cnsa? "sha384": "sha256", 0, (uchar*)buf, n);
 	/*
 	 * sign gives nil when it has no memory for its buffer or the
 	 * algorithm made no signature: it went on to be printed, through
@@ -2690,6 +2747,10 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 	certimmutable(alphacert);		/* hide from the garbage collector */
+	if(cnsa && !cnsahash(alphacert->x.ha)){
+		err = "CNSA mode: the peer signed the exchange over a hash that is not SHA-384 or SHA-512";
+		goto out;
+	}
 	n = bigtobase64(alphar1, buf, Maxbuf);
 	n += bigtobase64(alphar0, buf+n, Maxbuf-n);
 	if(n > Maxbuf - 2*pklen){

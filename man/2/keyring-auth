@@ -83,6 +83,17 @@ otherwise.
 writes a representation of
 .I info
 to a file. It returns -1 if the write operation fails, 0 otherwise.
+.PP
+In CNSA mode (the emulator started with
+.B CNSAMODE
+set; see
+.IR security-login (2))
+.B auth
+uses ML-KEM-1024 and takes only the mode's keys:
+.IR info 's
+keys, its signer's key and its certificate must be ML-DSA-87, the certificate over SHA-384 or SHA-512, and the modulus of 3072 bits or more, and the peer's key and certificate are held to the same.
+The exchange is then signed over SHA-384.
+A key file that is not the mode's is refused, and each end's error says which part of it.
 .SH FILES
 .TF /usr/user/keyring/defaultxxx
 .TP

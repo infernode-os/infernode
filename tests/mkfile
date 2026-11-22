@@ -164,6 +164,7 @@ TARG=\
 	auth_bind_test.dis\
 	tls_record_test.dis\
 	random_fail_test.dis\
+	cnsa_auth_test.dis\
 	cnsa_mode_test.dis\
 	secstored_test.dis\
 	wstat_owner_test.dis\

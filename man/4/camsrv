@@ -271,11 +271,7 @@ The same works for any feed in this schema,
 .IR vid9p 's
 recordings and a camera mounted from another machine alike: the feed
 serves frames and knows nothing of picture formats; converting one is
-a filter's job. Its plant health, likewise:
-.IP
-.EX
-read 126280 < /mnt/video/0/ndvi > still.ndvi
-.EE
+a filter's job.
 .PP
 .I Cp
 will not do: a feed's

@@ -151,6 +151,7 @@ void		ixsummary(void);
 void		kbdclock(void);
 int		kbdcr2nl(Queue*, int);
 int		kbdputc(Queue*, int);
+int		kbdputbyte(Queue*, int);
 void		kbdrepeat(int);
 void		kproc(char*, void(*)(void*), void*, int);
 int		kfgrpclose(Fgrp*, int);

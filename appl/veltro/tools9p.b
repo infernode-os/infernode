@@ -2946,9 +2946,9 @@ Loop:
 		b := <-v.wc =>
 			if(dead)
 				break;
-			# A message is at most MAXRPC bytes: more than that with
+			# A message is at most DEFMSIZE bytes: more than that with
 			# none whole in it is not 9P, and was kept without bound.
-			if(len cin + len b > 2*Styx->MAXRPC) {
+			if(len cin + len b > 2*Styx->DEFMSIZE) {
 				dead = 1;
 				cin = nil;
 				if(err == nil)
@@ -3062,7 +3062,7 @@ takeremove(l: list of (int, string), tag: int): (list of (int, string), string)
 
 viewpipe(fd: ref Sys->FD, inq: chan of array of byte)
 {
-	buf := array[Styx->MAXRPC] of byte;
+	buf := array[Styx->DEFMSIZE] of byte;
 	while((n := sys->read(fd, buf, len buf)) > 0)
 		inq <-= buf[0:n];
 	inq <-= nil;

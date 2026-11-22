@@ -370,7 +370,31 @@ pendingdesc(ln: string): (string, list of string)
 	else if(kind != "pay")
 		what = kind;
 	l := wraplines("#" + id + " " + what + " from ", acct, nil);
-	l = wraplines("amount ", amount, l);
+	# The amount is in the token's smallest unit and an x402 asset is
+	# a contract's address: "10000 of 0x1c7D..." said neither which
+	# token nor how much.  wallet9p says what it knows the token to
+	# be and its decimals (fields 9 and 10), and the amount is shown in
+	# the token's units first; for a token it does not know, that it
+	# is unknown, so that no number here reads as an amount of money.
+	sym := "";
+	dec := -1;
+	if(ntoks >= 10){
+		sym = hd tl tl tl tl tl tl tl tl toks;
+		ds := hd tl tl tl tl tl tl tl tl tl toks;
+		if(len ds <= 2 && ds != "-" && alldigits(ds))
+			dec = int ds;
+	}
+	if(dec >= 0 && alldigits(amount)){
+		l = wraplines("amount ", units(amount, dec) + " " + sym, l);
+		l = wraplines("(", amount + " base units)", l);
+	}else{
+		l = wraplines("amount ", amount, l);
+		if(sym == "unknown"){
+			l = wraplines("", "base units of a token the", l);
+			l = wraplines("", "wallet does not know: its", l);
+			l = wraplines("", "worth is not shown", l);
+		}
+	}
 	l = wraplines("of ", token, l);
 	l = wraplines("to ", recip, l);
 	# The network is part of what is being approved: the same
@@ -380,6 +404,21 @@ pendingdesc(ln: string): (string, list of string)
 	for(; l != nil; l = tl l)
 		r = hd l :: r;
 	return (id, r);
+}
+
+# amount, a decimal number of base units, in units of dec decimals:
+# 1500000 at 6 is 1.5, 5 at 6 is 0.000005
+units(amount: string, dec: int): string
+{
+	while(len amount <= dec)
+		amount = "0" + amount;
+	whole := amount[0:len amount - dec];
+	frac := amount[len amount - dec:];
+	while(len frac > 0 && frac[len frac - 1] == '0')
+		frac = frac[0:len frac - 1];
+	if(frac == "")
+		return whole;
+	return whole + "." + frac;
 }
 
 # label and the whole of val, PENDW characters of it to a line, put on

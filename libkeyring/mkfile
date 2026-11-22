@@ -13,8 +13,15 @@ OFILES=\
 HFILES=\
 	../include/mp.h\
 	../include/libsec.h\
-	../libinterp/runt.h\
+	../libinterp/keyringif.h\
 	../include/interp.h\
 	keys.h\
 
 <$ROOT/mkfiles/mksyslib-$SHELLTYPE
+
+# keyringif.h is Keyring's adts as C sees them (limbo -a of keyring.m);
+# libinterp's mkfile makes it.  Every file here includes it, and none
+# was rebuilt when it changed (runt.h, which none includes, was named).
+../libinterp/keyringif.h:	../module/keyring.m ../libinterp/keyringif.m
+	cd ../libinterp
+	mk 'SHELLTYPE='$SHELLTYPE 'SYSTARG='$SYSTARG 'OBJTYPE='$OBJTYPE keyringif.h

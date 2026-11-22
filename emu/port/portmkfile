@@ -101,6 +101,11 @@ errstr.h:	../port/error.h
 INTERP=../../include/interp.h
 RUNT=../../libinterp/runt.h		# for culling dependencies
 
+# The three devices that name $LIBSEC below are compiled against
+# libmp's and libsec's structures (digest and cipher states live inside
+# the devices' own): a changed header with the old object is a crash,
+# not a link error.
+
 alloc.$O: ../../include/pool.h\
 		$INTERP
 devcons.$O:	../../include/version.h
@@ -113,6 +118,10 @@ devpipe.$O:	$INTERP
 devprof.$O:	$INTERP
 devprog.$O:	../../libinterp/runt.h\
 			$INTERP
+LIBSEC=../../include/mp.h ../../include/libsec.h
+devcap.$O:	$LIBSEC
+devcons.$O:	$LIBSEC
+devssl.$O:	$LIBSEC
 devsign.$O:	$INTERP
 devsign.$O: ../../libkeyring/keys.h
 devsrv.$O:	../../libinterp/runt.h\

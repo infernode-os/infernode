@@ -253,15 +253,14 @@ Push-Location "$ROOT\libsec"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $secSrc = @(
-    "aes.c", "aesarm64.c", "aesgcm.c", "ghasharm64.c", "blowfish.c",
+    "aes.c", "aesarm64.c", "aesamd64.c", "aesgcm.c", "ghasharm64.c", "ghashamd64.c",
     "chacha.c", "poly1305.c", "ccpoly.c",
     "x25519.c", "ecc.c",
-    "idea.c",
-    "hmac.c", "hmacdrbg.c", "md5.c", "md5block.c", "md4.c", "sha1.c", "sha1block.c",
+    "hmac.c", "hmacdrbg.c", "md5.c", "md5block.c", "sha1.c", "sha1block.c",
     "sha2.c", "sha256block.c", "sha256arm64.c", "sha512block.c",
     "rc4.c",
     "genrandom.c", "prng.c", "fastrand.c", "securezero.c", "nonce.c", "mpnonce.c",
-    "secp256k1.c", "keccak256.c",
+    "secp256k1.c",
     "probably_prime.c", "smallprimetest.c", "genprime.c", "dsaprimes.c",
     "gensafeprime.c", "genstrongprime.c", "dhparams.c",
     "rsagen.c", "rsafill.c", "rsaencrypt.c", "rsadecrypt.c", "rsaalloc.c", "rsaprivtopub.c",

@@ -827,6 +827,7 @@ jobs:
               cs_cancel_test registry_test secstore_cmd_test logon_unlock_test sntp_test
               vid9p_ctl_test wpa_log_test
               acvp_pq_test sha3_test sign_nonce_test tls_keyupdate_test auth_services_test
+              cnsa_auth_test ed25519_test mail9p_send_test visionfs_test file2chan_close_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test

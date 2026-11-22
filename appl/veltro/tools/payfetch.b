@@ -255,15 +255,13 @@ exec(args: string): string
 		return "error: server quoted a malformed payment amount: " + opt.amount;
 
 	# Request a signed authorization from wallet9p (budget + approval
-	# enforced there); poll up to 90s while approval is pending.
+	# enforced there), waiting up to 90s for the approval.  One not
+	# approved in that time is withdrawn, and the error says so: there
+	# is nothing left pending to approve later, and a fetch again is a
+	# new request.
 	(payload, aerr) := x402->authorize(opt, pr.resource, acctname, 90);
-	if(aerr != nil) {
-		if(len aerr > 8 && aerr[0:8] == "pending:")
-			return "payment pending approval (" + aerr[8:] + ").\n" +
-				"A trusted controller must approve it in the wallet GUI\n" +
-				"(or via /mnt/wallet/ctl); retry this fetch after approval.";
+	if(aerr != nil)
 		return "error: payment authorization failed: " + aerr;
-	}
 
 	# Retry with the payment header.  X-PAYMENT carries the payload
 	# base64-encoded per the x402 spec; the legacy PAYMENT-SIGNATURE

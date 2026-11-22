@@ -200,7 +200,7 @@ E(s: string): ref Rmsg.Error
 
 rversion(t: ref Tmsg.Version): ref Rmsg
 {
-	(msize, version) := styx->compatible(t, Styx->MAXRPC, Styx->VERSION);
+	(msize, version) := styx->compatible(t, Styx->DEFMSIZE, Styx->VERSION);
 	return ref Rmsg.Version(t.tag, msize, version);
 }
 
@@ -299,7 +299,7 @@ ropen(t: ref Tmsg.Open): ref Rmsg
 	if(e != nil)
 		return E(e);
 	f.flags = openflags(t.mode);
-	return ref Rmsg.Open(t.tag, f.qid, Styx->MAXFDATA);
+	return ref Rmsg.Open(t.tag, f.qid, Styx->DEFIOUNIT);
 }
 
 rcreate(t: ref Tmsg.Create): ref Rmsg
@@ -318,7 +318,7 @@ rcreate(t: ref Tmsg.Create): ref Rmsg
 	if(e != nil)
 		return E(e);
 	f.flags = openflags(t.mode);
-	return ref Rmsg.Create(t.tag, f.qid, Styx->MAXFDATA);
+	return ref Rmsg.Create(t.tag, f.qid, Styx->DEFIOUNIT);
 }
 
 rread(t: ref Tmsg.Read): ref Rmsg
@@ -332,7 +332,7 @@ rread(t: ref Tmsg.Read): ref Rmsg
 		return E("file not opened for reading");
 	if(t.count < 0 || t.offset < big 0)
 		return E("negative offset or count");
-	b := array[Styx->MAXFDATA] of byte;
+	b := array[Styx->DEFIOUNIT] of byte;
 	count: int;
 	if(f.qid.qtype & Sys->QTDIR)
 		(count, err) = f.readdir(b, int t.offset, t.count);

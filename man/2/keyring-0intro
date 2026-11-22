@@ -247,10 +247,9 @@ The
 .B SigAlg
 adt contains a single string that specifies the algorithm used for digital signatures.
 The allowable values are
-.BR md5 ,
-.BR md4
+.B md5
 and
-.BR sha1
+.B sha1
 that specify which one-way hash function is used to produce a digital signature
 or message digest.
 .TP

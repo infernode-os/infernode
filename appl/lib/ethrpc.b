@@ -58,14 +58,61 @@ init(url: string): string
 
 	if(url == nil || url == "")
 		url = "https://sepolia.base.org";
-	rpcurl = url;
 	reqid = 1;
+	return setrpc(url);
+}
+
+# The node's address: https, or http to this machine alone (a node of
+# one's own).  Any URL was taken, and to an http one the addresses
+# asked about and every signed transaction went in clear, to whoever
+# was on the path, who also gave the nonce and the gas price.  A URL
+# refused leaves the node as it was.
+setrpc(url: string): string
+{
+	if(!okrpcurl(url))
+		return "the node's URL must be https (http only to this machine: 127.0.0.1, localhost, [::1])";
+	rpcurl = url;
 	return nil;
 }
 
-setrpc(url: string)
+okrpcurl(url: string): int
 {
-	rpcurl = url;
+	for(i := 0; i < len url; i++)
+		if(url[i] <= ' ' || url[i] == 16r7f)
+			return 0;
+	if(len url > 8 && lower(url[0:8]) == "https://")
+		return 1;
+	if(!(len url > 7 && lower(url[0:7]) == "http://"))
+		return 0;
+	# the authority: up to the path, with no user and no port
+	h := url[7:];
+	for(i = 0; i < len h; i++)
+		if(h[i] == '/' || h[i] == '?' || h[i] == '#')
+			break;
+	h = lower(h[0:i]);
+	for(i = 0; i < len h; i++)
+		if(h[i] == '@')
+			return 0;
+	if(len h > 0 && h[0] == '['){
+		for(i = 0; i < len h; i++)
+			if(h[i] == ']')
+				break;
+		return h[0:i] == "[::1";
+	}
+	for(i = 0; i < len h; i++)
+		if(h[i] == ':')
+			break;
+	h = h[0:i];
+	return h == "localhost" || h == "127.0.0.1";
+}
+
+lower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
 }
 
 #
@@ -168,55 +215,6 @@ sendrawtx(rawtx: string): (string, string)
 	if(!validtxhash(txhash))
 		return (nil, "eth_sendRawTransaction: malformed transaction hash");
 	return (txhash, nil);
-}
-
-#
-# eth_getTransactionReceipt
-#
-getreceipt(txhash: string): (ref TxReceipt, string)
-{
-	if(!validtxhash(txhash))
-		return (nil, "eth_getTransactionReceipt: invalid tx hash");
-	params := "[\"" + txhash + "\"]";
-	(result, err) := rpccall("eth_getTransactionReceipt", params);
-	if(err != nil)
-		return (nil, err);
-
-	rv := getresult(result);
-	if(rv == nil || rv.isnull())
-		return (nil, nil);	# pending — no receipt yet
-
-	# status must parse to the documented {0,1} domain; a missing or
-	# malformed field is an error, never a value a fail-open caller
-	# could mistake for success
-	status := hexnum(jvgetstr(rv, "status"));
-	if(status < 0 || status > 1)
-		return (nil, "eth_getTransactionReceipt: malformed status in receipt");
-	blocknumber := jvgetstr(rv, "blockNumber");
-	gasused := jvgetstr(rv, "gasUsed");
-
-	return (ref TxReceipt(status, txhash, blocknumber, gasused), nil);
-}
-
-#
-# Poll for receipt
-#
-waitreceipt(txhash: string, timeoutsec: int): (ref TxReceipt, string)
-{
-	# Poll every 2 seconds
-	polls := timeoutsec / 2;
-	if(polls < 1)
-		polls = 1;
-
-	for(i := 0; i < polls; i++) {
-		(receipt, err) := getreceipt(txhash);
-		if(err != nil)
-			return (nil, err);
-		if(receipt != nil)
-			return (receipt, nil);
-		sys->sleep(2000);
-	}
-	return (nil, "timeout waiting for receipt: " + txhash);
 }
 
 #
@@ -444,17 +442,21 @@ getresult(jv: ref JValue): ref JValue
 	return jv.get("result");
 }
 
+# A result that is a string, or "".  Every result read here is one: a
+# quantity or data in hex (the JSON-RPC API's encoding), a hash.  A
+# result of another type was given as its JSON text, so the number 16
+# was the text "16" and then, read as hex, 22: a node's answer in the
+# wrong type is no answer.
 getresultstr(jv: ref JValue): string
 {
 	rv := getresult(jv);
 	if(rv == nil)
 		return "";
-	if(rv.isstring()) {
-		pick sv := rv {
-		String => return sv.s;
-		}
+	pick sv := rv {
+	String =>
+		return sv.s;
 	}
-	return rv.text();
+	return "";
 }
 
 jvgetstr(jv: ref JValue, field: string): string

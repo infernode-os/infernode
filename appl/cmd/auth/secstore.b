@@ -32,6 +32,7 @@ stderr: ref Sys->FD;
 conn: ref Dial->Connection;
 seckey: array of byte;
 seckey2: array of byte;
+pin: string;	# a second factor's, when one is given or asked for: erase() clears it
 seckey4: array of byte;
 rootkey: array of byte;	# files as logon and factotum write them (SGCM2)
 filekey2: array of byte;	# the two older formats, read only
@@ -57,7 +58,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->init(args);
 	arg->setusage("auth/secstore [-iv] [-k key] [-p pin] [-s net!server!secstore] [-u user] [{dmrptx} file ...]");
 	iflag := 0;
-	pass, pin: string;
+	pass: string;
 	while((o := arg->opt()) != 0)
 		case o {
 		'i' => iflag = 1;
@@ -108,6 +109,10 @@ init(nil: ref Draw->Context, args: list of string)
 		pass = hd flds;
 		if(nf > 1)
 			pin = hd tl flds;
+		# the list's are the same strings: with it gone the ones
+		# cleared below are the only ones (clearing a string that
+		# something else still names clears a copy)
+		flds = nil;
 	}
 	# The connection is the module's (conn, above), used after this loop.
 	# A second conn was declared here and a third by the := in the loop:
@@ -421,6 +426,8 @@ erase()
 		secstore->erasekey(filekey);
 		secstore->erasekey(file);
 	}
+	for(i := 0; i < len pin; i++)
+		pin[i] = 0;
 }
 
 error(s: string)

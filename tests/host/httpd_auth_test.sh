@@ -26,8 +26,13 @@
 # the defaults, a path no rule names, the log's user field; the
 # CertificateRequest naming the CA; ten wrong passwords locking an
 # address out.  Then: configurations that must not start (-P without
-# TLS, a rule taking what is not configured, a CRL no root signed, a
-# bad term, -r with -P), the servers still answering, no fault.
+# TLS, a rule taking what is not configured, a CRL in a CA's name that
+# the CA did not sign, a bad term, -r with -P), the servers still
+# answering, no fault.  The fifth server's -A file has the root, its
+# CRL, the intermediate's CRL and another CA's, and neither of those
+# CAs: it starts (it was refused: an intermediate's CRL needed the
+# intermediate made a CA of the file), and the intermediate's CRL
+# revokes what the intermediate issued.
 #
 # Run from project root: ./tests/host/httpd_auth_test.sh
 #
@@ -61,13 +66,14 @@ ec() { q ecparam -name prime256v1 -genkey -noout -out "$1.key"; }
 printf 'basicConstraints=critical,CA:true\nkeyUsage=critical,keyCertSign,cRLSign\n' > ca.ext
 printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n' > cli.ext
 printf 'basicConstraints=CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n' > srv.ext
-for k in ca int other alice bob srvonly revoked selfsigned server; do ec $k; done
+for k in ca int other alice bob srvonly revoked selfsigned server carl fakeint; do ec $k; done
 q req -x509 -new -key ca.key -subj "/CN=Test Client CA" -days 2 -addext "basicConstraints=critical,CA:true" -addext "keyUsage=critical,keyCertSign,cRLSign" -out ca.pem
 q req -x509 -new -key other.key -subj "/CN=Other CA" -days 2 -addext "basicConstraints=critical,CA:true" -addext "keyUsage=critical,keyCertSign,cRLSign" -out other.pem
 sign() { q req -new -key "$1.key" -subj "/CN=$2" -out "$1.csr"; q x509 -req -in "$1.csr" -CA "$3.pem" -CAkey "$3.key" -CAcreateserial -days 2 -extfile "$4" -out "$1.pem"; }
 sign int "Test Intermediate" ca ca.ext
 sign alice alice-laptop ca cli.ext
 sign bob bob-phone int cli.ext
+sign carl carl-tablet int cli.ext
 sign srvonly a-server ca srv.ext
 sign revoked mallory ca cli.ext
 # an RSA key whose exponent is past 32 bits: costly to check, refused
@@ -82,11 +88,33 @@ printf '[ca]\ndefault_ca=c\n[c]\ndatabase=db/index.txt\ncrlnumber=db/crlnumber\n
 q ca -config ca.cnf -keyfile ca.key -cert ca.pem -revoke revoked.pem
 q ca -config ca.cnf -keyfile ca.key -cert ca.pem -gencrl -out ca.crl
 q ca -config ca.cnf -keyfile other.key -cert other.pem -gencrl -out other.crl
-for f in ca.pem ca.crl int.pem alice.pem bob.pem srvonly.pem revoked.pem selfsigned.pem server.pem other.chain other.crl bigexp.pem; do
+# The intermediate's own CRL, which revokes carl; one of that name
+# signed by another key; and a CRL of the root's that revokes the
+# intermediate.
+crlof() {	# name CA key [revoked]
+	mkdir db.$1; : > db.$1/index.txt; echo 1000 > db.$1/crlnumber
+	printf '[ca]\ndefault_ca=c\n[c]\ndatabase=db.%s/index.txt\ncrlnumber=db.%s/crlnumber\ndefault_md=sha256\ndefault_crl_days=2\n' $1 $1 > $1.cnf
+	[ -n "$4" ] && q ca -config $1.cnf -keyfile $3 -cert $2 -revoke $4
+	q ca -config $1.cnf -keyfile $3 -cert $2 -gencrl -out $1.crl
+}
+crlof int int.pem int.key carl.pem
+q req -x509 -new -key fakeint.key -subj "/CN=Test Intermediate" -days 2 -addext "basicConstraints=critical,CA:true" -addext "keyUsage=critical,keyCertSign,cRLSign" -out fakeint.pem
+crlof fakeint fakeint.pem fakeint.key
+crlof carev ca.pem ca.key int.pem
+for f in ca.pem ca.crl int.pem alice.pem bob.pem srvonly.pem revoked.pem selfsigned.pem server.pem other.chain other.crl bigexp.pem carl.pem int.crl fakeint.crl carev.crl; do
 	[ -s "$f" ] || { echo "FAIL: could not make $f"; exit 1; }
 done
 cat ca.pem ca.crl > trust.pem
-cat ca.pem other.crl > badtrust.pem
+# a CRL in the root's own name that the root did not sign
+q req -x509 -new -key other.key -subj "/CN=Test Client CA" -days 2 -addext "basicConstraints=critical,CA:true" -addext "keyUsage=critical,keyCertSign,cRLSign" -out fakeca.pem
+crlof fakeca fakeca.pem other.key
+cat ca.pem fakeca.crl > badtrust.pem
+# the intermediate's CRL, the intermediate no CA of the file (its
+# clients send its certificate), and a CA's that no client comes to
+cat ca.pem ca.crl int.crl other.crl > nointtrust.pem
+cat ca.pem int.pem ca.crl fakeint.crl > faketrust.pem	# a CRL in its name, another's key
+cat ca.pem int.pem carev.crl int.crl > revtrust.pem	# the root's CRL revokes it
+cat carl.pem int.pem > carl.chain; cp carl.pem carlleaf.chain; cp carl.key carlleaf.key
 cp bigexp.pem bigexp.chain; cp alice.pem alice.chain; cp srvonly.pem srvonly.chain; cp revoked.pem revoked.chain; cp selfsigned.pem selfsigned.chain
 cat bob.pem int.pem > bob.chain; cp bob.pem bobleaf.chain; cp bob.key bobleaf.key
 mv other.key otherca.key; cp alice.key other.key
@@ -128,6 +156,8 @@ printf '/open none\n' > plainrules
 printf 'realm Lockout\n/ password\n' > lockrules
 printf '/admin cert\n' > certrules
 printf '/x pasword\n' > badrules
+# a none under a directory that is protected: named at start
+printf '/ none\n/admin password\n/admin/dl none\nGET /led cert\nPOST /led/ctl none\n/public none\n' > warnrules
 
 pw() { echo "$2" | "$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd.dis -i "$3" "$1" </dev/stdin 2>&1 | grep "^$1:"; }
 { pw alice opensesame 20000; pw bob bobpass 20000; pw carol carolpass 100000; } > pw
@@ -166,7 +196,7 @@ python3 -c 'print("p" * 256)' | "$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd
 refuse() {
 	local why=$1 want=$2
 	shift 2
-	with_timeout 30 "$EMU" $EMUFLAGS -r"$ROOT" sh -c "svc/httpd/httpd $* $T/site; echo exited" </dev/null >refuse.log 2>&1
+	with_timeout 30 "$EMU" $EMUFLAGS -r"$ROOT" sh -c "svc/httpd/httpd $* $T/site; echo exited; echo halt > /dev/sysctl" </dev/null >refuse.log 2>&1
 	if grep -qE "$want" refuse.log && grep -q exited refuse.log; then
 		echo "PASS: will not start: $why"
 	else
@@ -177,15 +207,18 @@ P0=$((21000 + $$ % 15000))
 refuse "-P without TLS" "need TLS" -P $T/pw -a tcp!127.0.0.1!$P0
 refuse "-A without TLS" "need TLS" -A $T/trust.pem -a tcp!127.0.0.1!$P0
 refuse "a rule taking a certificate with no -A" "there is no -A" -c $T/server.pem -k $T/server.key -x $T/certrules -a tcp!127.0.0.1!$P0
-refuse "a CRL no root signed" "CRL not signed" -c $T/server.pem -k $T/server.key -A $T/badtrust.pem -a tcp!127.0.0.1!$P0
+refuse "a CRL in a CA's name that the CA did not sign" "CRL not signed by its issuer" -c $T/server.pem -k $T/server.key -A $T/badtrust.pem -a tcp!127.0.0.1!$P0
+refuse "a CRL in the intermediate's name that it did not sign" "CRL not signed" -c $T/server.pem -k $T/server.key -A $T/faketrust.pem -a tcp!127.0.0.1!$P0
+refuse "an intermediate the root's CRL revokes" "revoked" -c $T/server.pem -k $T/server.key -A $T/revtrust.pem -a tcp!127.0.0.1!$P0
 refuse "a rule that is not one" "not a term" -c $T/server.pem -k $T/server.key -x $T/badrules -a tcp!127.0.0.1!$P0
 refuse "-r with -P" "TLS server's|need TLS" -r 443 -P $T/pw -a tcp!127.0.0.1!$P0
 refuse "-P with no users in the file" "no users" -c $T/server.pem -k $T/server.key -P $T/rules -a tcp!127.0.0.1!$P0
 
 # ---------------------------------------------------------------- the servers
-P1=$((P0+1)); P2=$((P0+2)); P3=$((P0+3)); P4=$((P0+4))
+P1=$((P0+1)); P2=$((P0+2)); P3=$((P0+3)); P4=$((P0+4)); P5=$((P0+5))
 TLSARGS="-c $T/server.pem -k $T/server.key"
 cat > run.sh <<INFERNO
+load std
 load file2chan
 # /alias is /admin under another name: what a host that folds case or
 # keeps 8.3 names makes of /ADMIN or /ADMINI~1
@@ -199,15 +232,26 @@ svc/httpd/httpd -v -L $TLSARGS -A $T/trust.pem -P $T/pw -x $T/rules -p /led/ctl 
 svc/httpd/httpd -v $TLSARGS -A $T/trust.pem -P $T/pw -p /led/ctl -a tcp!127.0.0.1!$P2 $T/site &
 svc/httpd/httpd -v -x $T/plainrules -a tcp!127.0.0.1!$P3 $T/site &
 svc/httpd/httpd -v $TLSARGS -P $T/pw -x $T/lockrules -a tcp!127.0.0.1!$P4 $T/site &
+svc/httpd/httpd -v $TLSARGS -A $T/nointtrust.pem -P $T/pw -x $T/warnrules -a tcp!127.0.0.1!$P5 $T/site &
+# the clock, stepped when auth.py asks (as timesync does)
+while {! ftest -e $T/step} {sleep 1}
+cat $T/step > /dev/time
+echo stepped > $T/stepped
 INFERNO
 "$EMU" $EMUFLAGS -r"$ROOT" sh "$T/run.sh" </dev/null >emu.log 2>&1 &
 pids="$pids $!"
 up() { python3 -c "import socket; socket.create_connection(('127.0.0.1', $1), timeout=1)" 2>/dev/null; }
-for _ in $(seq 1 100); do up $P1 && up $P2 && up $P3 && up $P4 && break; sleep 0.1; done
-up $P1 && up $P2 && up $P3 && up $P4 || { echo "FAIL: the servers did not start"; cat emu.log; exit 1; }
+for _ in $(seq 1 100); do up $P1 && up $P2 && up $P3 && up $P4 && up $P5 && break; sleep 0.1; done
+up $P1 && up $P2 && up $P3 && up $P4 && up $P5 || { echo "FAIL: the servers did not start"; cat emu.log; exit 1; }
 
-with_timeout 600 python3 -I "$ROOT/tests/host/httpd/auth.py" $P1 $P2 $P3 $P4 "$W"
+with_timeout 600 python3 -I "$ROOT/tests/host/httpd/auth.py" $P1 $P2 $P3 $P4 "$W" $P5
 fails=$((fails + $?))
+# the CRLs of CAs that are not in the -A file are taken, and named
+if grep -q 'nointtrust.pem: a CRL of .*Test Intermediate.*no CA of the file' emu.log && grep -q 'nointtrust.pem: a CRL of .*Other CA.*no CA of the file' emu.log; then
+	echo "PASS: an intermediate's CRL and another CA's, their CAs not in the file: taken at start, each named"
+else
+	echo "FAIL: the CRLs of CAs not in the -A file were not named at start"; fails=$((fails+1))
+fi
 if grep -qiE 'panic|SYS: process|broken|sanitizer' emu.log; then
 	echo "FAIL: emu reported a fault"; grep -iE 'panic|SYS: process|broken|sanitizer' emu.log | head -5; fails=$((fails+1))
 fi

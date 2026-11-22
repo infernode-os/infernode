@@ -5,6 +5,8 @@ registry, regquery \- registration of services dynamically
 .B ndb/registry
 [
 .BI -f " dbfile"
+] [
+.BI -t " seconds"
 ]
 .PP
 .B ndb/regquery
@@ -90,7 +92,16 @@ named
 .B persist
 with non-zero
 .IR value ;
-the service will then remain registered until explicitly removed (see below).
+the service will then remain registered until explicitly removed (see below),
+or until its owner has not written to its file for a day
+(or the
+.I seconds
+given by
+.BR -t ;
+.B "-t 0"
+keeps such services for ever).
+An owner that means its service to stay writes its attributes again from
+time to time.
 .RE
 .TP
 .B index
@@ -200,6 +211,15 @@ prints only the service name(s); otherwise it prints the service description as 
 If no attributes are given on the command line,
 .I regquery
 prompts for successive queries, one per line, and prints each result.
+.PP
+The registry holds at most 1024 services registered through
+.B new
+at once, 128 of them by any one user; a service has at most 64 attributes,
+and its name, attribute names and values come to at most 4096 bytes.
+There may be 256 filters and 256 readers of
+.B event
+at once.
+A request past a limit is refused, and nothing of a refused write is taken.
 .SH EXAMPLE
 Start a registry that appears at the standard location for local registries,
 .BR /mnt/registry :

@@ -1,0 +1,103 @@
+.TH SDGSRV 8
+.SH NAME
+sdgsrv \- serve a directory as 9P over Noise-secured datagrams
+.SH SYNOPSIS
+.B sdgsrv
+[
+.B -v
+] [
+.BI -c " ncache"
+] [
+.BI -d " n"
+]
+.I keydir
+.I addr
+.I dir
+.br
+.B sdgsrv -g
+.I keydir
+.SH DESCRIPTION
+.I Sdgsrv
+is the responder of
+.IR sdg (2),
+as the styxbrick's firmware is, for an InferNode machine: it announces
+the UDP address
+.I addr
+and serves
+.I dir
+to the one commander whose public key it holds, each accepted handshake
+a session with an export of
+.I dir
+of its own.
+The protocol is styxbrick's
+.BR docs/STYX-DGRAM.md :
+Noise IKpsk2 over X25519, ChaCha20-Poly1305 and SHA-256.
+.PP
+.I Keydir
+holds, as lines of hex,
+.B sdgsrv.key
+(its X25519 private key),
+.B sdgsrv.peer
+(the commander's public key) and
+.B sdg.psk
+(the pre-shared key);
+.B -g
+makes a set, with the commander's side beside them
+.RB ( sdg.key ,
+.BR sdg.brick ,
+.BR sdg.psk ,
+as
+.IR sdg (2)
+and
+.IR brick (1)
+name them) to be copied to the commander.
+It also keeps there, in
+.B sdgsrv.ctr.a
+and
+.BR .b ,
+the newest initiation counter it has accepted, so that an initiation
+recorded from the wire is as old after a restart as before it; with a
+store it cannot read or write it does not start, or does not answer.
+.PP
+.B -c
+is the number of replies a session keeps to answer a request sent again
+(16, as the brick keeps);
+.B -d
+loses one data packet in
+.I n
+each way, as a lossy link would, for tests;
+.B -v
+says when a session is made.
+.SS "A flood of initiations"
+An initiation costs two X25519s before anything shows who sent it, and
+anyone holding the server's public key can make one that will be looked
+at.
+Four a second are looked at as they come.
+Past that the server is under load: an initiation is answered with a
+cookie, an HMAC of its sender's address under a secret that changes
+every two minutes, sealed to the initiation, and no X25519 is done for
+it, unless it carries the proof
+.RB ( mac2 )
+that its sender has had a cookie, which only a sender at that address
+can have.
+Senders that have are looked at, four a second each and sixteen a
+second in all; at most 64 cookies a second are sent, each smaller than
+the initiation it answers.
+.IR Sdg (2)'s
+client shows its cookie at once.
+.SS "What it does not do"
+A session is not rekeyed: the protocol has no rekey, so a session's
+keys last until the commander makes the session again (a mount made
+again is a new handshake, with new keys and a new export).
+A session that has sent or received 2^60 packets is over.
+There is no deferred promotion (STYX-DGRAM Rev S1): the brick has one
+session, which a new one replaces only when a packet arrives under its
+keys; here each handshake is a session beside the others, and only the
+commander's key with a newer counter makes one.
+The suite is Noise's, not CNSA's.
+An idle session is dropped after two minutes.
+.SH SOURCE
+.B /appl/cmd/sdgsrv.b
+.SH SEE ALSO
+.IR brick (1),
+.IR sdg (2)

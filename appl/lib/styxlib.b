@@ -99,7 +99,7 @@ Styxserver.reply(srv: self ref Styxserver, m: ref Rmsg): int
 Styxserver.devversion(srv: self ref Styxserver, m: ref Tmsg.Version): int
 {
 	if(srv.msize <= 0)
-		srv.msize = Styx->MAXRPC;
+		srv.msize = Styx->DEFMSIZE;
 	(msize, version) := styx->compatible(m, srv.msize, Styx->VERSION);
 	if(msize < 128){
 		srv.reply(ref Rmsg.Error(m.tag, "unusable message size"));
@@ -310,7 +310,7 @@ Styxserver.devopen(srv: self ref Styxserver, m: ref Tmsg.Open,
 	}
 	c.open = 1;
 	c.mode = omode;
-	srv.reply(ref Rmsg.Open(m.tag, c.qid, Styx->MAXFDATA));
+	srv.reply(ref Rmsg.Open(m.tag, c.qid, Styx->DEFIOUNIT));
 	return c;
 }
 

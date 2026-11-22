@@ -29,6 +29,8 @@ Wiki: module {
 	Maxtitle: con 128;		# characters of a page's title
 	Maxpages: con 65536;	# pages: what a qid's 16 bits can number
 	Maxdiff: con 20;		# versions diff.html compares, the newest
+	Maxvers: con 10000;		# versions in a page's history, conflicts among them
+	Maxhist: con 16*1024*1024;	# bytes of a page's history file
 	Wpara, Wheading, Wbullet, Wlink, Wman, Wplain, Wpre, Nwtxt: con iota;
 	Tpage, Tedit, Tdiff, Thistory, Tnew, Toldpage, Twerror, Ntemplate: con iota;
 

@@ -86,6 +86,13 @@ NsConstruct: module {
 	# refused.
 	restrictchildns: fn(caps: ref Capabilities, auditrequired: int): string;
 
+	# The file descriptors, by number, that keep alive what the name
+	# space this is called from was given (a vision session lasts while
+	# one of its files is open); they are left open in the caller's
+	# table.  A process that prunes its descriptors after its name space
+	# is restricted keeps these.
+	held: fn(): list of int;
+
 	# What restrictchildns would refuse caps for by its names and paths
 	# alone, with nothing restricted: nil if nothing.  For a caller to ask
 	# before it starts anything on the child's behalf (spawn opens the

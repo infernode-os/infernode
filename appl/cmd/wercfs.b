@@ -259,9 +259,24 @@ Serve:
 				srv.reply(ref Rmsg.Read(m.tag, buf[0:k]));
 		Stat =>
 			c := srv.getfid(m.fid);
-			if(c != nil && (o := findopen(opens, c.fid)) != nil)
+			if(c != nil && (o := findopen(opens, c.fid)) != nil){
+				# A file served as it is is read from the host as it
+				# is now, so its stat is as it is now too.  (It was
+				# the stat of when it was opened: a file that grew or
+				# was cut after was said to be one length and read as
+				# another, and httpd, which takes Content-Length from
+				# the stat, ended the connection short or sent less
+				# than there was.)
+				if(o.fd != nil){
+					(ok, d) := sys->fstat(o.fd);
+					if(ok >= 0){
+						o.d.length = d.length;
+						o.d.mtime = d.mtime;
+						o.d.qid.vers = d.qid.vers;
+					}
+				}
 				srv.reply(ref Rmsg.Stat(m.tag, *o.d));
-			else
+			}else
 				srv.stat(m);
 		Clunk =>
 			opens = dropopen(opens, m.fid);

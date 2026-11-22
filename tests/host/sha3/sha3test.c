@@ -242,6 +242,10 @@ vectors(const char *file)
 		sha3_512(big, n, o1);
 		refsponge(72, 0x06, big, n, o2, 64);
 		check(memcmp(o1, o2, 64) == 0, "SHA3-512 differs from the reference sponge", i);
+		/* Ethereum's Keccak-256: the Keccak submission's padding (it had a permutation of its own) */
+		keccak256(big, n, o1);
+		refsponge(136, 0x01, big, n, o2, 32);
+		check(memcmp(o1, o2, 32) == 0, "Keccak-256 differs from the reference sponge", i);
 	}
 
 	/*

@@ -321,7 +321,7 @@ handletmsg(srv:  ref Styxserver, gm: ref Tmsg, uproc: Uproc): int
 	Open =>
 		c := fid2chan(srv, m.fid);
 		if (c.qid.qtype & Sys->QTDIR) {
-			srv.reply(ref Rmsg.Open(m.tag, c.qid, Styx->MAXFDATA));
+			srv.reply(ref Rmsg.Open(m.tag, c.qid, Styx->DEFIOUNIT));
 			break;
 		}
 		for (ll := locks; ll != nil; ll = tl ll)
@@ -376,7 +376,7 @@ handletmsg(srv:  ref Styxserver, gm: ref Tmsg, uproc: Uproc): int
 		locks = l :: locks;
 		c.qid.path = (hd locks).d.qid.path;
 		c.open = 1;
-		srv.reply(ref Rmsg.Create(m.tag, c.qid, Styx->MAXFDATA));
+		srv.reply(ref Rmsg.Create(m.tag, c.qid, Styx->DEFIOUNIT));
 	Read =>
 		c := fid2chan(srv, m.fid);
 		if (c.qid.qtype & Sys->QTDIR)
@@ -523,7 +523,7 @@ openlockfile(l: ref Lockfile, req: ref Openreq): int
 	req.c.open = 1;
 	if (req.omode & Sys->OTRUNC)
 		l.d.length = big 0;
-	req.srv.reply(ref Rmsg.Open(req.tag, l.d.qid, Styx->MAXFDATA));
+	req.srv.reply(ref Rmsg.Open(req.tag, l.d.qid, Styx->DEFIOUNIT));
 	if (req.omode == Sys->OREAD)
 		l.readers++;
 	else

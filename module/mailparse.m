@@ -32,9 +32,29 @@ Mailparse: module
 	# or "" if not found.
 	extractheader:	fn(body, field: string): string;
 
+	# Every value of a header field (To:, Cc:, Bcc:), each occurrence
+	# with its continuation lines unfolded, joined by ", "; "" if the
+	# header section has none.
+	headerall:	fn(body, field: string): string;
+
+	# The message without the header lines of that field (and their
+	# continuation lines): a Bcc: is for the envelope, not the text
+	# every recipient gets.
+	dropheader:	fn(body, field: string): string;
+
 	# Parse a comma-separated address list. Returns each entry with
 	# any surrounding "Name <...>" stripped down to the bare address.
+	# A comma inside a quoted name, angle brackets or a comment
+	# separates nothing; empty entries are left out.
 	parseaddrlist:	fn(s: string): list of string;
+
+	# The factotum keys a send to smtphost may use, in order, for an
+	# account whose IMAP server is imaphost: the service=smtp key of
+	# the SMTP host, then the IMAP key, but only when the SMTP host is
+	# the IMAP host or is one the user named (named != 0).  A host
+	# mail9p made up from the IMAP server's name gets no password its
+	# key does not name.
+	smtpkeys:	fn(imaphost, smtphost: string, named: int): list of string;
 
 	# Strip "Name <addr@dom>" → "addr@dom", trim surrounding
 	# whitespace. Plain addresses pass through.

@@ -405,6 +405,7 @@ server(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int, p
 # What the synthetic server does for the tests of the command itself
 # (CommandNak, CommandRetry), and what it tells them of it.
 mode := "";
+stage := 0;	# which of Exchange's exchanges has begun
 notes: chan of string;
 srvname := "dhcptest";
 
@@ -414,6 +415,7 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 	readers: list of Rread;
 	phase := 0;
 	cmdphase := 0;
+	refused := 0;
 	told := 0;
 	mac := macb();
 	for(;;)alt{
@@ -459,7 +461,7 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 			replies = mkreply(xid, mac, Ouraddr, bootpopts(),
 				array of byte "/boot/kernel", nil) :: nil;
 		Discover =>
-			if(mode == "nakrenew" && cmdphase == 2 && !told){
+			if(mode == "nakrenew" && cmdphase == 1 && !told){	# after the renewal's NAK
 				# looking again after the lease was lost: from an
 				# interface made speakable again, or from one the
 				# stack would send nothing from
@@ -483,15 +485,19 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 				replies = mkreply(xid, mac, Ouraddr, offeropts(), nil, nil) :: nil;
 		Request =>
 			if(mode == "nakrenew"){
-				# a short lease, and its renewal refused
-				if(cmdphase == 0){
+				# a short lease, and its renewal refused.  Which
+				# of the two a request is, is in the request (a
+				# renewal names no server, RFC 2131 4.3.2), not
+				# in how many have come: a request sent again
+				# after a wait that ran out was taken for the
+				# renewal.
+				if(findopt(buf, 54) != nil)
 					replies = mkreply(xid, mac, Ouraddr, ack3opts(), nil, nil) :: nil;
-					cmdphase = 1;
-				}else{
+				else{
 					replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
-					if(cmdphase == 1)
+					if(cmdphase == 0)
 						notes <-= "nak";
-					cmdphase = 2;
+					cmdphase = 1;
 				}
 			}else if(mode == "failfirst"){
 				# refused once, then granted; each time, whether
@@ -513,23 +519,31 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 						notes <-= "granted " + host;
 					cmdphase = 7;
 				}
-			}else case phase {
+			}else case stage {
+			#
+			# Which exchange this is, is what the test says it
+			# has begun (stage), not how many requests have gone
+			# by: on a loaded machine a client whose wait ran
+			# out asks again, and a server that counted requests
+			# then answered every later exchange with the reply
+			# meant for the one after it (about one run in
+			# seven).
+			#
 			0 or 1 =>
 				# the first exchange: an ACK whose options are
 				# overloaded into the file field
 				replies = mkreply(xid, mac, Ouraddr, ackopts(),
 					fileopts(), array of byte "hostfromsname") :: nil;
-				phase = 2;
 			2 =>
-				# the second exchange: refused once
-				replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
-				phase = 3;
-			3 =>
-				# and then granted, with no overload, so the
-				# file and sname fields are names
-				replies = mkreply(xid, mac, Ouraddr, ack2opts(),
-					array of byte "/boot/kernel", array of byte "srv1") :: nil;
-				phase = 4;
+				# the second exchange: refused once, and then
+				# granted, with no overload, so the file and
+				# sname fields are names
+				if(!refused){
+					replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
+					refused = 1;
+				}else
+					replies = mkreply(xid, mac, Ouraddr, ack2opts(),
+						array of byte "/boot/kernel", array of byte "srv1") :: nil;
 			* =>
 				#
 				# The third exchange, and every renewal of it:
@@ -538,7 +552,6 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 				# test is still watching.
 				#
 				replies = mkreply(xid, mac, Ouraddr, ack3opts(), nil, nil) :: nil;
-				phase = 5;
 			}
 		}
 		for(; replies != nil; replies = tl replies){
@@ -668,6 +681,7 @@ exchange1(res: chan of ref Result, done: chan of int, pids: chan of int)
 	# comes back out of a completed exchange full of options like it.
 	#
 	cfg.put(Dhcpclient->Omask, ipb("255.255.255.0"));
+	stage = 1;
 	(conf, lease, de) := dhcpclient->dhcp(Netdir, nil, Addrfile, cfg, nil);
 	res <-= ref Result(de == nil, "first exchange completes: "+nonnil(de));
 	if(conf != nil){
@@ -703,6 +717,7 @@ exchange1(res: chan of ref Result, done: chan of int, pids: chan of int)
 	# start over rather than take the address it was refused.
 	#
 	cfg2 := Bootconf.new();
+	stage = 2;
 	(conf2, lease2, de2) := dhcpclient->dhcp(Netdir, nil, Addrfile, cfg2, nil);
 	res <-= ref Result(de2 == nil, "exchange survives a DHCPNAK: "+nonnil(de2));
 	if(conf2 != nil){
@@ -727,6 +742,7 @@ exchange1(res: chan of ref Result, done: chan of int, pids: chan of int)
 	# the part of the client that runs for hours on a live machine.
 	#
 	cfg4 := Bootconf.new();
+	stage = 3;
 	(conf4, lease4, de4) := dhcpclient->dhcp(Netdir, nil, Addrfile, cfg4, nil);
 	res <-= ref Result(de4 == nil, "a short lease is granted: "+nonnil(de4));
 	if(conf4 != nil)
@@ -1248,8 +1264,11 @@ command(argv: list of string, done: chan of string, pidc: chan of int)
 	spawn server(clone, data, chan[256] of array of byte, chan of int, spid);
 	<-spid;
 	null := sys->open("/dev/null", Sys->OWRITE);
+	if(outfd != nil)
+		null = outfd;	# what it prints is wanted
 	if(null != nil)
 		sys->dup(null.fd, 1);
+	null = nil;
 	dhcp := load Command "/dis/ip/dhcp.dis";
 	if(dhcp == nil){
 		done <-= sys->sprint("cannot load ip/dhcp: %r");
@@ -1317,6 +1336,67 @@ testCommandNak(t: ref T)
 	}
 	killgrp(pid);
 	mode = "";
+}
+
+outfd: ref Sys->FD;	# where the command's standard output goes, when a test wants it
+
+pipereader(fd: ref Sys->FD, c: chan of string)
+{
+	buf := array[2048] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n > 0)
+		c <-= string buf[0:n];
+	else
+		c <-= "";
+}
+
+# dhcp -p prints the configuration: all of what the lease set, not the
+# address, mask, gateway and lease alone.
+testCommandPrint(t: ref T)
+{
+	mode = "";
+	stage = 1;
+	srvname = "dhcpcmdprint";
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		t.fatal(sys->sprint("pipe: %r"));
+	outfd = p[1];
+	notes = chan[8] of string;
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn command("dhcp" :: "-p" :: "-x" :: Netdir :: Netdir+"/ifc" :: nil, done, pidc);
+	pid := <-pidc;
+	t.assertseq(await(done, 60*1000), "returned", "dhcp -p ends");
+	killgrp(pid);
+	outfd = nil;
+	out := "";
+	oc := chan[1] of string;
+	spawn pipereader(p[0], oc);
+	late := chan[1] of int;
+	pc := chan of int;
+	spawn deadline(late, pc, 3000);
+	lpid := <-pc;
+	alt{
+	out = <-oc =>
+		;
+	<-late =>
+		;
+	}
+	killproc(lpid);
+	p[0] = p[1] = nil;
+	t.log(out);
+	want := array[] of {"ip=" + Ouraddr, "ipmask=255.255.255.0", "ipgw=" + Server, "iplease=3600",
+		" sys=boardname", " dom=example.invalid", " dns=192.168.7.53 dns=192.168.7.54", " fs=192.168.7.9"};
+	for(i := 0; i < len want; i++)
+		t.assert(has2(out, want[i]), "the configuration printed has " + want[i] + ": " + out);
+}
+
+has2(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
 }
 
 testCommandRetry(t: ref T)
@@ -1392,6 +1472,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Exchange", testExchange);
 	run("CommandNak", testCommandNak);
 	run("CommandRetry", testCommandRetry);
+	run("CommandPrint", testCommandPrint);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

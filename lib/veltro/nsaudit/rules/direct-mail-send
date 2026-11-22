@@ -1,3 +1,7 @@
+# mail9p(4)'s compose and draft-reply are the owner's files: whoever
+# writes one sends mail as the account with nobody asked.  An agent does
+# not hold them; it proposes through /mnt/msg/draft, and the user
+# approves the text and the recipient (mail9p(4), CAPABILITY MODEL).
 rule=DIRECT_MAIL_SEND
 	severity=high
 	require='direct_mail_send'

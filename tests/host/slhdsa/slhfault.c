@@ -52,6 +52,21 @@ genrandom(uchar *p, int n)
 		abort();
 }
 
+/*
+ * the signatures' hedging bytes are asked for here (libsec.h: -1 and
+ * nothing when there is no generator); norng makes that the answer
+ */
+int	norng;
+
+int
+genrandomtry(uchar *p, int n)
+{
+	if(norng)
+		return -1;
+	genrandom(p, n);
+	return 0;
+}
+
 static int fails;
 
 static void

@@ -114,7 +114,8 @@ MAXWELEM: con 16;
 NOTAG:    con 16rFFFF;
 NOFID:    con ~0;
 IOHDRSZ:  con \fIimplementation-defined\f5;
-MAXRPC:   con \fIimplementation-defined\f5;
+DEFIOUNIT: con \fIimplementation-defined\f5;
+DEFMSIZE: con \fIimplementation-defined\f5;
 .EE
 .SH DESCRIPTION
 .B Styx
@@ -407,10 +408,14 @@ and
 is the negotiated protocol version, or the value \f5"unknown"\f1
 if no version could be agreed.
 The constant
-.B MAXRPC
+.B DEFMSIZE
 is a reasonable value for
 .I msize
-on current systems.
+on current systems, and
+.B DEFIOUNIT
+(it less
+.BR IOHDRSZ )
+for the data of one read or write.
 The resulting value
 .I m
 can subsequently be given to the various read functions as the limit

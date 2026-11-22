@@ -3,13 +3,6 @@
 #
 
 
-Virgil: module
-{
-	PATH:	con "/dis/lib/virgil.dis";
-
-	virgil:	fn(args: list of string): string;
-};
-
 Random: module
 {
 	PATH:	con "/dis/lib/random.dis";

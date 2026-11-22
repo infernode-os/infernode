@@ -14,7 +14,7 @@ implement Wallet9p;
 #       default      r:  default account name
 #       new          rw: write "eth base myaccount" → read account name
 #       pending      r:  payments awaiting approval, one a line:
-#                        id kind account token amount payee network agent
+#                        id kind account token amount payee network agent symbol decimals
 #       network      r:  the active network (name, chainid, caip2, usdc)
 #       event        r:  "pending" whenever that list changes (blocking)
 #       {name}/          per-account directory
@@ -23,7 +23,8 @@ implement Wallet9p;
 #           chain    r:  chain name the account was made with
 #           pay      rw: write "amount recipient" → read "pending:<id>", then
 #                        the outcome (txhash, "denied", "expired", "error:...")
-#           authorize rw: write an x402 request → read the same way
+#           authorize rw: write an x402 request → read the same way; closed,
+#                        or "withdraw" written, a request not yet approved is withdrawn
 #           ctl      rw: per-account budgets
 #           history  r:  recent transactions (JSON lines)
 #
@@ -310,6 +311,7 @@ setauthstate(fid: int, result: string)
 {
 	fr := getfidresult(authstates, fid);
 	if(fr != nil) {
+		withdraw(fr);	# the request it had is no longer waited for
 		fr.result = result;
 		fr.told = 0;
 		return;
@@ -317,8 +319,33 @@ setauthstate(fid: int, result: string)
 	authstates = ref FidResult(fid, result, 0, nil) :: authstates;
 }
 
+WITHDRAWN: con "error:withdrawn: its requester stopped waiting";
+
+# An x402 authorization is its requester's: a signature only the fid
+# that asked can read, good for a few minutes.  When that fid is closed
+# or asks for another while the request still awaits approval, there is
+# nobody to give it to, and the request is withdrawn.  (It stayed in the
+# approver's list for fifteen minutes, and an approval then signed it
+# and took its amount from the budget, for a reader that had gone; the
+# requester's next try was a new request.)  A payment (pay) is not
+# withdrawn: its approval sends it, whoever is still reading.
+withdraw(fr: ref FidResult)
+{
+	if(fr == nil || !ispending(fr.result))
+		return;
+	(id, ok) := strint(fr.result[8:]);
+	if(!ok)
+		return;
+	pp := findpending(id);
+	if(pp == nil || pp.kind != "x402" || pp.result != nil)
+		return;
+	pp.result = WITHDRAWN;
+	postevent("pending");
+}
+
 delfidresult(fid: int)
 {
+	withdraw(getfidresult(authstates, fid));
 	nl: list of ref FidResult;
 	for(l := paystates; l != nil; l = tl l)
 		if((hd l).fid != fid)
@@ -789,9 +816,13 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 				net := pp.network;
 				if(net == "")
 					net = "-";
-				s += sys->sprint("%d %s %s %s %s %s %s %s\n",
+				# and what the wallet itself knows the token to be,
+				# with its decimals: the amount is in the token's
+				# smallest unit, and an asset is an address
+				(sym, dec) := tokenof(pp);
+				s += sys->sprint("%d %s %s %s %s %s %s %s %s %s\n",
 					pp.id, pp.kind, pp.acct, pp.token, pp.amount,
-					pp.recipient, net, pp.agent);
+					pp.recipient, net, pp.agent, sym, dec);
 			}
 		}
 		if(s == "")
@@ -931,7 +962,11 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			defaultacct = hd tl toks;
 			globalctl = "default " + defaultacct + "\n";
 		} else if(cmd == "rpc" && ntoks == 2) {
-			ethrpc->setrpc(hd tl toks);
+			# (any URL was taken, an http one too: see ethrpc)
+			if((rerr := ethrpc->setrpc(hd tl toks)) != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "rpc: " + rerr));
+				return;
+			}
 		} else if(cmd == "network" && ntoks >= 2) {
 			# Rejoin remaining tokens as network name (may have spaces)
 			nname := "";
@@ -1128,6 +1163,14 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 		as := findacctbyid(aid);
 		if(as == nil) {
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+			return;
+		}
+		# "withdraw": the requester gives up waiting on the request
+		# this fid made, as closing the file does (a reader still in
+		# its read keeps the file open: it is answered now)
+		if(str->take(data, "^\n\r") == "withdraw") {
+			withdraw(getfidresult(authstates, m.fid));
+			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			return;
 		}
 		(areq, aerr) := parseauthreq(data);
@@ -1394,9 +1437,30 @@ approvepending(id: int): string
 	return err;
 }
 
+# What the wallet knows a pending payment's token to be: its symbol and
+# decimals ("ETH" "18", "USDC" "6"), or "unknown" "-" for an asset that
+# is not the active network's USDC contract.  Never the name a 402
+# server gave: that is the server's word, and the EIP-712 domain's.
+tokenof(pp: ref PendingPay): (string, string)
+{
+	case pp.token {
+	"eth" =>
+		return ("ETH", "18");
+	"usdc" =>
+		return ("USDC", "6");
+	"usd-cents" =>
+		return ("USD", "2");
+	}
+	if(pp.kind == "x402" && assetcurrency(pp.token) == "USDC")
+		return ("USDC", "6");
+	return ("unknown", "-");
+}
+
 approvepending0(id: int): string
 {
 	pp := findpending(id);
+	if(pp != nil && pp.result == WITHDRAWN)
+		return sys->sprint("payment %d was withdrawn: its requester stopped waiting; nothing was signed", id);
 	if(pp == nil || pp.result != nil)
 		return "pending payment not found: " + string id;
 	checkpendingexpiry(pp);
@@ -1625,8 +1689,9 @@ setnetwork(name: string): string
 {
 	for(i := 0; i < len networks; i++) {
 		if(networks[i].name == name) {
+			if((rerr := ethrpc->setrpc(networks[i].rpcurl)) != nil)
+				return "network " + name + ": " + rerr;
 			activenetwork = i;
-			ethrpc->setrpc(networks[i].rpcurl);
 			sys->fprint(stderr, "wallet9p: network: %s (%s)\n",
 				networks[i].name, networks[i].rpcurl);
 			return nil;

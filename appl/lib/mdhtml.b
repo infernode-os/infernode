@@ -46,6 +46,7 @@ Ctx: adt {
 	refs:	list of ref Ref;
 	depth:	int;	# of blocks: quotes and lists
 	idepth:	int;	# of spans: link text, emphasis
+	safe:	int;	# the text is not the page's author's (htmlsafe)
 };
 
 Maxdepth: con 32;	# of each; markdown-it's is 100, 20 in its CommonMark mode
@@ -85,9 +86,60 @@ html(text: string): string
 {
 	if(sys == nil)
 		init();
-	c := ref Ctx(nil, 0, 0);
+	c := ref Ctx(nil, 0, 0, 0);
 	l := getrefs(c, splitlines(text));
 	return blocks(c, l, 0);
+}
+
+# Text that is not its page's author's (a visitor's, a correspondent's,
+# a model's), for a page that is: the Markdown is Markdown, and nothing
+# of it is HTML of the writer's own.  html passes a block of HTML, a
+# tag and any link's destination through, which is right for a site's
+# own pages and gives anyone else's text the page's scripts.  Here a
+# tag is its characters, and a link or an image goes only where
+# safeurl allows; one that goes elsewhere is left as the text it was
+# written as.
+htmlsafe(text: string): string
+{
+	if(sys == nil)
+		init();
+	c := ref Ctx(nil, 0, 0, 1);
+	l := getrefs(c, splitlines(text));
+	return blocks(c, l, 0);
+}
+
+# A destination a stranger's link may have: http, https or mailto, or
+# no scheme at all (a path of the site, a fragment).  It is judged as
+# a browser will read it: after Markdown's backslashes, so with no
+# character reference in it (&colon; and &#58; are colons to a browser
+# and not to this), no blank or control character (browsers drop tabs
+# and newlines from a scheme) and no backslash left.
+safeurl(u: string): int
+{
+	t := "";
+	for(i := 0; i < len u; i++){
+		c := u[i];
+		if(c == '\\' && i+1 < len u && isescapable(u[i+1]))
+			c = u[++i];
+		else if(c == '&' && entity(u, i) > i)
+			return 0;
+		if(c <= ' ' || c == 16r7F || c == '\\')
+			return 0;
+		t[len t] = c;
+	}
+	for(i = 0; i < len t; i++){
+		c := t[i];
+		if(c == '/' || c == '?' || c == '#')
+			return 1;
+		if(c == ':'){
+			case lower(t[0:i]) {
+			"http" or "https" or "mailto" =>
+				return 1;
+			}
+			return 0;
+		}
+	}
+	return 1;
 }
 
 # Lines, without their ends, tabs set to the next multiple of four
@@ -145,7 +197,7 @@ getrefs(c: ref Ctx, l: array of string): array of string
 		# A block of raw HTML is its author's, definitions and all, as
 		# Markdown.pl has it (a line of a <pre> that looked like a
 		# definition was taken out of it and made a link elsewhere).
-		if(infence == nil && ind == 0 && (n == 0 || isblank(out[n-1])) && (hb := htmlblock(l, i)) > i){
+		if(!c.safe && infence == nil && ind == 0 && (n == 0 || isblank(out[n-1])) && (hb := htmlblock(l, i)) > i){
 			for(; i < hb; i++)
 				out[n++] = l[i];
 			i--;
@@ -343,7 +395,7 @@ blocks(c: ref Ctx, l: array of string, tight: int): string
 			i = j;
 			continue;
 		}
-		if(ind == 0 && (hb := htmlblock(l, i)) > i){
+		if(!c.safe && ind == 0 && (hb := htmlblock(l, i)) > i){
 			out = rawlines(l[i:hb]) :: out;
 			i = hb;
 			continue;
@@ -798,7 +850,7 @@ inline(c: ref Ctx, s: string): string
 				continue;
 			}
 		'<' =>
-			(h, j) := angle(sc, s, i);
+			(h, j) := angle(c, sc, s, i);
 			o += h;
 			i = j;
 			continue;
@@ -1050,6 +1102,8 @@ link(c: ref Ctx, sc: ref Scan, s: string, i: int, img: int): (string, int)
 			return (nil, i);
 		(url, title) = (r.url, r.title);
 	}
+	if(c.safe && !safeurl(url))
+		return (nil, i);
 	text := s[i+1:e];
 	t := "";
 	if(title != nil)
@@ -1140,7 +1194,7 @@ dest(sc: ref Scan, s: string, i: int): (string, string, int, int)
 }
 
 # At a '<': an autolink, raw HTML, or a less-than sign
-angle(sc: ref Scan, s: string, i: int): (string, int)
+angle(c: ref Ctx, sc: ref Scan, s: string, i: int): (string, int)
 {
 	n := len s;
 	j := i+1;
@@ -1148,12 +1202,12 @@ angle(sc: ref Scan, s: string, i: int): (string, int)
 		j++;
 	if(j < n && s[j] == '>' && j > i+1){
 		u := s[i+1:j];
-		if(isurl(u))
+		if(isurl(u) && (!c.safe || safeurl(u)))
 			return ("<a href=\"" + attr(u) + "\">" + escape(u) + "</a>", j+1);
 		if(isemail(u))
 			return ("<a href=\"mailto:" + attr(u) + "\">" + escape(u) + "</a>", j+1);
 	}
-	if((e := htmltag(sc, s, i)) > i)
+	if(!c.safe && (e := htmltag(sc, s, i)) > i)
 		return (s[i:e], e);
 	return ("&lt;", i+1);
 }

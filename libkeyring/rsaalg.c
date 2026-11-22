@@ -17,6 +17,9 @@ enum
 	MinRSAgen	= 16,
 	/* and the most: past it nothing returns, and near the largest int the digit counts wrap */
 	MaxRSAgen	= 1<<16,
+	/* the public exponent: FIPS 186-5 A.1.1 has it odd, above 2^16 and below 2^256 */
+	RSAebits	= 17,
+	MaxRSAebits	= 256,
 };
 
 /*
@@ -24,12 +27,21 @@ enum
  * from a string, which a peer or a file supplies, a modulus or a prime
  * of 0 reached mpdiv, whose answer to a zero divisor is sysfatal, and
  * the emulator ended.  Not a judgment of the key's strength.
+ *
+ * And as far as what it costs to use: the key is a peer's, and its
+ * signature is checked by raising to its exponent.  An exponent as long
+ * as the modulus made each check hundreds of times the work of one with
+ * the usual exponent, and with an even modulus (which is no product of
+ * two odd primes) mpexp leaves its fast path: seconds for one check at
+ * 8192 bits.  FIPS 186-5 A.1.1 has the exponent below 2^256.
  */
 static int
 rsapubok(RSApub *pub)
 {
 	return mpcmp(pub->n, mpone) > 0
+		&& (pub->n->p[0] & 1) != 0
 		&& mpcmp(pub->ek, mpone) > 0
+		&& mpsignif(pub->ek) <= MaxRSAebits
 		&& mpcmp(pub->ek, pub->n) < 0;
 }
 
@@ -168,6 +180,7 @@ static void*
 rsa_gen(int len)
 {
 	RSApriv *key;
+	int elen;
 
 	/*
 	 * rsagen() halves len for genprime(); a non-positive / tiny size
@@ -177,8 +190,16 @@ rsa_gen(int len)
 	 */
 	if(len < MinRSAgen || len > MaxRSAgen)
 		return nil;
+	/*
+	 * An exponent of 17 bits (FIPS 186-5 A.1.1: above 2^16); it was
+	 * 6 bits.  A modulus too short to have one below it (no size to
+	 * use: the least there are primes for) keeps the 6.
+	 */
+	elen = RSAebits;
+	if(len < 4*RSAebits)
+		elen = 6;
 	for(;;){
-		key = rsagen(len, 6, 0);
+		key = rsagen(len, elen, 0);
 		if(mpsignif(key->pub.n) == len)
 			return key;
 		rsaprivfree(key);
@@ -201,7 +222,7 @@ rsa_genfrompk(void *vpub)
 	pub = vpub;
 	nlen = mpsignif(pub->n);
 	elen = mpsignif(pub->ek);
-	if(nlen < MinRSAgen || elen < 2 || elen > nlen)
+	if(nlen < MinRSAgen || elen < 2 || elen > nlen || elen > MaxRSAebits)
 		return nil;
 	return rsagen(nlen, elen, 0);
 }

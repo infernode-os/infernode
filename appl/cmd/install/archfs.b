@@ -149,7 +149,7 @@ reader(fd: ref Sys->FD, ch: chan of ref Tmsg, sync: chan of int)
 {
 	sys->pctl(Sys->NEWFD|Sys->NEWNS, fd.fd :: nil);
 	sync <-= 1;
-	while((m := Tmsg.read(fd, Styx->MAXRPC)) != nil && tagof m != tagof Tmsg.Readerror)
+	while((m := Tmsg.read(fd, Styx->DEFMSIZE)) != nil && tagof m != tagof Tmsg.Readerror)
 		ch <-= m;
 	ch <-= m;
 }
@@ -170,7 +170,7 @@ serve(fd: ref Sys->FD, ch : chan of ref Tmsg, pidch : chan of int)
 			Readerror =>
 				fatal("read error on styx server", 1);
 			Version =>
-				(s, v) := styx->compatible(m, Styx->MAXRPC, Styx->VERSION);
+				(s, v) := styx->compatible(m, Styx->DEFMSIZE, Styx->VERSION);
 				reply(fd, ref Rmsg.Version(m.tag, s, v));
 			Auth =>
 				error(fd, m, "no authentication required");
@@ -237,7 +237,7 @@ serve(fd: ref Sys->FD, ch : chan of ref Tmsg, pidch : chan of int)
 					continue;
 				}
 				f.open = 1;
-				reply(fd, ref Rmsg.Open(m.tag, f.dir.dir.qid, Styx->MAXFDATA));
+				reply(fd, ref Rmsg.Open(m.tag, f.dir.dir.qid, Styx->DEFIOUNIT));
 			Create =>
 				error(fd, m, Eperm);
 			Read =>

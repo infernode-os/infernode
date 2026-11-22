@@ -572,6 +572,15 @@ typedef struct {
 } ge_cached;
 
 /*
+ * carry times two to the n.  ref10 writes it "carry << n", and a carry
+ * out of a signed limb is negative half the time: a left shift of a
+ * negative value, which C leaves undefined (C11 6.5.7).  The compilers
+ * in use shift all the same, but one may reason from "carry is not
+ * negative".  The product is defined, and is compiled to the shift.
+ */
+#define SHL(x, n)	((x) * ((i64)1 << (n)))
+
+/*
  * Load/store functions
  */
 static u64
@@ -669,17 +678,17 @@ fe_frombytes(fe h, const uchar *s)
 	i64 carry0, carry1, carry2, carry3, carry4;
 	i64 carry5, carry6, carry7, carry8, carry9;
 
-	carry9 = (h9 + (i64)(1 << 24)) >> 25; h0 += carry9 * 19; h9 -= carry9 << 25;
-	carry1 = (h1 + (i64)(1 << 24)) >> 25; h2 += carry1; h1 -= carry1 << 25;
-	carry3 = (h3 + (i64)(1 << 24)) >> 25; h4 += carry3; h3 -= carry3 << 25;
-	carry5 = (h5 + (i64)(1 << 24)) >> 25; h6 += carry5; h5 -= carry5 << 25;
-	carry7 = (h7 + (i64)(1 << 24)) >> 25; h8 += carry7; h7 -= carry7 << 25;
+	carry9 = (h9 + (i64)(1 << 24)) >> 25; h0 += carry9 * 19; h9 -= SHL(carry9, 25);
+	carry1 = (h1 + (i64)(1 << 24)) >> 25; h2 += carry1; h1 -= SHL(carry1, 25);
+	carry3 = (h3 + (i64)(1 << 24)) >> 25; h4 += carry3; h3 -= SHL(carry3, 25);
+	carry5 = (h5 + (i64)(1 << 24)) >> 25; h6 += carry5; h5 -= SHL(carry5, 25);
+	carry7 = (h7 + (i64)(1 << 24)) >> 25; h8 += carry7; h7 -= SHL(carry7, 25);
 
-	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= carry0 << 26;
-	carry2 = (h2 + (i64)(1 << 25)) >> 26; h3 += carry2; h2 -= carry2 << 26;
-	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= carry4 << 26;
-	carry6 = (h6 + (i64)(1 << 25)) >> 26; h7 += carry6; h6 -= carry6 << 26;
-	carry8 = (h8 + (i64)(1 << 25)) >> 26; h9 += carry8; h8 -= carry8 << 26;
+	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= SHL(carry0, 26);
+	carry2 = (h2 + (i64)(1 << 25)) >> 26; h3 += carry2; h2 -= SHL(carry2, 26);
+	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= SHL(carry4, 26);
+	carry6 = (h6 + (i64)(1 << 25)) >> 26; h7 += carry6; h6 -= SHL(carry6, 26);
+	carry8 = (h8 + (i64)(1 << 25)) >> 26; h9 += carry8; h8 -= SHL(carry8, 26);
 
 	h[0] = (i32)h0;
 	h[1] = (i32)h1;
@@ -724,16 +733,16 @@ fe_reduce(fe h, const fe f)
 
 	h0 += 19 * q;
 
-	carry0 = h0 >> 26; h1 += carry0; h0 -= carry0 << 26;
-	carry1 = h1 >> 25; h2 += carry1; h1 -= carry1 << 25;
-	carry2 = h2 >> 26; h3 += carry2; h2 -= carry2 << 26;
-	carry3 = h3 >> 25; h4 += carry3; h3 -= carry3 << 25;
-	carry4 = h4 >> 26; h5 += carry4; h4 -= carry4 << 26;
-	carry5 = h5 >> 25; h6 += carry5; h5 -= carry5 << 25;
-	carry6 = h6 >> 26; h7 += carry6; h6 -= carry6 << 26;
-	carry7 = h7 >> 25; h8 += carry7; h7 -= carry7 << 25;
-	carry8 = h8 >> 26; h9 += carry8; h8 -= carry8 << 26;
-	carry9 = h9 >> 25; h9 -= carry9 << 25;
+	carry0 = h0 >> 26; h1 += carry0; h0 -= SHL(carry0, 26);
+	carry1 = h1 >> 25; h2 += carry1; h1 -= SHL(carry1, 25);
+	carry2 = h2 >> 26; h3 += carry2; h2 -= SHL(carry2, 26);
+	carry3 = h3 >> 25; h4 += carry3; h3 -= SHL(carry3, 25);
+	carry4 = h4 >> 26; h5 += carry4; h4 -= SHL(carry4, 26);
+	carry5 = h5 >> 25; h6 += carry5; h5 -= SHL(carry5, 25);
+	carry6 = h6 >> 26; h7 += carry6; h6 -= SHL(carry6, 26);
+	carry7 = h7 >> 25; h8 += carry7; h7 -= SHL(carry7, 25);
+	carry8 = h8 >> 26; h9 += carry8; h8 -= SHL(carry8, 26);
+	carry9 = h9 >> 25; h9 -= SHL(carry9, 25);
 
 	h[0] = h0;
 	h[1] = h1;
@@ -756,32 +765,32 @@ fe_tobytes(uchar *s, const fe h)
 	s[0] = (uchar)(t[0]);
 	s[1] = (uchar)(t[0] >> 8);
 	s[2] = (uchar)(t[0] >> 16);
-	s[3] = (uchar)((t[0] >> 24) | (t[1] << 2));
+	s[3] = (uchar)((t[0] >> 24) | ((u32)t[1] << 2));
 	s[4] = (uchar)(t[1] >> 6);
 	s[5] = (uchar)(t[1] >> 14);
-	s[6] = (uchar)((t[1] >> 22) | (t[2] << 3));
+	s[6] = (uchar)((t[1] >> 22) | ((u32)t[2] << 3));
 	s[7] = (uchar)(t[2] >> 5);
 	s[8] = (uchar)(t[2] >> 13);
-	s[9] = (uchar)((t[2] >> 21) | (t[3] << 5));
+	s[9] = (uchar)((t[2] >> 21) | ((u32)t[3] << 5));
 	s[10] = (uchar)(t[3] >> 3);
 	s[11] = (uchar)(t[3] >> 11);
-	s[12] = (uchar)((t[3] >> 19) | (t[4] << 6));
+	s[12] = (uchar)((t[3] >> 19) | ((u32)t[4] << 6));
 	s[13] = (uchar)(t[4] >> 2);
 	s[14] = (uchar)(t[4] >> 10);
 	s[15] = (uchar)(t[4] >> 18);
 	s[16] = (uchar)(t[5]);
 	s[17] = (uchar)(t[5] >> 8);
 	s[18] = (uchar)(t[5] >> 16);
-	s[19] = (uchar)((t[5] >> 24) | (t[6] << 1));
+	s[19] = (uchar)((t[5] >> 24) | ((u32)t[6] << 1));
 	s[20] = (uchar)(t[6] >> 7);
 	s[21] = (uchar)(t[6] >> 15);
-	s[22] = (uchar)((t[6] >> 23) | (t[7] << 3));
+	s[22] = (uchar)((t[6] >> 23) | ((u32)t[7] << 3));
 	s[23] = (uchar)(t[7] >> 5);
 	s[24] = (uchar)(t[7] >> 13);
-	s[25] = (uchar)((t[7] >> 21) | (t[8] << 4));
+	s[25] = (uchar)((t[7] >> 21) | ((u32)t[8] << 4));
 	s[26] = (uchar)(t[8] >> 4);
 	s[27] = (uchar)(t[8] >> 12);
-	s[28] = (uchar)((t[8] >> 20) | (t[9] << 6));
+	s[28] = (uchar)((t[8] >> 20) | ((u32)t[9] << 6));
 	s[29] = (uchar)(t[9] >> 2);
 	s[30] = (uchar)(t[9] >> 10);
 	s[31] = (uchar)(t[9] >> 18);
@@ -812,18 +821,18 @@ fe_mul(fe h, const fe f, const fe g)
 	h8 = (i64)f0*g8 + (i64)f1_2*g7 + (i64)f2*g6 + (i64)f3_2*g5 + (i64)f4*g4 + (i64)f5_2*g3 + (i64)f6*g2 + (i64)f7_2*g1 + (i64)f8*g0 + (i64)f9_2*g9_19;
 	h9 = (i64)f0*g9 + (i64)f1*g8 + (i64)f2*g7 + (i64)f3*g6 + (i64)f4*g5 + (i64)f5*g4 + (i64)f6*g3 + (i64)f7*g2 + (i64)f8*g1 + (i64)f9*g0;
 
-	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= carry0 << 26;
-	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= carry4 << 26;
-	carry1 = (h1 + (i64)(1 << 24)) >> 25; h2 += carry1; h1 -= carry1 << 25;
-	carry5 = (h5 + (i64)(1 << 24)) >> 25; h6 += carry5; h5 -= carry5 << 25;
-	carry2 = (h2 + (i64)(1 << 25)) >> 26; h3 += carry2; h2 -= carry2 << 26;
-	carry6 = (h6 + (i64)(1 << 25)) >> 26; h7 += carry6; h6 -= carry6 << 26;
-	carry3 = (h3 + (i64)(1 << 24)) >> 25; h4 += carry3; h3 -= carry3 << 25;
-	carry7 = (h7 + (i64)(1 << 24)) >> 25; h8 += carry7; h7 -= carry7 << 25;
-	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= carry4 << 26;
-	carry8 = (h8 + (i64)(1 << 25)) >> 26; h9 += carry8; h8 -= carry8 << 26;
-	carry9 = (h9 + (i64)(1 << 24)) >> 25; h0 += carry9 * 19; h9 -= carry9 << 25;
-	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= carry0 << 26;
+	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= SHL(carry0, 26);
+	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= SHL(carry4, 26);
+	carry1 = (h1 + (i64)(1 << 24)) >> 25; h2 += carry1; h1 -= SHL(carry1, 25);
+	carry5 = (h5 + (i64)(1 << 24)) >> 25; h6 += carry5; h5 -= SHL(carry5, 25);
+	carry2 = (h2 + (i64)(1 << 25)) >> 26; h3 += carry2; h2 -= SHL(carry2, 26);
+	carry6 = (h6 + (i64)(1 << 25)) >> 26; h7 += carry6; h6 -= SHL(carry6, 26);
+	carry3 = (h3 + (i64)(1 << 24)) >> 25; h4 += carry3; h3 -= SHL(carry3, 25);
+	carry7 = (h7 + (i64)(1 << 24)) >> 25; h8 += carry7; h7 -= SHL(carry7, 25);
+	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= SHL(carry4, 26);
+	carry8 = (h8 + (i64)(1 << 25)) >> 26; h9 += carry8; h8 -= SHL(carry8, 26);
+	carry9 = (h9 + (i64)(1 << 24)) >> 25; h0 += carry9 * 19; h9 -= SHL(carry9, 25);
+	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= SHL(carry0, 26);
 
 	h[0] = (i32)h0; h[1] = (i32)h1; h[2] = (i32)h2; h[3] = (i32)h3; h[4] = (i32)h4;
 	h[5] = (i32)h5; h[6] = (i32)h6; h[7] = (i32)h7; h[8] = (i32)h8; h[9] = (i32)h9;
@@ -1178,12 +1187,57 @@ static const fe By = {
 	6710886, 53687091, 13421772, 40265318, 26843545
 };
 
+/*
+ * r = t[n], n 0 to 15, in constant time: every entry is read and the
+ * one wanted kept by a mask, so neither a branch nor an address is made
+ * from n, which is four bits of a secret scalar.
+ */
+static void
+ge_cached_select(ge_cached *r, const ge_cached *t, u32 n)
+{
+	i32 mask;
+	u32 j;
+	int i;
+
+	memset(r, 0, sizeof(*r));
+	for(j = 0; j < 16; j++){
+		mask = -(i32)(((j ^ n) - 1) >> 31);	/* all ones when j is n */
+		for(i = 0; i < 10; i++){
+			r->YplusX[i] |= t[j].YplusX[i] & mask;
+			r->YminusX[i] |= t[j].YminusX[i] & mask;
+			r->Z[i] |= t[j].Z[i] & mask;
+			r->T2d[i] |= t[j].T2d[i] & mask;
+		}
+	}
+}
+
+/*
+ * h = [a]B, a any 256 bits, in constant time: a is the secret scalar
+ * when a key is made and the nonce when a message is signed.
+ *
+ * This was double-and-add, the addition made only for the bits of a
+ * that are set: the time said how many there are, and which additions
+ * were made (a branch a neighbour's cache or branch predictor sees)
+ * said which.  A nonce's bits are the key's (S = r + ha).
+ *
+ * Now a is taken four bits at a time from the top: h is doubled four
+ * times and one of 0B, 1B, ... 15B is added, always, chosen by
+ * ge_cached_select.  Adding 0B, the neutral element, is a sound use of
+ * ge_add: it is the unified addition of Hisil, Wong, Carter and Dawson
+ * ("Twisted Edwards curves revisited", 2008), which on this curve is
+ * complete, with no special case for equal or neutral points, -1 being
+ * a square and d not (Bernstein and Lange, "Faster addition and
+ * doubling on elliptic curves", 2007).  The table is public; it is
+ * made here each time (fourteen additions, which with the loop's
+ * sixty-four are fewer than the 128 the old loop made on average).
+ */
 static void
 ge_scalarmult_base(ge_p3 *h, const uchar *a)
 {
 	ge_p3 B;
 	ge_p1p1 t;
-	ge_cached Bcached;
+	ge_p2 p2;
+	ge_cached Bcached, sel, tab[16];
 	int i;
 	static int tested = 0;
 
@@ -1290,16 +1344,35 @@ ge_scalarmult_base(ge_p3 *h, const uchar *a)
 		}
 	}
 
-	/* Simple binary double-and-add: h = [a]B */
+	/* 0B (as ge_p3_to_cached makes it: Y+X, Y-X and Z are 1, 2dT is 0), 1B, ..., 15B */
 	ge_p3_0(h);
-	for(i = 255; i >= 0; i--){
-		ge_p3_dbl(&t, h);
+	ge_p3_to_cached(&tab[0], h);
+	tab[1] = Bcached;
+	for(i = 2; i < 16; i++){
+		ge_add(&t, &B, &tab[i-1]);
 		ge_p1p1_to_p3(h, &t);
-		if((a[i/8] >> (i&7)) & 1){
-			ge_add(&t, h, &Bcached);
-			ge_p1p1_to_p3(h, &t);
-		}
+		ge_p3_to_cached(&tab[i], h);
 	}
+
+	ge_p3_0(h);
+	for(i = 63; i >= 0; i--){
+		/* h = 16h: only the last doubling needs T */
+		ge_p3_dbl(&t, h);
+		ge_p1p1_to_p2(&p2, &t);
+		ge_p2_dbl(&t, &p2);
+		ge_p1p1_to_p2(&p2, &t);
+		ge_p2_dbl(&t, &p2);
+		ge_p1p1_to_p2(&p2, &t);
+		ge_p2_dbl(&t, &p2);
+		ge_p1p1_to_p3(h, &t);
+
+		ge_cached_select(&sel, tab, (a[i/2] >> (4*(i&1))) & 15);
+		ge_add(&t, h, &sel);
+		ge_p1p1_to_p3(h, &t);
+	}
+	/* the entry chosen last is four bits of a, and p2 a multiple by its top bits */
+	secureZero(&sel, sizeof(sel));
+	secureZero(&p2, sizeof(p2));
 }
 
 /*
@@ -1385,18 +1458,18 @@ sc_reduce(uchar *s)
 	s11 -= s18 * 683901;
 	s18 = 0;
 
-	carry6 = (s6 + (1 << 20)) >> 21; s7 += carry6; s6 -= carry6 << 21;
-	carry8 = (s8 + (1 << 20)) >> 21; s9 += carry8; s8 -= carry8 << 21;
-	carry10 = (s10 + (1 << 20)) >> 21; s11 += carry10; s10 -= carry10 << 21;
-	carry12 = (s12 + (1 << 20)) >> 21; s13 += carry12; s12 -= carry12 << 21;
-	carry14 = (s14 + (1 << 20)) >> 21; s15 += carry14; s14 -= carry14 << 21;
-	carry16 = (s16 + (1 << 20)) >> 21; s17 += carry16; s16 -= carry16 << 21;
+	carry6 = (s6 + (1 << 20)) >> 21; s7 += carry6; s6 -= SHL(carry6, 21);
+	carry8 = (s8 + (1 << 20)) >> 21; s9 += carry8; s8 -= SHL(carry8, 21);
+	carry10 = (s10 + (1 << 20)) >> 21; s11 += carry10; s10 -= SHL(carry10, 21);
+	carry12 = (s12 + (1 << 20)) >> 21; s13 += carry12; s12 -= SHL(carry12, 21);
+	carry14 = (s14 + (1 << 20)) >> 21; s15 += carry14; s14 -= SHL(carry14, 21);
+	carry16 = (s16 + (1 << 20)) >> 21; s17 += carry16; s16 -= SHL(carry16, 21);
 
-	carry7 = (s7 + (1 << 20)) >> 21; s8 += carry7; s7 -= carry7 << 21;
-	carry9 = (s9 + (1 << 20)) >> 21; s10 += carry9; s9 -= carry9 << 21;
-	carry11 = (s11 + (1 << 20)) >> 21; s12 += carry11; s11 -= carry11 << 21;
-	carry13 = (s13 + (1 << 20)) >> 21; s14 += carry13; s13 -= carry13 << 21;
-	carry15 = (s15 + (1 << 20)) >> 21; s16 += carry15; s15 -= carry15 << 21;
+	carry7 = (s7 + (1 << 20)) >> 21; s8 += carry7; s7 -= SHL(carry7, 21);
+	carry9 = (s9 + (1 << 20)) >> 21; s10 += carry9; s9 -= SHL(carry9, 21);
+	carry11 = (s11 + (1 << 20)) >> 21; s12 += carry11; s11 -= SHL(carry11, 21);
+	carry13 = (s13 + (1 << 20)) >> 21; s14 += carry13; s13 -= SHL(carry13, 21);
+	carry15 = (s15 + (1 << 20)) >> 21; s16 += carry15; s15 -= SHL(carry15, 21);
 
 	s5 += s17 * 666643;
 	s6 += s17 * 470296;
@@ -1446,40 +1519,19 @@ sc_reduce(uchar *s)
 	s5 -= s12 * 683901;
 	s12 = 0;
 
-	carry0 = (s0 + (1 << 20)) >> 21; s1 += carry0; s0 -= carry0 << 21;
-	carry2 = (s2 + (1 << 20)) >> 21; s3 += carry2; s2 -= carry2 << 21;
-	carry4 = (s4 + (1 << 20)) >> 21; s5 += carry4; s4 -= carry4 << 21;
-	carry6 = (s6 + (1 << 20)) >> 21; s7 += carry6; s6 -= carry6 << 21;
-	carry8 = (s8 + (1 << 20)) >> 21; s9 += carry8; s8 -= carry8 << 21;
-	carry10 = (s10 + (1 << 20)) >> 21; s11 += carry10; s10 -= carry10 << 21;
+	carry0 = (s0 + (1 << 20)) >> 21; s1 += carry0; s0 -= SHL(carry0, 21);
+	carry2 = (s2 + (1 << 20)) >> 21; s3 += carry2; s2 -= SHL(carry2, 21);
+	carry4 = (s4 + (1 << 20)) >> 21; s5 += carry4; s4 -= SHL(carry4, 21);
+	carry6 = (s6 + (1 << 20)) >> 21; s7 += carry6; s6 -= SHL(carry6, 21);
+	carry8 = (s8 + (1 << 20)) >> 21; s9 += carry8; s8 -= SHL(carry8, 21);
+	carry10 = (s10 + (1 << 20)) >> 21; s11 += carry10; s10 -= SHL(carry10, 21);
 
-	carry1 = (s1 + (1 << 20)) >> 21; s2 += carry1; s1 -= carry1 << 21;
-	carry3 = (s3 + (1 << 20)) >> 21; s4 += carry3; s3 -= carry3 << 21;
-	carry5 = (s5 + (1 << 20)) >> 21; s6 += carry5; s5 -= carry5 << 21;
-	carry7 = (s7 + (1 << 20)) >> 21; s8 += carry7; s7 -= carry7 << 21;
-	carry9 = (s9 + (1 << 20)) >> 21; s10 += carry9; s9 -= carry9 << 21;
-	carry11 = (s11 + (1 << 20)) >> 21; s12 += carry11; s11 -= carry11 << 21;
-
-	s0 += s12 * 666643;
-	s1 += s12 * 470296;
-	s2 += s12 * 654183;
-	s3 -= s12 * 997805;
-	s4 += s12 * 136657;
-	s5 -= s12 * 683901;
-	s12 = 0;
-
-	carry0 = s0 >> 21; s1 += carry0; s0 -= carry0 << 21;
-	carry1 = s1 >> 21; s2 += carry1; s1 -= carry1 << 21;
-	carry2 = s2 >> 21; s3 += carry2; s2 -= carry2 << 21;
-	carry3 = s3 >> 21; s4 += carry3; s3 -= carry3 << 21;
-	carry4 = s4 >> 21; s5 += carry4; s4 -= carry4 << 21;
-	carry5 = s5 >> 21; s6 += carry5; s5 -= carry5 << 21;
-	carry6 = s6 >> 21; s7 += carry6; s6 -= carry6 << 21;
-	carry7 = s7 >> 21; s8 += carry7; s7 -= carry7 << 21;
-	carry8 = s8 >> 21; s9 += carry8; s8 -= carry8 << 21;
-	carry9 = s9 >> 21; s10 += carry9; s9 -= carry9 << 21;
-	carry10 = s10 >> 21; s11 += carry10; s10 -= carry10 << 21;
-	carry11 = s11 >> 21; s12 += carry11; s11 -= carry11 << 21;
+	carry1 = (s1 + (1 << 20)) >> 21; s2 += carry1; s1 -= SHL(carry1, 21);
+	carry3 = (s3 + (1 << 20)) >> 21; s4 += carry3; s3 -= SHL(carry3, 21);
+	carry5 = (s5 + (1 << 20)) >> 21; s6 += carry5; s5 -= SHL(carry5, 21);
+	carry7 = (s7 + (1 << 20)) >> 21; s8 += carry7; s7 -= SHL(carry7, 21);
+	carry9 = (s9 + (1 << 20)) >> 21; s10 += carry9; s9 -= SHL(carry9, 21);
+	carry11 = (s11 + (1 << 20)) >> 21; s12 += carry11; s11 -= SHL(carry11, 21);
 
 	s0 += s12 * 666643;
 	s1 += s12 * 470296;
@@ -1489,17 +1541,38 @@ sc_reduce(uchar *s)
 	s5 -= s12 * 683901;
 	s12 = 0;
 
-	carry0 = s0 >> 21; s1 += carry0; s0 -= carry0 << 21;
-	carry1 = s1 >> 21; s2 += carry1; s1 -= carry1 << 21;
-	carry2 = s2 >> 21; s3 += carry2; s2 -= carry2 << 21;
-	carry3 = s3 >> 21; s4 += carry3; s3 -= carry3 << 21;
-	carry4 = s4 >> 21; s5 += carry4; s4 -= carry4 << 21;
-	carry5 = s5 >> 21; s6 += carry5; s5 -= carry5 << 21;
-	carry6 = s6 >> 21; s7 += carry6; s6 -= carry6 << 21;
-	carry7 = s7 >> 21; s8 += carry7; s7 -= carry7 << 21;
-	carry8 = s8 >> 21; s9 += carry8; s8 -= carry8 << 21;
-	carry9 = s9 >> 21; s10 += carry9; s9 -= carry9 << 21;
-	carry10 = s10 >> 21; s11 += carry10; s10 -= carry10 << 21;
+	carry0 = s0 >> 21; s1 += carry0; s0 -= SHL(carry0, 21);
+	carry1 = s1 >> 21; s2 += carry1; s1 -= SHL(carry1, 21);
+	carry2 = s2 >> 21; s3 += carry2; s2 -= SHL(carry2, 21);
+	carry3 = s3 >> 21; s4 += carry3; s3 -= SHL(carry3, 21);
+	carry4 = s4 >> 21; s5 += carry4; s4 -= SHL(carry4, 21);
+	carry5 = s5 >> 21; s6 += carry5; s5 -= SHL(carry5, 21);
+	carry6 = s6 >> 21; s7 += carry6; s6 -= SHL(carry6, 21);
+	carry7 = s7 >> 21; s8 += carry7; s7 -= SHL(carry7, 21);
+	carry8 = s8 >> 21; s9 += carry8; s8 -= SHL(carry8, 21);
+	carry9 = s9 >> 21; s10 += carry9; s9 -= SHL(carry9, 21);
+	carry10 = s10 >> 21; s11 += carry10; s10 -= SHL(carry10, 21);
+	carry11 = s11 >> 21; s12 += carry11; s11 -= SHL(carry11, 21);
+
+	s0 += s12 * 666643;
+	s1 += s12 * 470296;
+	s2 += s12 * 654183;
+	s3 -= s12 * 997805;
+	s4 += s12 * 136657;
+	s5 -= s12 * 683901;
+	s12 = 0;
+
+	carry0 = s0 >> 21; s1 += carry0; s0 -= SHL(carry0, 21);
+	carry1 = s1 >> 21; s2 += carry1; s1 -= SHL(carry1, 21);
+	carry2 = s2 >> 21; s3 += carry2; s2 -= SHL(carry2, 21);
+	carry3 = s3 >> 21; s4 += carry3; s3 -= SHL(carry3, 21);
+	carry4 = s4 >> 21; s5 += carry4; s4 -= SHL(carry4, 21);
+	carry5 = s5 >> 21; s6 += carry5; s5 -= SHL(carry5, 21);
+	carry6 = s6 >> 21; s7 += carry6; s6 -= SHL(carry6, 21);
+	carry7 = s7 >> 21; s8 += carry7; s7 -= SHL(carry7, 21);
+	carry8 = s8 >> 21; s9 += carry8; s8 -= SHL(carry8, 21);
+	carry9 = s9 >> 21; s10 += carry9; s9 -= SHL(carry9, 21);
+	carry10 = s10 >> 21; s11 += carry10; s10 -= SHL(carry10, 21);
 
 	s[0] = (uchar)(s0);
 	s[1] = (uchar)(s0 >> 8);
@@ -1536,79 +1609,58 @@ sc_reduce(uchar *s)
 }
 
 /*
- * Scalar multiply-add: s = (a * b + c) mod L
- * Uses mpint for correctness (slower but verified)
- * a, b, c are 32-byte scalars in little-endian
- * Result s is also 32 bytes little-endian
+ * s = (a*b + c) mod L, each 32 bytes, little-endian, in constant time:
+ * in a signature S = (h*a + r) mod L, a is the secret scalar and r the
+ * nonce, and either gives the other away (RFC 8032 5.1.6).
+ *
+ * It was libmp's mpmul, mpadd and mpmod, which loop by the operands'
+ * significant digits, divide by trial quotients and corrections that
+ * depend on the values, and allocate.
+ *
+ * Now the product and sum are made whole, 512 bits in sixteen 32-bit
+ * limbs by the schoolbook method (a 32 by 32 bit multiplication into
+ * 64 bits, the same steps whatever the values), and reduced by
+ * sc_reduce, ref10's reduction of a 512-bit number mod L in fixed
+ * limbs, which the nonce and h already go through.  Any a, b and c
+ * fit: (2^256-1)^2 + 2^256-1 is less than 2^512.
  */
 static void
-sc_muladd_simple(uchar *s, const uchar *a, const uchar *b, const uchar *c)
+sc_muladd(uchar *s, const uchar *a, const uchar *b, const uchar *c)
 {
-	/* L = 2^252 + 27742317777372353535851937790883648493 */
-	static const uchar L_bytes[32] = {
-		0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
-		0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10
-	};
-	mpint *ma, *mb, *mc, *ml, *mab, *mabc, *ms;
-	int i;
+	u32 al[8], bl[8], p[16];
+	uchar w[64];
+	u64 t;
+	int i, j;
 
-	/* Convert from little-endian bytes to mpint */
-	ma = betomp((uchar*)a, 32, nil);
-	mb = betomp((uchar*)b, 32, nil);
-	mc = betomp((uchar*)c, 32, nil);
-	ml = betomp((uchar*)L_bytes, 32, nil);
-
-	/* Need to reverse bytes since betomp expects big-endian */
-	{
-		uchar rev_a[32], rev_b[32], rev_c[32], rev_L[32];
-		for(i = 0; i < 32; i++){
-			rev_a[i] = a[31-i];
-			rev_b[i] = b[31-i];
-			rev_c[i] = c[31-i];
-			rev_L[i] = L_bytes[31-i];
+	for(i = 0; i < 8; i++){
+		al[i] = (u32)load_4(a + 4*i);
+		bl[i] = (u32)load_4(b + 4*i);
+		p[i] = (u32)load_4(c + 4*i);
+		p[i+8] = 0;
+	}
+	for(i = 0; i < 8; i++){
+		/* t is at most (2^32-1)^2 + 2(2^32-1) = 2^64-1 */
+		t = 0;
+		for(j = 0; j < 8; j++){
+			t += (u64)al[i]*bl[j] + p[i+j];
+			p[i+j] = (u32)t;
+			t >>= 32;
 		}
-		mpfree(ma); mpfree(mb); mpfree(mc); mpfree(ml);
-		ma = betomp(rev_a, 32, nil);
-		mb = betomp(rev_b, 32, nil);
-		mc = betomp(rev_c, 32, nil);
-		ml = betomp(rev_L, 32, nil);
+		p[i+8] = (u32)t;
 	}
-
-	/* Compute (a * b + c) mod L */
-	mab = mpnew(0);
-	mabc = mpnew(0);
-	ms = mpnew(0);
-
-	mpmul(ma, mb, mab);       /* mab = a * b */
-	mpadd(mab, mc, mabc);     /* mabc = a * b + c */
-	mpmod(mabc, ml, ms);      /* ms = (a * b + c) mod L */
-
-	/* Convert back to little-endian bytes */
-	{
-		uchar be_s[32];
-		int len, offset;
-
-		memset(be_s, 0, 32);
-		/* mptobe may not pad with leading zeros correctly, so we
-		 * calculate the actual byte length and right-align manually */
-		len = (mpsignif(ms) + 7) / 8;
-		if(len > 32) len = 32;
-		if(len == 0) len = 1;  /* Handle zero case */
-		offset = 32 - len;
-		mptobe(ms, be_s + offset, len, nil);
-		for(i = 0; i < 32; i++)
-			s[i] = be_s[31-i];
+	for(i = 0; i < 16; i++){
+		w[4*i] = (uchar)p[i];
+		w[4*i+1] = (uchar)(p[i] >> 8);
+		w[4*i+2] = (uchar)(p[i] >> 16);
+		w[4*i+3] = (uchar)(p[i] >> 24);
 	}
-
-	mpfree(ma);
-	mpfree(mb);
-	mpfree(mc);
-	mpfree(ml);
-	mpfree(mab);
-	mpfree(mabc);
-	mpfree(ms);
+	sc_reduce(w);
+	memmove(s, w, 32);
+	secureZero(al, sizeof(al));
+	secureZero(bl, sizeof(bl));
+	secureZero(p, sizeof(p));
+	secureZero(w, sizeof(w));
+	secureZero(&t, sizeof(t));
 }
 
 /*
@@ -1705,7 +1757,7 @@ ed25519_sign(uchar *sig, const uchar *m, ulong mlen, const uchar *sk)
 	sc_reduce(hram);
 
 	/* s * hram + r mod L -> sig[32..63] */
-	sc_muladd_simple(sig + 32, hram, hash, r);
+	sc_muladd(sig + 32, hram, hash, r);
 
 	secureZero(hash, sizeof(hash));
 	secureZero(r, sizeof(r));

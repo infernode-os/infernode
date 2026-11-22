@@ -55,7 +55,10 @@ Imap: module
 		recent:		int;		# recent messages
 		unseen:		int;		# first unseen seq
 		uidnext:	int;
-		uidvalidity:	int;
+		# an unsigned 32-bit number (RFC 3501 2.3.1.1), so a big:
+		# as an int every value from 2^31 up was the largest int,
+		# and a change among them was no change.  0 if none came.
+		uidvalidity:	big;
 	};
 
 	# Connect, authenticate, return error string or nil
@@ -120,6 +123,7 @@ Imap: module
 	parseflags:	fn(s: string): int;
 	flagstostring:	fn(flags: int): string;
 	parsefetchline:	fn(line: string): ref Msg;
+	uidvalidityof:	fn(line: string): big;	# of "* OK [UIDVALIDITY n] ..."; 0 if it is none
 	checkliteral:	fn(line: string): int;
 	parselistname:	fn(line: string): string;
 	hasprefix:	fn(s, prefix: string): int;

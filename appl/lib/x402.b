@@ -213,7 +213,7 @@ authorize(req: ref PaymentReq, resource: ref ResourceInfo,
 		return (nil, "no authorization returned");
 	if(len result >= 8 && result[0:8] == "pending:") {
 		if(waitsecs <= 0)
-			return ("", result);
+			return (nil, "the wallet's controller must approve it, and nothing waits for that (" + result[8:] + " is withdrawn)");
 		# its reader ends when the payment is decided or expires, its
 		# answer left in rc (an agent's /prog has only its own pid)
 		rc := chan[1] of string;
@@ -226,7 +226,16 @@ authorize(req: ref PaymentReq, resource: ref ResourceInfo,
 				return (nil, "no authorization returned");
 			result = r;
 		<-tick =>
-			return ("", result);	# still pending; caller may retry later
+			# Not approved in time: the request is withdrawn, so
+			# that nothing is signed for a requester that has gone
+			# (the reader is answered by it, and the file closes).
+			# It said "pending" here, the caller said to try again
+			# once it was approved, and the approval then signed an
+			# authorization nobody read, the next try being a new
+			# request.
+			wd := array of byte "withdraw";
+			sys->write(fd, wd, len wd);
+			return (nil, sys->sprint("not approved within %d seconds: the request (%s) is withdrawn; ask again when the wallet's controller is there to approve it", waitsecs, result[8:]));
 		}
 	}
 	if(result == "denied")

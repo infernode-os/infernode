@@ -6,7 +6,7 @@ implement KeyringArgsTest;
 #
 # - A digest's count of bytes was only held to the array's length from
 #   above. A negative one went to libsec as an unsigned length: sha1, md5
-#   and md4 stepped back from the array and hashed up to 63 bytes found
+#   and (then) md4 stepped back from the array and hashed up to 63 bytes found
 #   before it, so a program read the heap below its array a byte at a
 #   time by matching digests; the SHA-2 and SHA-3 digests walked forward
 #   to the end of memory.
@@ -136,9 +136,10 @@ nfds(): int
 }
 
 digests := array[] of {
-	# the three that stepped back and read, first: they raise nothing
-	# in the code before, where the others fault
-	"sha1", "md5", "md4", "hmac_sha1", "hmac_md5",
+	# the two that stepped back and read (md4, since removed, was a
+	# third), first: they raise nothing in the code before, where the
+	# others fault
+	"sha1", "md5", "hmac_sha1", "hmac_md5",
 	"sha224", "sha256", "sha384", "sha512",
 	"hmac_sha256", "hmac_sha384", "hmac_sha512",
 	"sha3_256", "sha3_512", "keccak256",
@@ -153,7 +154,6 @@ digest(alg: string, buf: array of byte, n: int): string
 		case alg {
 		"sha1" =>	kr->sha1(buf, n, d, nil);
 		"md5" =>	kr->md5(buf, n, d, nil);
-		"md4" =>	kr->md4(buf, n, d, nil);
 		"sha224" =>	kr->sha224(buf, n, d, nil);
 		"sha256" =>	kr->sha256(buf, n, d, nil);
 		"sha384" =>	kr->sha384(buf, n, d, nil);

@@ -216,7 +216,7 @@ tools/gps.dis: tools/gps.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/gps.dis tools/gps.b
 
 # Vision tool
-tools/vision.dis: tools/vision.b tool.m $MODDIR/draw.m $MODDIR/sys.m
+tools/vision.dis: tools/vision.b tool.m $MODDIR/draw.m $MODDIR/sys.m $MODDIR/string.m
 	limbo $LIMBOFLAGS -gw -o tools/vision.dis tools/vision.b
 
 # Fractal tool

@@ -159,6 +159,17 @@ testMountArguments(t: ref T)
 	t.assertseq(e, "", "a bind that fails is passed over with -i");
 }
 
+# Lines that asked for Plan 9's authentication (factotum's p9any, which
+# is gone) say so; they dialled, and failed at the far end or for want
+# of one.
+testPlan9(t: ref T)
+{
+	(e, nil) := try("inferno", "mount -9 tcp!127.0.0.1!1 " + DIR + "/x\n", DIR + "/x/f");
+	t.assert(has(e, "p9sk1") && !has(e, "dial"), "mount -9 is refused before it dials: " + e);
+	(e, nil) = try("inferno", "import tcp!127.0.0.1!1 / " + DIR + "/x\n", DIR + "/x/f");
+	t.assert(has(e, "p9sk1") && !has(e, "tcp!"), "import is refused before it dials: " + e);
+}
+
 testNoUser(t: ref T)
 {
 	(e, got) := try(nil, "bind " + DIR + "/b " + DIR + "/x\n", DIR + "/x/f");
@@ -196,6 +207,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("UnsetVariable", testUnsetVariable);
 	run("EmptyWord", testEmptyWord);
 	run("MountArguments", testMountArguments);
+	run("Plan9", testPlan9);
 	run("NoUser", testNoUser);
 	run("Nested", testNested);
 

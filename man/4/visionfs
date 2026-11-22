@@ -200,6 +200,79 @@ it took.
 .PP
 Each picture is looked at in a process of its own, so one session's
 never holds up another's, nor the server.
+A session looks at one picture at a time: one written while another is
+being looked at waits for it, and a picture written after that takes the
+waiting one's place.
+There are at most 64 sessions, and 256 MB of pictures being written or
+looked at; past either, an open of
+.B clone
+or a write to
+.B image
+is refused.
+A class's name with a blank, a quote or an
+.B =
+in it is quoted in a record, as
+.IR layers (2)
+and
+.IR string (2)'s
+.B unquoted
+read it.
+A frame's records longer than a read's count are given in pieces, by
+the reads after.
+.SH CAPABILITY MODEL
+The root's
+.B ctl
+is written by the user
+.I visionfs
+runs as, who owns it.
+A session's files are owned by the user of the connection that read
+.BR clone :
+its
+.B ctl
+and
+.B image
+are that user's to write, its
+.B detections
+and layer that user's to read.
+.I Visionfs
+reads files only for its own user: a model's directory
+.RB ( load ),
+an engine tree
+.RB ( engine ,
+.BR place ),
+and a feed
+.RB ( src ),
+which it opens in its own name space, turning a camera on.
+In a session of another user's,
+.B src
+and a
+.B place
+other than
+.B cpu
+are refused; such a session is for pictures its owner writes.
+Holders of the mount who are the server's own user are one principal
+with it, so what such a holder may do is decided by what of the mount
+it is given.
+An agent's vision tool is given the
+.B models
+directory and one session, made for it, with that session's
+.BR image ,
+.B detections
+and
+.B status
+and nothing else: no
+.BR clone ,
+neither
+.BR ctl ,
+no other session.
+It can therefore have a picture looked at, and cannot load a model,
+name a feed or read another's answers.
+A
+.B src
+command is answered when the feed's
+.B fmt
+has been read (it is refused if that takes more than ten seconds); the
+server goes on answering meanwhile.
 .SH EXAMPLE
 .EX
 ; visionfs load nano /lib/vision/yolox-nano

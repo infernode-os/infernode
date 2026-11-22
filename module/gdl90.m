@@ -14,6 +14,7 @@ Gdl90: module
 		inframe:	int;
 		esc:	int;
 		gpsvalid:	int;	# the last heartbeat's GPS position valid bit
+		sincehb:	int;	# own-ship reports since that heartbeat
 		bad:	int;		# frames with a bad CRC
 
 		new:	fn(): ref Framer;

@@ -220,6 +220,78 @@ done(t: ref T): int
 	return 1;
 }
 
+# own, reap: a test's processes are its own, and none outlives it
+mygrp := -1;
+groups: list of int;	# the process groups there were at own()
+
+# (pid, group) of every Prog
+progs(): list of (int, int)
+{
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	l: list of (int, int);
+	for(;;){
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++){
+			sfd := sys->open("/prog/" + d[i].name + "/status", Sys->OREAD);
+			if(sfd == nil)
+				continue;	# gone since
+			buf := array[256] of byte;
+			m := sys->read(sfd, buf, len buf);
+			if(m <= 0)
+				continue;
+			(nf, f) := sys->tokenize(string buf[0:m], " \t\n");
+			if(nf >= 2)
+				l = (int hd f, int hd tl f) :: l;
+		}
+	}
+	return l;
+}
+
+ingroups(g: int, l: list of int): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == g)
+			return 1;
+	return 0;
+}
+
+own()
+{
+	if(sys == nil)
+		init();
+	mygrp = sys->pctl(Sys->NEWPGRP, nil);
+	groups = nil;
+	for(l := progs(); l != nil; l = tl l)
+		if(!ingroups((hd l).t1, groups))
+			groups = (hd l).t1 :: groups;
+}
+
+reap()
+{
+	if(mygrp < 0)
+		return;
+	# the groups made since: servers the test started, each in its own
+	killed: list of int;
+	for(l := progs(); l != nil; l = tl l){
+		(pid, g) := hd l;
+		if(g == mygrp || ingroups(g, groups) || ingroups(g, killed))
+			continue;
+		killed = g :: killed;
+		fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "killgrp");
+	}
+	# and the test's own Progs (the one running is not killed by its
+	# own kill)
+	fd := sys->open(sys->sprint("/prog/%d/ctl", sys->pctl(0, nil)), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
 # summary: print final summary and return exit code
 summary(passed, failed, skipped: int): int
 {

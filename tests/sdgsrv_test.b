@@ -22,12 +22,20 @@ implement SdgsrvTest;
 # kept across a start: it opened a session), while a new handshake is.
 # A counter store that cannot be read stops the server at its start.
 #
+# A flood of initiations that pass mac1 (anyone with the server's public
+# key makes them) from one socket: past four a second the server answers
+# with cookies and does no X25519 for them (it did two for each, as fast
+# as they came, and answered nothing), a cookie opens under the key the
+# client derives, and a client connecting through the flood, which gets
+# a cookie and shows it, is served.
+#
 
 include "sys.m";
 	sys: Sys;
 include "draw.m";
 include "sh.m";
 include "keyring.m";
+	keyring: Keyring;
 include "security.m";
 	random: Random;
 include "sdg.m";
@@ -182,13 +190,13 @@ setup(): string
 	port := 23000 + int (random->randombuf(Random->NotQuiteRandom, 2)[0]) * 100 + sys->millisec() % 97;
 	addr = sys->sprint("udp!127.0.0.1!%d", port);
 	pidc := chan of int;
-	spawn server(nil, kd, sys->sprint("udp!*!%d", port), d, pidc);
+	spawn server(nil, kd, sys->sprint("udp!127.0.0.1!%d", port), d, pidc);
 	srvpid = <-pidc;
 	# the same, losing one data packet in 20 each way, keeping 1024 replies
 	# so that a lost reply is still there when its request comes again: what
 	# is left to fail is a lost request the client has outrun
 	lossyaddr = sys->sprint("udp!127.0.0.1!%d", port+1);
-	spawn server("-c" :: "1024" :: "-d" :: "20" :: nil, kd, sys->sprint("udp!*!%d", port+1), d, pidc);
+	spawn server("-c" :: "1024" :: "-d" :: "20" :: nil, kd, sys->sprint("udp!127.0.0.1!%d", port+1), d, pidc);
 	lossypid = <-pidc;
 	sys->sleep(300);
 	return nil;
@@ -540,6 +548,136 @@ testRestart(t: ref T)
 	}
 }
 
+hmac16(key, data: array of byte): array of byte
+{
+	d := array[Keyring->SHA256dlen] of byte;
+	keyring->hmac_sha256(data, len data, key, d, nil);
+	return d[0:16];
+}
+
+sha(a: array of byte): array of byte
+{
+	d := array[Keyring->SHA256dlen] of byte;
+	keyring->sha256(a, len a, d, nil);
+	return d;
+}
+
+catb(a, b: array of byte): array of byte
+{
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
+}
+
+# an initiation that passes mac1 and nothing else, under index i
+junkinit(mac1key: array of byte, i: int): array of byte
+{
+	m := array[1 + 4 + 108 + 16 + 16] of {* => byte 0};
+	m[0] = byte 1;
+	put4(m, 1, i);
+	m[5:] = random->randombuf(Random->NotQuiteRandom, 108);
+	m[113:] = hmac16(mac1key, m[0:113]);
+	return m;
+}
+
+Flood: adt {
+	cookies:	int;	# cookie replies
+	others:	int;	# anything else
+	last:	array of byte;	# the last cookie reply
+};
+
+floodreader(fd: ref Sys->FD, f: ref Flood, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	buf := array[2048] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0){
+			sys->sleep(20);
+			continue;
+		}
+		if(n == 1 + 4 + 8 + 16 + 16 && int buf[0] == 4){
+			f.cookies++;
+			f.last = array[n] of byte;
+			f.last[0:] = buf[0:n];
+		}else
+			f.others++;
+	}
+}
+
+flooder(fd: ref Sys->FD, mac1key: array of byte, n, ms: int, done: chan of int)
+{
+	for(i := 0; i < n; i++){
+		m := junkinit(mac1key, 1000 + i);
+		sys->write(fd, m, len m);
+		if(ms > 0)
+			sys->sleep(ms);
+	}
+	done <-= 1;
+}
+
+testFlood(t: ref T)
+{
+	keyring = load Keyring Keyring->PATH;
+	if(keyring == nil)
+		t.fatal(sys->sprint("load keyring: %r"));
+	spub := hexfile(scratch + "/keys/sdg.brick");
+	mac1key := sha(catb(array of byte "mac1", spub));
+	ckey := sha(catb(array of byte "cookie--", spub));
+	(ok, c) := sys->dial(addr, nil);
+	if(ok < 0)
+		t.fatal(sys->sprint("dial: %r"));
+	f := ref Flood(0, 0, nil);
+	pidc := chan of int;
+	spawn floodreader(c.dfd, f, pidc);
+	rpid := <-pidc;
+	sys->sleep(1100);	# a second of the server's own, with nothing in it
+	done := chan of int;
+	spawn flooder(c.dfd, mac1key, 40, 0, done);
+	<-done;
+	sys->sleep(500);
+	t.assert(f.cookies >= 20, sys->sprint("forty initiations at once: past its budget the server answers with cookies (%d)", f.cookies));
+	t.asserteq(f.others, 0, "and with nothing else");
+	if(f.last != nil){
+		# the cookie opens under the key a client derives, sealed to
+		# the initiation's mac1: remake that initiation's mac1 is not
+		# possible (its bytes were random), so only its shape is asked
+		t.asserteq(len f.last, 45, "a cookie reply's length");
+		t.assert(get4(f.last, 1) >= 1000 && get4(f.last, 1) < 1040, "it names the initiation it answers");
+	}
+	# one whose mac1 we still have: its cookie opens
+	m := junkinit(mac1key, 7777);
+	f.last = nil;
+	for(i := 0; i < 8; i++){
+		j := junkinit(mac1key, 2000 + i);
+		sys->write(c.dfd, j, len j);
+	}
+	sys->write(c.dfd, m, len m);
+	sys->sleep(300);
+	if(f.last == nil || get4(f.last, 1) != 7777)
+		t.error("no cookie for the last initiation of a burst");
+	else{
+		nb := array[12] of {* => byte 0};
+		nb[4:] = f.last[5:13];
+		ck := keyring->ccpolydecrypt(f.last[13:29], m[113:129], f.last[29:45], ckey, nb);
+		t.assert(ck != nil && len ck == 16, "the cookie opens under the key made from the server's public key, sealed to the initiation's mac1");
+	}
+	# a client through a flood: it is given a cookie, shows it, and is served
+	spawn flooder(c.dfd, mac1key, 300, 10, done);
+	sys->sleep(200);
+	e := mountat(addr, scratch + "/m6");
+	t.assertnil(e, "a client connecting through the flood");
+	if(e == nil){
+		(b, err) := readways(scratch + "/m6/big", 4);
+		t.assert(err == nil && same(b, want), "and its session reads: " + err);
+	}
+	<-done;
+	kfd := sys->open(sys->sprint("/prog/%d/ctl", rpid), Sys->OWRITE);
+	if(kfd != nil)
+		sys->fprint(kfd, "kill");
+}
+
 tryserver(kd, a: string, c: chan of string)
 {
 	sys->pctl(Sys->NEWPGRP|Sys->NEWFD, 0 :: 1 :: nil);
@@ -713,6 +851,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:cannot load testing";
 	}
 	testing->init();
+	testing->own();	# what this starts is killed at the end (reap)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
@@ -734,18 +873,23 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Sdgsrv/Junk", testJunk);
 	run("Sdgsrv/Restart", testRestart);
 	run("Sdgsrv/BadStore", testBadStore);
+	run("Sdgsrv/Flood", testFlood);
 	# the mounts (their relays end), the server and the slow file's, so that emu can exit
 	sys->unmount(nil, scratch + "/m1");
 	sys->unmount(nil, scratch + "/m2");
 	sys->unmount(nil, scratch + "/m3");
 	sys->unmount(nil, scratch + "/m4");
 	sys->unmount(nil, scratch + "/m5");
+	sys->unmount(nil, scratch + "/m6");
 	for(pl := srvpid :: lossypid :: slowpid :: s3pid :: relaypid :: nil; pl != nil; pl = tl pl)
 		if(hd pl >= 0){
 			fd := sys->open(sys->sprint("/prog/%d/ctl", hd pl), Sys->OWRITE);
 			if(fd != nil)
 				sys->fprint(fd, "killgrp");
 		}
+	# nothing of the test's is left running: run as emu's own program
+	# it never exited, for the servers and waiting procs it left
+	testing->reap();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

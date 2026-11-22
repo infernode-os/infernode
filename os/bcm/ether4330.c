@@ -198,6 +198,9 @@ enum
 		Fwready		= 0x80,
 
 	/* wifi control commands */
+	GetRate		= 12,	/* WLC_GET_RATE: 500 kbit/s units */
+	GetChannel	= 29,	/* WLC_GET_CHANNEL: channel_info, hw_channel first */
+	GetRssi		= 127,	/* WLC_GET_RSSI: scb_val, the signal in dBm first */
 	GetVar		= 262,
 	SetVar		= 263,
 
@@ -3356,6 +3359,26 @@ etherbcmtransmit(Ether *edev)
  * host has run out of credit or the queue has run dry, and txseq
  * equal to txwin answers it.
  */
+/*
+ * One of the firmware's integers about the link: the command's answer
+ * is its first word (channel_info's hw_channel, the rate in 500 kbit/s,
+ * scb_val's signal), and the question is that many zero bytes (an
+ * scb_val with no address asks for the access point's). Refused, or a
+ * radio not answering, it is def.
+ */
+static int
+linkint(Ctlr *ctl, int op, int len, int def)
+{
+	uchar buf[16];
+
+	memset(buf, 0, sizeof buf);
+	if(waserror())
+		return def;
+	wlcmd(ctl, 0, op, buf, len, buf, len);
+	poperror();
+	return (int)get4(buf);
+}
+
 static long
 etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 {
@@ -3389,7 +3412,26 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	l += snprint(p+l, 512-l, "firmware: %s\n", ctl->running? ctl->ver : "not loaded");
 	if(ctl->running)
 		l += snprint(p+l, 512-l, "firmware bytes: %d\n", ctl->fwbytes);
-	l += snprint(p+l, 512-l, "channel: %d\n", ctl->chanid);
+	/*
+	 * Associated, the channel is the one in use and the link's rate
+	 * and signal are the firmware's own, asked now: what was asked
+	 * for on ctl is 0 (any channel) for nearly every join, and a
+	 * link nobody can measure cannot be made faster. A command the
+	 * firmware refuses leaves its line out; the rest still reads.
+	 */
+	if(ctl->running && ctl->status == Connected){
+		int ch, rate, rssi;
+
+		ch = linkint(ctl, GetChannel, 12, 0);
+		rate = linkint(ctl, GetRate, 4, 0);
+		rssi = linkint(ctl, GetRssi, 12, 0);	/* scb_val: 4 + 6, padded to 12 */
+		l += snprint(p+l, 512-l, "channel: %d\n", ch > 0? ch : ctl->chanid);
+		if(rate > 0)
+			l += snprint(p+l, 512-l, "rate: %d.%d Mbit/s\n", rate/2, (rate&1)*5);
+		if(rssi < 0)
+			l += snprint(p+l, 512-l, "rssi: %d dBm\n", rssi);
+	}else
+		l += snprint(p+l, 512-l, "channel: %d\n", ctl->chanid);
 	l += snprint(p+l, 512-l, "essid: %s\n", ctl->essid);
 	if(ctl->assocfail != 0)
 		l += snprint(p+l, 512-l, "assocfail: %ld\n", ctl->assocfail);

@@ -59,14 +59,18 @@ SET="good v4 leap burst"
 	done
 	echo "sleep 19"
 	echo "cat /dev/time > $E/clock.refused"
+	# a good answer years from a clock that is set: not taken without -m
+	echo "ip/sntp 'udp!127.0.0.1!$(port good)' > $E/out.step >[2=1]"
+	echo "echo \$status > $E/st.step"
+	echo "cat /dev/time > $E/clock.step"
 	for c in $SET; do
-		echo "ip/sntp -d 'udp!127.0.0.1!$(port $c)' > $E/out.$c >[2=1]"
+		echo "ip/sntp -d -m 0 'udp!127.0.0.1!$(port $c)' > $E/out.$c >[2=1]"
 		echo "echo \$status > $E/st.$c"
 		echo "cat /dev/time > $E/clock.$c"
 	done
 	# a clock that refuses to be written
 	echo "/dis/tests/timerec.dis rot 0"
-	echo "@{pctl forkns; bind /chan/rot /dev/time; ip/sntp 'udp!127.0.0.1!$(port ro)' > $E/out.ro >[2=1]; echo \$status > $E/st.ro}"
+	echo "@{pctl forkns; bind /chan/rot /dev/time; ip/sntp -m 0 'udp!127.0.0.1!$(port ro)' > $E/out.ro >[2=1]; echo \$status > $E/st.ro}"
 	echo "cat /dev/time > $E/clock.ro"
 	echo "echo done > $E/done"
 	echo "echo halt > /dev/sysctl"
@@ -122,6 +126,9 @@ check("no response from server" in o and "timeout" in f("st.other"), "an answer 
 c = clock("clock.refused")
 check(abs(c - time.time()) < 300, "and none of them set the clock", c)
 
+o = f("out.step")
+check("more than the 86400 s" in o and "step too large" in f("st.step") and abs(clock("clock.step") - time.time()) < 300,
+      "an answer years from a clock already set is refused without -m, and the clock left", (o[-300:], f("st.step"), clock("clock.step")))
 for c, y in (("good", 2030), ("v4", 2034), ("leap", 2035), ("burst", 2029)):
     check(abs(clock("clock." + c) - year(y)) < 60 and f("st." + c).strip() == "",
           "%s: the clock is set to %d" % (c, y), (clock("clock." + c), f("st." + c), f("out." + c)[-300:]))

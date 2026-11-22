@@ -73,6 +73,19 @@ mkdir(d: string)
 	sys->create(d, Sys->OREAD, Sys->DMDIR | 8r777);
 }
 
+# A created file's mode is masked by its directory's (devfs), so what
+# is made here is only as open as the tree's /tmp, which a job that ran
+# other things first may have made its owner's alone.  Set outright.
+openup(f: string, perm: int)
+{
+	(ok, d) := sys->stat(f);
+	if(ok < 0)
+		return;
+	nd := sys->nulldir;
+	nd.mode = (d.mode & Sys->DMDIR) | perm;
+	sys->wstat(f, nd);
+}
+
 mkfile(f, s: string)
 {
 	fd := sys->create(f, Sys->OWRITE, 8r666);
@@ -299,7 +312,10 @@ testPeerName(t: ref T)
 	t.assert(readfile(D + "/m/file") == nil, "and mounts nothing");
 	e = start("/dis/mount.dis", "mount" :: "-k" :: keyfile :: "-u" :: "mounts-server" :: addr :: D + "/m" :: nil, 20000);
 	t.assert(e == nil, "mount -u takes the server it names: " + e);
-	t.assertseq(readfile(D + "/m/file"), "served", "and its file is read");
+	got := readfile(D + "/m/file");
+	if(got == nil)
+		t.log(sys->sprint("reading %s/m/file: %r", D));
+	t.assertseq(got, "served", "and its file is read");
 	sys->unmount(nil, D + "/m");
 	e = start("/dis/mount.dis", "mount" :: "-A" :: "-u" :: "mounts-server" :: addr :: D + "/m" :: nil, 20000);
 	t.assertseq(e, "fail:usage", "mount -A -u: nobody is authenticated to be named");
@@ -470,6 +486,12 @@ init(nil: ref Draw->Context, args: list of string)
 	mkdir(D + "/dir");
 	mkdir(D + "/m");
 	mkfile(D + "/dir/file", "served");
+	# a listener's command runs as the caller it authenticated
+	# (mounts-server, below), not as this test's user: it must be able
+	# to read what it exports
+	openup(D, 8r755);
+	openup(D + "/dir", 8r755);
+	openup(D + "/dir/file", 8r644);
 
 	run("CommandEnd", testCommandEnd);
 	run("PeerName", testPeerName);

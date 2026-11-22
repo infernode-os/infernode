@@ -445,7 +445,7 @@ int	slhdsa_ht_verify(const uchar*, int, const uchar*, const uchar*, int, const u
 /* random number generation */
 /* ===================================================== */
 void	genrandom(uchar *buf, int nbytes);
-int	genrandomtry(uchar *buf, int nbytes);	/* 0 ok, -1 no secure source (emu; never aborts) */
+int	genrandomtry(uchar *buf, int nbytes);	/* 0 ok, -1 no secure source and nothing given (never aborts, never waits for ever) */
 void	_genrandomqlock(void);
 void	_genrandomqunlock(void);
 void	prng(uchar *buf, int nbytes);

@@ -914,7 +914,9 @@ sign(int set, uchar *sig, const uchar *msg, ulong msglen,
 	pre[1] = ctxlen;
 	if(ctxlen > 0)
 		memmove(pre+2, ctx, ctxlen);
-	genrandom(rnd, sizeof(rnd));
+	/* no generator: no signature, said (genrandom ends the emulator, and waits for ever in a native kernel) */
+	if(genrandomtry(rnd, sizeof(rnd)) < 0)
+		return -1;
 	r = sign_set(set, sig, pre, 2+ctxlen, msg, msglen, nil, rnd, sk);
 	secureZero(rnd, sizeof(rnd));
 	return r;

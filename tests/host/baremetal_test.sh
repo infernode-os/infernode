@@ -655,6 +655,13 @@ build_kernel() {
             "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/vera/vera.14.0000"
         )
 
+        # BAREMETAL_EXTRA_ROOT: more files for the root, as
+        # "/path/in/root=/host/file" words, for an experiment's own
+        # programs kept outside this tree.
+        for x in ${BAREMETAL_EXTRA_ROOT:-}; do
+            rootmanifest+=("$x")
+        done
+
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
             "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1
         "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \

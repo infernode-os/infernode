@@ -1268,8 +1268,8 @@ doenroll2fa()
 	setsecresult("Creating credential — TOUCH your security key now…");
 	(cred, ce) := twofa->enroll(pin);
 	if(ce != nil) { setsecresult("Enroll failed: " + ce); return; }
-	salt := random->randombuf(Random->ReallyRandom, 32);
-	if(salt == nil || len salt != 32) { setsecresult("Could not generate a salt."); return; }
+	(salt, serr) := newsalt();
+	if(salt == nil) { setsecresult("Could not generate a salt: " + serr); return; }
 	setsecresult("Binding key — TOUCH again…");
 	keys := ("key", cred, tohex2fa(salt)) :: nil;
 	err := twofaslot->enroll(getuser2fa(), pass, rec, keys, pin);
@@ -1298,8 +1298,8 @@ doaddkey2fa()
 	setsecresult("Creating backup credential — TOUCH the backup key…");
 	(cred, ce) := twofa->enroll(pin);
 	if(ce != nil) { setsecresult("Backup failed: " + ce); return; }
-	salt := random->randombuf(Random->ReallyRandom, 32);
-	if(salt == nil || len salt != 32) { setsecresult("Could not generate a salt."); return; }
+	(salt, serr) := newsalt();
+	if(salt == nil) { setsecresult("Could not generate a salt: " + serr); return; }
 	setsecresult("Binding backup key — TOUCH again…");
 	err := twofaslot->addkey(getuser2fa(), pass, rec, cred, tohex2fa(salt), pin);
 	if(err != nil) { setsecresult("Backup failed: " + err); return; }
@@ -1877,10 +1877,29 @@ writellmctl(verb: string): string
 	return "";
 }
 
+# Is a key added now saved?  factotum's secstore file says (factotum(4)):
+# a file in /tmp was asked, which anything could make and which stayed
+# from boot to boot.
 secstoreunlocked(): int
 {
-	(ok, nil) := sys->stat("/tmp/.secstore-unlocked");
-	return ok >= 0;
+	s := tread("/mnt/factotum/secstore", Waitfile);
+	return len s >= 6 && s[0:6] == "saving";
+}
+
+# 32 random bytes for a second factor's salt, or nil and why.  randombuf
+# raises when the generator has nothing to give (it returned zeros,
+# and a salt of zeros was used); the exception ended the panel's thread.
+newsalt(): (array of byte, string)
+{
+	{
+		salt := random->randombuf(Random->ReallyRandom, 32);
+		if(salt == nil || len salt != 32)
+			return (nil, "the random number generator gave nothing");
+		return (salt, nil);
+	} exception e {
+	"random:*" =>
+		return (nil, e);
+	}
 }
 
 hassubstr(s, sub: string): int

@@ -147,6 +147,9 @@ init(nil: ref Draw->Context, argv: list of string)
 	myPKbuf := array of byte kr->pktostr(info.mypk);
 	state := certdigest(info.mysk, myPKbuf);
 	info.cert = kr->sign(info.mysk, expire, state, certhash(info.mysk));
+	# sign gives nil when it fails: the file was then written with no certificate
+	if(info.cert == nil)
+		error("can't sign the key made");
 
 	# The realm's Diffie-Hellman modulus, which auth(2) uses between
 	# holders of this signer's certificates: RFC 3526's 2048-bit group,

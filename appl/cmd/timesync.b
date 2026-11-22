@@ -77,6 +77,7 @@ Micro: con big 1000000;
 
 floor: big;		# microseconds: a time before this is none
 lastgps := big 0;	# the receiver's time in the newest record a result was made from
+ownns := 0;		# the name space is this command's own (forked)
 
 init(nil: ref Draw->Context, argv: list of string)
 {
@@ -119,14 +120,8 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(argv != nil && tl argv != nil || nsamples < 1)
 		arg->usage();
 
-	if(file == DEFAULT && sys->stat(file).t0 < 0) {
-		# gpsfs mounted elsewhere: its posted files, in a name space
-		# of this command's own
-		sys->pctl(Sys->FORKNS, nil);
-		fd := sys->open("#sgps/fs", Sys->ORDWR);
-		if(fd == nil || sys->mount(fd, nil, "/mnt/gps", Sys->MREPL, nil) < 0)
-			fatal(sys->sprint("no GPS time: %s: not served, nor #sgps/fs posted", file));
-	}
+	if(file == DEFAULT && sys->stat(file).t0 < 0 && !posted())
+		fatal(sys->sprint("no GPS time: %s: not served, nor #sgps/fs posted", file));
 
 	floor = big Written * Micro;
 	(ok, d) := sys->stat("#c/time");
@@ -139,11 +134,19 @@ init(nil: ref Draw->Context, argv: list of string)
 			sys->fprint(stderr, "timesync: %s\n", err);
 			if(period <= 0)
 				raise "fail:" + err;
+			# The gpsfs that was mounted may have gone and another
+			# been started: its posted files are mounted again.  The
+			# mount was made once, so after gpsfs was restarted
+			# every period reported the old one's read error and the
+			# clock was never set again.
+			if(file == DEFAULT && sys->stat(file).t0 < 0)
+				posted();
 		} else {
 			offset += adjust;
 			if(offset >= threshold || offset <= -threshold) {
 				# a clock that has been set is stepped only so far
-				if(maxstep > big 0 && clock() >= floor && (offset > maxstep || offset < -maxstep))
+				(now, nil) := clock();	# read a moment ago, by sample
+				if(maxstep > big 0 && now >= floor && (offset > maxstep || offset < -maxstep))
 					err = sys->sprint("clock %s by %s s, more than the %bd s a clock already set is stepped: not set (-m seconds allows more, -m 0 any step)",
 						way(offset), secs(offset), maxstep / Micro);
 				else
@@ -161,6 +164,20 @@ init(nil: ref Draw->Context, argv: list of string)
 			return;
 		sys->sleep(period * 1000);
 	}
+}
+
+# gpsfs's posted files mounted at /mnt/gps, in a name space of this
+# command's own; 0 if they are not posted
+posted(): int
+{
+	fd := sys->open("#sgps/fs", Sys->ORDWR);
+	if(fd == nil)
+		return 0;
+	if(!ownns) {
+		sys->pctl(Sys->FORKNS, nil);
+		ownns = 1;
+	}
+	return sys->mount(fd, nil, "/mnt/gps", Sys->MREPL, nil) >= 0;
 }
 
 fatal(s: string)
@@ -226,8 +243,13 @@ sample(file: string, n: int): (big, string)
 	gpss := array[n] of big;
 	got := 0;
 	seen := "";
-	# only fixes from now on: one from before a step is stale
-	since := clock();
+	# only fixes from now on: one from before a step is stale.  A
+	# clock that cannot be read was read as 0: every sample was then
+	# "ahead of the clock" and dropped with no word of why, and a
+	# clock at 0 has never been set, so no step was too large.
+	(since, cerr) := clock();
+	if(cerr != nil)
+		return (big 0, cerr);
 	why := "no live GPS time in " + file;
 	for(i := 0; i < n + 2 && got < n; i++) {
 		if(i > 0)
@@ -276,7 +298,10 @@ sample(file: string, n: int): (big, string)
 		# stamped before this began, or by a clock since stepped back
 		# (it is ahead of the clock), or no later than the last one a
 		# result came from
-		if(lo <= since || lo > clock() + Micro || g <= lastgps)
+		(now, nerr) := clock();
+		if(nerr != nil)
+			return (big 0, nerr);
+		if(lo <= since || lo > now + Micro || g <= lastgps)
 			continue;
 		offs[got] = o;
 		gpss[got] = g;
@@ -322,13 +347,15 @@ clean(s: string): string
 	return r;
 }
 
-# this host's clock, microseconds since the epoch
-clock(): big
+# this host's clock, microseconds since the epoch, or why it is not known
+clock(): (big, string)
 {
-	(s, nil) := readfile("/dev/time");
-	if(s == nil)
-		return big 0;
-	return big s;
+	(s, e) := readfile("/dev/time");
+	if(e == nil && s == nil)
+		e = "empty";
+	if(e != nil)
+		return (big 0, "this host's clock: /dev/time: " + e);
+	return (big s, nil);
 }
 
 # set the clock forward by offset microseconds

@@ -648,14 +648,60 @@ def chains():
     case('crl-inter-and-root', 'REJECT', ['ileaf', 'inter'], crls=('crl-root-empty', 'crl-inter'), why='revoked')
     case('crl-inter-not-revoked', 'ACCEPT', ['ileaf', 'inter'], crls=('crl-inter-other', 'crl-root-empty'))
     case('crl-inter-forged', 'REJECT', ['ileaf', 'inter'], crls=('crl-inter-forged',), why='CRL not signed by its issuer')
-    case('crl-inter-not-in-chain', 'REJECT', ['okleaf'], crls=('crl-inter',), why='CRL not signed by a root or by a CA of the chain')
+    # a CRL is consulted for what its own issuer issued, and for nothing
+    # else (RFC 5280 6.3.3): an intermediate's CRL, the intermediate no
+    # anchor, says nothing of a certificate the root issued (it failed
+    # every chain that did not go through the intermediate)
+    case('crl-inter-not-on-path', 'ACCEPT', ['okleaf'], crls=('crl-inter',))
+    # the intermediate's CRL, the intermediate not anchored: the leaf it
+    # names refused, another the intermediate issued taken
+    case('crl-inter-sibling-not-revoked', 'ACCEPT', ['leaf', 'inter'], crls=('crl-inter',))
+    # another CA altogether: its CRL in the list, and one that is not
+    # its own, change nothing for a chain that is not its
+    ko = eckey()
+    other = mk(ko, tbs(1, name('Other'), name('Other'), P(ko), CAEXT, nb=nb - 300 * D, na=na + 3000 * D))
+    w('other', other)
+    OSER = ser()
+    w('oleaf', mk(ko, tbs(OSER, name('Other'), name('leaf.example'), P(kleaf), LEAFX)))
+    w('crl-other', crl(ko, name('Other'), [OSER], NOW - D, NOW + D))
+    w('crl-other-forged', crl(k2, name('Other'), [OSER + 1000], NOW - D, NOW + D))
+    w('crl-root-forged', crl(k2, name('Root'), [999999], NOW - D, NOW + D))
+    case('crl-unrelated-ca-not-a-root', 'ACCEPT', ['leaf', 'inter'], crls=('crl-other',))
+    case('crl-unrelated-root', 'ACCEPT', ['leaf', 'inter'], roots=('root', 'other'), crls=('crl-other',))
+    case('crl-unrelated-root-its-own-revoked', 'REJECT', ['oleaf'], roots=('root', 'other'), crls=('crl-other',), why='revoked')
+    # a CRL its issuer did not sign: the paths through that issuer
+    # refused, as before, and no other (it refused every chain)
+    case('crl-forged-for-another-root', 'ACCEPT', ['leaf', 'inter'], roots=('root', 'other'), crls=('crl-other-forged',))
+    case('crl-forged-for-its-root', 'REJECT', ['oleaf'], roots=('root', 'other'), crls=('crl-other-forged',), why='CRL not signed by its issuer')
+    case('crl-root-forged', 'REJECT', ['okleaf'], crls=('crl-root-forged',), why='CRL not signed by its issuer')
+    case('crl-root-forged-under-inter', 'REJECT', ['leaf', 'inter'], crls=('crl-root-forged',), why='CRL not signed by its issuer')
+    # the same from the store (/lib/crls), whose files were taken for
+    # their issuers' by name alone: an unsigned list revoked, and one
+    # that named nothing was never asked whose it was
+    storedir('s-roots2', {'root.der': root, 'other.der': other})
+    storedir('s-other', {'other.der': crl(ko, name('Other'), [OSER], NOW - D, NOW + D)})
+    storedir('s-inter', {'inter.der': crl(kint, name('Inter'), [ILEAF], NOW - D, NOW + D)})
+    storedir('s-inter-forged', {'inter.der': crl(k2, name('Inter'), [ILEAF + 1000], NOW - D, NOW + D)})
+    storedir('s-inter-forged-revoking', {'inter.der': crl(k2, name('Inter'), [ILEAF], NOW - D, NOW + D)})
+    storedir('s-root-forged', {'root.der': crl(k2, name('Root'), [999999], NOW - D, NOW + D)})
+    storecase('crl-store-unrelated-ca', 'ACCEPT', ['leaf', 'inter'], 's-roots', 's-other')
+    storecase('crl-store-unrelated-root', 'ACCEPT', ['leaf', 'inter'], 's-roots2', 's-other')
+    storecase('crl-store-unrelated-root-its-own-revoked', 'REJECT', ['oleaf'], 's-roots2', 's-other', 'revoked')
+    storecase('crl-store-inter-revoked', 'REJECT', ['ileaf', 'inter'], 's-roots', 's-inter', 'revoked')
+    storecase('crl-store-inter-sibling', 'ACCEPT', ['leaf', 'inter'], 's-roots', 's-inter')
+    storecase('crl-store-inter-not-on-path', 'ACCEPT', ['okleaf'], 's-roots', 's-inter')
+    storecase('crl-store-inter-forged', 'REJECT', ['ileaf', 'inter'], 's-roots', 's-inter-forged', 'CRL not signed by its issuer')
+    storecase('crl-store-inter-forged-revoking', 'REJECT', ['ileaf', 'inter'], 's-roots', 's-inter-forged-revoking', 'CRL not signed by its issuer')
+    storecase('crl-store-inter-forged-not-on-path', 'ACCEPT', ['okleaf'], 's-roots', 's-inter-forged')
+    storecase('crl-store-root-forged', 'REJECT', ['okleaf'], 's-roots', 's-root-forged', 'CRL not signed by its issuer')
+    storecase('crl-store-root-forged-other-root', 'ACCEPT', ['oleaf'], 's-roots2', 's-root-forged')
     kx = eckey()
     w('nocrl-ca', mk(kroot, tbs(ser(), name('Root'), name('NoCRL'), P(kx), [bc(True), ku([5])])))
     w('nocrl-leaf', mk(kx, tbs(ser(), name('NoCRL'), name('leaf.example'), P(kleaf), LEAFX)))
     w('crl-nocrl', crl(kx, name('NoCRL'), [5], NOW - D, NOW + D))
     case('crl-inter-without-crlsign', 'REJECT', ['nocrl-leaf', 'nocrl-ca'], crls=('crl-nocrl',), why='cRLSign')
     w('root-nocrlsign', mk(kroot, tbs(1, name('Root'), name('Root'), P(kroot), [bc(True), ku([5])])))
-    case('crl-root-without-crlsign', 'REJECT', ['leaf', 'inter'], roots=('root-nocrlsign',), crls=('crl-root-empty',), why='CRL not signed by a root')
+    case('crl-root-without-crlsign', 'REJECT', ['leaf', 'inter'], roots=('root-nocrlsign',), crls=('crl-root-empty',), why='cRLSign')
     # two levels: each CA's CRL, each checked with its own key
     kc2 = eckey()
     w('x-c2', mk(kroot, tbs(ser(), name('Root'), name('X-c2'), P(k2), CAEXT)))

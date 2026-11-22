@@ -115,6 +115,8 @@ files := array[] of {
 
 Port: con "1234";
 Chunk: con 64*1024;		# a read of the stream
+Minchunk: con 4096;		# the least of it given to the readers at once
+Maxcmds: con 64;		# commands waiting for rtl_tcp to take them
 Maxqueue: con 8*1024*1024;	# what a reader of iq has not read: 1.7s at 2.4 MS/s
 Greeting: con 12;		# "RTL0", the tuner type, the number of gains
 
@@ -194,6 +196,10 @@ settlems := 300;	# samples dropped after rtl_tcp has applied a setting
 Cmdms: con 150;		# rtl_tcp applies a command in 25-120ms, one at a time
 given := big 0;		# bytes the readers of iq were given
 ncmds := 0;		# commands sent to rtl_tcp
+# Commands go to rtl_tcp from a process of their own, through this.  The
+# server wrote them itself: an rtl_tcp that stopped reading, its socket
+# full, stopped the server in a write, and every file with it.
+cmdc: chan of array of byte;
 stderr: ref Sys->FD;
 
 init(nil: ref Draw->Context, argv: list of string)
@@ -352,6 +358,16 @@ server(reqc: chan of ref Req, spec: string, navops: chan of ref Navop,
 	gen := 0;
 	conn: ref Sys->Connection;	# the stream's, while it is open
 	readerpid := -1;
+	writerpid := -1;
+	# Settings written while rtl_tcp is still applying the last are
+	# kept, and sent, as they then are, when it has done: one command
+	# for each, however often it was written.  Every write was sent as
+	# it came, at 150ms each to apply: a hundred writes of the
+	# frequency, as a knob turned makes, and no sample was given for
+	# fifteen seconds.
+	dirty: list of int;		# settings changed and not sent, newest first
+	flushc := chan[1] of int;
+	flushing := 0;			# a timer is out
 	dialling := 0;
 	ctlwait: ref Tmsg.Write;	# a source command waiting for its dial
 	ctlsrv: ref Styxserver;
@@ -398,10 +414,17 @@ Serve:
 			# take the next client
 			conn = ev.conn;
 			link = "open";
+			cmdc = chan[Maxcmds] of array of byte;
+			wpidc := chan of int;
+			spawn cmdwriter(gen, conn.dfd, cmdc, evc, wpidc);
+			writerpid = <-wpidc;
+			dirty = nil;
 			n0 = ncmds;
 			e := sendall(conn.dfd, set);
 			(busyuntil, settleuntil) = sent(ncmds - n0, busyuntil);
 			if(e != nil) {
+				kill(writerpid);
+				writerpid = -1;
 				hangup(conn, readerpid, settleuntil);
 				conn = nil;
 				link = "error";
@@ -423,14 +446,19 @@ Serve:
 				}
 			}
 		Ddata =>
-			if(sys->millisec() - settleuntil < 0) {
+			if(sys->millisec() - settleuntil < 0 || dirty != nil) {
 				skipped += big len ev.data;
 				break;
 			}
 			for(l := clients; l != nil; l = tl l)
 				dropped += big (hd l).put(ev.data);
 		Dend =>
+			# from the reader or the writer: the other goes too
+			kill(readerpid);
+			kill(writerpid);
 			readerpid = -1;
+			writerpid = -1;
+			dirty = nil;
 			conn = nil;
 			gen++;
 			if(ev.err != nil) {
@@ -453,11 +481,41 @@ Serve:
 			spawn lingertimer(left, lingerc);
 			break;
 		}
+		kill(writerpid);
+		writerpid = -1;
+		dirty = nil;
 		hangup(conn, readerpid, settleuntil);
 		conn = nil;
 		readerpid = -1;
 		gen++;
 		link = "idle";
+
+	<-flushc =>
+		# rtl_tcp has done with the last commands: what was set since
+		flushing = 0;
+		if(conn == nil || dirty == nil)
+			break;
+		if((left := busyuntil - sys->millisec()) > 0) {
+			flushing = 1;
+			spawn timer(left, flushc);
+			break;
+		}
+		n0 = ncmds;
+		e := sendchanged(conn.dfd, set, dirty);
+		dirty = nil;
+		(busyuntil, settleuntil) = sent(ncmds - n0, busyuntil);
+		if(e != nil) {
+			kill(writerpid);
+			writerpid = -1;
+			hangup(conn, readerpid, settleuntil);
+			conn = nil;
+			readerpid = -1;
+			gen++;
+			link = "error";
+			srcerr = e;
+			for(l := clients; l != nil; l = tl l)
+				(hd l).end(e);
+		}
 
 	r := <-reqc =>
 		srv := r.srv;
@@ -467,8 +525,13 @@ Serve:
 				if((hd l).srv != srv)
 					nl = hd l :: nl;
 			clients = nl;
-			if(ctlsrv == srv)
+			if(ctlsrv == srv && ctlwait != nil) {
+				# its source command goes with it (as a flush)
 				ctlwait = nil;
+				dialling = 0;
+				gen++;
+				link = "none";
+			}
 			if(listening(clients) == 0 && conn != nil)
 			{
 				idlesince = sys->millisec();
@@ -600,28 +663,39 @@ Serve:
 				for(cl := clients; cl != nil; cl = tl cl)
 					(hd cl).end(nil);
 			*set = *nset;
-			if(conn != nil) {
-				# the gain last, and again after direct or agc,
-				# which lose it (sendall)
-				e: string;
-				regain := 0;
-				n0 = ncmds;
-				for(l := rev(changed); l != nil && e == nil; l = tl l) {
-					case hd l {
-					Cgainmode or Cdirect or Cagc =>
-						regain = 1;
+			if(conn != nil && changed != nil) {
+				for(l := rev(changed); l != nil; l = tl l)
+					if(!member(dirty, hd l))
+						dirty = hd l :: dirty;
+				if((left := busyuntil - sys->millisec()) > 0) {
+					# rtl_tcp is still applying the last: when it has done
+					if(!flushing) {
+						flushing = 1;
+						spawn timer(left, flushc);
 					}
-					if(hd l != Cgainmode)
-						e = sendone(conn.dfd, set, hd l);
+				} else {
+					n0 = ncmds;
+					e := sendchanged(conn.dfd, set, dirty);
+					dirty = nil;
+					(busyuntil, settleuntil) = sent(ncmds - n0, busyuntil);
+					if(e != nil) {
+						# the settings are kept, and sent to the next
+						# connection; this one is not taking them
+						kill(writerpid);
+						writerpid = -1;
+						hangup(conn, readerpid, settleuntil);
+						conn = nil;
+						readerpid = -1;
+						gen++;
+						link = "error";
+						srcerr = e;
+						for(cl := clients; cl != nil; cl = tl cl)
+							(hd cl).end(e);
+						srv.reply(ref Rmsg.Error(m.tag, e));
+						break;
+					}
 				}
-				if(regain && e == nil)
-					e = sendone(conn.dfd, set, Cgainmode);
-				(busyuntil, settleuntil) = sent(ncmds - n0, busyuntil);
-				if(e != nil) {
-					srv.reply(ref Rmsg.Error(m.tag, e));
-					break;
-				}
-				if(changed != nil && listening(clients) == 0)
+				if(listening(clients) == 0)
 				{
 					idlesince = sys->millisec();
 					if(!lingering) {
@@ -635,6 +709,9 @@ Serve:
 				break;
 			}
 			# a new source, or none: hang up the old
+			kill(writerpid);
+			writerpid = -1;
+			dirty = nil;
 			if(conn != nil)
 				hangup(conn, readerpid, settleuntil);
 			conn = nil;
@@ -664,8 +741,15 @@ Serve:
 			for(l := clients; l != nil; l = tl l)
 				if((hd l).srv == srv && (hd l).rd != nil && (hd l).rd.tag == m.oldtag)
 					(hd l).rd = nil;
-			if(ctlwait != nil && ctlsrv == srv && ctlwait.tag == m.oldtag)
+			if(ctlwait != nil && ctlsrv == srv && ctlwait.tag == m.oldtag) {
+				# A source command given up is not done.  Its dial
+				# went on: when rtl_tcp answered, status said
+				# link=open with no source, and ctl read back none.
 				ctlwait = nil;
+				dialling = 0;
+				gen++;
+				link = "none";
+			}
 			srv.default(r.m);
 		Clunk =>
 			nl: list of ref Client;
@@ -691,9 +775,46 @@ Serve:
 	# Not posted and its last connection gone: nobody can reach it.  It
 	# left its stream's reader, the connection to rtl_tcp (which takes
 	# one client at a time) and its navigator behind for ever.
+	kill(writerpid);
 	if(conn != nil)
 		hangup(conn, readerpid, settleuntil);
 	navops <-= nil;
+}
+
+member(l: list of int, v: int): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == v)
+			return 1;
+	return 0;
+}
+
+kill(pid: int)
+{
+	if(pid < 0)
+		return;
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+# The settings changed (newest first), as they now are: the gain last,
+# and again after direct or agc, which lose it (sendall).
+sendchanged(fd: ref Sys->FD, set: ref Settings, changed: list of int): string
+{
+	e: string;
+	regain := 0;
+	for(l := rev(changed); l != nil && e == nil; l = tl l) {
+		case hd l {
+		Cgainmode or Cdirect or Cagc =>
+			regain = 1;
+		}
+		if(hd l != Cgainmode)
+			e = sendone(fd, set, hd l);
+	}
+	if(regain && e == nil)
+		e = sendone(fd, set, Cgainmode);
+	return e;
 }
 
 client(l: list of ref Client, srv: ref Styxserver, fid: int): ref Client
@@ -927,31 +1048,51 @@ timer(ms: int, tc: chan of int)
 	tc <-= 1;
 }
 
-# the stream, in chunks of whole samples
+# The stream, in chunks of whole samples, none shorter than Minchunk
+# but the last.  Each read was a chunk whatever it held: an rtl_tcp
+# sending two bytes at a time made a chunk, an event and a list cell in
+# every reader's queue for each two, and the queue's bound, which counts
+# bytes, was passed forty times over in what it cost to hold.
 reader(gen: int, fd: ref Sys->FD, evc: chan of ref Event, pidc: chan of int)
 {
 	pidc <-= sys->pctl(0, nil);
-	buf := array[Chunk+1] of byte;
-	have := 0;	# a byte carried over: half a sample
+	buf := array[Chunk+Minchunk] of byte;
+	have := 0;	# what is read and not yet given
 	for(;;) {
 		n := sys->read(fd, buf[have:], Chunk);
 		if(n <= 0) {
+			k := have & ~1;
+			if(k > 0)
+				evc <-= ref Event(gen, Ddata, nil, 0, 0, buf[0:k], nil);
 			e: string;
 			if(n < 0)
 				e = sys->sprint("%r");
 			evc <-= ref Event(gen, Dend, nil, 0, 0, nil, e);
 			return;
 		}
-		n += have;
-		k := n & ~1;
-		if(k > 0) {
-			d := array[k] of byte;
-			d[0:] = buf[0:k];
-			evc <-= ref Event(gen, Ddata, nil, 0, 0, d, nil);
-		}
-		have = n - k;
+		have += n;
+		if(have < Minchunk)
+			continue;
+		k := have & ~1;
+		d := array[k] of byte;
+		d[0:] = buf[0:k];
+		evc <-= ref Event(gen, Ddata, nil, 0, 0, d, nil);
+		have -= k;
 		if(have)
 			buf[0] = buf[k];
+	}
+}
+
+# rtl_tcp's commands, written as it takes them
+cmdwriter(gen: int, fd: ref Sys->FD, c: chan of array of byte, evc: chan of ref Event, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	for(;;) {
+		b := <-c;
+		if(sys->write(fd, b, len b) != len b) {
+			evc <-= ref Event(gen, Dend, nil, 0, 0, nil, sys->sprint("rtl_tcp: %r"));
+			return;
+		}
 	}
 }
 
@@ -1004,9 +1145,12 @@ command(fd: ref Sys->FD, code: int, v: int): string
 	b[2] = byte (v >> 16);
 	b[3] = byte (v >> 8);
 	b[4] = byte v;
-	if(sys->write(fd, b, len b) != len b)
-		return sys->sprint("rtl_tcp: %r");
-	return nil;
+	alt {
+	cmdc <-= b =>
+		return nil;
+	* =>
+		return "rtl_tcp is not taking commands";
+	}
 }
 
 # every setting, the gain last.  On an RTL-SDR Blog V4 (R828D) through

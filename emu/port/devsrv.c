@@ -7,6 +7,8 @@
 
 typedef struct SrvFile SrvFile;
 typedef struct Pending Pending;
+typedef struct Notes Notes;
+typedef union Note Note;
 
 /* request pending to a server, in case a server vanishes */
 struct Pending
@@ -16,6 +18,29 @@ struct Pending
 	int fid;
 	Channel*	rc;
 	Channel*	wc;
+};
+
+/* what a server is sent when a file is closed: a request with no reply channel */
+union Note
+{
+	Sys_FileIO_read	r;
+	Sys_FileIO_write	w;
+};
+
+/*
+ * The closes a server has yet to be told of, on one of its channels:
+ * see noteclose.
+ */
+struct Notes
+{
+	Channel*	c;		/* the server's channel (SrvFile.read or .write), nil once it is going */
+	int	iswrite;
+	Prog	p;		/* stands in c's queue of senders with one of them */
+	int	queued;		/* p is there, with msg */
+	Note	msg;
+	int*	fid;		/* the others, each fid once */
+	int	nfid;
+	int	mfid;		/* room: at least nfid and the file's opens (noteroom) */
 };
 
 struct SrvFile
@@ -39,6 +64,8 @@ struct SrvFile
 	Channel*	write;
 	SrvFile*	dir;		/* parent directory */
 	Pending	waitlist;	/* pending requests from client opens */
+	Notes	rnote;		/* closes not yet sent on read */
+	Notes	wnote;		/* and on write */
 };
 
 enum
@@ -65,6 +92,8 @@ void	freechan(Heap*, int);
 static void	freerdchan(Heap*, int);
 static void	freewrchan(Heap*, int);
 static void delwaiting(Pending*);
+static void	noteroom(SrvFile*);
+static void	notestop(Notes*);
 
 Type	*Trdchan;
 Type	*Twrchan;
@@ -278,6 +307,7 @@ srvopen(Chan *c, int omode)
 		error(Eperm);
 	if(sf->perm & DMEXCL && sf->opens != 0)
 		error(Einuse);
+	noteroom(sf);		/* for this open's close */
 	sf->opens++;
 	if(omode&ORCLOSE)
 		sf->flags |= SORCLOSE;
@@ -368,35 +398,271 @@ srvoffset(vlong offset)
 	return offset;
 }
 
+/*
+ * A close is told to the server on both its channels: a request with
+ * no reply channel.  It was sent only if the channel's buffer (sixteen)
+ * had room at that moment, and dropped with a message on the console
+ * if not: a server busy for a moment while seventeen files were closed
+ * never heard of the seventeenth, and one that counts its clients kept
+ * that one for good, so opening and closing quickly used up a service's
+ * limit.  The closer cannot wait for room: the server may never take
+ * anything from that channel (the plumber never reads its read
+ * channel), and a close is made by exiting processes and by the
+ * collector.
+ *
+ * So the notices that do not fit wait in Notes, as fids, and one of
+ * them at a time waits in the channel's own queue of senders, behind
+ * the buffer and whoever was there first, held by a Prog that is no
+ * process: when the server's receive takes it, addrun calls noted
+ * (as it calls cwakeme for a process blocked in csend), which puts
+ * the next one there.  Nothing waits and nothing is made at a close:
+ * the room for an open's close is taken when it is opened.
+ *
+ * A fid is the Chan's, and the next open to be given that Chan has the
+ * same fid.  A server must hear of the close before it hears from the
+ * new open, so a read or write first sends, itself, a notice of its own
+ * fid still waiting on that channel (noteflush).  That is also why a
+ * fid waits only once on a channel: between two closes of it with
+ * nothing sent on the channel for it, the server has nothing of the
+ * fid's to forget twice.  So what waits is bounded by the fids there
+ * are, which is the Chans the kernel has made, four bytes each.
+ *
+ * All of it is done with the interpreter held (acquire), as the
+ * channel's own queues are.
+ */
 static void
-srvunblock(SrvFile *sf, int fid)
+mknote(Notes *n, Note *m, int fid)
+{
+	if(n->iswrite){
+		m->w.t0 = 0;
+		m->w.t1 = H;
+		m->w.t2 = fid;
+		m->w.t3 = H;
+	}else{
+		m->r.t0 = 0;
+		m->r.t1 = 0;
+		m->r.t2 = fid;
+		m->r.t3 = H;
+	}
+}
+
+static int
+notefind(Notes *n, int fid)
+{
+	int i;
+
+	for(i = 0; i < n->nfid; i++)
+		if(n->fid[i] == fid)
+			return i;
+	return -1;
+}
+
+static void
+notedel(Notes *n, int i)
+{
+	n->nfid--;
+	memmove(n->fid+i, n->fid+i+1, (n->nfid-i)*sizeof(int));
+}
+
+/* will a send on d go at once? */
+static int
+canput(Channel *d)
+{
+	return d->recv->prog != nil || (d->buf != H && d->size < d->buf->len);
+}
+
+static void	noted(Prog*);
+
+/*
+ * Leave the first of what waits in the channel's queue of senders.
+ */
+static void
+notequeue(Notes *n)
+{
+	if(n->queued || n->nfid == 0)
+		return;
+	mknote(n, &n->msg, n->fid[0]);
+	n->p.state = Psend;
+	n->p.kill = nil;
+	n->p.osenv = n;
+	n->p.addrun = noted;
+	n->p.ptr = &n->msg;
+	if(!cqaddok(&n->c->send, &n->p)){
+		/* no memory for a place in the queue: it stays with the others, for the next close, read or write to send on */
+		n->p.ptr = nil;
+		return;
+	}
+	notedel(n, 0);
+	n->queued = 1;
+}
+
+/*
+ * Send what waits while it goes at once, in the order it came, and
+ * queue the next.
+ */
+static void
+notego(Notes *n)
 {
 	Channel *d;
-	Sys_FileIO_read rreq;
-	Sys_FileIO_write wreq;
+	Note m;
 
+	d = n->c;
+	if(n->queued)
+		return;
+	while(n->nfid > 0 && canput(d)){
+		mknote(n, &m, n->fid[0]);
+		notedel(n, 0);
+		csendalt(d, &m, d->mid.t, -1);
+	}
+	notequeue(n);
+}
+
+/*
+ * addrun, for Notes.p: the server has received, and the notice p held
+ * went into the buffer in the place that made; or the channel is being
+ * freed (killcomm), which notestop should have come before.  This is
+ * inside the server's receive: the buffer is full again, and the
+ * server, in an alt, is itself still in the queue of receivers, where
+ * it must not be taken for one that waits.  So the next is queued, not
+ * sent.
+ */
+static void
+noted(Prog *p)
+{
+	Notes *n;
+
+	n = p->osenv;
+	n->queued = 0;
+	if(p->kill != nil){
+		p->kill = nil;
+		n->nfid = 0;
+		return;
+	}
+	notequeue(n);
+}
+
+/*
+ * The channel is going: nothing more is sent on it.  Its free function
+ * calls this before it lets the interpreter go to take dev.l, which a
+ * closer may hold while it waits here for the interpreter: that closer
+ * must find the channel gone, not queue p on it for killcomm to hand
+ * back when the file may have been freed.
+ */
+static void
+notestop(Notes *n)
+{
+	if(n->c == nil)
+		return;
+	if(n->queued){
+		cqdelp(&n->c->send, &n->p);
+		n->p.ptr = nil;
+		n->queued = 0;
+	}
+	n->nfid = 0;
+	n->c = nil;
+}
+
+static void
+noteclose(Notes *n, int fid, int opens)
+{
+	if(n->c == nil)
+		return;
+	if(notefind(n, fid) < 0){
+		if(n->nfid >= n->mfid){
+			/* not to be: noteroom took the room when it was opened */
+			print("devsrv: no room to tell a server of a close\n");
+			return;
+		}
+		n->fid[n->nfid++] = fid;
+	}
+	notego(n);
+	if(opens == 0 && n->nfid == 0 && n->mfid > 64){
+		/* a crowd has been and gone */
+		free(n->fid);
+		n->fid = nil;
+		n->mfid = 0;
+	}
+}
+
+/*
+ * Room for the notices of every open's close, taken as the file is
+ * opened (dev.l held), where having none can be refused.
+ */
+static void
+noteroom1(Notes *n, int opens)
+{
+	int m, *f;
+
+	m = n->nfid + opens + 1;
+	if(m <= n->mfid)
+		return;
+	m += 16;
+	f = malloc(m*sizeof(int));
+	if(f == nil)
+		error(Enomem);
+	if(n->nfid > 0)
+		memmove(f, n->fid, n->nfid*sizeof(int));
+	free(n->fid);
+	n->fid = f;
+	n->mfid = m;
+}
+
+static void
+noteroom(SrvFile *sf)
+{
 	acquire();
 	if(waserror()){
 		release();
 		nexterror();
 	}
-	d = sf->read;
-	if(d != H){
-		rreq.t0 = 0;
-		rreq.t1 = 0;
-		rreq.t2 = fid;
-		rreq.t3 = H;
-		csendalt(d, &rreq, d->mid.t, -1);
-	}
+	noteroom1(&sf->rnote, sf->opens);
+	noteroom1(&sf->wnote, sf->opens);
+	poperror();
+	release();
+}
 
-	d = sf->write;
-	if(d != H){
-		wreq.t0 = 0;
-		wreq.t1 = H;
-		wreq.t2 = fid;
-		wreq.t3 = H;
-		csendalt(d, &wreq, d->mid.t, -1);
+/*
+ * Before a request for fid is sent on n's channel: a close of the
+ * fid's last open that still waits goes first, sent by the requester,
+ * which can wait.  Interrupted, it is put back: it may have been sent
+ * as the interrupt came, and a server told twice that a fid has gone
+ * forgets nothing it should keep.
+ */
+static void
+noteflush(Notes *n, int fid)
+{
+	int i;
+	Note m;
+
+	if(n->c == nil)
+		return;
+	notego(n);	/* what could not be queued before */
+	i = notefind(n, fid);
+	if(i < 0)
+		return;
+	notedel(n, i);
+	mknote(n, &m, fid);
+	if(waserror()){
+		if(n->c != nil && notefind(n, fid) < 0 && n->nfid < n->mfid){
+			n->fid[n->nfid++] = fid;
+			notego(n);
+		}
+		nexterror();
 	}
+	csend(n->c, &m);
+	poperror();
+}
+
+static void
+srvunblock(SrvFile *sf, int fid)
+{
+	acquire();
+	if(waserror()){
+		release();
+		nexterror();
+	}
+	noteclose(&sf->rnote, fid, sf->opens);
+	noteclose(&sf->wnote, fid, sf->opens);
 	poperror();
 	release();
 }
@@ -417,11 +683,13 @@ srvcancelreqs(SrvFile *sf)
 				rreply.t0 = H;
 				rreply.t1 = c2string(Ehungup, strlen(Ehungup));
 				csend(w->rc, &rreply);
+				destroy(rreply.t1);	/* the channel has its own */
 			}
 			if(w->wc != nil){
 				wreply.t0 = 0;
 				wreply.t1 = c2string(Ehungup, strlen(Ehungup));
 				csend(w->wc, &wreply);
+				destroy(wreply.t1);
 			}
 			poperror();
 		}
@@ -455,6 +723,8 @@ srvchkref(SrvFile *sf)
 	if(sf->dir != nil)
 		srvputdir(sf->dir);
 
+	free(sf->rnote.fid);
+	free(sf->wnote.fid);
 	free(sf->user);
 	free(sf->name);
 	free(sf);
@@ -479,10 +749,11 @@ freerdchan(Heap *h, int swept)
 	SrvFile *sf;
 	Dsave ds;
 
+	sf = H2D(Channel*, h)->aux;
+	notestop(&sf->rnote);	/* before killcomm finds its Prog, and while sf is certainly there */
 	destroysave(&ds);	/* release() inside a destroy: heap.c */
 	release();
 	qlock(&dev.l);
-	sf = H2D(Channel*, h)->aux;
 	sf->read = H;
 	srvfree(sf, SRDCLOSE);
 	qunlock(&dev.l);
@@ -498,10 +769,11 @@ freewrchan(Heap *h, int swept)
 	SrvFile *sf;
 	Dsave ds;
 
+	sf = H2D(Channel*, h)->aux;
+	notestop(&sf->wnote);
 	destroysave(&ds);	/* release() inside a destroy: heap.c */
 	release();
 	qlock(&dev.l);
-	sf = H2D(Channel*, h)->aux;
 	sf->write = H;
 	srvfree(sf, SWRCLOSE);
 	qunlock(&dev.l);
@@ -597,28 +869,35 @@ srvremove(Chan *c)
  * the buffer, never waits, and reaches nobody.  Each request has a
  * channel of its own, so an answer that comes late is never a later
  * request's.
+ *
+ * The notice must not be the thing that fails.  Its text was made
+ * here, where no memory meant no notice, and what the request needed
+ * for its answer was made after the server had the request, where no
+ * memory left the server answering nobody, untold; a request that was
+ * interrupted as the server took it went the same way.  The requester
+ * now has the text, and all else it needs, before the server has the
+ * request, and tells of giving up from the moment it starts to send.
+ * The notice is put only where there is room for it (there is, unless
+ * the server has answered twice), so giving up never waits.
  */
 static char Einterrupted[] = "interrupted";
 
 static void
-gaveup(Channel *rc, Channel *wc)
+gaveup(Channel *rc, Channel *wc, String *gone)
 {
 	Sys_Rread rreply;
 	Sys_Rwrite wreply;
 
-	if(waserror())
-		return;		/* no memory to say so with */
-	if(rc != nil){
+	if(rc != nil && canput(rc)){
 		rreply.t0 = H;
-		rreply.t1 = c2string(Einterrupted, strlen(Einterrupted));
+		rreply.t1 = gone;
 		csend(rc, &rreply);
 	}
-	if(wc != nil){
+	if(wc != nil && canput(wc)){
 		wreply.t0 = 0;
-		wreply.t1 = c2string(Einterrupted, strlen(Einterrupted));
+		wreply.t1 = gone;
 		csend(wc, &wreply);
 	}
-	poperror();
 }
 
 static void
@@ -659,6 +938,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 	SrvFile *sp;
 	Channel *rc;
 	Channel *rd;
+	String *gone;
 	Pending wait;
 	Sys_Rread * volatile r;
 	Sys_FileIO_read req;
@@ -683,8 +963,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	rd = sp->read;
-	if(rd == H)
+	if(sp->read == H)
 		error(Ehungup);
 
 	rc = cnewc(dev.Rread, movtmp, 2);	/* the answer, and "interrupted": see gaveup */
@@ -695,12 +974,6 @@ srvread(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	req.t0 = srvoffset(offset);
-	req.t1 = count;
-	req.t2 = c->fid;
-	req.t3 = rc;
-	csend(rd, &req);
-
 	h = heap(dev.Rread);
 	r = H2D(Sys_Rread *, h);
 	ptradd(h);
@@ -710,15 +983,34 @@ srvread(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
+	gone = c2string(Einterrupted, strlen(Einterrupted));
+	ptradd(D2H(gone));
+	if(waserror()){
+		ptrdel(D2H(gone));
+		destroy(gone);
+		nexterror();
+	}
+
+	noteflush(&sp->rnote, c->fid);
+	rd = sp->read;		/* noteflush can wait */
+	if(rd == H)
+		error(Ehungup);
+
+	req.t0 = srvoffset(offset);
+	req.t1 = count;
+	req.t2 = c->fid;
+	req.t3 = rc;
+
 	wait.fid = c->fid;
 	wait.rc = rc;
 	wait.wc = nil;
 	addwaiting(sp, &wait);
 	if(waserror()){
 		delwaiting(&wait);
-		gaveup(rc, nil);
+		gaveup(rc, nil, gone);
 		nexterror();
 	}
+	csend(rd, &req);
 	crecv(rc, r);
 	poperror();
 	delwaiting(&wait);
@@ -734,6 +1026,10 @@ srvread(Chan *c, void *va, long count, vlong offset)
 			l = count;
 		memmove(va, a->data, l);
 	}
+
+	poperror();
+	ptrdel(D2H(gone));
+	destroy(gone);
 
 	poperror();
 	ptrdel(h);
@@ -757,6 +1053,8 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	SrvFile *sp;
 	Channel *wc;
 	Channel *wr;
+	String *gone;
+	Array *data;
 	Pending wait;
 	Sys_Rwrite * volatile w;
 	Sys_FileIO_write req;
@@ -771,8 +1069,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	}
 
 	sp = c->aux;
-	wr = sp->write;
-	if(wr == H)
+	if(sp->write == H)
 		error(Ehungup);
 
 	wc = cnewc(dev.Rwrite, movtmp, 2);	/* the answer, and "interrupted": see gaveup */
@@ -783,34 +1080,40 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	req.t0 = srvoffset(offset);
-	req.t1 = mem2array(va, count);
-	req.t2 = c->fid;
-	req.t3 = wc;
-
-	ptradd(D2H(req.t1));
-
-	if(waserror()){
-		ptrdel(D2H(req.t1));
-		destroy(req.t1);
-		nexterror();
-	}
-
-	csend(wr, &req);
-
-	poperror();
-	ptrdel(D2H(req.t1));
-	destroy(req.t1);
-
 	h = heap(dev.Rwrite);
 	w = H2D(Sys_Rwrite *, h);
 	ptradd(h);
-
 	if(waserror()){
 		ptrdel(h);
 		destroy(w);
 		nexterror();
 	}
+
+	gone = c2string(Einterrupted, strlen(Einterrupted));
+	ptradd(D2H(gone));
+	if(waserror()){
+		ptrdel(D2H(gone));
+		destroy(gone);
+		nexterror();
+	}
+
+	data = mem2array(va, count);
+	ptradd(D2H(data));
+	if(waserror()){
+		ptrdel(D2H(data));
+		destroy(data);
+		nexterror();
+	}
+
+	noteflush(&sp->wnote, c->fid);
+	wr = sp->write;		/* noteflush can wait */
+	if(wr == H)
+		error(Ehungup);
+
+	req.t0 = srvoffset(offset);
+	req.t1 = data;
+	req.t2 = c->fid;
+	req.t3 = wc;
 
 	wait.fid = c->fid;
 	wait.rc = nil;
@@ -818,12 +1121,21 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 	addwaiting(sp, &wait);
 	if(waserror()){
 		delwaiting(&wait);
-		gaveup(nil, wc);
+		gaveup(nil, wc, gone);
 		nexterror();
 	}
+	csend(wr, &req);
 	crecv(wc, w);
 	poperror();
 	delwaiting(&wait);
+
+	poperror();
+	ptrdel(D2H(data));
+	destroy(data);
+
+	poperror();
+	ptrdel(D2H(gone));
+	destroy(gone);
 
 	if(w->t1 != H)
 		error(string2c(w->t1));
@@ -897,7 +1209,10 @@ srvf2c(char *dir, char *file, Sys_FileIO *io)
 	srvretype(io->write, f, Twrchan);
 	f->read = io->read;
 	f->write = io->write;
-	
+	f->rnote.c = io->read;
+	f->wnote.c = io->write;
+	f->wnote.iswrite = 1;
+
 	f->waitlist.next = &f->waitlist;
 	f->waitlist.prev = &f->waitlist;
 

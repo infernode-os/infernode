@@ -387,3 +387,8 @@ LICENCE.broadcom
 # agentloop_characterization_test.sh scratch (removed when the test exits)
 /usr/agentloop/
 /tests/inferno/.agentloop-char.*
+
+# webget's log: the service makes it and rewrites it each time it
+# starts.  It was tracked, empty, and every fetch through web(2) left
+# the tree changed.
+/services/webget/webget.log

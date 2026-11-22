@@ -1014,7 +1014,11 @@ setsecretver(conn: ref Dial->Connection, sigma: array of byte, direction: int, n
 		kr->hmac_sha384(sigma, len sigma, array of byte "two", secretout, nil);
 		kr->hmac_sha384(sigma, len sigma, array of byte "one", secretin, nil);
 	}
-	return ssl->secret(conn, secretin, secretout);
+	err := ssl->secret(conn, secretin, secretout);
+	# the device has them now: these copies were left in the heap
+	erasekey(secretin);
+	erasekey(secretout);
+	return err;
 }
 
 erasekey(a: array of byte)

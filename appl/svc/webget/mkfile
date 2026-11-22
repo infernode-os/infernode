@@ -32,9 +32,3 @@ SYSMODULES=\
 DISBIN=$ROOT/dis/svc/webget
 
 <$ROOT/mkfiles/mkdis
-
-install:V:	install-logs
-
-install-logs:V:
-	rm -f $ROOT/services/webget/webget.log && cp webget.log $ROOT/services/webget/webget.log
-	# chmod 644 $ROOT/services/webget/webget.log

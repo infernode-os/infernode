@@ -240,7 +240,7 @@ select(mailbox: string): (ref Mailbox, string)
 	if(resp.status != "OK")
 		return (nil, "SELECT failed: " + resp.statusline);
 
-	mbox := ref Mailbox(mailbox, 0, 0, 0, 0, 0);
+	mbox := ref Mailbox(mailbox, 0, 0, 0, 0, big 0);
 
 	# Parse untagged responses for mailbox info
 	for(l := resp.untagged; l != nil; l = tl l) {
@@ -259,7 +259,7 @@ select(mailbox: string): (ref Mailbox, string)
 			mbox.uidnext = parsebracketnum(line, "UIDNEXT");
 		# * OK [UIDVALIDITY 3857529045]
 		else if(hasprefix(line, "* OK [UIDVALIDITY "))
-			mbox.uidvalidity = parsebracketnum(line, "UIDVALIDITY");
+			mbox.uidvalidity = uidvalidityof(line);
 	}
 
 	currentmbox = mailbox;
@@ -1279,6 +1279,29 @@ parsebracketnum(line: string, key: string): int
 	while(end < len line && line[end] != ']' && line[end] != ' ')
 		end++;
 	return tocount(line[start:end]);
+}
+
+# A mailbox's UIDVALIDITY, whole: a nonzero number of 32 bits, unsigned
+# (RFC 3501 2.3.1.1, 9: nz-number).  tocount gave the largest int for
+# every value past it, which is half of those a server may choose, so
+# two validities there were one and a mailbox made again kept its ids.
+# What is no such number is 0: no validity, and no message is named.
+uidvalidityof(line: string): big
+{
+	target := "[UIDVALIDITY ";
+	i := strindex(line, target);
+	if(i < 0)
+		return big 0;
+	v := big 0;
+	n := 0;
+	for(i += len target; i < len line && line[i] >= '0' && line[i] <= '9'; i++) {
+		v = v * big 10 + big (line[i] - '0');
+		if(++n > 10)
+			return big 0;
+	}
+	if(n == 0 || v > big 16rFFFFFFFF)
+		return big 0;
+	return v;
 }
 
 # IMAP quoting: wrap in double quotes, escape \ and "

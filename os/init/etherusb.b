@@ -3181,38 +3181,95 @@ selftest()
 		ok = 0;
 	}
 
-	# SNTP: a server's answer for 2026-01-01 00:00:00 UTC
+	# SNTP: a server's answer to a request, for 2027-01-01 00:00:00 UTC
+	rq := array[48] of {* => byte 0};
+	rq[0] = byte (4 << 3 | 3);
+	for(i := 0; i < 8; i++)
+		rq[40+i] = byte (16rA1 + i);
 	nt := array[48] of {* => byte 0};
 	nt[0] = byte (4 << 3 | 4);
 	nt[1] = byte 2;
-	secs := big 1767225600 + big 2208988800;
+	nt[24:] = rq[40:48];
+	T27: con big 1798761600;
+	secs := T27 + big 2208988800;
 	nt[40] = byte (secs >> 24);
 	nt[41] = byte (secs >> 16);
 	nt[42] = byte (secs >> 8);
 	nt[43] = byte secs;
-	if(ntpunix(nt) != big 1767225600){
-		sys->print("etherusb: selftest: a time server's answer read as %bd\n", ntpunix(nt));
+	if(ntpanswer(nt, rq) != T27){
+		sys->print("etherusb: selftest: a time server's answer read as %bd\n", ntpanswer(nt, rq));
+		ok = 0;
+	}
+	# an answer to another request, or to none
+	nt[27] ^= byte 1;
+	if(ntpanswer(nt, rq) > big 0){
+		sys->print("etherusb: selftest: an answer whose originate timestamp is not the request's taken\n");
+		ok = 0;
+	}
+	nt[27] ^= byte 1;
+	zr := array[48] of {* => byte 0};
+	zr[0] = rq[0];
+	if(ntpanswer(nt, zr) > big 0){
+		sys->print("etherusb: selftest: an answer taken for a request it does not answer\n");
 		ok = 0;
 	}
 	nt[1] = byte 0;
-	if(ntpunix(nt) > big 0){
+	if(ntpanswer(nt, rq) > big 0){
 		sys->print("etherusb: selftest: a stratum 0 answer taken for the time\n");
 		ok = 0;
 	}
 	nt[1] = byte 2;
-	nt[0] = byte (4 << 3 | 3);
-	if(ntpunix(nt) > big 0){
-		sys->print("etherusb: selftest: a client's request taken for an answer\n");
+	# modes: a client's request, a broadcast, a control message
+	modes := array[] of {3, 5, 6, 0};
+	for(i = 0; i < len modes; i++){
+		nt[0] = byte (4 << 3 | modes[i]);
+		if(ntpanswer(nt, rq) > big 0){
+			sys->print("etherusb: selftest: mode %d taken for an answer\n", modes[i]);
+			ok = 0;
+		}
+	}
+	nt[0] = byte (3 << 6 | 4 << 3 | 4);
+	if(ntpanswer(nt, rq) > big 0){
+		sys->print("etherusb: selftest: a server whose clock is not set (LI 3) taken\n");
+		ok = 0;
+	}
+	nt[0] = byte (7 << 3 | 4);
+	if(ntpanswer(nt, rq) > big 0){
+		sys->print("etherusb: selftest: version 7 taken\n");
+		ok = 0;
+	}
+	nt[0] = byte (1 << 6 | 3 << 3 | 4);
+	if(ntpanswer(nt, rq) != T27){
+		sys->print("etherusb: selftest: a version 3 answer with a leap second pending refused\n");
 		ok = 0;
 	}
 	nt[0] = byte (4 << 3 | 4);
-	if(ntpunix(nt[0:47]) > big 0 || ntpunix(nil) > big 0){
+	if(ntpanswer(nt[0:47], rq) > big 0 || ntpanswer(nil, rq) > big 0 || ntpanswer(nt, nil) > big 0){
 		sys->print("etherusb: selftest: a short answer taken\n");
 		ok = 0;
 	}
 	nt[40] = nt[41] = nt[42] = nt[43] = byte 0;
-	if(ntpunix(nt) > big 0){
+	if(ntpanswer(nt, rq) > big 0){
 		sys->print("etherusb: selftest: an answer with no time taken\n");
+		ok = 0;
+	}
+	# what an answer may do to the clock
+	fl := big Ntpwritten;
+	if(nostep(big 0, T27, fl) != nil || nostep(big 86400, T27, fl) != nil){
+		sys->print("etherusb: selftest: a clock that starts in 1970 not set\n");
+		ok = 0;
+	}
+	if(nostep(big 0, fl - big 1, fl) == nil || nostep(T27, big 1700000000, fl) == nil){
+		sys->print("etherusb: selftest: a time before this was written taken\n");
+		ok = 0;
+	}
+	if(nostep(T27, T27 + big 86400, fl) != nil || nostep(T27, T27 - big 86400, fl) != nil){
+		sys->print("etherusb: selftest: a clock already set not moved by a day\n");
+		ok = 0;
+	}
+	if(nostep(T27, T27 + big 86401, fl) == nil || nostep(T27 + big 86401, T27, fl) == nil ||
+	   nostep(T27, T27 + big 315360000, fl) == nil){
+		sys->print("etherusb: selftest: a clock already set moved by more than a day\n");
 		ok = 0;
 	}
 
@@ -4031,13 +4088,22 @@ trytime(server: string): int
 		return -1;
 
 	#
-	# A 48-byte SNTP client request: leap 0, version 4, mode 3. Every
-	# other field may be zero -- the server fills in what matters.
+	# A 48-byte SNTP client request: leap 0, version 4, mode 3, and 64
+	# random bits as its transmit timestamp, which the server gives
+	# back as its reply's originate timestamp (RFC 4330 section 5).
+	# The request was all zeros and any datagram in server mode was
+	# the answer: whoever could send one to this port from the
+	# server's address, without having seen the request, set the
+	# clock, and this runs at every boot with nobody watching.
 	#
-	req := array[48] of byte;
-	for(i := 0; i < len req; i++)
-		req[i] = byte 0;
+	req := array[48] of {* => byte 0};
 	req[0] = byte (4 << 3 | 3);
+	rfd := sys->open("/dev/random", Sys->OREAD);
+	if(rfd == nil || sys->read(rfd, req[40:], 8) != 8){
+		sys->print("etherusb: no random numbers for a time request: %r\n");
+		return -1;
+	}
+	rfd = nil;
 	if(sys->write(d, req, len req) != len req)
 		return -1;
 
@@ -4058,23 +4124,29 @@ trytime(server: string): int
 	rpid := <-pc;
 	tc := chan[1] of int;	# see dhcpwait
 	spawn ntptimer(tc, 3000);
-	rep: array of byte;
-	alt {
-	rep = <-rc =>
-		;
+	unix := big -1;
+	# a datagram that is not the answer does not use up the wait: the
+	# answer may be the next
+Wait:
+	for(;;) alt {
+	rep := <-rc =>
+		if(rep == nil)
+			break Wait;
+		unix = ntpanswer(rep, req);
+		if(unix > big 0)
+			break Wait;
 	<-tc =>
-		killproc(rpid);
-		return -1;
+		break Wait;
 	}
-	#
-	# Each of these returned whatever its test said: only the kill was
-	# under the if, so any reply at all was "no answer" and the clock
-	# was never set from the network.
-	#
 	killproc(rpid);
-	unix := ntpunix(rep);
 	if(unix <= big 0)
 		return -1;
+
+	why := nostep(clocknow(), unix, clockfloor());
+	if(why != nil){
+		sys->print("etherusb: %s says %bd: %s\n", server, unix, why);
+		return -1;
+	}
 
 	t := sys->open("/dev/time", Sys->OWRITE);
 	if(t == nil)
@@ -4084,34 +4156,43 @@ trytime(server: string): int
 	#
 	if(sys->fprint(t, "%bd", unix * big 1000000) < 0){
 		sys->print("etherusb: cannot set the clock: %r\n");
-		killproc(rpid);
 		return -1;
 	}
 	sys->print("etherusb: clock set from %s\n", server);
-	killproc(rpid);
 	return 0;
 }
 
 #
-# The time in an SNTP reply, in seconds since 1970; -1 if it is not a
-# server's answer with a time in it.
+# The time in the answer to request req, in seconds since 1970; -1 if
+# rep is not that: its originate timestamp (bytes 24-31) is not the
+# request's transmit timestamp (40-47), it is not in server mode, its
+# version is none, its server's clock is not set (leap indicator 3), it
+# is a kiss-of-death (stratum 0), or it holds no time.
 #
 # Transmit timestamp, bytes 40-43: seconds since 1900. NTP counts from
 # 1900 and Unix from 1970, so the difference is the 2208988800 seconds
 # between them -- seventy years including seventeen leap days. Getting
 # that constant wrong is the classic way to be exactly 70 years out.
 #
-ntpunix(rep: array of byte): big
+ntpanswer(rep, req: array of byte): big
 {
-	if(rep == nil || len rep < 48)
+	if(rep == nil || len rep < 48 || req == nil || len req < 48)
 		return big -1;
-	mode := int rep[0] & 7;
-	if(mode != 4 && mode != 5)	# server, or broadcast: not our own request come back
+	for(i := 0; i < 8; i++)
+		if(rep[24+i] != req[40+i])
+			return big -1;
+	b := int rep[0];
+	if((b & 7) != 4)		# a server's answer: not a broadcast, a control message, our own request
+		return big -1;
+	vn := (b >> 3) & 7;
+	if(vn == 0 || vn > 4)
+		return big -1;
+	if((b >> 6) == 3)		# its own clock is not set
 		return big -1;
 	if(int rep[1] == 0)		# stratum 0: "go away", with a reason where the time would be
 		return big -1;
 	secs := big 0;
-	for(i := 40; i < 44; i++)
+	for(i = 40; i < 44; i++)
 		secs = (secs << 8) | big (int rep[i] & 16rFF);
 	if(secs == big 0)
 		return big -1;
@@ -4119,6 +4200,48 @@ ntpunix(rep: array of byte): big
 	if(unix <= big 0)
 		return big -1;
 	return unix;
+}
+
+#
+# SNTP is not authenticated, so what an answer may do to the clock is
+# bounded, as timesync(8) bounds a GPS receiver's: a time before this
+# was written, or before the kernel was built, is none; and a clock
+# that already says a time since then is moved by at most a day.  A
+# board with no clock of its own starts in 1970 and is set once,
+# freely.
+#
+Ntpwritten: con 1793491200;	# 2026-11-01
+Ntpmaxstep: con 86400;
+
+clockfloor(): big
+{
+	f := big Ntpwritten;
+	(ok, d) := sys->stat("#c/time");
+	if(ok >= 0 && big d.mtime > f)
+		f = big d.mtime;	# the kernel's build date
+	return f;
+}
+
+clocknow(): big
+{
+	fd := sys->open("/dev/time", Sys->OREAD);
+	if(fd == nil)
+		return big 0;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return big 0;
+	return big string buf[0:n] / big 1000000;
+}
+
+# why the clock, at cur, is not to be set to t; nil if it may be
+nostep(cur, t, floor: big): string
+{
+	if(t < floor)
+		return "a time before this system was built: not a time";
+	if(cur >= floor && (t - cur > big Ntpmaxstep || cur - t > big Ntpmaxstep))
+		return "more than a day from the clock, which is already set: the clock is left";
+	return nil;
 }
 
 ntpreader(d: ref Sys->FD, rc: chan of array of byte, pids: chan of int)
@@ -4133,12 +4256,20 @@ ntpreader(d: ref Sys->FD, rc: chan of array of byte, pids: chan of int)
 	#
 	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: d.fd :: nil);
 	pids <-= sys->pctl(0, nil);
-	buf := array[128] of byte;
-	n := sys->read(d, buf, len buf);
-	if(n <= 0)
-		rc <-= nil;
-	else
-		rc <-= buf[0:n];
+	for(;;){
+		buf := array[128] of byte;
+		n := sys->read(d, buf, len buf);
+		if(n <= 0){
+			rc <-= nil;
+			return;
+		}
+		alt{
+		rc <-= buf[0:n] =>
+			;
+		* =>
+			;	# more datagrams than anyone is reading: dropped
+		}
+	}
 }
 
 ntptimer(c: chan of int, ms: int)

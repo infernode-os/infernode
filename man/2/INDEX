@@ -70,10 +70,8 @@ dec encoding
 enc encoding
 encoding encoding
 env env
-ether ether
 exception exception
 factotum factotum
-mount factotum
 proxy factotum
 rpc factotum
 expand filepat
@@ -124,12 +122,6 @@ strtopk keyring-certtostr
 strtosk keyring-certtostr
 aescbc keyring-crypt
 aessetup keyring-crypt
-descbc keyring-crypt
-desecb keyring-crypt
-dessetup keyring-crypt
-ideacbc keyring-crypt
-ideaecb keyring-crypt
-ideasetup keyring-crypt
 keyring keyring-crypt
 keyring-crypt keyring-crypt
 dhparams keyring-gensk
@@ -171,7 +163,6 @@ hmac_md5 keyring-sha1
 hmac_sha1 keyring-sha1
 keyring keyring-sha1
 keyring-sha1 keyring-sha1
-md4 keyring-sha1
 md5 keyring-sha1
 sha1 keyring-sha1
 sign keyring-sha1
@@ -401,14 +392,12 @@ werrstr sys-werrstr
 mktabs tabs
 tabs tabs
 tabsctl tabs
-tftp tftp
 timers timers
 mkdictname translate
 opendict translate
 opendicts translate
 translate translate
 venti venti
-virgil virgil
 volume volume
 w3c w3c-css
 w3c-css w3c-css

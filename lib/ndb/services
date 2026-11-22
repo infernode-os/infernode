@@ -14,7 +14,6 @@ infweb		6670/tcp	# inferno web server
 infsigner	6671/tcp	# inferno signing services
 infcsigner	6672/tcp	# inferno signing services
 inflogin	6673/tcp	# inferno login service
-virgil		2202/udp	virgild		# inferno info
 infsds	6674/tcp	# SDS
 infgamelogin	6660/tcp	# inferno games login service
 registry		6675/tcp	# default registry

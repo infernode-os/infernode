@@ -54,6 +54,8 @@ run(name: string)
 			testRemoveRaceThroughMount(t);
 		"OversizeStatBecomesError" =>
 			testOversizeStatBecomesError(t);
+		"WstatLength" =>
+			testWstatLength(t);
 		"FarOffsetRefused" =>
 			testFarOffsetRefused(t);
 		"LongWstatServed" =>
@@ -699,6 +701,117 @@ testDirectoriesCharged(t: ref T)
 	t.assertseq(err, "", "and there is room for another");
 }
 
+# A wstat that gives a length sets it: the file is cut, or lengthened
+# with zeros.  The length was not looked at and the wstat answered as
+# done, so a file "truncated" was as long as before.
+testWstatLength(t: ref T)
+{
+	mountmemfs(t);
+	fd := sys->create("/n/len", Sys->ORDWR, 8r666);
+	if(fd == nil)
+		t.fatal(sys->sprint("create: %r"));
+	b := array of byte "0123456789";
+	t.asserteq(sys->write(fd, b, len b), len b, "ten bytes written");
+	res := chan[1] of string;
+	spawn lengths(fd, res);
+	tc := chan of int;
+	spawn timer(tc, 5000);
+	alt {
+	e := <-res =>
+		t.assertseq(e, "", "a file's length set by wstat");
+	<-tc =>
+		t.fatal("memfs did not answer in 5s");
+	}
+
+	# what a cut gives back can be written again
+	fd = nil;
+	mfd := twousers(t, "-m" :: "8192" :: nil);
+	mk(t, mfd, OWNER, 1, "full", 8r666);
+	(nil, err) := rpc(mfd, ref Tmsg.Walk(0, OWNER, 2, array[] of {"full"}));
+	(nil, err) = rpc(mfd, ref Tmsg.Open(0, 2, Sys->ORDWR));
+	t.assertseq(err, "", "open a file in a store of 8192 bytes");
+	d := sys->nulldir;
+	d.length = big 7000;
+	(nil, err) = rpc(mfd, ref Tmsg.Wstat(0, 2, d));
+	t.assertseq(err, "", "its length set to 7000");
+	mk(t, mfd, OWNER, 3, "other", 8r666);
+	(nil, err) = rpc(mfd, ref Tmsg.Walk(0, OWNER, 4, array[] of {"other"}));
+	(nil, err) = rpc(mfd, ref Tmsg.Open(0, 4, Sys->ORDWR));
+	d.length = big 7000;
+	(nil, err) = rpc(mfd, ref Tmsg.Wstat(0, 4, d));
+	t.assertseq(err, "filesystem full", "a second file of 7000 does not fit");
+	d.length = big 0;
+	(nil, err) = rpc(mfd, ref Tmsg.Wstat(0, 2, d));
+	t.assertseq(err, "", "the first cut to nothing");
+	d.length = big 7000;
+	(nil, err) = rpc(mfd, ref Tmsg.Wstat(0, 4, d));
+	t.assertseq(err, "", "and the second then fits");
+	(nil, err) = rpc(mfd, ref Tmsg.Walk(0, OTHER, 5, array[] of {"other"}));
+	d.length = big 1;
+	(nil, err) = rpc(mfd, ref Tmsg.Wstat(0, 5, d));
+	t.assertseq(err, "permission denied", "a user who may not write the file may not set its length");
+	(nil, err) = rpc(mfd, ref Tmsg.Wstat(0, OWNER, d));
+	t.assert(err != "", "a directory's length is not set: " + err);
+}
+
+lengths(fd: ref Sys->FD, res: chan of string)
+{
+	d := sys->nulldir;
+	d.length = big 4;
+	if(sys->fwstat(fd, d) < 0){
+		res <-= sys->sprint("wstat to 4: %r");
+		return;
+	}
+	(ok, st) := sys->fstat(fd);
+	if(ok < 0 || st.length != big 4){
+		res <-= sys->sprint("after a wstat to 4 the length is %bd", st.length);
+		return;
+	}
+	buf := array[64] of byte;
+	n := sys->pread(fd, buf, len buf, big 0);
+	if(n != 4 || string buf[0:n] != "0123"){
+		res <-= sys->sprint("after a wstat to 4 the file reads %d bytes: %q", n, string buf[0:n]);
+		return;
+	}
+	d.length = big 8;
+	if(sys->fwstat(fd, d) < 0){
+		res <-= sys->sprint("wstat to 8: %r");
+		return;
+	}
+	n = sys->pread(fd, buf, len buf, big 0);
+	if(n != 8 || string buf[0:4] != "0123"){
+		res <-= sys->sprint("after a wstat to 8 the file reads %d bytes", n);
+		return;
+	}
+	for(i := 4; i < 8; i++)
+		if(buf[i] != byte 0){
+			res <-= sys->sprint("lengthened, byte %d is %d, not 0 (what was cut came back)", i, int buf[i]);
+			return;
+		}
+	d.length = big 3000;
+	if(sys->fwstat(fd, d) < 0){
+		res <-= sys->sprint("wstat to 3000: %r");
+		return;
+	}
+	big3 := array[4000] of byte;
+	n = sys->pread(fd, big3, len big3, big 0);
+	if(n != 3000){
+		res <-= sys->sprint("after a wstat to 3000 the file reads %d bytes", n);
+		return;
+	}
+	for(i = 4; i < 3000; i++)
+		if(big3[i] != byte 0){
+			res <-= sys->sprint("lengthened to 3000, byte %d is not 0", i);
+			return;
+		}
+	d.length = big 1 << 31;
+	if(sys->fwstat(fd, d) >= 0){
+		res <-= "a length of 2^31 was taken";
+		return;
+	}
+	res <-= "";
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -730,6 +843,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RemovedWhileOpen");
 	run("WalkAndNames");
 	run("DirectoriesCharged");
+	run("WstatLength");
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

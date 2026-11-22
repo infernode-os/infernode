@@ -326,7 +326,6 @@ status and addresses of interface
 .SH SOURCE
 .B /appl/lib/ip.b
 .SH SEE ALSO
-.IR ether (2),
 .IR ip (3)
 .SH BUGS
 .B Readipifc

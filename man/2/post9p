@@ -62,9 +62,25 @@ A client's reads and writes wait for the connection's server, in the
 order they were made, and never hold up another connection or a new one.
 One connection can have 1024 reads and 1024 writes waiting; more are
 refused.
+A post has at most 256 connections at once; one more is refused in answer
+to its first request.
+What the server sent for a read whose client had gone by then (it was
+killed, or its request flushed) is kept for the connection's next read,
+and a request given up while it waited is not passed on.
 A write to a connection whose server has closed its end is an error.
 When a client closes its connection the server sees the end of it,
-whatever was waiting.
+whatever was waiting, and its place among the 256 is free again,
+however many close at once (the system tells a posted file's server of
+every close:
+.IR sys-file2chan (2)).
+.PP
+The connections are the caller's to serve as it likes.
+One that serves them by exporting a directory, as
+.IR post (1)
+does, can make the export read-only with
+.BR Sys->EXPREADONLY ;
+see
+.IR sys-export (2).
 .PP
 A process with
 .B NODEVS
@@ -77,6 +93,8 @@ does for the editor and Charon).
 .SH SOURCE
 .B /appl/lib/post9p.b
 .SH SEE ALSO
+.IR post (1),
+.IR sys-export (2),
 .IR sys-file2chan (2),
 .IR styxservers (2),
 .IR editor (1)

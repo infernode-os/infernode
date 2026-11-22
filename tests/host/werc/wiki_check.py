@@ -62,7 +62,7 @@ def page(name, f="index.html"):
 
 
 def words(html):
-    # wiki2html sets a paragraph a word to a line
+    # the wiki's HTML sets a paragraph a word to a line
     return " ".join(html.split())
 
 

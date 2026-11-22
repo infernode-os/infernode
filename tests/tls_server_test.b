@@ -602,9 +602,17 @@ testClientCerts(t: ref T)
 	t.assert(contains(serr, "revoked"), "the CA's CRL given: mallory refused: " + serr);
 	(nil, sc) = connect(t, scfg, clientcfg(C_GOOD, K_GOOD));
 	t.assert(sc.peercerts != nil, "and alice still taken");
+	# a CRL is its own CA's business (RFC 5280 6.3.3): another CA's
+	# says nothing of this CA's clients (it refused them all), and one
+	# in this CA's name that the CA did not sign refuses them all
 	scfg.clientcrls = hex(CRL_OTHER) :: nil;
+	(nil, sc) = connect(t, scfg, clientcfg(C_GOOD, K_GOOD));
+	t.assert(sc.peercerts != nil, "another CA's CRL given: alice taken");
+	forged := hex(CRL_CA);
+	forged[len forged - 5] ^= byte 1;	# in its signature
+	scfg.clientcrls = forged :: nil;
 	(serr, nil) = refusedhs(scfg, clientcfg(C_GOOD, K_GOOD));
-	t.assert(contains(serr, "CRL not signed"), "a CRL no root signed: every client refused (the configuration is wrong): " + serr);
+	t.assert(contains(serr, "CRL not signed"), "a CRL in the CA's name that it did not sign: every client of the CA refused: " + serr);
 	scfg.clientcrls = nil;
 
 	# the clock: 2200 is past every certificate's end, 1970 before its start

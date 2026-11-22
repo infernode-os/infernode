@@ -45,6 +45,7 @@ Output: adt
 	started:	int;
 	startup:	string;
 	waiting:	int;
+	since:	int;		# when its reader last took a message, or the queue began
 };
 
 Port: adt
@@ -148,6 +149,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 	plumbmsg = load Plumbmsg Plumbmsg->PATH;
 	plumbmsg->init(0, nil, 0);
 
+	# With -n the group is the caller's, and not the plumber's to kill:
+	# shutdown wrote killgrp to it all the same, and a plumber that
+	# could not make its files took its caller's shell with it.
+	owngrp = !nogrp;
 	if(nogrp)
 		pgrp = sys->pctl(0, nil);
 	else
@@ -177,12 +182,15 @@ init(ctxt: ref Draw->Context, args: list of string)
 		shutdown();
 	input.inc = chan of ref Inmesg;
 	input.resc = chan of int;
-	spawn receiver(input);
+	pidc := chan of int;
+	spawn receiver(input, pidc);
+	mine = <-pidc :: mine;
 	
 	rulesio = makefile("plumb.rules");
 	if(rulesio == nil)
 		shutdown();
-	spawn rulesproc(rulesio);
+	spawn rulesproc(rulesio, pidc);
+	mine = <-pidc :: mine;
 
 	output = array[len ports] of ref Output;
 
@@ -223,8 +231,9 @@ makefile(file: string): ref Sys->FileIO
 	return io;
 }
 
-receiver(input: ref Input)
+receiver(input: ref Input, pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 
 	for(;;){
 		(nil, msg, nil, wc) := <-input.io.write;
@@ -261,7 +270,18 @@ sender(input: ref Input, output: array of ref Output)
 				input.resc <-= HANDLED;
 				break;
 			}
-			(j, msg) := process(in);
+			# A fault in handling one message costs that message.  It
+			# ended this proc, the one that answers every writer: each
+			# write to plumb.input after it waited for ever.
+			j := UNKNOWN;
+			msg: array of byte;
+			{
+				(j, msg) = process(in);
+			} exception e {
+			"*" =>
+				sys->fprint(stderr, "plumb: a message raised: %s\n", show(e));
+				j = UNKNOWN;
+			}
 			case j {
 			HANDLED =>
 				break;
@@ -277,6 +297,8 @@ sender(input: ref Input, output: array of ref Output)
 					sys->fprint(stderr, "plumb: %d messages wait for port %s: the oldest is dropped\n", Maxqueue, output[j].name);
 					output[j].queue = tl output[j].queue;
 				}
+				if(output[j].queue == nil)
+					output[j].since = sys->millisec();
 				output[j].queue = append(output[j].queue, msg);
 				outputc[j] = output[j].io.read;
 			}
@@ -292,6 +314,7 @@ sender(input: ref Input, output: array of ref Output)
 			# next read met it again: every later message to the port
 			# waited behind it for good.
 			output[j].queue = tl output[j].queue;
+			output[j].since = sys->millisec();
 			if(output[j].queue == nil)
 				outputc[j] = nil;
 			if(nbytes < len msg){
@@ -351,10 +374,14 @@ updaterules(urules: list of ref Rule): list of ref Rule
 }
 
 Maxqueue: con 256;	# messages waiting for one port's reader
+Unread: con 5000;	# ms a message waits unread before its port is taken for unattended
+Statwait: con 2000;	# ms a file named by a message is waited for
+Clickback: con 2048;	# characters before a click a match may begin
 Maxrules: con 256*1024;	# bytes of rules
 
-rulesproc(rulesio: ref Sys->FileIO)
+rulesproc(rulesio: ref Sys->FileIO, pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 	wfid := -1;	# the fid whose writes are being gathered
 	wtext: array of byte;
 	for(;;){
@@ -443,12 +470,39 @@ append(l: list of array of byte, a: array of byte): list of array of byte
 	return hd l :: append(tl l, a);
 }
 
+owngrp := 1;	# the process group is the plumber's own (no -n)
+mine: list of int;	# its procs started before it serves
+
 shutdown()
 {
-	fname := sys->sprint("#p/%d/ctl", pgrp);
-	if((fdesc := sys->open(fname, sys->OWRITE)) != nil)
-		sys->write(fdesc, array of byte "killgrp\n", 8);
+	if(owngrp){
+		fname := sys->sprint("#p/%d/ctl", pgrp);
+		if((fdesc := sys->open(fname, sys->OWRITE)) != nil)
+			sys->write(fdesc, array of byte "killgrp\n", 8);
+	}else{
+		# only what this plumber started
+		for(; mine != nil; mine = tl mine)
+			if((fd := sys->open(sys->sprint("#p/%d/ctl", hd mine), Sys->OWRITE)) != nil)
+				sys->fprint(fd, "kill");
+	}
 	raise "fail:error";
+}
+
+# text of a message's, for a diagnostic: what can be shown, and no more
+# than a line of it.  It went to the plumber's standard error and log
+# as it came, control characters and all, at any length.
+show(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s && i < 120; i++){
+		c := s[i];
+		if(c < ' ' || c == 16r7f || c >= 16r80 && c < 16ra0)
+			c = '?';
+		r[len r] = c;
+	}
+	if(i < len s)
+		r += "...";
+	return r;
 }
 
 # Handle control messages: (it was one, why it is refused)
@@ -484,18 +538,23 @@ start(port: string, startstop: int)
 				output[i].started += startstop;
 			return;
 		}
-	sys->fprint(stderr, "plumb: \"start\" message from unrecognized port %s\n", port);
+	sys->fprint(stderr, "plumb: \"start\" message from unrecognized port %s\n", show(port));
 }
 
 startup(dir, prog: string, args: list of string, wait: chan of int)
 {
 	if(wmstartup){
+		# With -w the window manager starts programs, or nothing does.
+		# When its file could not be opened the plumber went on to
+		# start the program itself, in its own name space and group.
 		fd := sys->open(wmchan, Sys->OWRITE);
-		if(fd != nil){
-			sys->fprint(fd, "s %s", str->quoted(dir :: prog :: args));
-			wait <-= 1;
+		if(fd == nil || sys->fprint(fd, "s %s", str->quoted(dir :: prog :: args)) < 0){
+			sys->fprint(stderr, "plumb: %s: %r: %s is not started\n", wmchan, show(prog));
+			wait <-= 0;
 			return;
 		}
+		wait <-= 1;
+		return;
 	}
 
 	sys->pctl(Sys->NEWFD|Sys->NEWPGRP|Sys->FORKNS, list of {0, 1, 2});
@@ -505,7 +564,7 @@ startup(dir, prog: string, args: list of string, wait: chan of int)
 	# for good and nothing ever started for it again.
 	mod := load Command prog;
 	if(mod == nil){
-		sys->fprint(stderr, "plumb: can't load %s: %r\n", prog);
+		sys->fprint(stderr, "plumb: can't load %s: %r\n", show(prog));
 		wait <-= 0;
 		return;
 	}
@@ -537,6 +596,16 @@ process(in: ref Inmesg): (int, array of byte)
 		return (UNKNOWN, nil);
 	a := in.msg.pack();
 	j := in.port;
+	# A port said to be started, or being started, whose messages
+	# nobody reads is not attended.  "start" is the word of whoever
+	# writes it, with any port's name as its source: after one, every
+	# message to the port was queued as delivered and its program
+	# never started (as after a reader that went without "stop", or a
+	# program started that never came to read).
+	if(a != nil && output[j].queue != nil && sys->millisec() - output[j].since > Unread){
+		output[j].started = 0;
+		output[j].waiting = 0;
+	}
 	if(a == nil)
 		j = UNKNOWN;
 	else if(output[j].started==0 && !shouldqueue(output[j])){
@@ -550,7 +619,7 @@ process(in: ref Inmesg): (int, array of byte)
 			args = in.text :: nil;
 		}else
 			return (NOTSTARTED, nil);
-		log(sys->sprint("start %s port %s\n", path, output[j].name));
+		log(sys->sprint("start %s port %s\n", show(path), output[j].name));
 		wait := chan of int;
 		output[j].waiting = 1;
 		spawn startup(in.msg.dir, path, args, wait);
@@ -575,7 +644,7 @@ process(in: ref Inmesg): (int, array of byte)
 				}
 			}
 		}
-		log(sys->sprint("send \"%s\" to %s", text, output[j].name));
+		log(sys->sprint("send \"%s\" to %s", show(text), output[j].name));
 	}
 	return (j, a);
 }
@@ -614,6 +683,11 @@ dorules(in: ref Inmesg, rules: list of ref Rule): int
 	if (verbose)
 		log("msg: " + inmesg2s(in));
 	for(r:=rules; r!=nil; r=tl r) {
+		# A rule that does not match leaves the message as it found
+		# it.  What its patterns had done before the one that failed
+		# stayed: a "data set", a file found by isfile, the pieces of
+		# a match, were the next rule's to start from.
+		saved := save(in);
 		if(matchrule(in, hd r)){
 			applyrule(in, hd r);
 			if (verbose)
@@ -621,17 +695,81 @@ dorules(in: ref Inmesg, rules: list of ref Rule): int
 			return 1;
 		} else if (verbose)
 			log("no");
+		restore(in, saved);
 	}
 	return 0;
+}
+
+Saved: adt {
+	src, dst, dir, kind, attr:	string;
+	data:	array of byte;
+	text:	string;
+	set:	int;
+	n:	array of string;
+	_dir, _file:	string;
+};
+
+save(in: ref Inmesg): ref Saved
+{
+	m := in.msg;
+	n := array[len in._n] of string;
+	n[0:] = in._n;
+	return ref Saved(m.src, m.dst, m.dir, m.kind, m.attr, m.data, in.text, in.set, n, in._dir, in._file);
+}
+
+restore(in: ref Inmesg, s: ref Saved)
+{
+	m := in.msg;
+	(m.src, m.dst, m.dir, m.kind, m.attr, m.data) = (s.src, s.dst, s.dir, s.kind, s.attr, s.data);
+	in.text = s.text;
+	in.set = s.set;
+	in._n = s.n;
+	in._dir = s._dir;
+	in._file = s._file;
+}
+
+# A file a message names, asked of whatever serves it, in a proc of its
+# own with Statwait to answer.  It was asked by the proc that handles
+# every message: a name on a server that does not answer (a mount gone
+# quiet, of the sender's choosing) stopped the plumber for good.
+statfile(name: string): (int, Sys->Dir)
+{
+	c := chan[1] of (int, Sys->Dir);
+	pidc := chan of int;
+	spawn statproc(name, c, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, Statwait);
+	alt {
+	r := <-c =>
+		return r;
+	<-tc =>
+		if((fd := sys->open(sys->sprint("#p/%d/ctl", pid), Sys->OWRITE)) != nil)
+			sys->fprint(fd, "kill");
+		sys->fprint(stderr, "plumb: %s: no answer in %d seconds\n", show(name), Statwait/1000);
+	}
+	return (-1, sys->zerodir);
+}
+
+statproc(name: string, c: chan of (int, Sys->Dir), pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	c <-= sys->stat(name);
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }
 
 inmesg2s(in: ref Inmesg): string
 {
 	m := in.msg;
 	s := sys->sprint("src=%s; dst=%s; dir=%s; kind=%s; attr='%s'",
-			m.src, m.dst, m.dir, m.kind, m.attr);
+			show(m.src), show(m.dst), show(m.dir), show(m.kind), show(m.attr));
 	if (m.kind == "text")
-		s += "; data='" + string m.data + "'";
+		s += "; data='" + show(string m.data) + "'";
 	return s;
 }
 
@@ -682,7 +820,7 @@ matchpattern(in: ref Inmesg, p: ref Pattern): int
 		return 0;
 	}
 	if (verbose)
-		log(sys->sprint("'%s' %s '%s'\n", text, p.pred, p.arg));
+		log(sys->sprint("'%s' %s '%s'\n", show(text), p.pred, p.arg));
 	case p.pred {
 	"is" =>
 		return text == p.arg;
@@ -695,7 +833,7 @@ matchpattern(in: ref Inmesg, p: ref Pattern): int
 		if(len in.msg.dir!=0 && text[0] != '/' && text[0]!='#')
 			text = in.msg.dir+"/"+text;
 		text = cleanname(text);
-		(ok, dir) := sys->stat(text);
+		(ok, dir) := statfile(text);
 		if(ok < 0)
 			return 0;
 		if(p.pred=="isfile" && (dir.mode&Sys->DMDIR)==0){
@@ -786,14 +924,21 @@ toport(in: ref Inmesg, name: string): int
 			return i;
 		}
 	in.port = -1;
-	sys->fprint(stderr, "plumb: unrecognized port %s\n", name);
+	sys->fprint(stderr, "plumb: unrecognized port %s\n", show(name));
 	return -1;
 }
 
 # simple heuristic: look for leftmost match that reaches click position
 clickmatch(re: ref Regex->Arena, text: string, click: int): array of Match
 {
-	for(i:=0; i<=click && i < len text; i++){
+	# A match that reaches the click begins near it.  Every start from
+	# the text's first character was tried, the expression run from
+	# each: a long text with a click near its end kept the plumber
+	# from everyone for as long as that took.
+	i := click - Clickback;
+	if(i < 0)
+		i = 0;
+	for(; i<=click && i < len text; i++){
 		matches := regex->executese(re, text, (i, -1), i == 0, 1);
 		if(matches == nil)
 			continue;

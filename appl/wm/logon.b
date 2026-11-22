@@ -112,7 +112,6 @@ WmLogon: module
 # where the account's secstore is
 SECSTORE: con "tcp!127.0.0.1!5356";
 secstoreaddr := SECSTORE;
-SENTINEL: con "/tmp/.secstore-unlocked";
 Minpass: con 8;	# characters in a new account's password
 
 BODYFONT: con "/fonts/combined/unicode.sans.14.font";
@@ -187,19 +186,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			giveup(sys->sprint("no display: %r"));
 	}
 
-	# The mark of an earlier boot's unlock says nothing of this one.  It
-	# is kept in /tmp, which outlives a boot, and was never removed: after
-	# one unlock, Keyring and Settings said "unlocked" at every boot
-	# after, a skipped login included.  It is made again below when this
-	# boot unlocks.
-	sys->remove(SENTINEL);
-
 	# If factotum was already started with secstore backing (e.g. headless
 	# mode with $SECSTORE_PASSWORD), skip the login screen entirely.
-	if(factotumhaskeys()) {
-		createsecstoresentinel();
+	if(factotumhaskeys())
 		return;
-	}
 
 	passbuf = "";
 	confirmbuf = "";
@@ -987,21 +977,14 @@ dounlock(): int
 	return 1;
 }
 
-# Create sentinel so other apps can detect secstore is active
-createsecstoresentinel()
-{
-	fd := sys->create(SENTINEL, Sys->OWRITE, 8r644);
-	if(fd != nil)
-		sys->fprint(fd, "1");
-}
-
-# The keys are in factotum: have it save to the secstore from here on,
-# and leave the mark.  If saving cannot be arranged the user is told,
-# for long enough to read: the keys are loaded all the same.
+# The keys are in factotum: have it save to the secstore from here on.
+# If saving cannot be arranged the user is told, for long enough to
+# read: the keys are loaded all the same.  (A file was also left in
+# /tmp to say an unlock had happened; anything could make it, it
+# outlived the boot, and its readers ask /mnt/factotum/secstore now.)
 unlocked(pass: string): string
 {
 	serr := enablesecstoresave(pass);
-	createsecstoresentinel();
 	if(serr != nil && top != nil){
 		statusmsg = "Unlocked. Keys added now will not be saved: " + serr;
 		redraw();
@@ -1021,7 +1004,6 @@ unlock(addr, pass: string): (string, string)
 	}
 	if(addr != nil)
 		secstoreaddr = addr;
-	sys->remove(SENTINEL);
 	err := connectfactotum(pass, "", "");
 	if(err != nil)
 		return (err, nil);

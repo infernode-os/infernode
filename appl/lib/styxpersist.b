@@ -12,8 +12,6 @@ include "styx.m";
 	Tmsg, Rmsg, NOFID, NOTAG: import styx;
 include "rand.m";
 	rand: Rand;
-include "factotum.m";
-	factotum: Factotum;
 include "styxpersist.m";
 
 NOTOPEN, DEAD, AUTH, OPEN: con iota;
@@ -66,7 +64,6 @@ Root: adt {
 	aname: string;
 };
 
-keyspec: string;
 
 tags := array[NTAGHASH] of ref Tag;
 fids: ref Table[ref Fid];
@@ -85,7 +82,7 @@ rmsgpid := -1;
 token: chan of (int, chan of (ref Fid, ref Root));		# [Nprocs] of (procid, workchan)
 procrmsg: array of chan of ref Rmsg;
 
-init(clientfd: ref Sys->FD, usefac: int, kspec: string): (chan of chan of ref Sys->FD, string)
+init(clientfd: ref Sys->FD): (chan of chan of ref Sys->FD, string)
 {
 	sys = load Sys Sys->PATH;
 	styx = load Styx Styx->PATH;
@@ -96,14 +93,6 @@ init(clientfd: ref Sys->FD, usefac: int, kspec: string): (chan of chan of ref Sy
 	if (rand == nil)
 		return (nil, sys->sprint("cannot load %q: %r", Rand->PATH));
 	rand->init(sys->millisec());
-	if(usefac){
-		factotum = load Factotum Factotum->PATH;
-		if(factotum == nil)
-			return (nil, sys->sprint("cannot load %q: %r", Rand->PATH));
-		factotum->init();
-	}
-
-	keyspec = kspec;
 	connectc := chan of chan of ref Sys->FD;
 	spawn styxpersistproc(clientfd, connectc);
 	return (connectc, nil);
@@ -457,17 +446,17 @@ resurrectfid(procid: int, fid: ref Fid, root: ref Root): string
 	if(!attached || root.uname != fid.uname || root.aname != fid.aname){
 		if(attached)
 			clunk(procid, root.fid);
-		afid := NOFID;
+		# An attach the client authenticated (it gave an afid) is not
+		# made again: what was said on the auth fid was between the
+		# client and the old server.  It used to be repeated here with
+		# factotum's p9any, Plan 9's protocol, which this system no
+		# longer has (and when that failed the attach was tried with
+		# an afid of -1).
 		if(fid.authed){
-			afid = fid.fid - 1;		# see unusedfid()
-			if((err := auth(procid, afid, root.uname, root.aname)) != nil){
-				log(err);
-				afid = -1;
-			}
+			root.attached <-= -1;
+			return "attach failed: it was authenticated, and that cannot be repeated on a new connection";
 		}
-		(err, qid) := attach(procid, root.fid, afid, fid.uname, fid.aname);
-		if(afid != NOFID)
-			clunk(procid, afid);
+		(err, qid) := attach(procid, root.fid, NOFID, fid.uname, fid.aname);
 		if(err != nil){
 			root.attached <-= -1;
 			return "attach failed: "+err;
@@ -544,66 +533,6 @@ attach(procid, fid, afid: int, uname, aname: string): (string, Sys->Qid)
 		return (m.ename, Noqid);
 	}
 	return (nil, Noqid);	# not reached
-}
-
-read(procid, fid: int, buf: array of byte): (int, string)
-{
-	# XXX assume that offsets are ignored of auth fid reads/writes
-	pick m := fcall(ref Tmsg.Read(procid, fid, big 0, len buf)) {
-	Error =>
-		return (-1, m.ename);
-	Read =>
-		buf[0:] = m.data;
-		return (len m.data, nil);
-	}
-	return (-1, nil);			# not reached
-}
-
-write(procid, fid: int, buf: array of byte): (int, string)
-{
-	# XXX assume that offsets are ignored of auth fid reads/writes
-	pick m := fcall(ref Tmsg.Write(procid, fid, big 0, buf)) {
-	Error =>
-		sys->werrstr(m.ename);
-		return (-1, sys->sprint("%r"));
-	Write =>
-		return (m.count, nil);
-	}
-	return (-1, nil);		# not reached
-}
-
-auth(procid, fid: int, uname, aname: string): string
-{
-	if(factotum == nil)
-		return "no factotum available";
-
-	pick m := fcall(ref Tmsg.Auth(procid, fid, uname, aname)) {
-	Error =>
-		return m.ename;
-	}
-
-	readc := chan of (array of byte, chan of (int, string));
-	writec := chan of (array of byte, chan of (int, string));
-	done := chan of (ref Factotum->Authinfo, string);
-	spawn factotum->genproxy(readc, writec, done,
-			sys->open("/mnt/factotum/rpc", Sys->ORDWR),
-			"proto=p9any role=client "+keyspec);
-	for(;;)alt{
-	(buf, reply) := <-readc =>
-		reply <-= read(procid, fid, buf);
-	(buf, reply) := <-writec =>
-		reply <-= write(procid, fid, buf);
-	(authinfo, err) := <-done =>
-		if(authinfo == nil){
-			clunk(procid, fid);
-			return err;
-		}
-		if(authinfo.cuid != uname){
-			clunk(procid, fid);
-			return "auth uname mismatch";
-		}
-		return nil;
-	}
 }
 
 # path is in reverse order; assume fid != newfid on entry.

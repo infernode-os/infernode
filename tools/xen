@@ -162,9 +162,17 @@ xenith)
 	# It starts once boot.sh (below) has started the plumber: a hostplumb
 	# older than its own wait for the plumber (an installed app's) gives
 	# up at once.
+	# the hosts whose messages hostplumb takes: those mounted below
+	hosts=
+	for h in $XEN_HOSTS; do
+		case $h in
+		*[!A-Za-z0-9._-]*|-*)	;;
+		*)	hosts="${hosts:+$hosts,}$h" ;;
+		esac
+	done
 	if nine=$(command -v 9p); then
 		host="'$nine' read plumb/xenith & r=\$!; while kill -0 \$PPID 2>/dev/null; do sleep 1; done; kill \$r"
-		run="${run}load std; {while {! ftest -e /chan/plumb.input} {sleep 1}; os sh -c $(q "$host") | hostplumb} & "
+		run="${run}load std; {while {! ftest -e /chan/plumb.input} {sleep 1}; os sh -c $(q "$host") | hostplumb${hosts:+ -h $hosts}} & "
 	fi
 	# Hosts whose files may be plumbed here (tools/rplumb): mounted at
 	# /n/<host> now, since Xenith keeps the name space it starts with.

@@ -17,8 +17,13 @@ fn srv.styx {
 	listen tcp!*!styx {export /&}
 }
 
+# logind reads its accounts from keyfs(4) at /mnt/keys, which listen
+# hides from its command unless told the command is trusted (-t):
+# without both, every login was refused.  As svc/auth starts it.
 fn srv.auth {
-	listen -A tcp!*!inflogin auth/logind
+	and {auth/keyfs} {
+		listen -t -A tcp!*!inflogin {auth/logind&}
+	}
 }
 
 # signer(8)'s operator-approved enrolment, for a realm that wants it:

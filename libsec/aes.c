@@ -33,8 +33,8 @@
  * counter mode.  CBC encryption cannot (each block needs the one
  * before), so it pays for four and uses one: it is the slow case.
  *
- * Where the processor has AES instructions (aesarm64.c) they are used
- * instead, from the same key schedule.
+ * Where the processor has AES instructions (aesarm64.c, aesamd64.c)
+ * they are used instead, from the same key schedule.
  */
 #include "os.h"
 #include <libsec.h>
@@ -48,6 +48,14 @@ void	aesarm64encryptblock(const u32int*, int, const uchar*, uchar*);
 void	aesarm64cbcencrypt(uchar*, int, const u32int*, int, uchar*);
 void	aesarm64cbcdecrypt(uchar*, int, const u32int*, int, uchar*);
 void	aesarm64ctr32(const u32int*, int, const uchar*, uchar*, ulong);
+
+/* aesamd64.c: x86-64's, where cpuid says the processor has them */
+int	aesamd64ok(void);
+void	aesamd64expand(u32int*, u32int*, const uchar*, int);
+void	aesamd64encryptblock(const u32int*, int, const uchar*, uchar*);
+void	aesamd64cbcencrypt(uchar*, int, const u32int*, int, uchar*);
+void	aesamd64cbcdecrypt(uchar*, int, const u32int*, int, uchar*);
+void	aesamd64ctr32(const u32int*, int, const uchar*, uchar*, ulong);
 
 /*
  * A key is 16, 24 or 32 bytes (FIPS 197).  Any other length was taken:
@@ -490,7 +498,11 @@ wordstobytes(uchar *p, const u32 *w)
  * with each key under all four blocks, and the decryption keys of the
  * equivalent inverse cipher (5.3.5: the inner ones through
  * InvMixColumns, in reverse order), which only the instructions use.
- * What it branches on is the key's length.
+ * What it branches on is the key's length.  Where x86-64 has the
+ * instructions they make the words of both (aesamd64expand: SubWord
+ * through the bit planes is slow, and a message of a few blocks is
+ * mostly its key's setup); the bit planes are made from them all the
+ * same, so a state serves either code.
  */
 static int
 keysetup(AESstate *s, const uchar *key, int keybytes)
@@ -501,25 +513,33 @@ keysetup(AESstate *s, const uchar *key, int keybytes)
 	u32 *w, t;
 	u64 q[8];
 	uchar blk[16];
-	int nk, nr, i, j, c;
+	int nk, nr, i, j, c, hw;
 
 	nk = keybytes/4;
 	nr = nk + 6;
 	w = s->ekey;
-	for(i = 0; i < nk; i++)
-		w[i] = (u32)key[4*i]<<24 | (u32)key[4*i+1]<<16 | (u32)key[4*i+2]<<8 | (u32)key[4*i+3];
-	for(i = nk; i < 4*(nr+1); i++){
-		t = w[i-1];
-		if(i % nk == 0)
-			t = subword(t<<8 | t>>24) ^ (u32)rcon[i/nk - 1]<<24;
-		else if(nk > 6 && i % nk == 4)
-			t = subword(t);
-		w[i] = w[i-nk] ^ t;
+	t = 0;
+	hw = aesamd64ok();
+	if(hw)
+		aesamd64expand(w, s->dkey, key, keybytes);
+	else{
+		for(i = 0; i < nk; i++)
+			w[i] = (u32)key[4*i]<<24 | (u32)key[4*i+1]<<16 | (u32)key[4*i+2]<<8 | (u32)key[4*i+3];
+		for(i = nk; i < 4*(nr+1); i++){
+			t = w[i-1];
+			if(i % nk == 0)
+				t = subword(t<<8 | t>>24) ^ (u32)rcon[i/nk - 1]<<24;
+			else if(nk > 6 && i % nk == 4)
+				t = subword(t);
+			w[i] = w[i-nk] ^ t;
+		}
 	}
 	for(i = 0; i <= nr; i++){
 		wordstobytes(blk, w + 4*i);
 		load(q, blk, 1);
-		if(i == 0 || i == nr)
+		if(hw)
+			;	/* aesamd64expand made dkey */
+		else if(i == 0 || i == nr)
 			memmove(s->dkey + 4*(nr-i), w + 4*i, 4*sizeof(u32));
 		else{
 			u64 d[8];
@@ -596,6 +616,10 @@ aesCBCencrypt(uchar *p, int len, AESstate *s)
 		aesarm64cbcencrypt(p, len/AESbsize, s->ekey, s->rounds, s->ivec);
 		p += len - len%AESbsize;
 		len %= AESbsize;
+	}else if(len >= AESbsize && aesamd64ok()){
+		aesamd64cbcencrypt(p, len/AESbsize, s->ekey, s->rounds, s->ivec);
+		p += len - len%AESbsize;
+		len %= AESbsize;
 	}
 	for(; len >= AESbsize; len -= AESbsize){
 		p2 = p;
@@ -633,6 +657,10 @@ aesCBCdecrypt(uchar *p, int len, AESstate *s)
 	}
 	if(len >= AESbsize && aesarm64ok()){
 		aesarm64cbcdecrypt(p, len/AESbsize, s->dkey, s->rounds, s->ivec);
+		p += len - len%AESbsize;
+		len %= AESbsize;
+	}else if(len >= AESbsize && aesamd64ok()){
+		aesamd64cbcdecrypt(p, len/AESbsize, s->dkey, s->rounds, s->ivec);
 		p += len - len%AESbsize;
 		len %= AESbsize;
 	}
@@ -677,6 +705,10 @@ aesEncryptBlock(AESstate *s, uchar pt[16], uchar ct[16])
 		aesarm64encryptblock(s->ekey, s->rounds, pt, ct);
 		return;
 	}
+	if(aesamd64ok()){
+		aesamd64encryptblock(s->ekey, s->rounds, pt, ct);
+		return;
+	}
 	encrypt1(s, pt, ct);
 }
 
@@ -701,6 +733,10 @@ aesCTR32(AESstate *s, const uchar ctr[16], uchar *p, ulong n)
 	}
 	if(aesarm64ok()){
 		aesarm64ctr32(s->ekey, s->rounds, ctr, p, n);
+		return;
+	}
+	if(aesamd64ok()){
+		aesamd64ctr32(s->ekey, s->rounds, ctr, p, n);
 		return;
 	}
 	base = (u32)ctr[12]<<24 | (u32)ctr[13]<<16 | (u32)ctr[14]<<8 | ctr[15];

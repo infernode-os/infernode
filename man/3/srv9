@@ -81,16 +81,8 @@ option to suppress Inferno authentication.)
 To mount the Plan 9 file service from which a Plan 9 machine booted:
 .IP
 .EX
-mount -9 /srv/boot /n/local
+mount -A /srv/boot /n/local
 .EE
-.PP
-The
-.B -9
-option to
-.IR mount (1)
-requests Plan 9 authentication; that could also have been used instead of
-.B -A
-in the previous example.
 .PP
 To make the environment variables of the current Inferno name space available to Plan 9:
 .IP

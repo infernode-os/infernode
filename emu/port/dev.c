@@ -36,7 +36,7 @@ devdir(Chan *c, Qid qid, char *n, long length, char *user, long perm, Dir *db)
 	db->qid = qid;
 	db->type = devtab[c->type]->dc;
 	db->dev = c->dev;
-	db->mode = perm | (qid.type << 24);
+	db->mode = perm | ((ulong)qid.type << 24);
 	db->atime = time(0);
 	db->mtime = kerndate;
 	db->length = length;

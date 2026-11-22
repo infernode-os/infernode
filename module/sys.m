@@ -112,6 +112,7 @@ Sys: module
 
 	EXPWAIT:	con 0;
 	EXPASYNC:	con 1;
+	EXPREADONLY:	con 2;	# with either: nothing is changed through the export
 
 	UTFmax:		con 4;		# bytes in the longest rune's UTF-8
 	UTFerror:	con 16rFFFD;	# the rune a decoding error yields

@@ -8,6 +8,7 @@ mdhtml := load Mdhtml Mdhtml->PATH;
 
 init:   fn();
 html:   fn(text: string): string;
+htmlsafe: fn(text: string): string;
 escape: fn(s: string): string;
 .EE
 .SH DESCRIPTION
@@ -87,7 +88,30 @@ What is written as HTML is passed through unchanged: a document is
 trusted as its author's, as it is in werc.
 Do not give
 .I html
-text from someone who must not write HTML into the page.
+text from someone who must not write HTML into the page: give it to
+.IR htmlsafe .
+.PP
+.I Htmlsafe
+is for text that is not the page's author's (a visitor's, a
+correspondent's, a model's) set in a page that is.
+It is the same Markdown, but nothing of it is HTML of the writer's
+own: a block of HTML, a tag and a comment are written as their
+characters, escaped, and a link, image or autolink goes only to
+.BR http: ,
+.BR https: ,
+.B mailto:
+or a place with no scheme (a path of the site, a fragment).
+A destination is judged as a browser reads it: one with a character
+reference in it, a blank, a control character or a backslash is
+refused.
+A link that is refused is left as the text it was written as.
+Nothing in the tree gives
+.I html
+text that is not its site's author's:
+.IR wercfs (4)
+sets a site's own pages, and the wiki's pages are in its own format,
+escaped by
+.IR wikifs .
 .PP
 The text may be anyone's who can write a page, so its cost is held to
 its length.

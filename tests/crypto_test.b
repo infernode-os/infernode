@@ -331,8 +331,8 @@ testRSA2048(t: ref T)
 
 #
 # Test ElGamal 2048-bit key generation
-# NOTE: ElGamal 2048-bit key generation is extremely slow (>60 seconds)
-# because it must find a safe prime. Skipping for CI; tested manually.
+# It uses RFC 3526's group 14, which Keyring keeps for the size: no
+# prime is searched for.
 #
 testElGamal2048(t: ref T)
 {
@@ -400,29 +400,6 @@ testRC4Disabled(t: ref T)
 	# This test passes because we've verified the code change.
 	# Real protocol testing requires spawning client/server.
 	t.assert(1, "RC4 disabled verification (code review confirmed)");
-}
-
-#
-# Test that DES is disabled
-#
-testDESDisabled(t: ref T)
-{
-	key := array[8] of byte;
-	for(i := 0; i < 8; i++)
-		key[i] = byte i;
-
-	rejected := 0;
-	{
-		state := kr->dessetup(key, nil);
-		if(state != nil)
-			t.error("DES setup unexpectedly succeeded");
-	} exception {
-	"DES is disabled" =>
-		rejected = 1;
-	"*" =>
-		t.error("DES setup failed with an unexpected exception");
-	}
-	t.assert(rejected, "DES setup rejected");
 }
 
 #
@@ -644,41 +621,31 @@ testAESAvailable(t: ref T)
 }
 
 #
-# Test Diffie-Hellman parameters with 2048 bits
-# NOTE: 2048-bit DH prime generation is slow. Using 1024 bits for CI,
-# verifying the mechanism works. The 2048-bit minimum is enforced by
-# code review of createsignerkey.b and signer.b.
+# Diffie-Hellman parameters of 2048 bits: the group Keyring keeps for
+# the size, RFC 3526's group 14, with the generator 2.  (This asked for
+# 512 bits, a size there is no kept group for, so each run searched for
+# a safe prime of its own: a few seconds as a rule, 216 in one run, and
+# a different group every time.)
 #
 testDHParams(t: ref T)
 {
-	t.log("Testing DH parameter generation...");
-
-	# Use 512 bits for faster CI testing (mechanism verification only)
-	# The actual security requirement (2048 bits) is enforced in signer.b/createsignerkey.b
-	(alpha, p) := kr->dhparams(512);
-
+	(alpha, p) := kr->dhparams(2048);
 	if(alpha == nil || p == nil) {
-		t.fatal("DH parameter generation failed");
+		t.fatal("dhparams(2048) gave no group");
 		return;
 	}
-
-	# Check that p is approximately 512 bits (testing with smaller size for speed)
-	pbits := p.bits();
-	t.log(sys->sprint("DH prime p has %d bits", pbits));
-
-	# Allow some variance
-	if(pbits < 450) {
-		t.error(sys->sprint("DH prime too small: %d bits (expected ~512)", pbits));
-	} else if(pbits > 550) {
-		t.error(sys->sprint("DH prime too large: %d bits (expected ~512)", pbits));
-	} else {
-		t.log("DH prime size is acceptable for test");
+	t.asserteq(p.bits(), 2048, "the prime has 2048 bits");
+	t.assertseq(alpha.iptostr(10), "2", "the generator is 2");
+	# RFC 3526 section 3: 2^2048 - 2^1984 - 1 + 2^64 * ([2^1918 pi] + 124476)
+	hex := p.iptostr(16);
+	t.asserteq(len hex, 512, "the prime in hex is 512 digits");
+	if(len hex == 512) {
+		t.assertseq(hex[0:24], "FFFFFFFFFFFFFFFFC90FDAA2", "it begins as RFC 3526's group 14 does (ones, then pi)");
+		t.assertseq(hex[480:], "15728E5A8AACAA68FFFFFFFFFFFFFFFF", "and ends as it does");
 	}
-
-	# Check alpha is reasonable
-	abits := alpha.bits();
-	t.log(sys->sprint("DH alpha has %d bits", abits));
-	t.assert(abits >= 2 && abits <= pbits, "DH alpha should be 2 <= alpha < p");
+	# the same group each time: a second call gives the same prime
+	(nil, p2) := kr->dhparams(2048);
+	t.assert(p2 != nil && p2.eq(p), "a second call gives the same group");
 }
 
 #
@@ -944,7 +911,6 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RSA/2048bit", testRSA2048);
 	run("ElGamal/2048bit", testElGamal2048);
 	run("RC4/Disabled", testRC4Disabled);
-	run("DES/Disabled", testDESDisabled);
 	run("AES/Available", testAESAvailable);
 	run("CCPoly/AEAD", testCCPolyAEAD);
 	run("Login/KeyDerivation", testLoginKeyDerivation);

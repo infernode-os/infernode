@@ -136,14 +136,15 @@ X.509 path validation (`X509->verify_certchain`, `verify_certchain_roots`) check
 |--------|--------|-------|
 | Revocation checking | None | **CRL-based** |
 | CRL store | N/A | **`/lib/crls/*.der`** (DER-encoded CRLs), read again whenever a file there changes |
-| A caller's CRLs | N/A | **`verify_certchain_roots(cs, roots, crls, now, usage)`**: each CRL signed by a root, or by a CA of the chain with the key the path verified (and cRLSign, if the CA has a keyUsage) |
+| A caller's CRLs | N/A | **`verify_certchain_roots(cs, roots, crls, now, usage)`** |
+| Whose a CRL is | N/A | **Its issuer's** (RFC 5280 6.3.3), the store's and a caller's alike: it is consulted for a certificate its issuer issued, when it has the issuer's name and the issuer's signature (a root's, or a CA's with the key the path verified, and cRLSign if the CA has a keyUsage). In the issuer's name and not the issuer's, it refuses the path; of a CA the path does not go through, it is not looked at |
 | Check point | N/A | **As each certificate's issuer is found on the path**; an intermediate given as a trust anchor is checked against the roots' CRLs too |
 
 A CRL past its `nextUpdate` is still applied (and said so on standard error when the store
-is read): a stale list still names what it revoked. A CRL that cannot be used (not DER, a
-critical extension that is not processed, a signature that is not its issuer's, an issuer
-that is neither a root nor in the chain) fails every verification rather than being left
-out. The store's own CRLs are not signature-checked: the directory is the administrator's.
+is read): a stale list still names what it revoked. A CRL that cannot be read (not DER, a
+critical extension that is not processed) fails every verification rather than being left
+out; one in an issuer's name with a signature that is not the issuer's refuses the paths
+through that issuer; one whose issuer the path does not go through is not looked at.
 Nothing fetches CRLs, and there is no OCSP.
 
 **Files:**
@@ -231,7 +232,9 @@ HMAC-SHA1 remains where a protocol still names it (HMAC-SHA1 is still considered
      longer read by a login: move it once with `auth/secstore m factotum`.
    - `svc/auth` no longer starts `auth/signer` and `auth/countersigner`
      (signer(8) says how to start them on purpose).
-   - `p9any` needs `authdom=dom auth=server` in ndb for each domain.
+   - `p9any` and `p9sk1` are gone (their tickets are DES): nothing
+     authenticates to a Plan 9 system, and `9export` serves one only
+     with `-A`.
 
 4. **Install CRLs (optional):**
    - Place DER-encoded CRL files in `/lib/crls/` for revocation checking
@@ -569,28 +572,42 @@ bare-metal cpu listener) takes it.
 
 **Breaking change:** both ends must run 0.10.1 or later. `9cpu`, `import` and
 `9export`, which speak to Plan 9 (p9sk1, a 56-bit key), refuse encryption
-and run in the clear without `-e`. `crypt(1)` uses AES-256-GCM with
+and run in the clear without `-e` (since then p9sk1 itself has gone, with
+DES: see factotum(4)). `crypt(1)` uses AES-256-GCM with
 PBKDF2-HMAC-SHA-384 and a salt per file.
 
 Under it:
 
 - **GHASH in constant time.** It indexed a table by nibbles of the running
-  hash; it is now PMULL where the processor has it and table-free integer
-  multiplication otherwise (after BearSSL). AES and SHA-256 use the ARMv8
-  instructions where `ID_AA64ISAR0_EL1` says the core has them, in the
-  emulator and the native kernels.
+  hash; it is now PMULL (ARMv8) or PCLMULQDQ (x86-64) where the processor
+  has it and table-free integer multiplication otherwise (after BearSSL).
+  AES and SHA-256 use the ARMv8 instructions where `ID_AA64ISAR0_EL1` says
+  the core has them, in the emulator and the native kernels.
 - **AES in constant time without the instructions.** Where the processor
-  has no AES instructions (amd64 as the emulator is built, the Pi 3 and 4,
-  RISC-V) `libsec/aes.c` was four tables indexed by the key exclusive-ored
+  has no AES instructions (the Pi 3 and 4, RISC-V, an x86-64 older than
+  about 2010, and Windows, whose build keeps the C) `libsec/aes.c` was
+  four tables indexed by the key exclusive-ored
   with the data, which a cache shared with an attacker shows. It is
   bitsliced now: eight 64-bit words hold one bit each of up to four
   blocks, SubBytes is Boyar and Peralta's 113-gate circuit, and nothing
   is indexed or branched on. It costs speed: AES-256-GCM about half what
-  it was on amd64 (55 MB/s against 109), CBC decryption the same, CBC
-  encryption a seventh (25 against 172), since a chained block cannot
+  the tables gave on amd64 (55 MB/s against 109), CBC decryption the same,
+  CBC encryption a seventh (25 against 172), since a chained block cannot
   share the words with three others. `tests/host/armcrypto_test.sh`
   holds it to FIPS 197, SP 800-38A, OpenSSL's GCM answers and a plain
   reference, and runs it under valgrind with key and data secret.
+- **AES-NI and PCLMULQDQ on x86-64.** `libsec/aesamd64.c` and
+  `libsec/ghashamd64.c` are `aesarm64.c`'s and `ghasharm64.c`'s twins:
+  the key expansion, a block, CBC both ways and GCM's counter mode with
+  the AES instructions (eight blocks in flight), GHASH with the
+  carry-less multiply (four blocks to a reduction). They are asked for
+  at run time (cpuid: AES, PCLMULQDQ, SSSE3) and only their own
+  functions are compiled for the instructions, so an older processor
+  runs the constant-time C. In the emulator on amd64 AES-256-GCM went
+  from 71 MB/s to 2770 and AES-256-CBC encryption from 26 to 1240
+  (`tests/crypto_bench.b`). The same test holds both paths to the same
+  answers and to each other, schedules included. Microsoft's compiler
+  builds the files to stubs: Windows keeps the C.
 - **Private keys and nonces away from the clock.** RSA's private
   operation is `libmp`'s `mpexpcrt`: both powers and Garner's
   recombination in Montgomery arithmetic at the primes' length, no
@@ -603,6 +620,13 @@ Under it:
   general arithmetic. `tests/host/rsa_edge_test.sh`,
   `tests/host/sign_nonce_test.sh` and `tests/host/ecc_test.sh` hold them
   to known answers (RFC 6979's own for P-256 and P-384) and to valgrind.
+  Ed25519 (`libkeyring/ed25519alg.c`) multiplies the base point by the
+  secret scalar and by a signature's nonce four bits at a time, always
+  adding one of sixteen multiples chosen by a mask (it was
+  double-and-add, an addition for each set bit), and makes S = (r + ha)
+  mod L in fixed limbs (it was `libmp`'s multiplication and division);
+  `tests/host/ed25519_test.sh` holds the signatures to the same bytes,
+  the scalar arithmetic to `libmp`'s, and both to valgrind.
 - **One generator, NIST's.** Every random number, in the emulator
   (`libsec/genrandom.c`) and the native kernels (`os/port/random.c`), comes
   from HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1, `libsec/hmacdrbg.c`),

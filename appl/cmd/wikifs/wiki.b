@@ -764,9 +764,34 @@ goodtitle(title: string): string
 		werrstr("reserved title name");
 		return nil;
 	}
-	(nil, b) := str->splitl(title, "/<>:");
+	(nil, b) := str->splitl(title, "/<>:\\");
 	if(len b != 0){
 		werrstr("invalid character in name");
+		return nil;
+	}
+	# A page is asked for by its title, as a name in a path, and what
+	# httpd(8) serves no file by, it serves no page by: a name that
+	# begins with a dot or ends with one, a Windows device's (con,
+	# nul.txt, com1), a volume's short alias (a~1).  Such a page was
+	# made, listed, and reached only by its number.
+	if(title[0] == '.' || title[len title - 1] == '.'){
+		werrstr("a title that begins or ends with a dot cannot be asked for by name");
+		return nil;
+	}
+	for(i = 0; i + 1 < len title; i++)
+		if(title[i] == '~' && title[i+1] >= '0' && title[i+1] <= '9'){
+			werrstr("a title with ~ before a digit cannot be asked for by name");
+			return nil;
+		}
+	(base, nil) := str->splitl(title, ".");
+	case base {
+	"con" or "prn" or "aux" or "nul" or "conin$" or "conout$" or "clock$" =>
+		werrstr("a title that is a device's name cannot be asked for by name");
+		return nil;
+	}
+	if(len base == 4 && (base[0:3] == "com" || base[0:3] == "lpt") &&
+	   (base[3] >= '0' && base[3] <= '9' || base[3] == 16rB9 || base[3] == 16rB2 || base[3] == 16rB3)){
+		werrstr("a title that is a device's name cannot be asked for by name");
 		return nil;
 	}
 	for(i = 0; i < len title; i++)
@@ -906,6 +931,29 @@ histlast(hist: string): int
 	}
 }
 
+# The versions in the history file hist (its D lines; a text's lines
+# begin with '#') and its bytes
+histsize(hist: string): (int, big)
+{
+	fd := wopen(hist, Sys->OREAD);
+	if(fd == nil)
+		return (0, big 0);
+	nv := 0;
+	n := big 0;
+	bol := 0;	# (the first line is the title)
+	buf := array[64*1024] of byte;
+	while((k := sys->read(fd, buf, len buf)) > 0){
+		for(i := 0; i < k; i++){
+			c := buf[i];
+			if(bol && c == byte 'D')
+				nv++;
+			bol = c == byte '\n';
+		}
+		n += big k;
+	}
+	return (nv, n);
+}
+
 # does the file end in a newline (or hold nothing)?
 endsline(fd: ref Sys->FD): int
 {
@@ -1002,6 +1050,19 @@ writepage(num: int, t: int, s: string, title: string): int
 			werrstr("did not expect to create");
 			return -1;
 		}
+	}
+
+	# A page's history has its limits, as its title and its text
+	# have: an open wiki took versions for as long as they came (3780
+	# of one page in a minute of writers, a history.html of them all
+	# made at each request), and a disk's worth.  A page at its limit
+	# takes no edit until its history has been cut or moved away.
+	(nv, hlen) := histsize(hist);
+	if(nv >= Maxvers || hlen + big (len array of byte s) > big Maxhist){
+		lfd = nil;
+		werrstr(sys->sprint("the page's history is full (%d versions, %bd bytes; at most %d and %d): d/%d.hist must be cut or moved before the page is edited again",
+			nv, hlen, Maxvers, Maxhist, num));
+		return -1;
 	}
 
 	# later than every version in the history, a conflicting one too

@@ -1667,6 +1667,10 @@ runchild(pidc, goc: chan of int, pipefd: ref Sys->FD, logfd: ref Sys->FD,
 		keepfds = logfd.fd :: keepfds;
 	if(provfd != nil)
 		keepfds = provfd.fd :: keepfds;
+	# what the child's name space was given that lasts only while it is
+	# held open (a vision session)
+	for(hf := nsconstruct->held(); hf != nil; hf = tl hf)
+		keepfds = hd hf :: keepfds;
 	if(sys->pctl(Sys->NEWFD, keepfds) < 0) {
 		writeresult(pipefd, "ERROR:cannot restrict file descriptors");
 		park();

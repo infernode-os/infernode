@@ -148,5 +148,5 @@ kif.$O: kif.c
 #	it works only on UNIX and Plan 9.
 
 nuke:EV:	nuke-std
-	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h kif.c keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h
+	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h freetypemod.h kif.c keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h
 

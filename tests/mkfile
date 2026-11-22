@@ -168,6 +168,7 @@ TARG=\
 	cnsa_mode_test.dis\
 	secstored_test.dis\
 	wstat_owner_test.dis\
+	file2chan_close_test.dis\
 	file2chan_gaveup_test.dis\
 	dial_kernel_test.dis\
 	udp_empty_test.dis\

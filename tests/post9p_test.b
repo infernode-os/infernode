@@ -274,13 +274,21 @@ testManyConns(t: ref T)
 	fd := sys->open(p.path, Sys->ORDWR);
 	t.asserteq(sys->fprint(fd, "x"), 1, "one closed makes room for one");
 	fd = nil;
-	# a few at a time: the kernel tells a server of a close only if
-	# there is room in its channel at that moment (16 requests)
-	for(i = 0; i <= N; i++){
+	# all at once: the post is told of every close, however many its
+	# channel holds at that moment (the kernel dropped those past
+	# sixteen, and the post went on counting them)
+	for(i = 0; i <= N; i++)
 		fds[i] = nil;
-		if(i%4 == 3)
-			sys->sleep(5);
+	sys->sleep(300);
+	ok = 0;
+	for(i = 0; i < N; i++){
+		fds[i] = sys->open(p.path, Sys->ORDWR);
+		if(fds[i] != nil && sys->fprint(fds[i], "x") == 1)
+			ok++;
 	}
+	t.asserteq(ok, N, "all closed at once make room for as many again");
+	for(i = 0; i < N; i++)
+		fds[i] = nil;
 	sys->sleep(100);
 	p.unpost();
 	kill(kpid);

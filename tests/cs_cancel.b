@@ -448,13 +448,10 @@ init(nil: ref Draw->Context, nil: list of string)
 			}
 			check(ndnsasked == asked+64 && refused == N-64,
 				sys->sprint("64 queries are answered at once and the rest refused (%d waiting for dns, %d refused)", ndnsasked-asked, refused));
-			# a few at a time: the kernel tells a server of a close
-			# only if there is room in its channel at that moment
+			# all at once: cs is told of every close
 			for(i = 0; i < N; i++){
 				kill(wpids[i]);
 				fds[i] = nil;
-				if(i%4 == 3)
-					sys->sleep(20);
 			}
 			for(i = 0; i < 100 && nprogs() > 2; i++)
 				sys->sleep(50);

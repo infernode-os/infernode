@@ -253,13 +253,23 @@ as Plan 9's
 does.
 .I Wikifs
 has its limits: a title of at most 128 characters, a page of at most a
-megabyte, 65536 pages, and 10 megabytes of titles in all (its map).
+megabyte, 65536 pages, 10 megabytes of titles in all (its map), and
+for each page a history of at most 10000 versions and 16 megabytes.
 A title past that, one that can name no page (blank, digits alone,
 .B map
 or
 .BR new ),
-and a new page when the wiki is full are refused (422), the answer
-saying which.
+one
+.I httpd
+would serve nothing by (beginning or ending with a dot, with a
+backslash, a Windows device's name, or
+.B ~
+before a digit),
+a new page when the wiki is full, and an edit of a page whose history
+is full (until its file,
+.BI d/ n .hist
+in the wiki's store, is cut or moved away) are refused (422), the
+answer saying which.
 Either is refused (403) when the request comes from another site: an
 .B Origin
 that is not this server's, or a

@@ -76,8 +76,8 @@ Bayer_merge(void *fp)
 	 * before the table.
 	 */
 	uvlong r, g, b;
-	int pr, pg, pb, sr[2], sg[2], sb[2];
-	uvlong tr, tg, tb;
+	int pr, pg, pb, sr[2], sg[2], sb[2], clip, top;
+	uvlong tr, tg, tb, ur, ug, ub, un;
 
 	f = fp;
 	if(f->raw == H || f->lr == H || f->lg == H || f->lb == H
@@ -97,7 +97,7 @@ Bayer_merge(void *fp)
 	if(f->lg->len != nl || f->lb->len != nl || nl == 0)
 		error(exBounds);
 	if(f->raw->len < (vlong)rw*rh*2 || f->y->len < w*h || f->cb->len < (w/2)*(h/2)
-	|| f->cr->len < (w/2)*(h/2) || f->mean->len < 3)
+	|| f->cr->len < (w/2)*(h/2) || f->mean->len < 3 || f->clip < 0)
 		error(exBounds);
 	raw = (ushort*)f->raw->data;
 	lr = f->lr->data;
@@ -117,6 +117,8 @@ Bayer_merge(void *fp)
 	cells = s/2;
 	n = cells*cells;
 	tr = tg = tb = 0;
+	ur = ug = ub = un = 0;
+	clip = f->clip;
 
 	for(y0 = 0; y0 < h; y0++){
 		yr = y + yb + y0*ydy;
@@ -125,12 +127,22 @@ Bayer_merge(void *fp)
 		sr[0] = sr[1] = sg[0] = sg[1] = sb[0] = sb[1] = 0;
 		for(x = 0; x < w; x++){
 			r = g = b = 0;
+			top = 0;
 			for(cy = 0; cy < cells; cy++){
 				c = raw + (y0*s + 2*cy)*rw + x*s;
 				for(cx = 0; cx < cells; cx++){
 					r += c[ro];
 					b += c[bo];
 					g += c[g1] + c[g2];
+					/* the block's highest sample, for clip */
+					if(c[ro] > top)
+						top = c[ro];
+					if(c[bo] > top)
+						top = c[bo];
+					if(c[g1] > top)
+						top = c[g1];
+					if(c[g2] > top)
+						top = c[g2];
 					c += 2;
 				}
 			}
@@ -140,6 +152,12 @@ Bayer_merge(void *fp)
 			tr += r;
 			tg += g;
 			tb += b;
+			if(clip == 0 || top < clip){
+				ur += r;
+				ug += g;
+				ub += b;
+				un++;
+			}
 			pr = lr[r < nl? r: nl-1];
 			pg = lg[g < nl? g: nl-1];
 			pb = lb[b < nl? b: nl-1];
@@ -166,4 +184,9 @@ Bayer_merge(void *fp)
 	mean[0] = tr/((uvlong)w*h);
 	mean[1] = tg/((uvlong)w*h);
 	mean[2] = tb/((uvlong)w*h);
+	if(f->mean->len >= 6){
+		mean[3] = un? ur/un: 0;
+		mean[4] = un? ug/un: 0;
+		mean[5] = un? ub/un: 0;
+	}
 }

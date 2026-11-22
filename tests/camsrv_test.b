@@ -296,6 +296,17 @@ testCtl(t: ref T)
 	t.assert(ctl("focus 700") > 0, "focus taken with nothing running");
 	t.assert(has(file("ctl"), "focus 700"), "and reads back");
 	t.assert(ctl("mode 144 80") < 0, "a mode that does not divide the sensor refused");
+	# white balance: fixed gains taken and read back, auto again, and
+	# what is not a pair of gains refused
+	t.assert(ctl("wb 300 512") > 0, "fixed white balance taken");
+	t.assert(has(file("ctl"), "wb 300 512\n"), "and reads back");
+	t.assert(ctl("wb auto") > 0, "auto white balance taken");
+	t.assert(has(file("ctl"), "wb auto\n"), "and reads back");
+	t.assert(ctl("wb 100 300") < 0, "a gain under a half refused");
+	t.assert(ctl("wb 300 3000") < 0, "a gain over eight refused");
+	t.assert(ctl("wb 300") < 0, "one gain refused");
+	t.assert(ctl("wb red blue") < 0, "words refused");
+	t.assert(has(file("status"), " wbgains="), "status says the gains in use");
 	t.assert(ctl("fps 10") > 0, "fps taken");
 	t.assert(has(file("fmt"), " i420 10"), "fmt says so");
 }

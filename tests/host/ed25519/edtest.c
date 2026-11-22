@@ -2,17 +2,28 @@
  * libkeyring/ed25519alg.c's Ed25519 on the host: known answers and
  * refusals, built with the undefined-behaviour sanitizer by
  * tests/host/ed25519_test.sh.  The file is Keyring's glue and the
- * arithmetic in one; what the glue needs of lib9 is stubbed here
+ * arithmetic in one, and is included here, so its scalar arithmetic
+ * can be reached; what the glue needs of lib9 is stubbed here
  * (nothing below calls it), and libmp is the tree's.
+ *
+ *	edtest vectors.txt	known answers and refusals; then the
+ *				scalar arithmetic (sc_reduce, sc_muladd)
+ *				against libmp's, and [a]B against plain
+ *				double-and-add, on random and extreme values
+ *	edtest ct sign|pubkey	a signature, or a public key, made of a
+ *				seed valgrind is told is secret (-DCTGRIND):
+ *				any branch or address that depends on it,
+ *				and so on the scalar or the nonce made of
+ *				it, is reported
  */
 #include <stdio.h>
-#include "lib9.h"
-#include <mp.h>
-#include <libsec.h>
-
-void	ed25519_raw_sign(uchar sig[64], const uchar seed[32], const uchar *msg, ulong msglen);
-int	ed25519_raw_verify(const uchar sig[64], const uchar pk[32], const uchar *msg, ulong msglen);
-void	ed25519_raw_pubkey(uchar pk[32], const uchar seed[32]);
+#include "../../../libkeyring/ed25519alg.c"
+#ifdef CTGRIND
+#include <valgrind/memcheck.h>
+#else
+#define VALGRIND_MAKE_MEM_UNDEFINED(p, n)	USED(p)
+#define VALGRIND_MAKE_MEM_DEFINED(p, n)	USED(p)
+#endif
 
 /* the glue's needs of lib9 and libsec that nothing below reaches */
 static void	no(char *s) { fprintf(stderr, "edtest: %s called\n", s); exit(3); }
@@ -80,6 +91,176 @@ static uchar L[32] = {
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
 };
 
+/* n bytes, little-endian, as a number; and a number mod L as 32 bytes, little-endian */
+static mpint*
+le2mp(const uchar *le, int n)
+{
+	uchar be[64];
+	int i;
+
+	for(i = 0; i < n; i++)
+		be[i] = le[n-1-i];
+	return betomp(be, n, nil);
+}
+
+static void
+modL(uchar out[32], mpint *x)
+{
+	uchar be[32];
+	mpint *l, *r;
+	int i, n;
+
+	l = le2mp(L, 32);
+	r = mpnew(0);
+	mpmod(x, l, r);
+	memset(be, 0, sizeof be);
+	n = (mpsignif(r) + 7) / 8;
+	if(n > 0)
+		mptobe(r, be + 32 - n, n, nil);
+	for(i = 0; i < 32; i++)
+		out[i] = be[31-i];
+	mpfree(l);
+	mpfree(r);
+}
+
+/* [a]B the plain way, a bit at a time: what ge_scalarmult_base was */
+static void
+refbasemult(uchar out[32], const uchar *a)
+{
+	ge_p3 B, h;
+	ge_p1p1 t;
+	ge_cached Bc;
+	int i;
+
+	fe_copy(B.X, Bx);
+	fe_copy(B.Y, By);
+	fe_1(B.Z);
+	fe_mul(B.T, Bx, By);
+	ge_p3_to_cached(&Bc, &B);
+	ge_p3_0(&h);
+	for(i = 255; i >= 0; i--){
+		ge_p3_dbl(&t, &h);
+		ge_p1p1_to_p3(&h, &t);
+		if((a[i/8] >> (i&7)) & 1){
+			ge_add(&t, &h, &Bc);
+			ge_p1p1_to_p3(&h, &t);
+		}
+	}
+	ge_p3_tobytes(out, &h);
+}
+
+/* a value to try: random, or one of the ends (0, 1, L-1, L, L+1, all ones, a top bit, ones below it) */
+static void
+pick(uchar *b, int n, int k)
+{
+	int i;
+
+	for(i = 0; i < n; i++)
+		b[i] = rand() >> 7;
+	switch(k % 16){
+	case 0:
+		memset(b, 0, n);
+		break;
+	case 1:
+		memset(b, 0, n);
+		b[0] = 1;
+		break;
+	case 2: case 3: case 4:
+		memset(b, 0, n);
+		memmove(b, L, 32);
+		b[0] += k % 16 - 3;	/* L-1, L, L+1 */
+		break;
+	case 5:
+		memset(b, 0xff, n);
+		break;
+	case 6:
+		memset(b, 0, n);
+		b[n-1] = 0x80;
+		break;
+	case 7:
+		memset(b, 0xff, n);
+		b[n-1] = 0x7f;
+		break;
+	}
+}
+
+/*
+ * The scalar arithmetic against libmp's, and the base-point
+ * multiplication against the plain one.  A signature's values are
+ * below L or clamped; these are any at all, the ends among them.
+ */
+static void
+scalars(void)
+{
+	uchar a[32], b[32], c[32], w[64], got[32], want[32];
+	mpint *ma, *mb, *mc, *mw;
+	ge_p3 h;
+	int i;
+
+	srand(8032);
+	for(i = 0; i < 20000; i++){
+		pick(a, 32, i);
+		pick(b, 32, i / 16);
+		pick(c, 32, i / 256);
+		ma = le2mp(a, 32);
+		mb = le2mp(b, 32);
+		mc = le2mp(c, 32);
+		mw = mpnew(0);
+		mpmul(ma, mb, mw);
+		mpadd(mw, mc, mw);
+		modL(want, mw);
+		sc_muladd(got, a, b, c);
+		check(memcmp(got, want, 32) == 0, "sc_muladd is (a*b+c) mod L", i);
+		mpfree(ma); mpfree(mb); mpfree(mc); mpfree(mw);
+
+		pick(w, 64, i);
+		mw = le2mp(w, 64);
+		modL(want, mw);
+		sc_reduce(w);
+		check(memcmp(w, want, 32) == 0, "sc_reduce is a 512-bit number mod L", i);
+		mpfree(mw);
+	}
+	for(i = 0; i < 400; i++){
+		pick(a, 32, i);
+		ge_scalarmult_base(&h, a);
+		ge_p3_tobytes(got, &h);
+		refbasemult(want, a);
+		check(memcmp(got, want, 32) == 0, "[a]B is double-and-add's", i);
+	}
+}
+
+/*
+ * Constant time: the seed is marked as valgrind's "undefined", which it
+ * follows through every operation: the scalar and the nonce are made
+ * of it.  A first call with a known seed gets the file's self-test,
+ * which runs once, out of the way.
+ */
+static int
+ct(char *what)
+{
+	uchar seed[32], pk[32], sig[64], msg[100];
+	int i;
+
+	for(i = 0; i < 32; i++)
+		seed[i] = 7*i + 1;
+	for(i = 0; i < sizeof msg; i++)
+		msg[i] = i;
+	ed25519_raw_sign(sig, seed, msg, sizeof msg);
+	seed[0] ^= 0x55;
+	VALGRIND_MAKE_MEM_UNDEFINED(seed, sizeof seed);
+	if(strcmp(what, "sign") == 0){
+		ed25519_raw_sign(sig, seed, msg, sizeof msg);
+		VALGRIND_MAKE_MEM_DEFINED(sig, sizeof sig);
+		printf("%02x\n", sig[0] ^ sig[63]);
+	}else if(strcmp(what, "pubkey") == 0){
+		ed25519_raw_pubkey(pk, seed);
+		VALGRIND_MAKE_MEM_DEFINED(pk, sizeof pk);
+		printf("%02x\n", pk[0]);
+	}else
+		return 2;
+	return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -88,8 +269,10 @@ main(int argc, char **argv)
 	uchar seed[32], pk[32], msg[1024], sig[64], out[64], bad[64], pk2[32];
 	int i, n, j, c;
 
+	if(argc == 3 && strcmp(argv[1], "ct") == 0)
+		return ct(argv[2]);
 	if(argc != 2){
-		fprintf(stderr, "usage: edtest vectors.txt\n");
+		fprintf(stderr, "usage: edtest vectors.txt | ct sign|pubkey\n");
 		return 2;
 	}
 	f = fopen(argv[1], "r");
@@ -143,10 +326,11 @@ main(int argc, char **argv)
 		printf("FAIL: only %d vectors read\n", i);
 		return 1;
 	}
+	scalars();
 	if(fails){
 		printf("ed25519: %d of %d checks FAILED\n", fails, checks);
 		return 1;
 	}
-	printf("ed25519: %d vectors, %d checks\n", i, checks);
+	printf("ed25519: %d vectors and the scalar arithmetic, %d checks\n", i, checks);
 	return 0;
 }

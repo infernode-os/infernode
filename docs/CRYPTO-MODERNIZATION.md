@@ -619,6 +619,13 @@ Under it:
   general arithmetic. `tests/host/rsa_edge_test.sh`,
   `tests/host/sign_nonce_test.sh` and `tests/host/ecc_test.sh` hold them
   to known answers (RFC 6979's own for P-256 and P-384) and to valgrind.
+  Ed25519 (`libkeyring/ed25519alg.c`) multiplies the base point by the
+  secret scalar and by a signature's nonce four bits at a time, always
+  adding one of sixteen multiples chosen by a mask (it was
+  double-and-add, an addition for each set bit), and makes S = (r + ha)
+  mod L in fixed limbs (it was `libmp`'s multiplication and division);
+  `tests/host/ed25519_test.sh` holds the signatures to the same bytes,
+  the scalar arithmetic to `libmp`'s, and both to valgrind.
 - **One generator, NIST's.** Every random number, in the emulator
   (`libsec/genrandom.c`) and the native kernels (`os/port/random.c`), comes
   from HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1, `libsec/hmacdrbg.c`),

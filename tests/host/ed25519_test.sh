@@ -18,6 +18,23 @@
 # program, at -O (as the emulator's libraries are) and -O2, with cc and
 # with clang where there is one.  No emulator is needed.
 #
+# Then the arithmetic on secrets, which was not constant time: [a]B (a
+# the secret scalar, or a signature's nonce) was double-and-add with
+# the addition made only for a's set bits, and S = (r + h*a) mod L was
+# libmp's multiplication and division.  Both are fixed sequences now:
+#   - sc_muladd and sc_reduce against libmp's arithmetic, and [a]B
+#     against plain double-and-add, on 20000 random and extreme values
+#     (0, 1, L-1, L, L+1, all ones), in the same sanitized program
+#   - constant time (ctgrind): with valgrind, a signature and a public
+#     key are made of a seed marked undefined, so the scalar and the
+#     nonce made of it are; valgrind reports every branch and every
+#     address that depends on them, and there must be none.  The code
+#     before is reported in ge_scalarmult_base and in libmp.
+# The constant-time check needs valgrind (Linux); CI installs it, and
+# a CI run without it fails rather than skips.  EDTEST_CFLAGS adds
+# compiler flags: the code before is run through this with
+# -Dsc_muladd=sc_muladd_simple, its name for S's arithmetic.
+#
 # Run from project root: ./tests/host/ed25519_test.sh
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -32,8 +49,9 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 
 INC="-I$ROOT/$EMUHOST/$OBJTYPE/include -I$ROOT/include -I$ROOT/libinterp -I$ROOT/libkeyring -I$ROOT/libmp"
 S="$ROOT/libsec"
-SRCS="$ROOT/libkeyring/ed25519alg.c $S/securezero.c $S/sha2.c $S/sha256block.c $S/sha256arm64.c $S/sha512block.c"
-# the signature's S is (r + h*a) mod L by libmp
+# edtest.c includes libkeyring/ed25519alg.c itself
+SRCS="$S/securezero.c $S/sha2.c $S/sha256block.c $S/sha256arm64.c $S/sha512block.c"
+# libmp: Keyring's glue converts a number to sign, and the test checks the scalar arithmetic against it
 for f in mpaux mpadd mpsub mpcmp mpmul mpleft mpright mpvecadd mpvecsub \
 	mpvecdigmuladd mpveccmp mpdigdiv mpdiv mpmod betomp mptobe; do
 	SRCS="$SRCS $ROOT/libmp/$f.c"
@@ -56,7 +74,7 @@ for cc in $ccs; do
 		continue
 	fi
 	for opt in -O -O2; do
-		if ! $cc -g $opt -fno-strict-aliasing -w $SAN $INC -o "$TMP/edtest" "$D/edtest.c" $SRCS 2>"$TMP/cc.log"; then
+		if ! $cc -g $opt -fno-strict-aliasing -w $SAN $EDTEST_CFLAGS $INC -o "$TMP/edtest" "$D/edtest.c" $SRCS 2>"$TMP/cc.log"; then
 			echo "FAIL: $cc $opt: does not build"
 			head -20 "$TMP/cc.log"
 			rc=1
@@ -70,6 +88,44 @@ for cc in $ccs; do
 			tail -2 "$TMP/out"
 			rc=1
 		fi
+	done
+done
+
+# ctgrind
+if ! command -v valgrind >/dev/null 2>&1 || [ ! -f /usr/include/valgrind/memcheck.h ]; then
+	if [ -n "${CI:-}" ] && [ "$(uname)" = Linux ]; then
+		echo "FAIL: CI has no valgrind (and valgrind's memcheck.h): the constant-time check did not run"
+		exit 1
+	fi
+	echo "SKIP: constant-time check (needs valgrind and its headers)"
+	exit $rc
+fi
+# each compiler here, at each level: they differ in what they make of a masked select
+for cc in $ccs; do
+	for opt in -O -O2; do
+		if ! $cc -g $opt -fno-strict-aliasing -w -DCTGRIND $EDTEST_CFLAGS $INC -o "$TMP/edtest-ct" "$D/edtest.c" $SRCS 2>"$TMP/cc.log"; then
+			echo "FAIL: $cc $opt: edtest -DCTGRIND does not build"
+			head -20 "$TMP/cc.log"
+			rc=1
+			continue
+		fi
+		for what in sign pubkey; do
+			valgrind --error-limit=no --read-inline-info=yes --log-file="$TMP/vg" "$TMP/edtest-ct" ct "$what" >"$TMP/out" 2>&1
+			st=$?
+			# the function each report is in
+			awk '/depends on uninitialised|Use of uninitialised/ { getline; sub(/.*: /, ""); sub(/ \(.*/, ""); print }' "$TMP/vg" | sort | uniq -c >"$TMP/fns"
+			if [ $st -ne 0 ]; then
+				echo "FAIL: $cc $opt: $what did not run under valgrind (status $st)"
+				tail -5 "$TMP/vg"
+				rc=1
+			elif [ -s "$TMP/fns" ]; then
+				echo "FAIL: $cc $opt: $what: branches or addresses depend on the secret scalar or the nonce in:"
+				sed 's/^/    /' "$TMP/fns"
+				rc=1
+			else
+				echo "PASS: $cc $opt: $what constant time (valgrind: no branch or address on the seed, the scalar or the nonce)"
+			fi
+		done
 	done
 done
 exit $rc

@@ -128,7 +128,7 @@ ps | grep Sdrfs | wc -l > $d/procs.after
 # an rtl_tcp that sends two bytes at a time: given in chunks
 sdrfs -S -m $d/m3 -t 200
 sh -c 'echo source 127.0.0.1!'^$6^' > '^$d^'/m3/ctl' >[2] $d/err.trickle
-read 16384 < $d/m3/iq > $d/iq.trickle
+{read 64 > /dev/null; read 16384 > $d/iq.trickle} < $d/m3/iq
 unmount $d/m3
 
 # a source command given up (its writer killed) is not done

@@ -68,7 +68,7 @@ This is equivalent to passing a value of
 to
 .IR sys-pctl (2).
 .TP
-.B "mount [-abcR9i] [-k \f2keyfile\fP] [-C \f2alg\fP] [\f2net\fP!]\f2machine\fP[!\f2svc\fP] \f2dir\fP [\f2spec\fP]"
+.B "mount [-abcRi] [-k \f2keyfile\fP] [-C \f2alg\fP] [\f2net\fP!]\f2machine\fP[!\f2svc\fP] \f2dir\fP [\f2spec\fP]"
 Mount the file tree of
 .I machine
 upon directory
@@ -96,10 +96,9 @@ of
 as described under
 .IR sys-bind (2).
 The
-.BR -k ,
-.B -C
+.B -k
 and
-.B -9
+.B -C
 options are the same as those for the
 .I mount
 command (see
@@ -107,27 +106,6 @@ command (see
 Authenticated mounts default to AES-256-CBC with SHA-256 when
 .B -C
 is omitted.
-.TP
-.B "import [-abcR9i] [\f2net\fP!]\f2machine\fP[!\f2svc\fP] [\f2remotedir\fP] \f2dir\fP"
-Import a directory from a remote Plan 9
-.I machine
-and make it appear on directory
-.IR dir .
-Options
-.BR a ,
-.BR b ,
-.BR c
-and
-.B i
-are the same as for
-.BR mount .
-By default,
-.I remotedir
-is assumed to be the same name as
-.IR dir .
-The default service is
-.BR exportfs .
-(Currently this operation works only under native Inferno and Plan 9.)
 .TP
 .B new
 Create a new name space in which the current directory

@@ -25,7 +25,6 @@ TARG=\
 	auditget.dis\
 	auditverify.dis\
 	9660srv.dis\
-	9cpu.dis\
 	9export.dis\
 	9win.dis\
 	acmeevent.dis\

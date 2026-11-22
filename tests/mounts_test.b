@@ -10,6 +10,9 @@ implement MountsTest;
 #    names who it must be.
 #  - with no user name (no /dev/user) mount's key directory was
 #    /usr//keyring/, whatever is there.
+#  - import, 9export and mount -9 without -A asked factotum for Plan 9's
+#    p9any, which is gone: they say so first, and import -A (which there
+#    was not) is the far end of 9export -A.  It was:
 #  - import, and 9export without -A, run Plan 9's p9sk1, whose DES no
 #    kernel is built with now: they got as far as factotum, which ended
 #    in an exception.  They say so before anything is dialled or said.
@@ -387,12 +390,47 @@ firstread(fd: ref Sys->FD, c: chan of int)
 	c <-= sys->read(fd, buf, len buf);
 }
 
+# one caller of a loopback address given to 9export -A
+serve9(c: chan of string, done: chan of string)
+{
+	(ok, a) := sys->announce("tcp!127.0.0.1!0");
+	if(ok < 0){
+		c <-= nil;
+		return;
+	}
+	(nil, f) := sys->tokenize(readfile(a.dir + "/local"), "!\n");
+	c <-= hd tl f;
+	(lok, l) := sys->listen(a);
+	if(lok < 0)
+		return;
+	fd := sys->open(l.dir + "/data", Sys->ORDWR);
+	if(fd == nil)
+		return;
+	export9(chan[1] of string, fd, done);
+}
+
 testPlan9(t: ref T)
 {
 	t.assertseq(start("/dis/import.dis", "import" :: "tcp!127.0.0.1!1" :: "/n/nosuch" :: nil, 10000),
-		"fail:p9sk1", "import says Plan 9 authentication cannot run, before it dials");
+		"fail:p9sk1", "import without -A says Plan 9 authentication is not here, before it dials");
 	t.assertseq(start("/dis/9export.dis", "9export" :: nil, 10000),
 		"fail:p9sk1", "9export without -A says the same, before its caller is spoken to");
+	# mount -9 asked factotum for p9any when the server took Tauth, and
+	# so could only fail there: it is refused, before it dials
+	t.assertseq(start("/dis/mount.dis", "mount" :: "-9" :: "tcp!127.0.0.1!1" :: D + "/m" :: nil, 10000),
+		"fail:p9sk1", "mount -9 says the same, before it dials");
+
+	# import -A and 9export -A are each other's far end
+	c := chan[1] of string;
+	done := chan[1] of string;
+	spawn serve9(c, done);
+	port := <-c;
+	if(port == nil)
+		t.skip(sys->sprint("no loopback tcp: %r"));
+	r := start("/dis/import.dis", "import" :: "-A" :: "tcp!127.0.0.1!" + port :: D + "/dir" :: D + "/m" :: nil, 10000);
+	t.assertseq(r, nil, "import -A from a 9export -A mounts");
+	t.assertseq(readfile(D + "/m/file"), "served", "and the tree named is what is mounted");
+	sys->unmount(nil, D + "/m");
 
 	(e, n) := impo(t, "impo nofilter clear");
 	t.assert(n > 0, sys->sprint("a caller asking for clear is exported to: %d bytes of a version answered (%s)", n, e));

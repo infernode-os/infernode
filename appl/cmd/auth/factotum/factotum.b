@@ -782,8 +782,8 @@ startproto(request: string): (Authproto, list of ref Attr, string)
 	# Plan 9's p9any offered one protocol, p9sk1, whose tickets are
 	# DES: with DES gone from the system it could only fail, somewhere
 	# in the middle, with "module not loaded".  Its module is removed,
-	# and whoever still asks for it (a 9P server that wants Tauth, 9cpu,
-	# import, 9export) is told why rather than that a file is missing.
+	# nothing in the tree asks for it, and whoever does is told why
+	# rather than that a file is missing.
 	if(p == "p9any" || p == "p9sk1")
 		return (nil, nil, "Plan 9's p9sk1 authentication is not available: it needs DES, which this system no longer has");
 	proto := load Authproto "/dis/auth/proto/"+p+".dis";

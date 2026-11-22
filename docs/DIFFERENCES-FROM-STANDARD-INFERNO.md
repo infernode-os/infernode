@@ -116,8 +116,11 @@ encrypted connection to standard Inferno®**, nor to an InferNode older than
 - **`9cpu`, `import` and `9export`** talk to Plan 9, and authenticated with
   its p9sk1, whose tickets are DES. DES is gone, and with it factotum's
   `p9any` and `p9sk1` (and `auth9`, `oldauth` and `$Crypt`): factotum
-  refuses a start for either, saying so. `9export -A` (no authentication,
-  clear text) is what is left of the three.
+  refuses a start for either, saying so. `9cpu` is removed (both of its
+  methods were Plan 9's); `import -A` and `9export -A` (no authentication,
+  clear text) are what is left, and `mount -9`, `Factotum->mount`,
+  `Styxpersist`'s re-authentication and namespace(6)'s `import` and
+  `mount -9` are gone.
 - **`crypt(1)`** uses AES-256-GCM with PBKDF2-HMAC-SHA-384 and a salt per
   file, not upstream's `md5/ideacbc`.
 - **Random numbers** come from NIST's HMAC_DRBG with SHA-512 (SP 800-90A) in

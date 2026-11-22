@@ -30,8 +30,13 @@ All notable changes to InferNode are documented in this file.
   - **Plan 9's authentication is removed.** p9sk1 needs DES, which went
     in 0.11.0, so it could run nowhere: `auth9`, `oldauth`, factotum's
     `p9any` and `crypt.m` are gone, factotum refuses those protocols
-    with the reason, and `import`, and `9export` without `-A`, stop
-    with a message.
+    with the reason. Nothing asks for them any more: `9cpu` is
+    removed, `import` and `9export` run only with `-A` (no
+    authentication, clear text) and say so without it, their `-k` is
+    gone, `mount -9` and namespace(6)'s `mount -9` and `import` are
+    refused (a 9P server that wants no authentication is `mount -A`),
+    and `Factotum->mount` and `Styxpersist->init`'s `usefac` and
+    `keyspec` are gone.
   - **Ciphers removed from Keyring:** the DES, IDEA, Blowfish and MD4
     functions, with `idea(1)` and `netkey(1)`. A certificate whose hash
     is `md4` is refused. RC4 stays for old PDFs.

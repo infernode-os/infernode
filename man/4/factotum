@@ -696,17 +696,19 @@ offered nothing else.
 A
 .B start
 naming either is refused, saying so.
-That is what a 9P server asking for authentication in the protocol
-(a Plan 9 file server; see
-.IR sys-fauth (2))
-and the commands that speak to Plan 9
-.RB ( import
+Nothing in the system asks for either:
+.IR mount (1)
+and
+.IR namespace (6)
+refuse
+.BR -9 ,
+and
+.B import
 and
 .B 9export
-of
-.IR import (4),
-.BR 9cpu )
-now get.
+(see
+.IR import (4))
+run only without authentication.
 A
 .B p9sk1
 key is kept, as any key whose protocol has no module is, and nothing uses it.

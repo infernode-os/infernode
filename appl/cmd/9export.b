@@ -4,16 +4,12 @@ include "sys.m";
 	sys: Sys;
 
 include "draw.m";
-include "keyring.m";
-include "factotum.m";
 include "arg.m";
 
 P9export: module
 {
 	init:	 fn(nil: ref Draw->Context, nil: list of string);
 };
-
-factotumfile := "/mnt/factotum/rpc";
 
 done: chan of int;	# tells the watchdog the caller's time is no longer counted
 
@@ -35,20 +31,6 @@ fail(status, msg: string)
 nomod(mod: string)
 {
 	fail("load", sys->sprint("can't load %s: %r", mod));
-}
-
-# Plan 9's p9sk1 enciphers its tickets with DES, which was the VM's
-# $Crypt module; no kernel is built with it now, so the protocol cannot
-# run here and factotum's attempt ends in an exception inside it.  That
-# is said before anything is dialled or answered.
-P9des: module
-{
-	PATH:	con "$Crypt";
-};
-
-nop9sk1(): int
-{
-	return (load P9des P9des->PATH) == nil;
 }
 
 # The caller has so long to authenticate, name its tree and say how it
@@ -100,9 +82,8 @@ init(nil: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 
 	arg->init(args);
-	arg->setusage("9export [-aA9] [-k keyspec] [-e clear]");
-	cryptalg := "";	# none: -e naming one is refused (p9sk1 below)
-	keyspec := "";
+	arg->setusage("9export -A [-a9] [-e clear]");
+	cryptalg := "";
 	noauth := 0;
 	xflag := Sys->EXPWAIT;
 	while((o := arg->opt()) != 0)
@@ -115,8 +96,6 @@ init(nil: ref Draw->Context, args: list of string)
 			cryptalg = arg->earg();
 			if(cryptalg == "clear")
 				cryptalg = nil;
-		'k' =>
-			keyspec = arg->earg();
 		'9' =>
 			;
 		*   =>
@@ -124,17 +103,15 @@ init(nil: ref Draw->Context, args: list of string)
 		}
 	args = arg->argv();
 	arg = nil;
-	# -e naming an algorithm is never done, and is said before the
-	# caller is spoken to.  With -A it was not said at all: the tree
-	# was exported in clear to a command line that asked for a cipher.
-	if(cryptalg != nil){
-		if(noauth)
-			fail("9export", "-e with -A: there is no key to encrypt with when the caller is not authenticated");
-		fail("9export", "Plan 9's p9sk1 gives a 56-bit key, too weak for ssl(3)'s aes_256_gcm and hmac_sha384; leave out -e for clear text, on a network you trust");
-	}
-
-	if(noauth == 0 && nop9sk1())
-		fail("p9sk1", "Plan 9 authentication (p9sk1) cannot run in this system, which has no DES; only 9export -A is left, for a network you trust (for an InferNode caller use listen(1) with export(4))");
+	# Both are said before the caller is spoken to.  Plan 9's own
+	# authentication (p9any offering p9sk1, whose tickets are DES) is not
+	# in this system, so the caller is nobody and there is no key to
+	# encrypt with: -A says whoever runs this knows.  Without it factotum
+	# used to be asked for p9any, which could only fail.
+	if(cryptalg != nil)
+		fail("9export", "-e: there is no key to encrypt with when the caller is not authenticated; leave it out for clear text, on a network you trust");
+	if(!noauth)
+		fail("p9sk1", "Plan 9 authentication (p9sk1) is not in this system; 9export -A exports to anyone who can reach it, in clear text, for a network you trust (for an InferNode caller use listen(1) with export(4))");
 
 	pid := sys->pctl(Sys->FORKFD|Sys->FORKNS, nil);
 
@@ -142,22 +119,6 @@ init(nil: ref Draw->Context, args: list of string)
 
 	done = chan[1] of int;
 	spawn watchdog(pid, done);
-	if(noauth == 0){
-		factotum := load Factotum Factotum->PATH;
-		if(factotum == nil)
-			nomod(Factotum->PATH);
-		factotum->init();
-		facfd := sys->open(factotumfile, Sys->ORDWR);
-		if(facfd == nil)
-			fail("factotum", sys->sprint("can't open %s: %r", factotumfile));
-		ai := factotum->proxy(fd, facfd, "proto=p9any role=server "+keyspec);
-		if(ai == nil)
-			fail("auth", sys->sprint("can't authenticate 9export: %r"));
-		# factotum's file is not kept through the export
-		facfd = nil;
-		factotum = nil;
-	}
-
 	# read tree; it's a Plan 9 bug that there's no reliable delimiter
 	btree := array[2048] of byte;
 	n := sys->read(fd, btree, len btree);

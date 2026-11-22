@@ -5,7 +5,6 @@ include "sys.m";
 include "draw.m";
 include "keyring.m";
 include "security.m";
-include "factotum.m";
 include "styxpersist.m";
 include "arg.m";
 include "sh.m";
@@ -17,7 +16,6 @@ Mount: module
 
 verbose := 0;
 doauth := 1;
-do9 := 0;
 persist := 0;
 showstyx := 0;
 
@@ -46,7 +44,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 
 	arg->init(args);
-	arg->setusage("mount [-a|-b] [-cRoA9P] [-C cryptoalg] [-k keyfile] [-u user] net!addr|file|{command} mountpoint [spec]");
+	arg->setusage("mount [-a|-b] [-cRoAP] [-C cryptoalg] [-k keyfile] [-u user] net!addr|file|{command} mountpoint [spec]");
 	flags := 0;
 	while((o := arg->opt()) != 0){
 		case o {
@@ -70,8 +68,11 @@ init(ctxt: ref Draw->Context, args: list of string)
 		'A' =>
 			doauth = 0;
 		'9' =>
-			doauth = 0;
-			do9 = 1;
+			# it authenticated to a Plan 9 file server through
+			# factotum's p9any, which could only fail once p9sk1
+			# (DES) had gone; a server that asks for no
+			# authentication was always -A's
+			fail("p9sk1", "-9: Plan 9 authentication (p9sk1) is not in this system; a 9P server that asks for none is mounted with -A (its service is 9fs)");
 		'v' =>
 			verbose = 1;
 		'P' =>
@@ -94,27 +95,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# -u names who the far end must authenticate as: with nothing
 	# authenticated there is nobody to name
 	if(peer != nil && !doauth)
-		fail("usage", "-u needs an authenticated connection (not -A, -9, a file or a command)");
+		fail("usage", "-u needs an authenticated connection (not -A, a file or a command)");
 
 	fd := connect(ctxt, addr);
-	ok: int;
-	if(do9){
-		fd = styxlog(fd);
-		factotum := load Factotum Factotum->PATH;
-		if(factotum == nil)
-			nomod(Factotum->PATH);
-		factotum->init();
-		ok = factotum->mount(fd, mountpoint, flags, spec, nil).t0;
-	}else{
-		err: string;
-		if(!persist){
-			(fd, err) = authcvt(fd);
-			if(fd == nil)
-				fail("error", err);
-		}
-		fd = styxlog(fd);
-		ok = sys->mount(fd, nil, mountpoint, flags, spec);
+	err: string;
+	if(!persist){
+		(fd, err) = authcvt(fd);
+		if(fd == nil)
+			fail("error", err);
 	}
+	fd = styxlog(fd);
+	ok := sys->mount(fd, nil, mountpoint, flags, spec);
 	if(ok < 0)
 		fail("mount failed", sys->sprint("mount failed: %r"));
 }
@@ -142,16 +133,13 @@ connect(ctxt: ref Draw->Context, dest: string): ref Sys->FD
 		if(dest[0] == '/')
 			fail("open failed", sys->sprint("can't open %s: %r", dest));
 	}
-	svc := "styx";
-	if(do9)
-		svc = "9fs";
-	dest = netmkaddr(dest, "net", svc);
+	dest = netmkaddr(dest, "net", "styx");
 	if(persist){
 		styxpersist := load Styxpersist Styxpersist->PATH;
 		if(styxpersist == nil)
 			fail("bad module", sys->sprint("cannot load %s: %r", Styxpersist->PATH));
 		sys->pipe(p := array[2] of ref Sys->FD);
-		(c, err) := styxpersist->init(p[0], do9, nil);
+		(c, err) := styxpersist->init(p[0]);
 		if(c == nil)
 			fail("error", "styxpersist: "+err);
 		spawn dialler(c, dest);

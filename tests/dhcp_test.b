@@ -414,6 +414,7 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 	readers: list of Rread;
 	phase := 0;
 	cmdphase := 0;
+	told := 0;
 	mac := macb();
 	for(;;)alt{
 	<-quit =>
@@ -458,6 +459,13 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 			replies = mkreply(xid, mac, Ouraddr, bootpopts(),
 				array of byte "/boot/kernel", nil) :: nil;
 		Discover =>
+			if(mode == "nakrenew" && cmdphase == 2 && !told){
+				# looking again after the lease was lost: from an
+				# interface made speakable again, or from one the
+				# stack would send nothing from
+				told = 1;
+				notes <-= rediscovered(readall(Netdir+"/ifc/ctl"));
+			}
 			if(phase == 0){
 				#
 				# Two replies a correct client must throw
@@ -1078,6 +1086,22 @@ testStrings(t: ref T)
 	sys->unmount(nil, Netdir);
 }
 
+# what the interface's ctl says of a DISCOVER after a lost lease: was
+# 0.0.0.0 put back after the lost address was taken off?
+rediscovered(ctl: string): string
+{
+	lost := "remove " + Ouraddr;
+	i := -1;
+	for(j := 0; j + len lost <= len ctl; j++)
+		if(ctl[j:j+len lost] == lost)
+			i = j;
+	if(i < 0)
+		return "rediscover with the lost address never removed";
+	if(contains(ctl[i:], "add 0.0.0.0 0.0.0.0"))
+		return "rediscover from 0.0.0.0";
+	return "rediscover with no address";
+}
+
 readall(f: string): string
 {
 	fd := sys->open(f, Sys->OREAD);
@@ -1285,6 +1309,9 @@ testCommandNak(t: ref T)
 	s := await(done, 30*1000);
 	t.assertseq(s, "nak", "a lease of four seconds is renewed, and the renewal refused");
 	if(s == "nak"){
+		s = await(done, 10*1000);
+		t.assertseq(s, "rediscover from 0.0.0.0",
+			"the lease lost, its address comes off and 0.0.0.0 goes on before it looks again");
 		s = await(done, 3000);
 		t.assertseq(s, "nothing", "and the command goes on");
 	}

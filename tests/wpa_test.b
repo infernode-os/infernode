@@ -879,6 +879,71 @@ testGroupKeyTkip(t: ref T)
 	t.asserteq(nctl(a), 0, "and not installed: it is not a TKIP key");
 }
 
+# A second association's handshake, as a re-join this supplicant did
+# not make itself brings (init's watcher after the access point went,
+# the radio re-associating): a new SNonce, so a new pairwise key, and
+# the same group key, as a phone's hotspot gives it. The radio forgot
+# every key with the old association, so all three go in again -- the
+# group key too, though it is the one installed before. Skipped, the
+# board heard no broadcast after the re-join: no ARP, no DHCP offer.
+testRejoinSameGtk(t: ref T)
+{
+	supp := keyed(t);
+	ptk1 := supp.ptk;
+	pmk := wpakey->unhex(Pmk);
+	smac := wpakey->unhex("020000000001");
+	amac := wpakey->unhex("020000000002");
+	snonce2 := array[32] of {* => byte 16r33};
+	m1 := withcounter(wpakey->unhex(Msg1), big 10);
+	(a1, e1) := supp.recv(m1, snonce2);
+	t.assertnil(e1, "the new association's message 1 is accepted");
+	t.asserteq(len a1, 1, "and answered");
+	kd := 18;
+	anonce := m1[kd+13:kd+45];
+	ptk2 := wpakey->ptk(pmk, smac, amac, snonce2, anonce);
+	t.assert(wpakey->hex(ptk2) != wpakey->hex(ptk1), "a new SNonce makes a new pairwise key");
+	(a3, e3) := supp.recv(msg3under(ptk1, ptk2, big 11), snonce2);
+	t.assertnil(e3, "its message 3 is accepted");
+	t.asserteq(nctl(a3), 3, "the receive, transmit and group keys all go in");
+	gk := "";
+	for(a := a3; a != nil; a = tl a)
+		if((hd a).kind == Wpakey->Actl && len (hd a).text > 6 && (hd a).text[0:6] == "rxkey1")
+			gk = (hd a).text;
+	t.assert(has(gk, "ccmp:" + Gtk1 + "@"), "the same group key, again: " + gk);
+}
+
+# a frame with this replay counter and nothing else changed (message 1
+# has no MIC to make again)
+withcounter(frame: array of byte, counter: big): array of byte
+{
+	f := array[len frame] of byte;
+	f[0:] = frame;
+	for(i := 7; i >= 0; i--){
+		f[18+5+i] = byte counter;
+		counter >>= 8;
+	}
+	return f;
+}
+
+# Msg3 as another association's: its key data unwrapped with the key it
+# was wrapped under and wrapped again under the new one, its MIC the new
+# KCK's, under this counter
+msg3under(oldptk, newptk: array of byte, counter: big): array of byte
+{
+	f := wpakey->unhex(Msg3);
+	n := (int f[18+93] << 8) | int f[18+94];
+	plain := wpakey->aesunwrap(oldptk[16:32], f[18+95:18+95+n]);
+	data := aeswrap(newptk[16:32], plain);
+	g := array[18 + 95 + len data] of byte;
+	g[0:] = f[0:18+95];
+	g[18+95:] = data;
+	g[16] = byte ((95 + len data) >> 8);
+	g[17] = byte (95 + len data);
+	g[18+93] = byte (len data >> 8);
+	g[18+94] = byte len data;
+	return remic(newptk[0:16], g, counter);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -915,6 +980,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Retransmissions", testRetransmissions);
 	run("GroupKeyShape", testGroupKeyShape);
 	run("GroupKeyTkip", testGroupKeyTkip);
+	run("RejoinSameGtk", testRejoinSameGtk);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -56,6 +56,9 @@ Riface:		con 1;
 Rgetdesc:	con 6;
 Rsetproto:	con 11;		# HID: SET_PROTOCOL
 Rsetidle:	con 10;		# HID: SET_IDLE
+Rsetreport:	con 9;		# HID: SET_REPORT (the LEDs, an output report)
+Capslock:	con 16r39;	# HID usage
+Ledcaps:	con 1<<1;	# LED report: Num 0, Caps 1, Scroll 2
 
 Dconf:		con 2;
 
@@ -102,6 +105,7 @@ iface := 0;		# the HID interface: class requests and the report descriptor go to
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	usbtrace = sys->stat("/n/dos/usbtrace").t0 >= 0;
 
 	args = tl args;
 	if(args == nil){
@@ -611,6 +615,8 @@ poll(fd, kbd: ref Sys->FD, ival, maxpkt: int)
 		#
 		# Time the read.
 		n := sys->read(fd, buf, len buf);
+		if(usbtrace && n > 0)
+			tracerep("kbdusb", dev, buf[0:n]);
 		if(n < 0){
 			if(isdetached()){
 				sys->print("kbdusb: %s detached\n", dev);
@@ -690,6 +696,19 @@ press(kbd: ref Sys->FD, mod: int, down: list of int)
 	lastreport = sys->millisec();
 
 	#
+	# ErrorRollOver (1), POSTFail (2), ErrorUndefined (3) in a key
+	# slot: the keyboard cannot say which keys are down -- more than
+	# it can report, a phantom -- and the HID specification (1.11,
+	# 8.3 and appendix C) has the host ignore the report and keep the
+	# state it had. Taken as a report, it released every key held,
+	# and the next report pressed them again: a keyboard mashed by a
+	# hand on a Zero 2 W typed its held keys twice.
+	#
+	for(e := down; e != nil; e = tl e)
+		if(hd e >= 1 && hd e <= 3)
+			return;
+
+	#
 	# Alt is a PREFIX, not a held modifier.
 	#
 	# Emitted once when it goes down, which is what devcons
@@ -706,6 +725,11 @@ press(kbd: ref Sys->FD, mod: int, down: list of int)
 		k := hd l;
 		if(member(prevdown, k))
 			continue;
+		if(k == Capslock){
+			caps = !caps;
+			setleds();
+			continue;
+		}
 		c := decode(k, mod);
 		if(c > 0){
 			emit(kbd, c);
@@ -759,6 +783,8 @@ pollreport(fd, kbd: ref Sys->FD, ival, maxpkt: int, keys: list of ref Keys)
 	nerr := 0;
 	for(;;){
 		n := sys->read(fd, buf, len buf);
+		if(usbtrace && n > 0)
+			tracerep("kbdusb", dev, buf[0:n]);
 		if(n < 0){
 			if(isdetached()){
 				sys->print("kbdusb: %s detached\n", dev);
@@ -845,6 +871,8 @@ emit(kbd: ref Sys->FD, c: int)
 {
 	b := array of byte sys->sprint("%c", c);
 	sys->write(kbd, b, len b);
+	if(usbtrace)
+		sys->print("kbdusb: %s typed t=%d %#ux\n", dev, sys->millisec(), c);
 }
 
 #
@@ -862,7 +890,7 @@ decode(k, mod: int): int
 		c := k - 16r04 + 'a';
 		if(ctrl)
 			return c - 'a' + 1;	# control characters
-		if(shift)
+		if(shift != caps)
 			return c - 'a' + 'A';
 		return c;
 	}
@@ -915,6 +943,14 @@ decode(k, mod: int): int
 	16r52 =>	return 16rE012;		# Up
 
 	#
+	# Print Screen, Scroll Lock and Pause, as keyboard.m names them
+	# (Print, Scroll, Pause: Spec|0x65, 0x62, 0x66).
+	#
+	16r46 =>	return 16rE065;		# Print Screen
+	16r47 =>	return 16rE062;		# Scroll Lock
+	16r48 =>	return 16rE066;		# Pause
+
+	#
 	# Keypad, always as digits: there is no Num Lock state to keep
 	# and a keypad that types numbers is what everyone reaches for.
 	#
@@ -928,6 +964,15 @@ decode(k, mod: int): int
 	}
 	if(k >= 16r59 && k <= 16r61)		# keypad 1-9
 		return k - 16r59 + '1';
+	#
+	# Function keys, as KF|n (keyboard.m: KF is Spec|0x40, so F1 is
+	# 16rE041), what the hosted emulator sends for them. They were
+	# not here, and F1 on a board typed nothing.
+	#
+	if(k >= 16r3A && k <= 16r45)		# F1-F12
+		return 16rE040 + k - 16r3A + 1;
+	if(k >= 16r68 && k <= 16r73)		# F13-F24
+		return 16rE040 + k - 16r68 + 13;
 	return 0;
 }
 
@@ -972,6 +1017,54 @@ ctlout(rtype, req, value, index: int): int
 	return 0;
 }
 
+#
+# Caps Lock: a state the keyboard does not keep, so the host does, and
+# says so on the keyboard's LED (an output report, SET_REPORT). Letters
+# only, as a keyboard's own Caps Lock means; Shift inverts it. A
+# keyboard that has no LED report refuses SET_REPORT, and that is said
+# once and ignored.
+#
+caps := 0;
+ledsaid := 0;
+
+setleds()
+{
+	data := array[1] of byte;
+	data[0] = byte 0;
+	if(caps)
+		data[0] = byte Ledcaps;
+	if(ctloutd(Rh2d|Rclass|Riface, Rsetreport, 16r0200, iface, data) < 0 && !ledsaid){
+		sys->print("kbdusb: %s keeps no LEDs (SET_REPORT: %r)\n", dev);
+		ledsaid = 1;
+	}
+	if(usbtrace)
+		sys->print("kbdusb: %s caps lock %s\n", dev, (array[] of {"off", "on"})[caps]);
+}
+
+#
+# A control transfer with an OUT data stage: devusb takes the setup
+# packet and its data as one write (mouseusb's ctloutd).
+#
+ctloutd(rtype, req, value, index: int, data: array of byte): int
+{
+	buf := array[8 + len data] of byte;
+	buf[0] = byte rtype;
+	buf[1] = byte req;
+	buf[2] = byte value;
+	buf[3] = byte (value >> 8);
+	buf[4] = byte index;
+	buf[5] = byte (index >> 8);
+	buf[6] = byte (len data);
+	buf[7] = byte ((len data) >> 8);
+	buf[8:] = data;
+	if(sys->write(ep0, buf, len buf) != len buf)
+		return -1;
+	rep := array[8] of byte;
+	if(sys->read(ep0, rep, len rep) < 0)
+		return -1;
+	return 0;
+}
+
 ctlin(rtype, req, value, index: int, data: array of byte): int
 {
 	buf := array[8] of byte;
@@ -1009,4 +1102,27 @@ isinuse(): int
 		if(e[i:i+6] == "in use")
 			return 1;
 	return 0;
+}
+
+#
+# /n/dos/usbtrace on the card: every report this driver reads is printed
+# on the console, raw, with the time in milliseconds -- for testing a
+# device by hand while nobody is watching (the serial capture keeps it).
+# A report the same as the one before it is not printed again.
+#
+usbtrace := 0;
+
+lasttrace := "";
+
+tracerep(who, dev: string, b: array of byte)
+{
+	s := "";
+	for(i := 0; i < len b; i++)
+		s += sys->sprint(" %.2ux", int b[i]);
+	# a report the same as the last one is no news: kbdusb asks for
+	# the keyboard's state every Idlems (SET_IDLE), changed or not
+	if(s == lasttrace)
+		return;
+	lasttrace = s;
+	sys->print("%s: %s report t=%d%s\n", who, dev, sys->millisec(), s);
 }

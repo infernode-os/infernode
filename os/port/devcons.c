@@ -566,6 +566,38 @@ kbdcr2nl(Queue *q, int ch)
 }
 
 /*
+ *  A byte of console input from a serial line, which carries UTF-8:
+ *  the bytes of a character are collected and kbdputc given the
+ *  rune. Given each byte as a rune of its own, as the UARTs did,
+ *  a character outside ASCII arrived as two or three Latin-1 ones,
+ *  each encoded again: an SSID with a curly apostrophe typed at a
+ *  Zero 2 W's serial console named no network. A sequence cut short
+ *  is U+FFFD, and the byte that cut it is kept. One line feeds this,
+ *  at interrupt time, so the half-read character is static.
+ */
+int
+kbdputbyte(Queue *q, int c)
+{
+	static char ub[UTFmax];
+	static int nub;
+	Rune r;
+
+	c &= 0xFF;
+	if(nub > 0 && (c & 0xC0) != 0x80){
+		nub = 0;
+		kbdputc(q, Runeerror);
+	}
+	if(nub == 0 && c < Runeself)
+		return kbdputc(q, c);
+	ub[nub++] = c;
+	if(nub < UTFmax && !fullrune(ub, nub))
+		return 0;
+	chartorune(&r, ub);
+	nub = 0;
+	return kbdputc(q, r);
+}
+
+/*
  *  Put character, possibly a rune, into read queue at interrupt time.
  *  Performs translation for compose sequences
  *  Called at interrupt time to process a character.
@@ -1322,8 +1354,17 @@ consread(Chan *c, void *buf, long n, vlong offset)
 				eol = 0;
 				switch(ch){
 				case '\b':
-					if(kbd.x)
+					/*
+					 * A character, not a byte: the line holds
+					 * UTF-8, and erasing one byte of a
+					 * character outside ASCII left the rest of
+					 * it, which read as U+FFFD.
+					 */
+					while(kbd.x > 0){
 						kbd.x--;
+						if((kbd.line[kbd.x] & 0xC0) != 0x80)
+							break;
+					}
 					break;
 				case 0x15:
 					kbd.x = 0;

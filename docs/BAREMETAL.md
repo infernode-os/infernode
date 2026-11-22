@@ -460,9 +460,9 @@ card has both); the card's `bt` file names the Bluetooth patch,
 They are Synaptics's, not Cypress's, under two licences
 (`os/bcm/card/LICENCE.synaptics-wifi`, `-bt`), pinned by
 `tools/pi-firmware-manifest-zero2w.txt` and
-`tools/pi-btfw-manifest-zero2w.txt`. There is no Zero 2 W image in a
-release yet: the Bluetooth patches' terms are narrower than the Cypress
-licence the other cards rely on, and that is not decided.
+`tools/pi-btfw-manifest-zero2w.txt`. A release carries
+`infernode-<version>-rpizero2w.img.xz`, made and checked as the other
+boards' are (`piromcheck.py`, then booted under QEMU's `raspi3ap`).
 
 No Ethernet: the network is Wi-Fi, or a USB adapter on the OTG port
 (micro-USB, through an OTG adapter), which is the DWC2's root port with
@@ -786,11 +786,10 @@ one command on the block file, which is in every namespace:
 
     dossrv -f /chan/usbdisk0 -m /n/usb0
 
-Only on a machine with an xHCI controller so far — QEMU's `virt`, and a
-Pi 4's USB-A sockets once the board is here. On a Pi 3 the disk is
-enumerated and named (`init: ep5.0 is a USB disk; diskusb is not started
-on this machine`) and left alone: the driver has run only under
-emulation, and a Pi 3 gets no new behaviour on that evidence.
+On every controller: QEMU's `virt` and a Pi 4's xHCI, and the DWC OTG of
+the BCM2837 boards, where it ran first on a Zero 2 W's OTG socket (a disk
+plugged in after boot, read back whole and its FAT mounted). Not yet run
+behind a 3B+'s hub.
 
 A **card reader** with several slots is one device with a logical unit per
 slot, and each unit with a card in it is a disk of its own: the next free
@@ -828,9 +827,8 @@ are up (`CTS DSR DCD RING`). Three kinds are driven:
 A port starts at 9600 8N1 with DTR and RTS up, which is what boards that
 wait for DTR before they talk need; one `ctl` write of several settings
 changes the line once. Pulling the adapter hangs up its readers and takes
-the files away. Only on xHCI machines for now, as with disks: a Pi 3
-names the adapter (`is a USB serial port; usbserial is not started on
-this machine`) and leaves it. Not done: CH340 and PL2303, the same name
+the files away. On every controller, as with disks: run on a Zero 2 W's
+OTG socket (CDC-ACM, bytes both ways); not yet behind a 3B+'s hub. Not done: CH340 and PL2303, the same name
 for the same adapter after a re-plug (the first free number is taken),
 and exclusive open.
 

@@ -172,6 +172,7 @@ ep0: ref Sys->FD;	# its control endpoint's data file, held open
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	usbtrace = sys->stat("/n/dos/usbtrace").t0 >= 0;
 
 	args = tl args;
 	if(args != nil && hd args == "-t"){
@@ -405,6 +406,8 @@ poll(fd, ptr: ref Sys->FD, ival: int, maxpkt: int)
 	nerr := 0;
 	for(;;){
 		nr := sys->read(fd, buf, len buf);
+		if(usbtrace && nr > 0)
+			tracerep("mouseusb", dev, buf[0:nr]);
 		if(nr < 0){
 			if(isdetached()){
 				sys->print("mouseusb: %s detached\n", dev);
@@ -1156,6 +1159,8 @@ reader(fd: ref Sys->FD, ival, maxpkt: int, c: chan of array of byte, pidc: chan 
 	nerr := 0;
 	for(;;){
 		nr := sys->read(fd, buf, len buf);
+		if(usbtrace && nr > 0)
+			tracerep("mouseusb", dev, buf[0:nr]);
 		if(nr < 0){
 			if(isdetached()){
 				sys->print("mouseusb: %s detached\n", dev);
@@ -1834,4 +1839,27 @@ selftest()
 		sys->print("mouseusb: selftest OK\n");
 	else
 		sys->print("mouseusb: selftest FAILED\n");
+}
+
+#
+# /n/dos/usbtrace on the card: every report this driver reads is printed
+# on the console, raw, with the time in milliseconds -- for testing a
+# device by hand while nobody is watching (the serial capture keeps it).
+# A report the same as the one before it is not printed again.
+#
+usbtrace := 0;
+
+lasttrace := "";
+
+tracerep(who, dev: string, b: array of byte)
+{
+	s := "";
+	for(i := 0; i < len b; i++)
+		s += sys->sprint(" %.2ux", int b[i]);
+	# a report the same as the last one is no news: some keyboards
+	# repeat theirs every 100 ms, SET_IDLE or not
+	if(s == lasttrace)
+		return;
+	lasttrace = s;
+	sys->print("%s: %s report t=%d%s\n", who, dev, sys->millisec(), s);
 }

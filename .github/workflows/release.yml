@@ -2027,7 +2027,7 @@ jobs:
         mkdir -p "$RUNNER_TEMP/bootfw"
         sh tools/pi-firmware.sh --manifest tools/pi-bootfw-manifest.txt "$RUNNER_TEMP/bootfw"
 
-        for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64 rpi5:bcm2712:none; do
+        for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpizero2w:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64 rpi5:bcm2712:none; do
           b=${board%%:*} rest=${board#*:} soc=${rest%%:*} qemu=${rest#*:}
           img="infernode-$VERSION-$b.img"
           sh tools/mkpiimage.sh "$b" "$RUNNER_TEMP/bm/$soc-kernel.img" "$img"
@@ -2058,7 +2058,7 @@ jobs:
         # URL Raspberry Pi has, so each release brings the listing up to
         # date with no hand edit (docs/store/rpi-imager/listing.md)
         python3 tools/mkimagerjson.py "$VERSION" "$(date -u +%F)" \
-          "infernode-$VERSION-rpi3bplus.img.xz" "infernode-$VERSION-rpi4b.img.xz" "infernode-$VERSION-rpi5.img.xz" > os_list_infernode.json
+          "infernode-$VERSION-rpi3bplus.img.xz" "infernode-$VERSION-rpizero2w.img.xz" "infernode-$VERSION-rpi4b.img.xz" "infernode-$VERSION-rpi5.img.xz" > os_list_infernode.json
         cat os_list_infernode.json
 
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -2203,6 +2203,7 @@ jobs:
           | Windows | AMD64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-windows-amd64-gui.zip` |
           | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
           | Raspberry Pi 3B+ | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi3bplus.img.xz` |
+          | Raspberry Pi Zero 2 W | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpizero2w.img.xz` |
           | Raspberry Pi 4B | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi4b.img.xz` |
           | Raspberry Pi 5 | ARM64, native (no host OS) | `infernode-${{ steps.version.outputs.version }}-rpi5.img.xz` |
 

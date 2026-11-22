@@ -460,9 +460,9 @@ card has both); the card's `bt` file names the Bluetooth patch,
 They are Synaptics's, not Cypress's, under two licences
 (`os/bcm/card/LICENCE.synaptics-wifi`, `-bt`), pinned by
 `tools/pi-firmware-manifest-zero2w.txt` and
-`tools/pi-btfw-manifest-zero2w.txt`. There is no Zero 2 W image in a
-release yet: the Bluetooth patches' terms are narrower than the Cypress
-licence the other cards rely on, and that is not decided.
+`tools/pi-btfw-manifest-zero2w.txt`. A release carries
+`infernode-<version>-rpizero2w.img.xz`, made and checked as the other
+boards' are (`piromcheck.py`, then booted under QEMU's `raspi3ap`).
 
 No Ethernet: the network is Wi-Fi, or a USB adapter on the OTG port
 (micro-USB, through an OTG adapter), which is the DWC2's root port with
@@ -470,6 +470,58 @@ no hub between. A router in WPA/WPA2 mixed mode (a TKIP group cipher)
 is joined: `ip/wpa` offers TKIP for the group when the access point
 refuses CCMP (wpa(8)). The console is the mini-UART on header pins 8
 and 10 (GPIO 14 and 15), as on the 3B+.
+
+### Clock speed
+
+The ARM clock is set in `config.txt`, by the Raspberry Pi firmware's
+own options; nothing in InferNode changes it while the machine runs,
+and no other software is needed. The firmware brings the cores up at
+`arm_freq_min`; at boot the kernel asks it, through the mailbox, for
+the most it allows and takes that (`boardclock()`, `os/bcm/board.c`),
+and the console says what came of it:
+
+    mbox: ARM clock 600 MHz, max 1400, now 1400 MHz
+
+The last number is what the machine runs at from then on. The maximum
+is the board's rating unless `config.txt` says otherwise: 1400 MHz on a
+3B+, 1000 on a Zero 2 W, 1500 on a Pi 4 (1800 with `arm_boost=1` on a
+board that can, as the Pi 4's card has it).
+
+The options are the firmware's, documented by Raspberry Pi under
+config.txt, "Overclocking options": `arm_freq` (the maximum, lower to
+underclock, higher to overclock), `arm_freq_min`, `over_voltage`,
+`force_turbo` and `temp_limit` (where the firmware throttles, default
+85 C). Add them to the card's `config.txt`, for instance to run a 3B+
+at a Zero 2 W's clock:
+
+    arm_freq=1000
+
+or to overclock a Zero 2 W (with a heatsink; not every chip takes it):
+
+    arm_freq=1200
+    over_voltage=2
+
+Three things to keep:
+
+- **Make the same change in `tryboot.txt`.** After a tryboot reset the
+  firmware reads it instead of `config.txt` (above), so a candidate
+  kernel otherwise runs at another clock.
+- **Leave `core_freq` and `core_freq_min` as they are.** They are the
+  VPU's clock, not the ARM's, and the console's baud is divided from it
+  once at boot (above).
+- Some combinations of `force_turbo` and `over_voltage` set a bit in
+  the chip's OTP that cannot be cleared; the firmware's documentation
+  says which.
+
+The firmware still caps the clock when it is hot or the supply sags.
+`#P` says whether it has (`os/bcm/devarch.c`):
+
+    cat '#P/cputemp' '#P/maxtemp' '#P/throttled'
+
+`throttled` is the firmware's flag word and what it means: `ok`, or
+`under-voltage`, `arm-capped`, `throttled` and `soft-temp-limit`,
+now and `-since-boot`. A benchmark run with anything there but `ok`
+did not run at the clock asked for. The files are read-only.
 
 ### Displays
 
@@ -734,11 +786,10 @@ one command on the block file, which is in every namespace:
 
     dossrv -f /chan/usbdisk0 -m /n/usb0
 
-Only on a machine with an xHCI controller so far — QEMU's `virt`, and a
-Pi 4's USB-A sockets once the board is here. On a Pi 3 the disk is
-enumerated and named (`init: ep5.0 is a USB disk; diskusb is not started
-on this machine`) and left alone: the driver has run only under
-emulation, and a Pi 3 gets no new behaviour on that evidence.
+On every controller: QEMU's `virt` and a Pi 4's xHCI, and the DWC OTG of
+the BCM2837 boards, where it ran first on a Zero 2 W's OTG socket (a disk
+plugged in after boot, read back whole and its FAT mounted). Not yet run
+behind a 3B+'s hub.
 
 A **card reader** with several slots is one device with a logical unit per
 slot, and each unit with a card in it is a disk of its own: the next free
@@ -776,9 +827,8 @@ are up (`CTS DSR DCD RING`). Three kinds are driven:
 A port starts at 9600 8N1 with DTR and RTS up, which is what boards that
 wait for DTR before they talk need; one `ctl` write of several settings
 changes the line once. Pulling the adapter hangs up its readers and takes
-the files away. Only on xHCI machines for now, as with disks: a Pi 3
-names the adapter (`is a USB serial port; usbserial is not started on
-this machine`) and leaves it. Not done: CH340 and PL2303, the same name
+the files away. On every controller, as with disks: run on a Zero 2 W's
+OTG socket (CDC-ACM, bytes both ways); not yet behind a 3B+'s hub. Not done: CH340 and PL2303, the same name
 for the same adapter after a re-plug (the first free number is taken),
 and exclusive open.
 

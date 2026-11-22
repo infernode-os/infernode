@@ -211,9 +211,13 @@ testShade(t: ref T)
 	raw = frame(w, h, 0, black+400, black+400, black+400);
 	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
 	t.asserteq(get(raw, w, 0, 4), black+400, "the left edge: one");
-	t.asserteq(get(raw, w, w-1, 4), 1023, "the right edge: two, held at max");
+	t.asserteq(get(raw, w, w-1, 4), black+800, "the right edge: two");
 	mid := get(raw, w, 16, 4) - black;
 	t.assert(mid >= 590 && mid <= 610, sys->sprint("the middle about one and a half: %d above black", mid));
+	# past the top: held there
+	raw = frame(w, h, 0, black+600, black+600, black+600);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, w-1, 4), 1023, "1200 above black held at the top");
 	# at and below black: left alone
 	raw = frame(w, h, 0, black, black-10, black);
 	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);

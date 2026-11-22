@@ -5,7 +5,9 @@ name: WPT reftests
 # rendered and compared by tools/ref/wptrun.py.  tools/ref/wptgate.py
 # fails the job if a test that passed in tools/ref/baseline no longer
 # does.  The gate is a ratchet: a change that makes more pass moves the
-# baseline up (wptgate.py --update) in the same commit.
+# baseline up (wptgate.py --update) in the same commit.  Then real
+# sites, pinned and served locally (tools/ref/corpus.py), each page held
+# to its score against Chromium's rendering the same way.
 
 on:
   pull_request:
@@ -62,6 +64,7 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y build-essential python3-numpy python3-pil
 
     - name: Build the emulator and the runtime tree
+      id: build
       run: |
         ./build-linux-amd64.sh headless
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
@@ -93,4 +96,35 @@ jobs:
       with:
         name: wpt-failures
         path: wpt-out
+        if-no-files-found: ignore
+
+    # Real sites with no network: tools/ref/corpus.py.  Documentation
+    # and project sites published as files, fetched by a hash, served on
+    # the loopback, each page scored against Chromium's rendering kept
+    # as 8px cells in tools/ref/baseline/corpus/ (no Chromium here).
+    - name: Keep the corpus
+      if: always() && steps.build.outcome == 'success'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/corpus
+        key: corpus-${{ hashFiles('tools/ref/corpus/sources') }}
+
+    - name: Fetch the corpus at its pins
+      if: always() && steps.build.outcome == 'success'
+      run: python3 tools/ref/corpus.py fetch "$RUNNER_TEMP/corpus"
+
+    - name: Render the corpus and hold the line
+      if: always() && steps.build.outcome == 'success'
+      run: |
+        python3 tools/ref/corpus.py run "$RUNNER_TEMP/corpus" corpus-out
+        python3 tools/ref/corpus.py gate corpus-out
+
+    - name: Keep the corpus's pictures
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: failure() && steps.build.outcome == 'success'
+      with:
+        name: corpus
+        path: |
+          corpus-out
+          tools/ref/baseline/corpus
         if-no-files-found: ignore

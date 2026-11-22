@@ -1,0 +1,17 @@
+# Real sites whose pages are published as files, pinned, for
+# tools/ref/corpus.py: fetched by a hash, served from this machine, the
+# same bytes every run, with no site to reach and none to refuse a robot.
+#
+#	name archive URL sha256:HEX strip=DIR [only=PATH,PATH...]
+#	name git URL COMMIT paths=PATH,PATH...
+#
+# An archive's hash is checked before it is opened; a git commit is
+# fetched by its hash, which git checks every object against.  strip is
+# the directory in the archive the site is (its root); only, the parts
+# of it kept (a directory ends in /).  paths, a git source's sparse
+# checkout.  A page names its files from the site's root (/docs/...),
+# so each is served at a root of its own.
+python archive https://docs.python.org/3/archives/python-3.15-docs-html.tar.bz2 sha256:3695a7510b75cf8ede50eb7058b2fe69509ce01c8e170a870bb9990d5bdf220f strip=python-3.15-docs-html only=index.html,_static/,library/,tutorial/,reference/,whatsnew/
+rust archive https://static.rust-lang.org/dist/2026-11-12/rust-docs-1.100.0-x86_64-unknown-linux-gnu.tar.gz sha256:cf0ac5e78669efb09ad6d29f0b9b85e6161c4378a7c66d3e75b787f7228774bd strip=rust-docs-1.100.0-x86_64-unknown-linux-gnu/rust-docs/share/doc/rust/html only=index.html,rust.css,static.files/,book/,reference/,std/index.html,std/vec/,std/sidebar-items.js
+ecma262 git https://github.com/tc39/ecma262.git 451180efc2792b27acdca0d71b5dfe9ee1e0e06e paths=/multipage/,/assets/,/img/,/index.html
+bootstrap git https://github.com/twbs/bootstrap.git 6c995da30d4230212c7e955bea1383efacf6c107 paths=/index.html,/docs/6.0/,/docs/5.3/

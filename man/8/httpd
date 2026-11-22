@@ -310,10 +310,15 @@ still counts).
 Every CA certificate in the file is one clients are trusted under, an
 intermediate's among them (a client then need not send it, and the
 root's CRL, if it is in the file, still revokes it).
-A CRL no CA in the file signed stops
+A CRL counts for the certificates its own CA issued and for no others.
+One in the name of a CA of the file that the CA did not sign stops
 .I httpd
-starting, as does a CA the file's own CRLs revoke: an intermediate's
-CRL needs the intermediate's certificate in the file beside it.
+starting, as does a CA the file's own CRLs revoke.
+One in the name of a CA that is not in the file is taken, and named at
+start: an intermediate's CRL, the intermediate's certificate sent by its
+clients, revokes what the intermediate issued (and a client of the
+intermediate is refused if the intermediate did not sign it); a CRL of a
+CA no client's chain comes to does nothing.
 A client that gives none goes on without one.
 A refused certificate ends the handshake.
 Revoke a certificate by a CRL in the file, or by its name leaving the

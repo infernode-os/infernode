@@ -9,7 +9,8 @@
 # DEFAULTS:   -A -P -p /led/ctl, no -x
 # PLAINRULES: -x with only "/open none", no TLS
 # LOCKOUT:    -P -x "/ password", for the ten-failures lockout
-# INTCRL:     -A with the intermediate and its CRL, -P, -x with a none
+# INTCRL:     -A with the root, its CRL and the intermediate's CRL (not its
+#             certificate), -P, -x with a none
 #             rule under a protected directory
 #
 import os, re, socket, ssl, sys, time, base64, threading
@@ -218,9 +219,10 @@ def rules():
     check(re.search(r' - cert:alice-laptop \[.*"GET /admin/x.txt HTTP/1.1" 200 ', log) is not None, "the log's user field: cert:alice-laptop")
 
 def intercrl():
-    # The intermediate's CRL in the trust file, beside its certificate:
-    # what it revokes is refused, what it does not is taken, and the
-    # root's own clients are too.
+    # The intermediate's CRL in the trust file, the intermediate's
+    # certificate not there (its clients send it), and another CA's
+    # CRL beside it: what the intermediate's revokes is refused, what
+    # it does not is taken, and the root's own clients are too.
     check(st(IC, "/admin/x.txt", cert="bob", user="alice:opensesame") == 200, "an intermediate's CRL in the file: bob, whom it does not list, is taken")
     r = request(IC, "/public/ok.txt", cert="carl")
     check(r.err is not None, "and carl, whom it revokes, refused at the handshake", "%s %s" % (r.status, r.err))

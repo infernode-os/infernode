@@ -26,8 +26,13 @@
 # the defaults, a path no rule names, the log's user field; the
 # CertificateRequest naming the CA; ten wrong passwords locking an
 # address out.  Then: configurations that must not start (-P without
-# TLS, a rule taking what is not configured, a CRL no root signed, a
-# bad term, -r with -P), the servers still answering, no fault.
+# TLS, a rule taking what is not configured, a CRL in a CA's name that
+# the CA did not sign, a bad term, -r with -P), the servers still
+# answering, no fault.  The fifth server's -A file has the root, its
+# CRL, the intermediate's CRL and another CA's, and neither of those
+# CAs: it starts (it was refused: an intermediate's CRL needed the
+# intermediate made a CA of the file), and the intermediate's CRL
+# revokes what the intermediate issued.
 #
 # Run from project root: ./tests/host/httpd_auth_test.sh
 #
@@ -100,9 +105,13 @@ for f in ca.pem ca.crl int.pem alice.pem bob.pem srvonly.pem revoked.pem selfsig
 	[ -s "$f" ] || { echo "FAIL: could not make $f"; exit 1; }
 done
 cat ca.pem ca.crl > trust.pem
-cat ca.pem other.crl > badtrust.pem
-cat ca.pem int.pem ca.crl int.crl > inttrust.pem	# the intermediate with its CRL
-cat ca.pem ca.crl int.crl > nointtrust.pem		# its CRL without it
+# a CRL in the root's own name that the root did not sign
+q req -x509 -new -key other.key -subj "/CN=Test Client CA" -days 2 -addext "basicConstraints=critical,CA:true" -addext "keyUsage=critical,keyCertSign,cRLSign" -out fakeca.pem
+crlof fakeca fakeca.pem other.key
+cat ca.pem fakeca.crl > badtrust.pem
+# the intermediate's CRL, the intermediate no CA of the file (its
+# clients send its certificate), and a CA's that no client comes to
+cat ca.pem ca.crl int.crl other.crl > nointtrust.pem
 cat ca.pem int.pem ca.crl fakeint.crl > faketrust.pem	# a CRL in its name, another's key
 cat ca.pem int.pem carev.crl int.crl > revtrust.pem	# the root's CRL revokes it
 cat carl.pem int.pem > carl.chain; cp carl.pem carlleaf.chain; cp carl.key carlleaf.key
@@ -198,8 +207,7 @@ P0=$((21000 + $$ % 15000))
 refuse "-P without TLS" "need TLS" -P $T/pw -a tcp!127.0.0.1!$P0
 refuse "-A without TLS" "need TLS" -A $T/trust.pem -a tcp!127.0.0.1!$P0
 refuse "a rule taking a certificate with no -A" "there is no -A" -c $T/server.pem -k $T/server.key -x $T/certrules -a tcp!127.0.0.1!$P0
-refuse "a CRL no root signed" "CRL not signed" -c $T/server.pem -k $T/server.key -A $T/badtrust.pem -a tcp!127.0.0.1!$P0
-refuse "an intermediate's CRL without its certificate, saying what is wanted" "needs the intermediate's certificate" -c $T/server.pem -k $T/server.key -A $T/nointtrust.pem -a tcp!127.0.0.1!$P0
+refuse "a CRL in a CA's name that the CA did not sign" "CRL not signed by its issuer" -c $T/server.pem -k $T/server.key -A $T/badtrust.pem -a tcp!127.0.0.1!$P0
 refuse "a CRL in the intermediate's name that it did not sign" "CRL not signed" -c $T/server.pem -k $T/server.key -A $T/faketrust.pem -a tcp!127.0.0.1!$P0
 refuse "an intermediate the root's CRL revokes" "revoked" -c $T/server.pem -k $T/server.key -A $T/revtrust.pem -a tcp!127.0.0.1!$P0
 refuse "a rule that is not one" "not a term" -c $T/server.pem -k $T/server.key -x $T/badrules -a tcp!127.0.0.1!$P0
@@ -224,7 +232,7 @@ svc/httpd/httpd -v -L $TLSARGS -A $T/trust.pem -P $T/pw -x $T/rules -p /led/ctl 
 svc/httpd/httpd -v $TLSARGS -A $T/trust.pem -P $T/pw -p /led/ctl -a tcp!127.0.0.1!$P2 $T/site &
 svc/httpd/httpd -v -x $T/plainrules -a tcp!127.0.0.1!$P3 $T/site &
 svc/httpd/httpd -v $TLSARGS -P $T/pw -x $T/lockrules -a tcp!127.0.0.1!$P4 $T/site &
-svc/httpd/httpd -v $TLSARGS -A $T/inttrust.pem -P $T/pw -x $T/warnrules -a tcp!127.0.0.1!$P5 $T/site &
+svc/httpd/httpd -v $TLSARGS -A $T/nointtrust.pem -P $T/pw -x $T/warnrules -a tcp!127.0.0.1!$P5 $T/site &
 # the clock, stepped when auth.py asks (as timesync does)
 while {! ftest -e $T/step} {sleep 1}
 cat $T/step > /dev/time
@@ -238,6 +246,12 @@ up $P1 && up $P2 && up $P3 && up $P4 && up $P5 || { echo "FAIL: the servers did 
 
 with_timeout 600 python3 -I "$ROOT/tests/host/httpd/auth.py" $P1 $P2 $P3 $P4 "$W" $P5
 fails=$((fails + $?))
+# the CRLs of CAs that are not in the -A file are taken, and named
+if grep -q 'nointtrust.pem: a CRL of .*Test Intermediate.*no CA of the file' emu.log && grep -q 'nointtrust.pem: a CRL of .*Other CA.*no CA of the file' emu.log; then
+	echo "PASS: an intermediate's CRL and another CA's, their CAs not in the file: taken at start, each named"
+else
+	echo "FAIL: the CRLs of CAs not in the -A file were not named at start"; fails=$((fails+1))
+fi
 if grep -qiE 'panic|SYS: process|broken|sanitizer' emu.log; then
 	echo "FAIL: emu reported a fault"; grep -iE 'panic|SYS: process|broken|sanitizer' emu.log | head -5; fails=$((fails+1))
 fi

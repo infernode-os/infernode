@@ -2577,28 +2577,21 @@ loadtrust()
 		fatal(trustfile + ": no PEM CA certificate");
 	# The CAs and CRLs as a handshake will take them, now.  Every CA
 	# of the file is one clients are trusted under, an intermediate
-	# among them, and every CRL of the file is checked in every
-	# handshake: so each must be one a CA of the file signed.  A CRL
-	# whose CA is not here can be checked only on a path that holds
-	# that CA, and fails every other (x509(2)): it would refuse every
-	# client, or all but an intermediate's.  It is named here, with
-	# what to do (the path check said only "not signed by a root or by
-	# a CA of the chain", which for an intermediate's CRL is to put
-	# the intermediate's certificate beside it).
+	# among them.  A CRL counts for what its own CA issued (x509(2)):
+	# one in the name of a CA of the file must be that CA's, since a
+	# path through the CA is refused for one that is not, and that is
+	# every client of it: it is refused here.  One in no such name is
+	# another CA's: an intermediate's whose certificate the clients
+	# send, and it then revokes what the intermediate issued, or one
+	# no chain here will come to.  It is taken, and named, since
+	# which it is cannot be told until a client's chain is seen.  (It
+	# stopped httpd starting: a CRL that was no root's failed every
+	# handshake that did not go through its CA, so an intermediate's
+	# CRL needed the intermediate made a CA of the file.)
 	x := load X509 X509->PATH;
 	if(x == nil || x->init() != nil)
 		fatal(sys->sprint("cannot load %s: %r", X509->PATH));
-	Signed, Certificate, CRL, Name: import x;
-	names: list of ref Name;
-	for(l := roots; l != nil; l = tl l) {
-		(serr, sg) := Signed.decode(hd l);
-		if(serr != nil)
-			fatal(trustfile + ": a certificate: " + serr);
-		(cerr, c) := Certificate.decode(sg.tobe_signed);
-		if(cerr != nil)
-			fatal(trustfile + ": a certificate: " + cerr);
-		names = c.subject :: names;
-	}
+	Signed, CRL, Name: import x;
 	for(cl := crls; cl != nil; cl = tl cl) {
 		(serr, sg) := Signed.decode(hd cl);
 		if(serr != nil)
@@ -2606,16 +2599,23 @@ loadtrust()
 		(cerr, crl) := CRL.decode(sg.tobe_signed);
 		if(cerr != nil)
 			fatal(trustfile + ": a CRL: " + cerr);
-		found := 0;
-		for(nl := names; nl != nil && !found; nl = tl nl)
-			found = (hd nl).equal(crl.issuer);
-		if(!found)
-			fatal(trustfile + ": CRL not signed by a CA of the file: " + crl.issuer.tostring() +
-				" (an intermediate's CRL needs the intermediate's certificate in the file)");
+		is := 0;
+		why := "";
+		for(l := roots; l != nil && !is; l = tl l) {
+			(ok, e) := x->crlof(hd cl, hd l);
+			is = ok;
+			if(e != nil && why == nil)
+				why = e;
+		}
+		if(!is && why != nil)
+			fatal(trustfile + ": " + why);
+		if(!is)
+			sys->fprint(stderr, "httpd: %s: a CRL of %s, which is no CA of the file: it revokes what a CA of that name on a client's chain has issued, and nothing else\n",
+				trustfile, crl.issuer.tostring());
 	}
-	# and each CA with the file's CRLs: every CRL's signature under its
-	# CA's key, a CA the file's own CRLs revoke, one out of date
-	for(l = roots; l != nil; l = tl l) {
+	# and each CA with the file's CRLs: a CA the file's own CRLs
+	# revoke, one out of date
+	for(l := roots; l != nil; l = tl l) {
 		(ok, err) := x->verify_certchain_roots(hd l :: nil, roots, crls, now(), X509->Usage_Any);
 		if(!ok)
 			fatal(trustfile + ": " + err);

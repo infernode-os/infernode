@@ -84,7 +84,7 @@ validat(validity: ref Validity, now: int): int
 CRLEntry: adt {
 	signed:	ref Signed;
 	crl:	ref CRL;
-	checked:	int;	# its signature is a root's (or it is the store's); else its issuer's, checked on the path
+	checked:	int;	# its signature is a root's, checked when it was given; else its issuer's, checked on the path
 };
 crl_store: list of ref CRLEntry;
 crl_store_loaded: int;
@@ -339,7 +339,10 @@ load_crl_store()
 			if(crl.next_update != big 0 && crl.next_update < now)
 				sys->fprint(sys->fildes(2), "x509: %s: this CRL is past its nextUpdate (%s): still applied, but what its issuer has revoked since is not known here\n",
 					path, timetext(crl.next_update, 0));
-			cs = ref CRLEntry(s, crl, 1) :: cs;
+			# its signature is checked where it is used, under the
+			# key of the issuer the path has found (check_revoked):
+			# a file here was taken for its issuer's by its name
+			cs = ref CRLEntry(s, crl, 0) :: cs;
 		}
 	}
 	crl_store = cs;
@@ -350,18 +353,26 @@ load_crl_store()
 
 # [private]
 # Is cert revoked by a CRL of its issuer's?  (1, why) if it is, or if a
-# CRL that names its issuer cannot be used; (0, "") if not.  issuer is
-# the certificate that issued it on the path being built, with its
-# extensions ix (nil: cert is a trust anchor, or the anchor's key is
-# all there is).
+# CRL of its issuer's cannot be used; (0, "") if not.  issuer is the
+# certificate that issued it on the path being built, with its
+# extensions ix (nil: cert is a trust anchor, which the path ends at).
 #
-# A CRL of a root's was checked when it was given.  One of a CA
-# further down is its issuer's only if that CA signed it: it is
-# checked here, with the key the path has just verified cert with, and
-# by RFC 5280 6.3.3 (f) with a keyUsage, where there is one, that has
-# cRLSign.  (Such a CRL could not be given at all: every CRL had to be
-# a root's, so a certificate issued by an intermediate could not be
-# revoked.)
+# RFC 5280 6.3.3: a CRL is cert's issuer's when it has the issuer's
+# name (b) and its signature verifies under the issuer's key (f, g),
+# with a keyUsage, where the issuer has one, that has cRLSign (f).  A
+# CRL with another name is some other CA's and says nothing of cert: it
+# is not looked at.  (One no root had signed had to name a CA among the
+# certificates presented, or the call failed whatever was being
+# verified: an intermediate's CRL refused every chain that did not go
+# through the intermediate, and a CRL a root had not signed refused the
+# chains of every other root.)  A CRL with the issuer's name that the
+# issuer did not sign, or may not sign, still fails the path: it is
+# there to say what that CA has revoked, and what it says cannot be
+# known.
+#
+# A trust anchor's own issuer is not on the path.  A CRL with that
+# issuer's name counts when a root of the name signed it (an anchor
+# that a root, its issuer, has revoked), and otherwise is another CA's.
 
 check_revoked(cert: ref Certificate, issuer: ref Certificate, ix: ref Xinfo, ctx: ref VCtx): (int, string)
 {
@@ -374,13 +385,18 @@ check_revoked(cert: ref Certificate, issuer: ref Certificate, ix: ref Xinfo, ctx
 			return (1, crl_store_err);
 		l = crl_store;
 	}
-	while(l != nil) {
+	for(; l != nil; l = tl l) {
 		entry := hd l;
-		# Match CRL issuer to certificate issuer
-		if(entry.crl.issuer.equal(cert.issuer)) {
-			if(!entry.checked) {
-				if(issuer == nil)
-					return (1, "CRL not signed by a root, and its issuer is not on the path: " + entry.crl.issuer.tostring());
+		if(!entry.crl.issuer.equal(cert.issuer))
+			continue;
+		if(!entry.checked) {
+			if(issuer == nil) {
+				(ok, err) := rootsigned(entry, ctx);
+				if(err != nil)
+					return (1, err);
+				if(!ok)
+					continue;
+			} else {
 				if(ix != nil && ix.ku && !(ix.usage & KeyUsage_CRLSign))
 					return (1, "CRL signed by a CA whose keyUsage lacks cRLSign: " + entry.crl.issuer.tostring());
 				if(--ctx.work < 0)
@@ -389,18 +405,78 @@ check_revoked(cert: ref Certificate, issuer: ref Certificate, ix: ref Xinfo, ctx
 				if(!ok)
 					return (1, "CRL not signed by its issuer: " + entry.crl.issuer.tostring());
 			}
-			# A CRL past its nextUpdate is used all the same, the
-			# store's as a caller's: a stale list of revoked
-			# certificates still names them.  (The store's were
-			# skipped, which let a revoked certificate back in as
-			# soon as its CRL aged; nothing here fetches a new one.)
-			if(entry.crl.is_revoked(cert.serial_number))
-				return (1, "certificate revoked (serial " +
-					cert.serial_number.iptostr(16) + ")");
 		}
-		l = tl l;
+		# A CRL past its nextUpdate is used all the same, the
+		# store's as a caller's: a stale list of revoked
+		# certificates still names them.  (The store's were
+		# skipped, which let a revoked certificate back in as
+		# soon as its CRL aged; nothing here fetches a new one.)
+		if(entry.crl.is_revoked(cert.serial_number))
+			return (1, "certificate revoked (serial " +
+				cert.serial_number.iptostr(16) + ")");
 	}
 	return (0, "");
+}
+
+# [public]
+# Is the CRL the CA's (module/x509.m)?  What check_revoked asks of a CRL
+# and the issuer a path has found, for a caller that holds both before
+# any path is made (a server reading its configuration).
+crlof(crlder: array of byte, cader: array of byte): (int, string)
+{
+	{
+		(serr, s) := Signed.decode(crlder);
+		if(serr != "")
+			return (0, "CRL: " + serr);
+		(cerr, crl) := CRL.decode(s.tobe_signed);
+		if(cerr != "")
+			return (0, "CRL: " + cerr);
+		if(!algsame(s.alg, crl.sig))
+			return (0, "CRL: signatureAlgorithm is not the algorithm its tbsCertList names: " + crl.issuer.tostring());
+		(e, cs) := Signed.decode(cader);
+		if(e != "")
+			return (0, "certificate: " + e);
+		c: ref Certificate;
+		(e, c) = Certificate.decode(cs.tobe_signed);
+		if(e != "")
+			return (0, "certificate: " + e);
+		if(!c.subject.equal(crl.issuer))
+			return (0, nil);
+		(x, xerr) := certinfo(c, cs.tobe_signed);
+		if(xerr != nil)
+			return (0, "certificate: " + xerr);
+		if(x.ku && !(x.usage & KeyUsage_CRLSign))
+			return (0, "CRL signed by a CA whose keyUsage lacks cRLSign: " + crl.issuer.tostring());
+		(ok, nil) := verify_issued(s, c);
+		if(!ok)
+			return (0, "CRL not signed by its issuer: " + crl.issuer.tostring());
+		return (1, nil);
+	} exception ex {
+	"*" =>
+		return (0, "CRL: internal error: " + ex);
+	}
+}
+
+# [private]
+# Did a trust anchor with the CRL's issuer's name sign it (and may it:
+# cRLSign, if it has a keyUsage)?  (1, nil) or (0, nil); (0, why) when
+# the work allowed a path is used up.
+rootsigned(entry: ref CRLEntry, ctx: ref VCtx): (int, string)
+{
+	for(t := ctxroots(ctx); t != nil; t = tl t) {
+		tr := hd t;
+		if(!tr.cert.subject.equal(entry.crl.issuer))
+			continue;
+		(x, xerr) := certinfo(tr.cert, tr.signed.tobe_signed);
+		if(xerr != nil || x.ku && !(x.usage & KeyUsage_CRLSign))
+			continue;
+		if(--ctx.work < 0)
+			return (0, "certificate path: too many signatures to check");
+		(ok, nil) := verify_issued(entry.signed, tr.cert);
+		if(ok)
+			return (1, nil);
+	}
+	return (0, nil);
 }
 
 ## SIGNED { ToBeSigned } ::= SEQUENCE {
@@ -1959,20 +2035,6 @@ verify_chain(cs: list of array of byte, ctx: ref VCtx): (int, string)
 	l2: list of ref Node;
 	for(; nodes != nil; nodes = tl nodes)
 		l2 = hd nodes :: l2;	# back to presented order
-	# A CRL given that no root signed is its issuer's to have signed:
-	# one of the chain's CAs.  With no such certificate here it cannot
-	# be checked at all, and a CRL that cannot be checked fails the
-	# call, as one that does not verify does.
-	if(!ctx.stores)
-		for(cl := ctx.crls; cl != nil; cl = tl cl) {
-			if((hd cl).checked)
-				continue;
-			found := 0;
-			for(nl := tl l2; nl != nil && !found; nl = tl nl)
-				found = (hd nl).c.subject.equal((hd cl).crl.issuer);
-			if(!found)
-				return (0, "CRL not signed by a root or by a CA of the chain: " + (hd cl).crl.issuer.tostring());
-		}
 	return verify_leaf(hd l2, tl l2, ctx);
 }
 
@@ -2014,26 +2076,23 @@ verify_roots(cs: list of array of byte, roots: list of array of byte,
 			return (0, "CRL: " + cerr);
 		if(!algsame(s.alg, crl.sig))
 			return (0, "CRL: signatureAlgorithm is not the algorithm its tbsCertList names: " + crl.issuer.tostring());
-		# A CRL counts only if its issuer signed it (the stores' CRLs
-		# are not checked; these come from a server's configuration
-		# and are checked all the same).  One that names a root is
-		# checked now, with that root's key; if the root has a
-		# keyUsage it has cRLSign (RFC 5280 6.3.3 (f)).  One that
-		# names another CA is checked when that CA is on the path
-		# (verify_chain, check_revoked).
-		named := 0;
+		# A CRL counts only if its issuer signed it.  One that names
+		# a root is checked now, once, with that root's key; if the
+		# root has a keyUsage it has cRLSign (RFC 5280 6.3.3 (f)).
+		# One a root of its name did not sign, and one that names
+		# another CA, are checked where they are used, on a path
+		# through their issuer (check_revoked), and refuse that path
+		# if they fail there: they are not this call's failure, since
+		# the chain may be another CA's altogether.
 		signed := 0;
 		for(t := ctx.roots; t != nil && !signed; t = tl t)
 			if((hd t).cert.subject.equal(crl.issuer)) {
-				named = 1;
 				(x, xerr) := certinfo((hd t).cert, (hd t).signed.tobe_signed);
 				if(xerr != nil || x.ku && !(x.usage & KeyUsage_CRLSign))
 					continue;
 				(ok, nil) := verify_issued(s, (hd t).cert);
 				signed = ok;
 			}
-		if(named && !signed)
-			return (0, "CRL not signed by a root: " + crl.issuer.tostring());
 		ctx.crls = ref CRLEntry(s, crl, signed) :: ctx.crls;
 	}
 	return verify_chain(cs, ctx);

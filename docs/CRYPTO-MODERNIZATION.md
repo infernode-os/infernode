@@ -136,14 +136,15 @@ X.509 path validation (`X509->verify_certchain`, `verify_certchain_roots`) check
 |--------|--------|-------|
 | Revocation checking | None | **CRL-based** |
 | CRL store | N/A | **`/lib/crls/*.der`** (DER-encoded CRLs), read again whenever a file there changes |
-| A caller's CRLs | N/A | **`verify_certchain_roots(cs, roots, crls, now, usage)`**: each CRL signed by a root, or by a CA of the chain with the key the path verified (and cRLSign, if the CA has a keyUsage) |
+| A caller's CRLs | N/A | **`verify_certchain_roots(cs, roots, crls, now, usage)`** |
+| Whose a CRL is | N/A | **Its issuer's** (RFC 5280 6.3.3), the store's and a caller's alike: it is consulted for a certificate its issuer issued, when it has the issuer's name and the issuer's signature (a root's, or a CA's with the key the path verified, and cRLSign if the CA has a keyUsage). In the issuer's name and not the issuer's, it refuses the path; of a CA the path does not go through, it is not looked at |
 | Check point | N/A | **As each certificate's issuer is found on the path**; an intermediate given as a trust anchor is checked against the roots' CRLs too |
 
 A CRL past its `nextUpdate` is still applied (and said so on standard error when the store
-is read): a stale list still names what it revoked. A CRL that cannot be used (not DER, a
-critical extension that is not processed, a signature that is not its issuer's, an issuer
-that is neither a root nor in the chain) fails every verification rather than being left
-out. The store's own CRLs are not signature-checked: the directory is the administrator's.
+is read): a stale list still names what it revoked. A CRL that cannot be read (not DER, a
+critical extension that is not processed) fails every verification rather than being left
+out; one in an issuer's name with a signature that is not the issuer's refuses the paths
+through that issuer; one whose issuer the path does not go through is not looked at.
 Nothing fetches CRLs, and there is no OCSP.
 
 **Files:**

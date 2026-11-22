@@ -55,6 +55,16 @@ Testing: module
 	# Returns 1 on pass, 0 on fail/skip
 	done:     fn(t: ref T): int;
 
+	# For a test that starts servers or leaves procs waiting (a
+	# listener in listen, a reader of a file that never answers).
+	# own, first thing in init, puts the test in a process group of
+	# its own and notes the groups there are; reap, last thing before
+	# the summary, kills every Prog of a group made since and the
+	# rest of the test's own.  Run as emu's own program, a test that
+	# leaves a Prog behind never exits.
+	own:      fn();
+	reap:     fn();
+
 	# Print final summary - call after all tests complete
 	# Pass counts of (passed, failed, skipped)
 	# Returns failed count (for use as exit status)

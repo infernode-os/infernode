@@ -851,6 +851,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:cannot load testing";
 	}
 	testing->init();
+	testing->own();	# what this starts is killed at the end (reap)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
@@ -886,6 +887,9 @@ init(nil: ref Draw->Context, args: list of string)
 			if(fd != nil)
 				sys->fprint(fd, "killgrp");
 		}
+	# nothing of the test's is left running: run as emu's own program
+	# it never exited, for the servers and waiting procs it left
+	testing->reap();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

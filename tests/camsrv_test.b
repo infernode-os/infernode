@@ -375,6 +375,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	testing = load Testing Testing->PATH;
 	testing->init();
+	testing->own();	# what this starts is killed at the end (reap)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
@@ -400,6 +401,9 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Settle", testSettle);
 		run("Stall", testStall);
 	}
+	# nothing of the test's is left running: run as emu's own program
+	# it never exited, for the servers and waiting procs it left
+	testing->reap();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

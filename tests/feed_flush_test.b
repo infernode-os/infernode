@@ -277,6 +277,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:load";
 	}
 	testing->init();
+	testing->own();	# what this starts is killed at the end (reap)
 	styx->init();
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
@@ -285,6 +286,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Vid9p", testVid9p);
 	run("Camsrv", testCamsrv);
 
+	# nothing of the test's is left running: run as emu's own program
+	# it never exited, for the servers and waiting procs it left
+	testing->reap();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

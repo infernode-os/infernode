@@ -47,12 +47,4 @@ Flow: module
 	# the records of flows that have ended, Entlen bytes each, into
 	# out; how many. Each is reported once
 	sweep:	fn(tab: array of byte, now: big, out: array of byte): int;
-
-	# forward without Limbo: read frames from file descriptor in; one
-	# whose flow passes is written to out, one whose flow drops is
-	# dropped. The first frame the table cannot decide (no such flow,
-	# another verdict, not a flow at all) is left in buf and its length
-	# returned, for the caller to judge. 0 after max frames; -1 when a
-	# read fails. now is the time for every frame of the call.
-	run:	fn(tab: array of byte, in, out: int, buf: array of byte, max: int, now: big): int;
 };

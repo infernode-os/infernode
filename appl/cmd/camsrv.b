@@ -1296,15 +1296,20 @@ simulate(stop: chan of int)
 	lgr = lgb = 256;
 	band := 0;
 	for(;;){
+		# the stall before the stop: a frame that will not come does
+		# not come for a capture told to stop either.  Looked at after
+		# it, a stop that came while this was still making the last
+		# frame was taken at once, and the stall was left set for the
+		# next capture, whose first frame then never came.
+		if(simstall){
+			simstall = 0;
+			<-chan of int;
+		}
 		alt {
 		<-stop =>
 			return;
 		* =>
 			;
-		}
-		if(simstall){
-			simstall = 0;
-			<-chan of int;
 		}
 		t0 := sys->millisec();
 		fill(raw, w, h, band);

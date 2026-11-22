@@ -268,8 +268,22 @@ testFrames(t: ref T)
 
 testStop(t: ref T)
 {
-	sys->sleep(300);
+	# the frame being made when the last reader went is finished first
+	# ("stopping"): how long that takes is the host's
+	for(i := 0; i < 50 && !has(file("status"), "stream=off"); i++)
+		sys->sleep(100);
 	t.assert(has(file("status"), "stream=off"), "the last close stops the stream: " + file("status"));
+}
+
+# the status at dir once it has stream=want, waiting at most ms for it
+waitstatus(dir, want: string, ms: int): string
+{
+	s := rd(dir + "/0/status");
+	for(; ms > 0 && !has(s, "stream=" + want); ms -= 100){
+		sys->sleep(100);
+		s = rd(dir + "/0/status");
+	}
+	return s;
 }
 
 testCtl(t: ref T)
@@ -706,8 +720,8 @@ stall(out: chan of string)
 	# the capture is in a frame that will not come: not off, and it says so
 	s := rd(dir + "/0/status");
 	check(out, has(s, "stream=stopping"), "a capture told to stop and not yet gone: " + s);
-	sys->sleep(3500);
-	s = rd(dir + "/0/status");
+	# Stopwait (3 s), and the host's time to kill it and say so
+	s = waitstatus(dir, "off", 8000);
 	check(out, has(s, "stream=off"), "given up after three seconds: " + s);
 	r := oneframe(dir, FS);
 	if(r == "hung")

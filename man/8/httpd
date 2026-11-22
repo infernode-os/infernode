@@ -188,17 +188,21 @@ the theme's
 .BR event ),
 is then a live page: the reads have no deadline, and after 15 seconds
 with nothing to send a comment line is sent, which keeps the stream
-open through proxies and finds a client that has gone.
+open through proxies.
+The client's side of the connection is read while the stream goes: a
+client that has gone (its end of the connection closed, or the
+connection lost) ends the stream at once, and a connection whose
+stream's file has ended is closed.
 The file ending ends the stream; an
 .B EventSource
 then opens it again.
-A stream is two processes beside its connection's, however many its
+A stream is three processes beside its connection's, however many its
 events, and they end with the connection.
 At most half of
 .I maxconns
 connections hold event streams, and half of
 .I persource
-from one address; one more is refused (503).
+from one source; one more is refused (503).
 The same file asked for otherwise is read as any other, under the
 deadline below.
 A directory is sent as its
@@ -293,9 +297,13 @@ the leaf's extended key usage, if it has one, must name client
 authentication (a server's certificate from the same CA is refused),
 and a CRL from the file must not list it (a CRL past its next update
 still counts).
+Every CA certificate in the file is one clients are trusted under, an
+intermediate's among them (a client then need not send it, and the
+root's CRL, if it is in the file, still revokes it).
 A CRL no CA in the file signed stops
 .I httpd
-starting.
+starting, as does a CA the file's own CRLs revoke: an intermediate's
+CRL needs the intermediate's certificate in the file beside it.
 A client that gives none goes on without one.
 A refused certificate ends the handshake.
 Revoke a certificate by a CRL in the file, or by its name leaving the
@@ -324,11 +332,16 @@ under the old one is forgotten.
 A file that has gone, cannot be read or holds no users refuses every
 password, said once on standard error, until there is one with users
 again.
-Passwords are checked by one process, one at a time; every guess
+Passwords are hashed by one process, one at a time; every guess
 costs as many iterations as the file's most (100000 at least), a user
 whose line has fewer and a name that is no user alike, so a name is
 not learnt by the time; a
-password found right is taken again for five minutes without its hash.
+password found right is taken again for five minutes without its hash,
+and is answered at once, however many guesses are waiting to be
+hashed.
+A guess is counted when it is asked, before it is hashed, and
+uncounted if it proves right; the same user and password asked again
+while it waits is hashed once.
 Ten wrong passwords from one network (an IPv4 address, an IPv6 /64)
 in ten minutes, or fifty for one user from anywhere, and further
 attempts from it, or for them, are refused (429) for the rest of the
@@ -336,6 +349,9 @@ ten minutes, except a password already found right.
 So anyone can keep a user who is not already in out, by guessing
 wrong for that user from five networks; the lockout is against
 guessing, not for keeping people out.
+The ten minutes and the five are counted by a clock that only goes
+forward, not by the time of day: setting the time neither ends a
+lockout nor prolongs one.
 .PP
 .BI -x " rules"
 says which paths need which.
@@ -377,6 +393,14 @@ for
 Identity only adds a rule to meet, never takes one away, so an
 identity shared by accident (an inode used again after a delete) can
 protect too much but not too little.
+So a
+.B none
+rule for a path under a protected directory that existed at start
+opens nothing: the directory's rule holds for all below it.
+.I Httpd
+names each such rule on standard error when it starts; to open part of
+a site, protect its other parts by name and leave the directory above
+them open.
 On a Windows host, whose emulator makes a file's identity from its
 name, a path with a byte past ASCII is refused (400) while anything is
 protected.
@@ -431,8 +455,9 @@ The listener admits at most
 .I maxconns
 connections at once (default 64), and at most
 .I persource
-from one address (default 16); a connection past either is closed
-unanswered.
+from one source (default 16): an IPv4 address, or an IPv6 /64, of
+which one host has as many addresses as it likes.
+A connection past either is closed unanswered.
 A connection is closed after 1000 requests.
 .PP
 The time in

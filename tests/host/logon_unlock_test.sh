@@ -21,11 +21,11 @@
 #     word (it did: every save was then a failed login at the server,
 #     and the account locked itself out).  Saving is arranged or, by a
 #     factotum that does not take such a password, refused and said so;
-#   - the mark in /tmp (/tmp/.secstore-unlocked) is there after an
-#     unlock and not after a failed one; Keyring and Settings, which
-#     read it, ask factotum's secstore file instead, which says "none"
-#     before an unlock with a forged mark in /tmp and "saving secstore"
-#     after one.
+#   - no mark is left in /tmp (/tmp/.secstore-unlocked), after an
+#     unlock or a failed one: Keyring and Settings, which read it, ask
+#     factotum's secstore file, which says "none" before an unlock
+#     with a forged mark in /tmp and "saving secstore" after one, and
+#     the login screen went on making a file nothing read.
 #
 # tests/logon_unlock.b calls the unlock; the server is on a port and a
 # store of the test's own, /tmp a directory of its own.
@@ -110,7 +110,7 @@ n=$(sed -n '/^WRONG/,/^RIGHT/p' "$ROOT/$T/new.out" | grep -c 'PAK auth failed')
 sed -n '/^WRONG/,/^RIGHT/p' "$ROOT/$T/new.out" | grep '^UNLOCK' | grep -q 'version mismatch'
 [ $? != 0 ]; check $? "and not reported as a version mismatch"
 has new '^UNLOCK err=<> save=<>'; check $? "a new account unlocks, and saving is arranged"
-has new '^MARK-THERE right'; check $? "the mark of an unlock is left"
+has new '^MARK-ABSENT right'; check $? "an unlock leaves no mark in /tmp either: nothing reads one"
 has new '^STOREWRONG none'; check $? "factotum says keys are kept nowhere before an unlock, whatever is in /tmp"
 has new '^STORERIGHT saving secstore '; check $? "and that they are saved to the secstore after one"
 has new '^SYNC *$'; check $? "a key added is saved"

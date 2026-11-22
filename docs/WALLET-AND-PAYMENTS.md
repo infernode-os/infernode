@@ -90,7 +90,6 @@ InferNode provides a native cryptocurrency wallet that enables Veltro AI agents 
    a. Connects to secstore, authenticates (PAK)
    b. Loads encrypted keys into factotum
    c. Establishes save-back path for new keys
-   d. Creates /tmp/.secstore-unlocked sentinel
 6. llmsrv, tools9p, lucibridge, lucifer start
 7. System fully operational with all keys available
 ```
@@ -128,7 +127,7 @@ The profile detects the variable and starts factotum with secstore backing (`-S 
 
 ### Secstore Status Detection
 
-Keyring and Settings read factotum's `secstore` file (`/mnt/factotum/secstore`, factotum(4)), which says where a key added now is saved, to display persistence status. (They used to ask whether `/tmp/.secstore-unlocked`, which `wm/logon` creates after an unlock, existed: a file anything can make.)
+Keyring and Settings read factotum's `secstore` file (`/mnt/factotum/secstore`, factotum(4)), which says where a key added now is saved, to display persistence status. (They used to ask whether `/tmp/.secstore-unlocked`, which `wm/logon` created after an unlock, existed: a file anything can make. `wm/logon` no longer makes it.)
 - **Keyring**: "Keys persist to secstore" or "Keys are in-memory only (login was skipped)"
 - **Settings**: "Key persistence: active" or "Key persistence: inactive (login skipped)"
 

@@ -61,6 +61,9 @@ Grouper.feed(d: self ref Grouper, b: array of byte): list of ref Fix
 		c := int b[i] & 16r7F;
 		case c {
 		STX =>
+			# a group whose ETX was lost ends here: it was dropped
+			if(d.got > 0 && (f := finish(d)) != nil)
+				out = f :: out;
 			d.line = "";
 			d.fix = nil;
 			d.got = 0;
@@ -131,7 +134,19 @@ record(d: ref Grouper, s: string)
 		if(s[i] != ' ')
 			v[len v] = s[i];
 	if(v == "" || v[0] == '-' && len v > 1 && v[1] == '-') {
-		d.got |= 4;	# not available, but the group is not empty
+		# Not available: what an earlier record of the group said of
+		# it is taken back (a latitude followed by "A-----" was a
+		# valid fix at the first one), and the group is not empty.
+		case id {
+		'z' =>	f.hasalt = 0;
+		'A' =>	d.got &= ~1;
+		'B' =>	d.got &= ~2;
+		'C' =>	d.hastrack = 0;
+		'D' =>	f.hasspeed = 0;
+		'Q' =>	f.hasmagvar = 0;
+		}
+		d.got |= 4;
+		f.haspos = (d.got & 3) == 3;
 		return;
 	}
 	case id {

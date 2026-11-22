@@ -166,7 +166,7 @@ Parser.new(): ref Parser
 	return ref Parser(Fix.new(), nil, 0, nil, 0, 0, 0, -1,
 		array[len systems] of list of ref Sat,
 		array[len systems] of list of ref Sat,
-		nil, -1, 0, nil, nil, 0, 0.0, 0.0, 0, 0);
+		nil, -1, 0, nil, nil, 0, 0.0, 0.0, 0, 0, -1, -1, -1);
 }
 
 Parser.forget(p: self ref Parser)
@@ -185,6 +185,58 @@ Parser.forget(p: self ref Parser)
 	p.aispend = nil;
 	p.hasgood = 0;
 	p.suspect = 0;
+	p.headat = p.baroat = p.errat = -1;
+}
+
+# What a receiver sends beside its position (a compass's heading, a
+# pressure altitude, an error estimate) is in the fix while it is
+# still being sent.  Each was kept from one time to the next for ever:
+# a compass unplugged, its last heading went on in every fix.  One not
+# heard for Stale seconds of the receiver's own time is gone.
+Stale: con 10;
+
+# a time as utc() gives it, in seconds of the day, or -1
+second(t: string): int
+{
+	if(len t < 8)
+		return -1;
+	return int t[0:2] * 3600 + int t[3:5] * 60 + int t[6:8];
+}
+
+# whether what was heard at second `at` is stale at `now`; at -1 is
+# heard now (it came before any time did)
+stale(now, at: int): (int, int)
+{
+	if(at < 0)
+		return (0, now);
+	d := (now - at + 86400) % 86400;
+	return (d > Stale && d < 86400 - Stale, at);
+}
+
+age(p: ref Parser, t: string)
+{
+	now := second(t);
+	if(now < 0)
+		return;
+	f := p.cur;
+	gone: int;
+	if(f.hasheading){
+		(gone, p.headat) = stale(now, p.headat);
+		if(gone)
+			f.hasheading = 0;
+	}
+	if(f.hasbaro){
+		(gone, p.baroat) = stale(now, p.baroat);
+		if(gone)
+			f.hasbaro = 0;
+	}
+	if(f.err >= 0.0 || f.verr >= 0.0){
+		(gone, p.errat) = stale(now, p.errat);
+		if(gone){
+			f.err = f.verr = -1.0;
+			p.gstseen = 0;
+		}
+	}
 }
 
 # an angle into 0 <= a < 360.  By division: it was by subtracting 360
@@ -566,6 +618,7 @@ Parser.sentence(p: self ref Parser, s: string): (list of ref Fix, string)
 			p.cur = p.cur.copy();
 			p.cur.utc = t;
 			p.cur.valid = 0;
+			age(p, t);
 			p.curtime = t;
 			p.got = 0;
 			p.done = 0;
@@ -704,8 +757,12 @@ gga(p: ref Parser, a: array of string)
 {
 	f := p.cur;
 	q := fld(a, 6);
-	f.valid = q != "0" && q != "";
-	if(f.valid && (qn := quality(q)) != nil)
+	# A fix is one of the qualities there are.  Anything but 0 or
+	# nothing was a fix: a field damaged, or a number no receiver
+	# sends, said there was one.
+	qn := quality(q);
+	f.valid = qn != nil;
+	if(f.valid)
 		f.quality = qn;
 	(lat, latok) := angle(fld(a, 2), fld(a, 3), 'N', 'S');
 	(lon, lonok) := angle(fld(a, 4), fld(a, 5), 'E', 'W');
@@ -829,6 +886,8 @@ gst(p: ref Parser, a: array of string)
 	if(alok)
 		f.verr = al;
 	p.gstseen = 1;
+	if(laok && look || alok)
+		p.errat = second(p.curtime);
 }
 
 # heading, true: HDT,x.x,T
@@ -838,6 +897,7 @@ hdt(p: ref Parser, a: array of string)
 	if(ok && fld(a, 2) == "T") {
 		p.cur.heading = degrees(h);
 		p.cur.hasheading = 1;
+		p.headat = second(p.curtime);
 	}
 }
 
@@ -860,6 +920,7 @@ hdg(p: ref Parser, a: array of string)
 	if(f.hasmagvar) {
 		f.heading = degrees(h + f.magvar);
 		f.hasheading = 1;
+		p.headat = second(p.curtime);
 	}
 }
 
@@ -871,6 +932,7 @@ hdm(p: ref Parser, a: array of string)
 	if(ok && fld(a, 2) == "M" && f.hasmagvar) {
 		f.heading = degrees(h + f.magvar);
 		f.hasheading = 1;
+		p.headat = second(p.curtime);
 	}
 }
 
@@ -894,6 +956,7 @@ pgrmz(p: ref Parser, a: array of string)
 		return;
 	p.cur.baroalt = v;
 	p.cur.hasbaro = 1;
+	p.baroat = second(p.curtime);
 }
 
 # Garmin's estimated errors: PGRME,h,M,v,M,e,M; GST's when it sends both
@@ -907,6 +970,8 @@ pgrme(p: ref Parser, a: array of string)
 	(v, vok) := numin(fld(a, 3), 0.0, Maxerr);
 	if(vok && fld(a, 4) == "M")
 		p.cur.verr = v;
+	if(hok || vok)
+		p.errat = second(p.curtime);
 }
 
 flarmtypes := array[] of {
@@ -1286,7 +1351,7 @@ aismsg(p: ref Parser, payload: string, fill: int)
 Target.new(kind, id: string): ref Target
 {
 	return ref Target(kind, id, 0, 0.0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0,
-		nil, nil, nil, 0);
+		nil, nil, nil, 0, 0, nil);
 }
 
 Maxtargets: con 1000;	# of each kind
@@ -1319,6 +1384,8 @@ Parser.target(p: self ref Parser, t: ref Target)
 		t.callsign = nil;
 	if(!plain(t.category, Maxname))
 		t.category = nil;
+	if(!plain(t.emergency, Maxname))
+		t.emergency = nil;
 	t.seen = sys->millisec();
 	n := 0;
 	for(l := p.targets; l != nil; l = tl l) {
@@ -1359,6 +1426,10 @@ Parser.target(p: self ref Parser, t: ref Target)
 			o.callsign = t.callsign;
 		if(t.category != nil)
 			o.category = t.category;
+		# as its last report says, not as an earlier one did
+		if(t.haspos)
+			o.extrapolated = t.extrapolated;
+		o.emergency = t.emergency;
 		o.seen = t.seen;
 		return;
 	}
@@ -1458,6 +1529,10 @@ Target.text(t: self ref Target, now: int): string
 		s += " callsign=" + quoted(t.callsign);
 	if(t.category != nil)
 		s += " cat=" + t.category;
+	if(t.extrapolated)
+		s += " extrapolated=1";
+	if(t.emergency != nil)
+		s += " emergency=" + t.emergency;
 	s += sys->sprint(" age=%.1f", real (now - t.seen) / 1000.0);
 	return s;
 }

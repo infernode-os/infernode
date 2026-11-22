@@ -31,7 +31,14 @@ file of
 .BR /mnt/gps/time ;
 if that is not mounted here, the posted
 .B #sgps/fs
-is mounted in a name space of the command's own).
+is mounted in a name space of the command's own, and with
+.B -p
+mounted again when the
+.I gpsfs
+that posted it has gone and another been started).
+A host clock that cannot be read
+.RB ( /dev/time )
+is an error, and nothing is set.
 It is for a host with no network time, as
 .IR sntp (8)
 needs, and no clock of its own that keeps time: a board in the field.

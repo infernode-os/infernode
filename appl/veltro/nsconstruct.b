@@ -180,6 +180,106 @@ restrictdirx(target: string, allowed: list of string,
 	return nil;
 }
 
+# The lowest score a granted vision session keeps.  Its holder has no
+# ctl to set one with, and the tool keeps what its caller asks for of
+# what comes back; the server's own default (0.30) would be a floor.
+Visfloor: con "0.05";
+
+# What the vision tool is given of /mnt/vision: the models to read, and
+# (session) one session's image, detections and status.  The session is
+# made here, before its ctl goes out of view: nothing in the result can
+# make another (clone), set a source (the session's ctl), write the
+# server's ctl or name another session.  A session lasts while one of
+# its files is open, so its status is left open in this process's file
+# descriptors, by number: it ends with the call's worker, or the
+# subagent, whose descriptors they are.  Made again from inside such a
+# view (a subagent's, from its parent's call), the session is the one
+# already there.
+restrictvision(session: int): string
+{
+	V: con "/mnt/vision";
+	allow := "models" :: nil;
+	if(session) {
+		id := "";
+		cfd := sys->open(V + "/clone", Sys->OREAD);
+		if(cfd != nil) {
+			b := array[32] of byte;
+			n := sys->read(cfd, b, len b);
+			w: list of string;
+			if(n > 0)
+				(nil, w) = sys->tokenize(string b[0:n], " \n");
+			if(w != nil)
+				id = hd w;
+		} else
+			id = visionsession(V);
+		if(isnumber(id)) {
+			d := V + "/" + id;
+			hold := sys->open(d + "/status", Sys->OREAD);
+			if(hold != nil && sys->dup(hold.fd, -1) >= 0) {
+				if(cfd != nil && (ctl := sys->open(d + "/ctl", Sys->OWRITE)) != nil)
+					sys->fprint(ctl, "thresh %s", Visfloor);
+				err := filterdir(d, "image" :: "detections" :: "status" :: nil, 0);
+				if(err != nil)
+					return err;
+				allow = id :: allow;
+			}
+		}
+		cfd = nil;
+	}
+	return filterdir(V, allow, 0);
+}
+
+# The descriptors, by number, that keep alive what this restricted name
+# space was given: left open in the caller's table.  For whoever prunes
+# its descriptors after its name space is made (a subagent does), which
+# must keep these.  A vision session is all there is of the kind.
+held(): list of int
+{
+	if(sys == nil)
+		init();
+	id := visionsession("/mnt/vision");
+	if(id == "" || sys->stat("/mnt/vision/clone").t0 >= 0)
+		return nil;
+	fd := sys->open("/mnt/vision/" + id + "/status", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	n := sys->dup(fd.fd, -1);
+	if(n < 0)
+		return nil;
+	return n :: nil;
+}
+
+# the one session of a view that has no clone
+visionsession(dir: string): string
+{
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	id := "";
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++)
+			if(isnumber(d[i].name)) {
+				if(id != "")
+					return "";	# more than one: not such a view
+				id = d[i].name;
+			}
+	}
+	return id;
+}
+
+isnumber(s: string): int
+{
+	if(s == "" || len s > 9)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
 # Who the name space is for.  The coordinator's (restrictns) is the
 # agent loop's own.  A tool worker's (restricttoolns) is one call's, made
 # by tools9p.  A child's (restrictchildns) is a spawned subagent's, made
@@ -489,13 +589,18 @@ restrictnsx0(caps: ref Capabilities, kind: int, auditreq: int): string
 	# /mnt/vision — recognition (visionfs(4)). Fixed-function service
 	# authority: the vision tool receives it per-invocation; generic path
 	# grants cannot. It is a picture's words, not a camera's frames:
-	# /mnt/video is never granted with it. The whole mount, as sessions
-	# appear in it after the name space is built (a restricted directory
-	# would hide them).
+	# /mnt/video is never granted with it. Narrowed below to the models
+	# and one session's picture and answer: the whole mount was given,
+	# as the server's user, so the tool's holder could also load and
+	# unload models (ctl), have the server open any feed, a camera
+	# among them (a session's src), and read every other session.
+	vismnt := 0;
 	if(inlist("vision", caps.tools)) {
 		(visok, nil) := sys->stat("/mnt/vision");
-		if(visok >= 0 && !inlist("vision", mntpaths))
+		if(visok >= 0 && !inlist("vision", mntpaths)) {
 			mntpaths = "vision" :: mntpaths;
+			vismnt = 1;
+		}
 	}
 	# /mnt/gps — the GPS receiver (gpsfs(4)). Fixed-function: only the gps
 	# tool, and only its read files (narrowed below), never ctl or feed, so
@@ -579,6 +684,13 @@ restrictnsx0(caps: ref Capabilities, kind: int, auditreq: int): string
 					uerr = ownactivity(caps.actid, kind);
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
+			}
+			# /mnt/vision sub-restriction: the models, and for whoever
+			# runs the tool (a call's worker, a subagent) a session.
+			if(vismnt) {
+				verr := restrictvision(kind != Kcoord);
+				if(verr != nil)
+					return sys->sprint("restrict /mnt/vision: %s", verr);
 			}
 			# /mnt/gps sub-restriction: the read files only.
 			if(gpsmnt) {

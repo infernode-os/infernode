@@ -27,6 +27,9 @@
 #   - a feed whose fmt never answers: the server goes on answering while
 #     it waits, and the write is refused in the end (the fmt was read by
 #     the server's one process, and every session stopped with it)
+#   - the agent's vision tool, given only its grant (the models and a
+#     session's image, detections and status), finds the detection and
+#     applies -c and -t itself (tests/vision_capability_test.b)
 #
 # What still needs a real model: what a detector finds (visnet_test.sh,
 # vision_test.sh); what needs a Jetson: a session on the engine tree
@@ -226,6 +229,17 @@ if grep -q '^STALL-END' "$W/log"; then
 		bad "the src was not refused: '$(cat "$W/stall.err" 2>/dev/null)'"
 else
 	bad "the session did not finish after the stalled feed"
+fi
+
+# the agent's tool, through its grant, with this model: the grant's shape
+# is vision_capability_test's own; here a picture has something in it
+if [ -f "$ROOT/tests/vision_capability_test.dis" ] && [ -f "$ROOT/dis/veltro/tools/vision.dis" ]; then
+	with_timeout 100 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c "/tests/vision_capability_test.dis -v -m $E/model $E/p.ppm; echo halt > '#c/sysctl'" > "$W/tool.log" 2>&1 < /dev/null
+	grep -q '^--- PASS: Tool' "$W/tool.log" && ! grep -q '^--- FAIL' "$W/tool.log" &&
+		ok "the vision tool, given only its grant: a detection, its class and score filters ($(grep -c '^--- PASS' "$W/tool.log") subtests)" ||
+		bad "the vision tool through its grant: $(grep -v fsqid "$W/tool.log" | grep -v '^=== RUN' | head -6 | tr '\n' '|')"
+else
+	echo "skip: the vision tool or its test is not built"
 fi
 
 [ $fail = 0 ] && echo "visionfs_test: ALL PASS"

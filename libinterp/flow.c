@@ -16,17 +16,6 @@
 #define FLOW_HAVE_TYPES
 #include "flowtab.h"
 
-extern vlong	osusectime(void);
-
-void
-Flow_now(void *fp)
-{
-	F_Flow_now *f;
-
-	f = fp;
-	*f->ret = osusectime()/1000;
-}
-
 void
 flowmodinit(void)
 {
@@ -180,7 +169,7 @@ Flow_run(void *fp)
 			return;
 		}
 		t = table(f->tab);	/* again: it was anyone's while the VM was let go */
-		e = flowlookup(t, &k, dir, n, osusectime()/1000);
+		e = flowlookup(t, &k, dir, n, f->now);
 		if(e == nil || (e->verdict != Fpass && e->verdict != Fdrop)){
 			*f->ret = n;
 			return;

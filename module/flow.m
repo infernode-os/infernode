@@ -25,10 +25,6 @@ Flow: module
 	Keylen:	con 40;
 	Entlen:	con 96;		# a flow's record, as sweep gives it
 
-	# the time, in ms, that run stamps frames with: use it for every
-	# now given to this module
-	now:	fn(): big;
-
 	# bytes a table of n entries needs
 	size:	fn(n: int): int;
 
@@ -57,6 +53,6 @@ Flow: module
 	# dropped. The first frame the table cannot decide (no such flow,
 	# another verdict, not a flow at all) is left in buf and its length
 	# returned, for the caller to judge. 0 after max frames; -1 when a
-	# read fails.
-	run:	fn(tab: array of byte, in, out: int, buf: array of byte, max: int): int;
+	# read fails. now is the time for every frame of the call.
+	run:	fn(tab: array of byte, in, out: int, buf: array of byte, max: int, now: big): int;
 };

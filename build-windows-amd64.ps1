@@ -253,7 +253,7 @@ Push-Location "$ROOT\libsec"
 Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 
 $secSrc = @(
-    "aes.c", "aesarm64.c", "aesgcm.c", "ghasharm64.c",
+    "aes.c", "aesarm64.c", "aesamd64.c", "aesgcm.c", "ghasharm64.c", "ghashamd64.c",
     "chacha.c", "poly1305.c", "ccpoly.c",
     "x25519.c", "ecc.c",
     "hmac.c", "hmacdrbg.c", "md5.c", "md5block.c", "sha1.c", "sha1block.c",

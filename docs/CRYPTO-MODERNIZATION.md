@@ -578,22 +578,35 @@ PBKDF2-HMAC-SHA-384 and a salt per file.
 Under it:
 
 - **GHASH in constant time.** It indexed a table by nibbles of the running
-  hash; it is now PMULL where the processor has it and table-free integer
-  multiplication otherwise (after BearSSL). AES and SHA-256 use the ARMv8
-  instructions where `ID_AA64ISAR0_EL1` says the core has them, in the
-  emulator and the native kernels.
+  hash; it is now PMULL (ARMv8) or PCLMULQDQ (x86-64) where the processor
+  has it and table-free integer multiplication otherwise (after BearSSL).
+  AES and SHA-256 use the ARMv8 instructions where `ID_AA64ISAR0_EL1` says
+  the core has them, in the emulator and the native kernels.
 - **AES in constant time without the instructions.** Where the processor
-  has no AES instructions (amd64 as the emulator is built, the Pi 3 and 4,
-  RISC-V) `libsec/aes.c` was four tables indexed by the key exclusive-ored
+  has no AES instructions (the Pi 3 and 4, RISC-V, an x86-64 older than
+  about 2010, and Windows, whose build keeps the C) `libsec/aes.c` was
+  four tables indexed by the key exclusive-ored
   with the data, which a cache shared with an attacker shows. It is
   bitsliced now: eight 64-bit words hold one bit each of up to four
   blocks, SubBytes is Boyar and Peralta's 113-gate circuit, and nothing
   is indexed or branched on. It costs speed: AES-256-GCM about half what
-  it was on amd64 (55 MB/s against 109), CBC decryption the same, CBC
-  encryption a seventh (25 against 172), since a chained block cannot
+  the tables gave on amd64 (55 MB/s against 109), CBC decryption the same,
+  CBC encryption a seventh (25 against 172), since a chained block cannot
   share the words with three others. `tests/host/armcrypto_test.sh`
   holds it to FIPS 197, SP 800-38A, OpenSSL's GCM answers and a plain
   reference, and runs it under valgrind with key and data secret.
+- **AES-NI and PCLMULQDQ on x86-64.** `libsec/aesamd64.c` and
+  `libsec/ghashamd64.c` are `aesarm64.c`'s and `ghasharm64.c`'s twins:
+  the key expansion, a block, CBC both ways and GCM's counter mode with
+  the AES instructions (eight blocks in flight), GHASH with the
+  carry-less multiply (four blocks to a reduction). They are asked for
+  at run time (cpuid: AES, PCLMULQDQ, SSSE3) and only their own
+  functions are compiled for the instructions, so an older processor
+  runs the constant-time C. In the emulator on amd64 AES-256-GCM went
+  from 71 MB/s to 2770 and AES-256-CBC encryption from 26 to 1240
+  (`tests/crypto_bench.b`). The same test holds both paths to the same
+  answers and to each other, schedules included. Microsoft's compiler
+  builds the files to stubs: Windows keeps the C.
 - **Private keys and nonces away from the clock.** RSA's private
   operation is `libmp`'s `mpexpcrt`: both powers and Garner's
   recombination in Montgomery arithmetic at the primes' length, no

@@ -326,7 +326,7 @@ sendreply(r: ref Rmsg)
 	if (debug)
 		sys->print("> %s\n", r.text());
 	a := r.pack();
-	if(styx->write(styxfd, a, len a) != len a)
+	if(sys->write(styxfd, a, len a) != len a)
 		sys->print("ftpfs: error replying: %r\n");
 }
 
@@ -1999,7 +1999,7 @@ shutdown()
 
 versionT(t: ref Tmsg.Version)
 {
-	(msize, version) := styx->compatible(t, Styx->MAXRPC, Styx->VERSION);
+	(msize, version) := styx->compatible(t, Styx->DEFMSIZE, Styx->VERSION);
 	sendreply(ref Rmsg.Version(t.tag, msize, version));
 }
 
@@ -2128,7 +2128,7 @@ openT(t: ref Tmsg.Open)
 		}
 		f.node.markcached();
 	}
-	sendreply(ref Rmsg.Open(t.tag, f.node.qid(), Styx->MAXFDATA));
+	sendreply(ref Rmsg.Open(t.tag, f.node.qid(), Styx->DEFIOUNIT));
 }
 
 createT(t: ref Tmsg.Create)
@@ -2157,7 +2157,7 @@ createT(t: ref Tmsg.Create)
 		f.node.dir.qid = f.node.qid();
 		f.node.valid = 1;
 	}
-	sendreply(ref Rmsg.Create(t.tag, f.node.qid(), Styx->MAXFDATA));
+	sendreply(ref Rmsg.Create(t.tag, f.node.qid(), Styx->DEFIOUNIT));
 }
 
 readT(t: ref Tmsg.Read)
@@ -2167,8 +2167,8 @@ readT(t: ref Tmsg.Read)
 
 	if (count < 0)
 		return rerror(t.tag, Ebadlength);
-	if (count > Styx->MAXFDATA)
-		count = Styx->MAXFDATA;
+	if (count > Styx->DEFIOUNIT)
+		count = Styx->DEFIOUNIT;
 	if (t.offset < big 0)
 		return rerror(t.tag, Ebadoffset);
 	# no file here is longer than an int counts: past that is past its

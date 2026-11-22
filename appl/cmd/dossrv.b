@@ -251,7 +251,7 @@ dossrv(rfd: ref Sys->FD)
 
 rversion(t: ref Tmsg.Version): ref Rmsg
 {
-	(msize, version) := styx->compatible(t, Styx->MAXRPC, Styx->VERSION);
+	(msize, version) := styx->compatible(t, Styx->DEFMSIZE, Styx->VERSION);
 	return ref Rmsg.Version(t.tag, msize, version);
 }
 
@@ -464,7 +464,7 @@ ropen(t: ref Tmsg.Open): ref Rmsg
 
 	f.flags |= omode;
 	putfile(f);
-	return ref Rmsg.Open(t.tag, f.qid, Styx->MAXFDATA);
+	return ref Rmsg.Open(t.tag, f.qid, Styx->DEFIOUNIT);
 }
 
 mkdentry(xf: ref Xfs, ndp: ref Dosptr, name: string, sname: string, islong: int, nattr: byte, start: int, length: array of byte): int
@@ -669,7 +669,7 @@ rcreate(t: ref Tmsg.Create): ref Rmsg
 	putsect(pdp.p);
 
 	f.flags |= omode;
-	return ref Rmsg.Create(t.tag, f.qid, Styx->MAXFDATA);
+	return ref Rmsg.Create(t.tag, f.qid, Styx->DEFIOUNIT);
 }
 
 rread(t: ref Tmsg.Read): ref Rmsg
@@ -695,8 +695,8 @@ rread(t: ref Tmsg.Read): ref Rmsg
 	count := t.count;
 	if(count < 0)
 		count = 0;
-	if(count > Styx->MAXFDATA)
-		count = Styx->MAXFDATA;
+	if(count > Styx->DEFIOUNIT)
+		count = Styx->DEFIOUNIT;
 
 	if((f.qid.qtype & Sys->QTDIR) != 0) {
 		if(getfile(f) < 0)
@@ -2047,7 +2047,7 @@ readdir(f:ref Xfile, offset: int, count: int): (int, array of byte)
 	xf := f.xf;
 	bp := xf.ptr;
 	rcnt := 0;
-	buf := array[Styx->MAXFDATA] of byte;
+	buf := array[Styx->DEFIOUNIT] of byte;
 	lfn := ref Lfn(nil, -1, 0);
 
 	if(count <= 0)
@@ -2346,9 +2346,9 @@ readfile(f: ref Xfile, offset: int, count: int): (int, array of byte)
 		length = Maxoff;
 	if(offset < 0 || offset >= length)
 		return (0,nil);
-	if(count > Styx->MAXFDATA)
-		count = Styx->MAXFDATA;
- 	buf := array[Styx->MAXFDATA] of byte;
+	if(count > Styx->DEFIOUNIT)
+		count = Styx->DEFIOUNIT;
+ 	buf := array[Styx->DEFIOUNIT] of byte;
 	if(count >= length - offset)
 		count = length - offset;
 	isect := offset/bp.sectsize;

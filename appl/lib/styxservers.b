@@ -489,7 +489,7 @@ Styxserver.default(srv: self ref Styxserver, gm: ref Tmsg)
 		# version not known, left the connection as though agreed
 		max := srv.msize;
 		if(max <= 0)
-			max = Styx->MAXRPC;
+			max = Styx->DEFMSIZE;
 		(msize, version) := styx->compatible(m, max, Styx->VERSION);
 		if(m.msize < 256 || msize < 256){
 			srv.reply(ref Rmsg.Error(m.tag, "message size too small"));

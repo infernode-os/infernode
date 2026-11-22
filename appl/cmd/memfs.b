@@ -258,7 +258,7 @@ Serve:
 				mf.length = 0;
 				mf.mtime = now();
 			}
-			srv.reply(ref Rmsg.Open(tm.tag, mf.qid, Styx->MAXFDATA));
+			srv.reply(ref Rmsg.Open(tm.tag, mf.qid, Styx->DEFIOUNIT));
 		Create =>
 			(err, c, parent) := fidtomf(srv, qhash, tm.fid);
 			if (err == "" && c.open)
@@ -314,7 +314,7 @@ Serve:
 			c.mode = tm.mode;
 			c.qid = nmf.qid;
 			nmf.nopen = 1;
-			srv.reply(ref Rmsg.Create(tm.tag, nmf.qid, Styx->MAXFDATA));
+			srv.reply(ref Rmsg.Create(tm.tag, nmf.qid, Styx->DEFIOUNIT));
 		Read =>
 			(err, c, mf) := fidtomf(srv, qhash, tm.fid);
 			if (err == "" && !c.open)
@@ -338,8 +338,8 @@ Serve:
 			# no more than one message holds: a raw client's count
 			# was the size of the array filedata made
 			count := tm.count;
-			if (count > Styx->MAXFDATA)
-				count = Styx->MAXFDATA;
+			if (count > Styx->DEFIOUNIT)
+				count = Styx->DEFIOUNIT;
 			if (mf.perm & Sys->DMDIR)
 				data = dirdata(mf, int tm.offset, count);
 			else
@@ -805,7 +805,7 @@ modeok(mode, perm : int, user, owner : string) : int
 
 dirdata(dir : ref Memfile, start, n : int) : array of byte
 {
-	data := array[Styx->MAXFDATA] of byte;
+	data := array[Styx->DEFIOUNIT] of byte;
 	for (k := dir.kids; start > 0 && k != nil; k = k.next) {
 		a := styx->packdir(fileinfo(k));
 		start -= len a;

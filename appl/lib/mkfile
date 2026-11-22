@@ -115,7 +115,6 @@ TARG=\
 	gdl90.dis\
 	sdrdsp.dis\
 	garminav.dis\
-	ninep.dis\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
@@ -215,7 +214,6 @@ SYSMODULES=\
 	imagefile.m\
 	woff2.m\
 	brotli.m\
-	9p.m\
 	acmewin.m\
 	agentlib.m\
 	arg.m\

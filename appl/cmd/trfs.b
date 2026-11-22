@@ -113,7 +113,7 @@ trfsin(cfd, sfd: ref Sys->FD)
 		
 trfsout(cfd, sfd: ref Sys->FD)
 {
-	b := array[Styx->MAXFDATA] of byte;
+	b := array[Styx->DEFIOUNIT] of byte;
 	while((r := Rmsg.read(sfd, msize)) != nil){
 		pick m := r {
 		Version =>

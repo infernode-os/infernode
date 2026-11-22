@@ -412,7 +412,7 @@ init(nil: ref Draw->Context, args: list of string)
 	mainlock = Lock.new();
 
 	conschan = Chan.new(nil);
-	conschan.msize = Styx->MAXRPC;
+	conschan.msize = Styx->DEFMSIZE;
 
 	mode := Sys->ORDWR;
 	if(readonly)
@@ -852,9 +852,9 @@ apply(cp: ref Chan, t: ref Tmsg): ref Rmsg
 rversion(cp: ref Chan, t: ref Tmsg.Version): ref Rmsg
 {
 	cp.msize = RBUFSIZE+IOHDRSZ;
-	if(cp.msize < Styx->MAXRPC)
-		cp.msize = Styx->MAXRPC;
-	(msize, version) := styx->compatible(t, Styx->MAXRPC, Styx->VERSION);
+	if(cp.msize < Styx->DEFMSIZE)
+		cp.msize = Styx->DEFMSIZE;
+	(msize, version) := styx->compatible(t, Styx->DEFMSIZE, Styx->VERSION);
 	if(msize < 256)
 		return ref Rmsg.Error(t.tag, "message size too small");
 	return ref Rmsg.Version(t.tag, msize, version);
@@ -3095,7 +3095,7 @@ cmd_users(): int
 		return 0;
 	buf: array of byte;
 	for(off := 0;;){
-		(a, e) := kread(FID2, off, Styx->MAXFDATA);
+		(a, e) := kread(FID2, off, Styx->DEFIOUNIT);
 		if(e != nil){
 			cprint("/adm/users read error: "+e);
 			return 0;

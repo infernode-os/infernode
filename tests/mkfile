@@ -353,7 +353,6 @@ TARG=\
 	utf21_test.dis\
 	vm_size_edge_test.dis\
 	styx_pack_test.dis\
-	ninep_pack_test.dis\
 	parread_test.dis\
 	devprog_read_test.dis\
 	devprog_nslock_test.dis\
@@ -607,7 +606,6 @@ SYSMODULES=\
 	keyboard.m\
 	wmclient.m\
 	styxlib.m\
-	9p.m\
 	ipints.m\
 	sdg.m\
 	sdrdsp.m\

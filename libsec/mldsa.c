@@ -65,7 +65,34 @@ extern int	mldsa_pack_hint(uchar *out, int outlen, const int32 h[][MLDSA_N], int
 extern int	mldsa_unpack_hint(int32 h[][MLDSA_N], int k, const uchar *in, int omega);
 
 /*
+ * Is |LowBits(a[j])| at or over bound for some j?  Whether it is, and
+ * at which coefficient the answer is known, are public: the candidate
+ * is then thrown away, and which candidates are does not depend on the
+ * key (see the rejection loop in sign_core).  The sign of the low bits
+ * is not public, and is not branched on.  A function of its own so
+ * that what valgrind reports of it has this name: compiled in place,
+ * clang's branch out of the loop had no line to be held to.
+ */
+static int
+lowbitsover(const int32 a[MLDSA_N], int32 gamma2, int32 bound)
+{
+	int32 r0, sgn;
+	int j;
+
+	for(j = 0; j < MLDSA_N; j++){
+		r0 = mldsa_lowbits(a[j], gamma2);
+		sgn = r0 >> 31;
+		r0 = (r0 ^ sgn) - sgn;	/* |r0|, with no branch on its sign */
+		if(r0 >= bound)
+			return 1;
+	}
+	return 0;
+}
+
+/*
  * Sample challenge polynomial c with exactly tau +/-1 coefficients.
+ * Its seed is the signature's c~, and its branches and indices follow
+ * the seed: public (see the rejection loop in sign_core).
  */
 static void
 sample_challenge(int32 c[MLDSA_N], const uchar *seed, int seedlen, int tau)
@@ -398,7 +425,18 @@ sign_core(uchar *sig, const uchar *pre, int prelen,
 		mldsa_ntt(st->t0[i]);
 	}
 
-	/* Rejection sampling loop */
+	/*
+	 * Rejection sampling loop.  Everything in it works on values made
+	 * from the secret key and the masks, with no branch or address
+	 * that depends on them, but for what the standard makes public:
+	 * whether a round's candidate is rejected, and by which test (the
+	 * distribution of what is accepted does not depend on the key, and
+	 * a rejected candidate is thrown away); the challenge, which is in
+	 * the signature; and the hints, which are too.  Those lines say
+	 * "public": tests/host/mldsa_test.sh runs a signing under valgrind
+	 * with the key undefined, and every decision it reports must be
+	 * one of them.
+	 */
 	kappa = 0;
 	for(rounds = 0;; rounds++){
 		if(rounds >= MLDSA_MAXROUNDS){
@@ -476,7 +514,7 @@ sign_core(uchar *sig, const uchar *pre, int prelen,
 		for(i = 0; i < l; i++)
 			reject |= mldsa_poly_chknorm(st->z[i], (1 << gamma1_bits) - beta);
 
-		if(reject)
+		if(reject)	/* public: z's norm */
 			continue;
 
 		/* r0 = LowBits(w - c*s2) */
@@ -486,18 +524,12 @@ sign_core(uchar *sig, const uchar *pre, int prelen,
 			mldsa_invntt(st->tmp2);
 			mldsa_poly_sub(st->tmp, st->w[i], st->tmp2);
 			mldsa_poly_reduce(st->tmp);
-			for(j = 0; j < MLDSA_N; j++){
-				int32 r0 = mldsa_lowbits(st->tmp[j], gamma2);
-				int32 sgn = r0 >> 31;
-				r0 = (r0 ^ sgn) - sgn;	/* |r0|, with no branch on its sign */
-				if(r0 >= gamma2 - beta){
-					reject = 1;
-					break;
-				}
+			if(lowbitsover(st->tmp, gamma2, gamma2 - beta)){	/* public: r0's norm */
+				reject = 1;
+				break;
 			}
-			if(reject) break;
 		}
-		if(reject)
+		if(reject)	/* public */
 			continue;
 
 		/* Compute hints */
@@ -507,7 +539,7 @@ sign_core(uchar *sig, const uchar *pre, int prelen,
 			mldsa_invntt(st->tmp2);
 
 			/* Check ||ct0||_inf < gamma2 */
-			if(mldsa_poly_chknorm(st->tmp2, gamma2)){
+			if(mldsa_poly_chknorm(st->tmp2, gamma2)){	/* public: ct0's norm */
 				reject = 1;
 				break;
 			}
@@ -527,10 +559,10 @@ sign_core(uchar *sig, const uchar *pre, int prelen,
 				hints_n += st->h[i][j];
 			}
 		}
-		if(reject)
+		if(reject)	/* public */
 			continue;
 
-		if(hints_n > omega)
+		if(hints_n > omega)	/* public: the number of hints */
 			continue;
 
 		break;	/* Success! */

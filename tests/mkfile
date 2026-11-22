@@ -158,6 +158,7 @@ TARG=\
 	math_edge_test.dis\
 	alt_edge_test.dis\
 	web_status_test.dis\
+	wercfs_stat_test.dis\
 	auth_bind_test.dis\
 	tls_record_test.dis\
 	random_fail_test.dis\

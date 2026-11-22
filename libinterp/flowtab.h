@@ -290,10 +290,15 @@ flowinit(Flowtab *t, uint n, uvlong k0, uvlong k1)
 	t->k1 = k1;
 }
 
+/*
+ * A clock that has gone back (stepped, or one caller's a little
+ * behind another's) ends nothing: the difference is unsigned, and an
+ * earlier now would be an enormous idle time.
+ */
 static int
 expired(Flowent *e, uvlong now)
 {
-	return now - e->last > e->idle;
+	return now > e->last && now - e->last > e->idle;
 }
 
 static void

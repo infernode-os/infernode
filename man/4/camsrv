@@ -164,6 +164,17 @@ One line of
 (the oldest kept), and no
 .BR pos= :
 this is what marks a feed live to its readers.
+.B stream=
+is the capture's state:
+.B on
+while the sensor runs,
+.B stopping
+between the last close and the capture's end (the frame it was making
+is finished first), and
+.B off
+otherwise; with readers and
+.BR error= ,
+the sensor would not run.
 .BR autofocus=
 says how the last run went.
 .B rawformat=
@@ -188,6 +199,12 @@ It is written by the user
 runs as, who owns the files, and read by anyone.
 A write that is not one of these, or whose value is missing, is no
 number or is out of range, is refused and changes nothing.
+The settings marked ``not while streaming'' are refused while
+.B frame
+or
+.B raw
+is open; written just after the last close, they wait for the capture
+to have stopped.
 .RS
 .PD 0
 .TP
@@ -243,6 +260,18 @@ exposure steps, white balance, a focus chart, motion:
 Its segments, their times and the code on every frame that names its
 segment and frame are in
 .BR docs/CAMERA-TEST-VIDEO.md .
+.PP
+A capture told to stop is given three seconds: one in a frame that
+never comes (the link to the sensor dead) is then killed and the sensor
+put off, its readers told
+.LR "the sensor stopped answering" .
+The simulated sensor
+.RB ( -t )
+takes one more
+.B ctl
+write,
+.BR stall ,
+after which its next frame never comes, for tests of that.
 .PP
 .I Camsrv
 runs in a process group of its own. To stop it, unmount it; to kill

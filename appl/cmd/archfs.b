@@ -154,14 +154,14 @@ serve(fd: ref Sys->FD, pidch: chan of int)
 	bio.fd = sys->fildes(bio.fd.fd);
 	fd = sys->fildes(fd.fd);
 Work:
-	while((m0 := Tmsg.read(fd, Styx->MAXRPC)) != nil){
+	while((m0 := Tmsg.read(fd, Styx->DEFMSIZE)) != nil){
 		if(debug)
 			sys->fprint(sys->fildes(2), "<- %s\n", m0.text());
 		pick m := m0 {
 		Readerror =>
 			fatal("read error on styx server");
 		Version =>
-			(s, v) := styx->compatible(m, Styx->MAXRPC, Styx->VERSION);
+			(s, v) := styx->compatible(m, Styx->DEFMSIZE, Styx->VERSION);
 			reply(fd, ref Rmsg.Version(m.tag, s, v));
 		Auth =>
 			error(fd, m, "authentication not required");
@@ -225,7 +225,7 @@ Work:
 				continue;
 			}
 			f.open = 1;
-			reply(fd, ref Rmsg.Open(m.tag, f.dir.dir.qid, Styx->MAXFDATA));
+			reply(fd, ref Rmsg.Open(m.tag, f.dir.dir.qid, Styx->DEFIOUNIT));
 		Create =>
 			error(fd, m, Eperm);
 		Read =>

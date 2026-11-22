@@ -395,8 +395,10 @@ setof(int set)
  * section 9.2 makes this the default: without it every signature of a
  * message is the same, which is what a fault induced while signing
  * needs to have one-time keys sign twice).  It was the deterministic
- * variant, opt_rand = PK.seed.  With no generator nothing is signed:
- * genrandom gives bytes or does not return.
+ * variant, opt_rand = PK.seed.  With no generator nothing is signed,
+ * and that is said: -1.  (genrandom gives bytes or does not return:
+ * the emulator ended, and a native kernel with no generator waited
+ * for ever in the builtin.)
  */
 static int
 sign(const Set *p, uchar *sig, const uchar *msg, ulong msglen,
@@ -408,7 +410,8 @@ sign(const Set *p, uchar *sig, const uchar *msg, ulong msglen,
 	prelen = mheader(pre, ctx, ctxlen);
 	if(prelen < 0)
 		return -1;
-	genrandom(addrnd, p->n);
+	if(genrandomtry(addrnd, p->n) < 0)
+		return -1;
 	r = sign_core(sig, pre, prelen, msg, msglen, addrnd, sk,
 		p->n, p->h, p->d, p->hprime, p->a, p->k);
 	secureZero(addrnd, sizeof(addrnd));

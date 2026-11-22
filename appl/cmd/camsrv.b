@@ -142,11 +142,26 @@ sess: list of ref Fsess;
 parked: list of (ref Tmsg.Read, ref Fsess);
 users := 0;
 capstop: chan of int;
-capdone: chan of int;
+# A capture's end, with what ended it ("" for a stop).  The error went on
+# a channel of its own, buffered, and the end on this: the loop could
+# take the end first, find no error yet, and start another capture beside
+# the first one's report of why it could not run.
+capdone: chan of (int, string);
+cappidc: chan of (int, int);	# a capture's generation and pid, as it starts
+stuckc: chan of int;		# a generation told to stop Stopwait ago
 framec: chan of (array of byte, int, int);
 rawc: chan of array of byte;
-errc: chan of string;
 ctlc: chan of string;
+capgen := 0;		# the capture now running, or the last
+cappid := -1;
+simstall := 0;		# -t: the next frame never comes (ctl stall)
+
+# How long a capture told to stop is waited for.  It looks at its stop
+# between frames, and a frame is a read of the receiver: with the link
+# dead that read does not return, the capture never went, and nothing
+# after it started (nor did the mount's end finish).  Past this it is
+# killed and the sensor put off for it.
+Stopwait: con 3000;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -186,8 +201,9 @@ init(nil: ref Draw->Context, args: list of string)
 	fsize = framesize();
 	framec = chan of (array of byte, int, int);
 	rawc = chan of array of byte;
-	errc = chan[1] of string;
-	capdone = chan of int;
+	capdone = chan of (int, string);
+	cappidc = chan of (int, int);
+	stuckc = chan[4] of int;
 	ctlc = chan[8] of string;
 
 	(tree, treeop) := nametree->start();
@@ -320,15 +336,79 @@ serve(tree: ref Tree)
 	r := <-rawc =>
 		lastraw = r;
 		wake();
-	e := <-errc =>
+	(g, pid) := <-cappidc =>
+		if(g == capgen)
+			cappid = pid;
+	(g, e) := <-capdone =>
+		ended(g, e);
+	g := <-stuckc =>
+		if(running && g == capgen)
+			reap();
+	}
+}
+
+# a capture has gone: generation g, saying e
+ended(g: int, e: string)
+{
+	if(g != capgen)
+		return;		# one reaped already
+	running = 0;
+	capstop = nil;
+	cappid = -1;
+	if(e != nil){
 		err = e;
 		wake();
-	<-capdone =>
-		running = 0;
-		capstop = nil;
-		if(wanted && err == "")
-			launch();
 	}
+	if(wanted && err == "")
+		launch();
+}
+
+# The capture told to stop has not gone: it is in a frame that does not
+# come.  Kill it and put the sensor off for it; its readers are told.
+reap()
+{
+	if(cappid >= 0){
+		fd := sys->open("/prog/" + string cappid + "/ctl", Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+	}
+	if(!sim)
+		sensoroff();
+	capgen++;	# whatever it still sends is not this capture's
+	ended(capgen, "camsrv: the sensor stopped answering");
+}
+
+# Wait for a capture on its way out to have gone, the loop's other
+# channels served meanwhile; an error if it is still there at the end.
+settle(): string
+{
+	if(!running)
+		return nil;
+	tc := chan[1] of int;
+	spawn timer(tc, Stopwait + 500);
+	while(running) alt {
+	<-framec =>
+		;
+	<-rawc =>
+		;
+	(g, pid) := <-cappidc =>
+		if(g == capgen)
+			cappid = pid;
+	(g, e) := <-capdone =>
+		ended(g, e);
+	g := <-stuckc =>
+		if(g == capgen)
+			reap();
+	<-tc =>
+		return "camsrv: in use";
+	}
+	return nil;
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }
 
 # one request; 1 when the mount has gone and the server with it
@@ -352,6 +432,11 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 			if(users++ == 0)
 				startcapture();
 		}
+	Flush =>
+		# The read flushed is forgotten, parked or not: left parked,
+		# the next frame answered a tag its client had given up.
+		unpark(tm.oldtag);
+		srv.default(tmsg);
 	Clunk =>
 		drop(tm.fid);
 		srv.default(tmsg);
@@ -413,18 +498,16 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 # waits for ever, with the sensor on and the name tree held.
 shutdown(tree: ref Tree)
 {
+	users = 0;
 	stopcapture();
-	while(running) alt {
-	<-framec =>
-		;
-	<-rawc =>
-		;
-	<-errc =>
-		;
-	<-capdone =>
-		running = 0;
-	}
+	if(settle() != nil)
+		reap();
 	tree.quit();
+	# the status log (-l) and anything else of the server's group go
+	# with it: the log wrote its line a minute for ever
+	fd := sys->open("/prog/" + string sys->pctl(0, nil) + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
 }
 
 # a soak's record: the status line, time first, once a minute, until the
@@ -461,15 +544,31 @@ drop(fid: int)
 		if(hd l != s)
 			n = hd l :: n;
 	sess = n;
+	# a read parked on the fid is answered: dropped unanswered, its tag
+	# waited for ever
 	p: list of (ref Tmsg.Read, ref Fsess);
 	for(q := parked; q != nil; q = tl q){
 		(tm, ps) := hd q;
 		if(ps != s)
 			p = (tm, ps) :: p;
+		else
+			s.srv.reply(ref Rmsg.Error(tm.tag, "camsrv: fid clunked"));
 	}
 	parked = p;
 	if(--users == 0)
 		stopcapture();
+}
+
+# forget the parked read of a tag on this connection
+unpark(tag: int)
+{
+	p: list of (ref Tmsg.Read, ref Fsess);
+	for(q := parked; q != nil; q = tl q){
+		(tm, ps) := hd q;
+		if(tm.tag != tag || ps.srv != srv)
+			p = (tm, ps) :: p;
+	}
+	parked = p;
 }
 
 # 1 if a reply went
@@ -559,9 +658,14 @@ simdiv(): int
 
 status(): string
 {
+	# as the capture is, not as its readers are counted: "on" with
+	# readers and a sensor that would not start was not so, nor "off"
+	# while the last frame of a stopped stream was still being made
 	on := "off";
-	if(users > 0)
+	if(running && capstop != nil)
 		on = "on";
+	else if(running)
+		on = "stopping";
 	first := seq - Ring;
 	if(first < base)
 		first = base;
@@ -628,8 +732,8 @@ doctl(s: string): string
 	"mode" =>
 		if(n != 3)
 			return "camsrv: mode W H";
-		if(users > 0)
-			return "camsrv: in use";
+		if((e := inuse()) != nil)
+			return e;
 		w := a;
 		h := arg(hd tl tl f);
 		if(rotate%180)
@@ -648,8 +752,8 @@ doctl(s: string): string
 	"fps" =>
 		if(n != 2 || a < 1 || a > maxfps())
 			return sys->sprint("camsrv: fps 1..%d", maxfps());
-		if(users > 0)
-			return "camsrv: in use";
+		if((e := inuse()) != nil)
+			return e;
 		fps = a;
 	"exposure" =>
 		if(n != 2 || a < 0 || a > Maxexposure)
@@ -689,10 +793,29 @@ doctl(s: string): string
 		if(!rotation(hd tl f))
 			return "camsrv: rotate 0|90|180|270";
 		latest = nil;
+	"stall" =>
+		# the simulated sensor's next frame never comes, as a real
+		# one's does not when its link has died
+		if(!sim || n != 1)
+			return "camsrv: unknown ctl " + hd f;
+		simstall = 1;
 	* =>
 		return "camsrv: unknown ctl " + hd f;
 	}
 	return nil;
+}
+
+# What the picture is made from (mode, fps, flip, rotate) changes only
+# with no capture running.  Readers were counted, not the capture: a
+# change between the last close and the capture's end was taken, and the
+# frame it was finishing was merged at one size into planes of another
+# (an exception in the capture, which then never reported its end, so
+# none was started again).  The capture is waited for.
+inuse(): string
+{
+	if(users > 0)
+		return "camsrv: in use";
+	return settle();
 }
 
 readuser(): string
@@ -739,7 +862,14 @@ stopcapture()
 	if(capstop != nil){
 		capstop <-= 1;
 		capstop = nil;
+		spawn stuck(capgen);
 	}
+}
+
+stuck(g: int)
+{
+	sys->sleep(Stopwait);
+	stuckc <-= g;
 }
 
 launch()
@@ -752,29 +882,42 @@ launch()
 	lastraw = nil;
 	capstop = chan[1] of int;
 	running = 1;
-	spawn capwrap(capstop);
+	cappid = -1;
+	spawn capwrap(++capgen, capstop);
 }
 
-capwrap(stop: chan of int)
+# A capture always says it has gone: one that raised (no room for a
+# frame) left the server believing it was still running.
+capwrap(g: int, stop: chan of int)
 {
-	capture(stop);
-	capdone <-= 1;
+	cappidc <-= (g, sys->pctl(0, nil));
+	e: string;
+	{
+		e = capture(stop);
+	} exception x {
+	"*" =>
+		e = "camsrv: capture: " + x;
+		if(!sim)
+			sensoroff();
+	}
+	capdone <-= (g, e);
 }
 
 # The capture process: everything that touches the sensor, one place.
-capture(stop: chan of int)
+# What ended it, nil for a stop.
+capture(stop: chan of int): string
 {
 	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: nil);
 	if(sim){
 		simulate(stop);
-		return;
+		return nil;
 	}
 	e := sensoron();
 	if(e != nil){
 		sensoroff();
-		errc <-= e;
-		return;
+		return e;
 	}
+	cerr: string;
 	aewait := Aeevery;
 	aesum := aen := 0;
 	wlines := wgain := -1;
@@ -822,11 +965,11 @@ capture(stop: chan of int)
 		}
 		fd := sys->open("/dev/unicam/frame", Sys->OREAD);
 		if(fd == nil){
-			errc <-= sys->sprint("camsrv: %r");
+			cerr = sys->sprint("camsrv: %r");
 			break;
 		}
 		if(!readall(fd, raw)){
-			errc <-= sys->sprint("camsrv: frame: %r");
+			cerr = sys->sprint("camsrv: frame: %r");
 			break;
 		}
 		fd = nil;
@@ -861,6 +1004,7 @@ capture(stop: chan of int)
 		}
 	}
 	sensoroff();
+	return cerr;
 }
 
 # A frame for /raw's readers, apart from raw: the next frame is read into
@@ -1171,6 +1315,15 @@ simulate(stop: chan of int)
 	lgr = lgb = 256;
 	band := 0;
 	for(;;){
+		# the stall before the stop: a frame that will not come does
+		# not come for a capture told to stop either.  Looked at after
+		# it, a stop that came while this was still making the last
+		# frame was taken at once, and the stall was left set for the
+		# next capture, whose first frame then never came.
+		if(simstall){
+			simstall = 0;
+			<-chan of int;
+		}
 		alt {
 		<-stop =>
 			return;

@@ -1,6 +1,6 @@
 .TH KEYRING-SHA1 2
 .SH NAME
-keyring: sha1, md4, md5, hmac_sha1, hmac_md5, sign, verify \- cryptographic digests and digital signatures
+keyring: sha1, md5, hmac_sha1, hmac_md5, sign, verify \- cryptographic digests and digital signatures
 .SH SYNOPSIS
 .EX
 include "keyring.m";
@@ -8,8 +8,6 @@ keyring := load Keyring Keyring->PATH;
 
 .ta \w'verify:\ 'u +\w'fn(\ \ \ 'u
 sha1:	fn(buf: array of byte, n: int, digest: array of byte,
-		state: ref DigestState): ref DigestState;
-md4:	fn(buf: array of byte, n: int, digest: array of byte,
 		state: ref DigestState): ref DigestState;
 md5:	fn(buf: array of byte, n: int, digest: array of byte,
 		state: ref DigestState): ref DigestState;
@@ -23,11 +21,10 @@ verify:	fn(pk: ref PK, cert: ref Certificate,
 		state: ref DigestState): int;
 .EE
 .SH DESCRIPTION
-.BR Sha1 ,
-.B md4
+.B Sha1
 and
 .B md5
-are cryptographically secure hash functions that produce output called a message digest.
+are hash functions that produce output called a message digest.
 Each function computes a hash of
 .I n
 bytes of the data in
@@ -56,13 +53,9 @@ array.
 .B Sha1
 produces a 20-byte hash
 .RB ( SHA1dlen ),
-.B md4
-and
 .B md5
 a 16-byte one
-.RB ( MD4len
-and
-.BR MD5len ).
+.RB ( MD5dlen ).
 .PP
 .B Hmac_sha1
 and
@@ -82,8 +75,7 @@ is hashed first, as the RFC has it.
 creates a digital signature of a digest from the concatenation of: a message, the name of the signer, and an expiration time.
 .I State
 is the digest state after running
-.BR sha1 ,
-.B md4
+.B sha1
 or
 .B md5
 over the message.
@@ -92,9 +84,7 @@ is a string specifying the hash algorithm to use:
 .B
 "sha"\fR,
 .B
-"sha1"\fR,
-.B
-"md4"\fR
+"sha1"\fR
 or
 .B
 "md5"\fR.
@@ -179,12 +169,10 @@ kr->sha1(buf, 0, digest, state);
 .br
 .B /libcrypt/hmac.c
 .br
-.B /libcrypt/md4.c
-.br
 .B /libcrypt/md5.c
 .br
 .B /libcrypt/sha1.c
 .SH BUGS
-The MD4 algorithm is included only to allow communication with software
-that might still use it; it should not otherwise be used now, because it
-is easily broken.
+MD5 and SHA-1 are kept for what still names them (old key files, PDF,
+the install tools); neither resists collisions, and new work uses the SHA-2 or SHA-3 digests.
+MD4 is gone.

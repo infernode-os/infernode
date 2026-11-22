@@ -5,7 +5,6 @@ include "sys.m";
 include "draw.m";
 include "keyring.m";
 include "security.m";
-include "factotum.m";
 include "styxpersist.m";
 include "arg.m";
 include "sh.m";
@@ -17,7 +16,6 @@ Mount: module
 
 verbose := 0;
 doauth := 1;
-do9 := 0;
 persist := 0;
 showstyx := 0;
 
@@ -25,6 +23,7 @@ alg := "aes_256_gcm";
 keyfile: string;
 spec: string;
 addr: string;
+peer: string;	# -u: who the far end must be; with -P, who it was at first
 
 fail(status, msg: string)
 {
@@ -45,7 +44,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		nomod(Arg->PATH);
 
 	arg->init(args);
-	arg->setusage("mount [-a|-b] [-cRoA9] [-C cryptoalg] [-k keyfile] net!addr|file|{command} mountpoint [spec]");
+	arg->setusage("mount [-a|-b] [-cRoAP] [-C cryptoalg] [-k keyfile] [-u user] net!addr|file|{command} mountpoint [spec]");
 	flags := 0;
 	while((o := arg->opt()) != 0){
 		case o {
@@ -62,11 +61,18 @@ init(ctxt: ref Draw->Context, args: list of string)
 		'k' or
 		'f' =>
 			keyfile = arg->earg();
+		'u' =>
+			peer = arg->earg();
+			if(peer == nil)
+				arg->usage();
 		'A' =>
 			doauth = 0;
 		'9' =>
-			doauth = 0;
-			do9 = 1;
+			# it authenticated to a Plan 9 file server through
+			# factotum's p9any, which could only fail once p9sk1
+			# (DES) had gone; a server that asks for no
+			# authentication was always -A's
+			fail("p9sk1", "-9: Plan 9 authentication (p9sk1) is not in this system; a 9P server that asks for none is mounted with -A (its service is 9fs)");
 		'v' =>
 			verbose = 1;
 		'P' =>
@@ -86,26 +92,20 @@ init(ctxt: ref Draw->Context, args: list of string)
 	arg = nil;
 	addr = hd args;
 	mountpoint := hd tl args;
+	# -u names who the far end must authenticate as: with nothing
+	# authenticated there is nobody to name
+	if(peer != nil && !doauth)
+		fail("usage", "-u needs an authenticated connection (not -A, a file or a command)");
 
 	fd := connect(ctxt, addr);
-	ok: int;
-	if(do9){
-		fd = styxlog(fd);
-		factotum := load Factotum Factotum->PATH;
-		if(factotum == nil)
-			nomod(Factotum->PATH);
-		factotum->init();
-		ok = factotum->mount(fd, mountpoint, flags, spec, nil).t0;
-	}else{
-		err: string;
-		if(!persist){
-			(fd, err) = authcvt(fd);
-			if(fd == nil)
-				fail("error", err);
-		}
-		fd = styxlog(fd);
-		ok = sys->mount(fd, nil, mountpoint, flags, spec);
+	err: string;
+	if(!persist){
+		(fd, err) = authcvt(fd);
+		if(fd == nil)
+			fail("error", err);
 	}
+	fd = styxlog(fd);
+	ok := sys->mount(fd, nil, mountpoint, flags, spec);
 	if(ok < 0)
 		fail("mount failed", sys->sprint("mount failed: %r"));
 }
@@ -115,6 +115,8 @@ connect(ctxt: ref Draw->Context, dest: string): ref Sys->FD
 	if(dest != nil && dest[0] == '{' && dest[len dest - 1] == '}'){
 		if(persist)
 			fail("usage", "cannot persistently mount a command");
+		if(peer != nil)
+			fail("usage", "-u needs an authenticated connection, not a command");
 		doauth = 0;
 		return popen(ctxt, dest :: nil);
 	}
@@ -124,21 +126,20 @@ connect(ctxt: ref Draw->Context, dest: string): ref Sys->FD
 		if(fd != nil){
 			if(persist)
 				fail("usage", "cannot persistently mount a file");
+			if(peer != nil)
+				fail("usage", "-u needs an authenticated connection, not a file");
 			return fd;
 		}
 		if(dest[0] == '/')
 			fail("open failed", sys->sprint("can't open %s: %r", dest));
 	}
-	svc := "styx";
-	if(do9)
-		svc = "9fs";
-	dest = netmkaddr(dest, "net", svc);
+	dest = netmkaddr(dest, "net", "styx");
 	if(persist){
 		styxpersist := load Styxpersist Styxpersist->PATH;
 		if(styxpersist == nil)
 			fail("bad module", sys->sprint("cannot load %s: %r", Styxpersist->PATH));
 		sys->pipe(p := array[2] of ref Sys->FD);
-		(c, err) := styxpersist->init(p[0], do9, nil);
+		(c, err) := styxpersist->init(p[0]);
 		if(c == nil)
 			fail("error", "styxpersist: "+err);
 		spawn dialler(c, dest);
@@ -160,10 +161,12 @@ dialler(dialc: chan of chan of ref Sys->FD, dest: string)
 			reply <-= nil;
 			continue;
 		}
+		# authcvt holds the far end to who it was the first time: a
+		# reconnection was given to whoever answered with a certificate
+		# of the same signer, mid-session and without a word
 		(fd, err) := authcvt(c.dfd);
-		if(fd == nil && verbose)
-			sys->print("%s\n", err);
-		# XXX could check that user at the other end is still the same.
+		if(fd == nil)
+			sys->fprint(sys->fildes(2), "mount: %s: %s\n", dest, err);
 		reply <-= fd;
 	}
 }
@@ -177,6 +180,13 @@ authcvt(fd: ref Sys->FD): (ref Sys->FD, string)
 			return (nil, err);
 		if(verbose)
 			sys->print("remote username is %s\n", err);
+		# the far end is whoever holds a certificate of our signer;
+		# -u says which of them it must be, and a persistent mount's
+		# far end stays who it was
+		if(peer != nil && err != peer)
+			return (nil, sys->sprint("the far end is %s, not %s", err, peer));
+		if(persist && peer == nil)
+			peer = err;
 	}
 	return (fd, nil);
 }
@@ -196,7 +206,11 @@ popen(ctxt: ref Draw->Context, argv: list of string): ref Sys->FD
 
 runcmd(sh: Sh, ctxt: ref Draw->Context, argv: list of string, stdin: ref Sys->FD, sync: chan of int)
 {
-	sys->pctl(Sys->FORKFD, nil);
+	# its own end of the pipe and the standard files, and nothing else:
+	# a copy of the whole table (FORKFD) had the mount's end of the pipe
+	# in it too, so the command never saw the end of its input when it
+	# was unmounted, and stayed for good
+	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: stdin.fd :: nil);
 	sys->dup(stdin.fd, 0);
 	stdin = nil;
 	sync <-= 0;
@@ -211,7 +225,11 @@ authenticate(keyfile, alg: string, dfd: ref Sys->FD, addr: string): (ref Sys->FD
 	if(kr == nil)
 		return (nil, sys->sprint("cannot load %s: %r", Keyring->PATH));
 
-	kd := "/usr/" + user() + "/keyring/";
+	# with no name the key directory was /usr//keyring/, whatever is there
+	u := user();
+	if(u == nil)
+		return (nil, "cannot read /dev/user to find the key directory");
+	kd := "/usr/" + u + "/keyring/";
 	if(keyfile == nil) {
 		cert = kd + netmkaddr(addr, "tcp", "");
 		(ok, nil) := sys->stat(cert);
@@ -226,9 +244,11 @@ authenticate(keyfile, alg: string, dfd: ref Sys->FD, addr: string): (ref Sys->FD
 	if(ai == nil)
 		return (nil, sys->sprint("cannot read %s: %r", cert));
 
+	# an error, not an exception: this runs in a persistent mount's
+	# dialler too, which an exception ended, leaving the mount waiting
 	auth := load Auth Auth->PATH;
 	if(auth == nil)
-		nomod(Auth->PATH);
+		return (nil, sys->sprint("cannot load %s: %r", Auth->PATH));
 
 	err := auth->init();
 	if(err != nil)
@@ -299,11 +319,13 @@ tmsgreader(cfd, sfd: ref Sys->FD, p1, p2: chan of int)
 	m: ref Tmsg;
 	do{
 		m = Tmsg.read(cfd, 9000);
+		if(m == nil)
+			break;	# the end: it was printed, through nil
 		sys->print("%s\n", m.text());
 		d := m.pack();
 		if(sys->write(sfd, d, len d) != len d)
 			sys->print("tmsg write error: %r\n");
-	} while(m != nil && tagof(m) != tagof(Tmsg.Readerror));
+	} while(tagof(m) != tagof(Tmsg.Readerror));
 	kill(<-p2);
 }
 
@@ -313,10 +335,12 @@ rmsgreader(sfd, cfd: ref Sys->FD, p1, p2: chan of int)
 	m: ref Rmsg;
 	do{
 		m = Rmsg.read(sfd, 9000);
+		if(m == nil)
+			break;
 		sys->print("%s\n", m.text());
 		d := m.pack();
 		if(sys->write(cfd, d, len d) != len d)
 			sys->print("rmsg write error: %r\n");
-	} while(m != nil && tagof(m) != tagof(Tmsg.Readerror));
+	} while(tagof(m) != tagof(Rmsg.Readerror));
 	kill(<-p2);
 }

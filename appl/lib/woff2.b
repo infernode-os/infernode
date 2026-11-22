@@ -15,6 +15,8 @@ include "brotli.m";
 include "woff2.m";
 
 Bad: con "woff2: corrupt font";
+Big: con "woff2: font too large";
+MAXFONT: con 64*1024*1024;	# bytes a font's tables may decompress to
 
 known := array[] of {
 	"cmap", "head", "hhea", "hmtx", "maxp", "name", "OS/2", "post", "cvt ",
@@ -159,6 +161,12 @@ unpack(data: array of byte): array of byte
 	clen := r.u32();
 	r.p = 48;
 	tabs := array[ntab] of ref Tab;
+	# The tables' lengths are the font's own word, each up to 2^31,
+	# and their sum was given to Brotli as the size to decode to,
+	# which it makes before it reads a byte: a font of a hundred
+	# bytes asked for a gigabyte, and two such lengths wrapped to a
+	# negative size, which is no limit at all.  The sum is held to
+	# MAXFONT, and Brotli makes no more than it decodes.
 	total := 0;
 	for(i := 0; i < ntab; i++) {
 		f := r.u8();
@@ -183,12 +191,18 @@ unpack(data: array of byte): array of byte
 				t.xform = 0;
 		if(tag == "hmtx" && transformed)
 			t.xform = 1;
+		if(t.tlen < 0 || t.tlen > MAXFONT - total)
+			raise Big;
 		total += t.tlen;
 		tabs[i] = t;
 	}
-	(raw, err) := brotli->decompress(r.take(clen), total);
+	(raw, err) := brotli->decompressmax(r.take(clen), total);
+	if(err == Brotli->Ebig)
+		raise Big;
 	if(err != nil)
 		raise err;
+	if(len raw != total)
+		raise Bad;
 	for(i = 0; i < ntab; i++)
 		tabs[i].data = raw[tabs[i].off:tabs[i].off + tabs[i].tlen];
 

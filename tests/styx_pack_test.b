@@ -4,13 +4,13 @@ implement StyxPackTest;
 # styx_pack_test - 9P messages packed and unpacked by the 9P libraries.
 #
 # A Twstat whose stat is 256 bytes or more (a name of 210 bytes) is
-# unpacked by Styx and Ninep: they read its stat count's high byte
+# unpacked by Styx: it read its stat count's high byte
 # shifted as a byte, so lost it, and refused the message; the reader of
 # a styxlib server ended on the refusal, and memfs, on the native
 # kernel's /tmp, waited for ever with every client of it (nativefuzz).
 #
 # Names with runes beyond U+FFFF, and with what is not
-# a rune at all, packed by the 9P libraries (Styx, Ninep) and Venti: a
+# a rune at all, packed by Styx and Venti: a
 # message or directory entry is the length its packedsize says, and
 # unpacks to what was packed.
 #
@@ -51,9 +51,6 @@ include "draw.m";
 
 include "styx.m";
 	styx: Styx;
-
-include "9p.m";
-	ninep: Ninep;
 
 include "venti.m";
 	venti: Venti;
@@ -208,24 +205,6 @@ testStyxMessages(t: ref T)
 	}
 }
 
-testNinep(t: ref T)
-{
-	ns := names();
-	for(i := 0; i < len ns; i++){
-		(n, nil) := ns[i];
-		d := dirnamed(n);
-		a: array of byte;
-		{
-			a = ninep->packdir(d);
-		} exception e {
-		"*" =>
-			t.error(sys->sprint("name %d: Ninep packdir raised %s", i, e));
-			continue;
-		}
-		t.asserteq(len a, ninep->packdirsize(d), sys->sprint("name %d: Ninep packdir's length", i));
-	}
-}
-
 # a Twstat, a Tcreate and an Rstat around the 255-byte boundary, both ways
 testLongStat(t: ref T)
 {
@@ -245,7 +224,6 @@ testLongStat(t: ref T)
 			* =>
 				t.error("Styx Twstat unpacked as something else");
 			}
-		# Ninep's Tmsg cannot be imported beside Styx's: ninep_pack_test
 		r := ref Rmsg.Stat(3, d);
 		ra := r.pack();
 		(rn, nil) := Rmsg.unpack(ra);
@@ -664,20 +642,17 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	styx = load Styx Styx->PATH;
-	ninep = load Ninep Ninep->PATH;
 	venti = load Venti Venti->PATH;
-	if(styx == nil || ninep == nil || venti == nil){
-		sys->fprint(sys->fildes(2), "cannot load Styx, Ninep or Venti: %r\n");
+	if(styx == nil || venti == nil){
+		sys->fprint(sys->fildes(2), "cannot load Styx or Venti: %r\n");
 		raise "fail:load";
 	}
 	styx->init();
-	ninep->init();
 	venti->init();
 
 	run("UtfBytes", testUtfBytes);
 	run("StyxPackdir", testStyxPackdir);
 	run("StyxMessages", testStyxMessages);
-	run("Ninep", testNinep);
 	run("LongStat", testLongStat);
 	run("Venti", testVenti);
 	run("HostileLengths", testHostileLengths);

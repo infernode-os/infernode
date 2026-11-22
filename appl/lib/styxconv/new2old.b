@@ -184,7 +184,7 @@ ns2os(tm0: ref Tmsg, newclient, oldsrv: ref Sys->FD)
 	Readerror =>
 		exit;
 	Version =>
-		(s, v) := nstyx->compatible(tm, nstyx->MAXRPC, nil);
+		(s, v) := nstyx->compatible(tm, nstyx->DEFMSIZE, nil);
 		NRsend(newclient, ref Rmsg.Version(tm.tag, s, v));
 		return;
 	Auth =>
@@ -606,7 +606,7 @@ readnewtmsgs(pidc: chan of int, newclient: ref Sys->FD, newtmsg: chan of ref Tms
 {
 	pidc <-= sys->pctl(0, nil);
 	for(;;){
-		newtmsg <-= Tmsg.read(newclient, nstyx->MAXRPC);
+		newtmsg <-= Tmsg.read(newclient, nstyx->DEFMSIZE);
 	}
 }
 

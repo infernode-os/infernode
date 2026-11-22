@@ -418,7 +418,7 @@ decrypt(s: ref Ss, c: array of byte): array of byte
 }
 
 # What the responder does with message 2's DHs and later 9P replies.
-Mhonest, Mloworder: con iota;
+Mhonest, Mloworder, Mcookies: con iota;
 Replyok, Replybadlen, Replybadtag, Replybadtype: con iota;
 
 Responder: adt {
@@ -431,6 +431,21 @@ Responder: adt {
 	ksend, krecv:	array of byte;
 	ctr:	big;
 };
+
+# A cookie reply to initiation m, as anyone with the server's public
+# key can make one: sealed to the initiation's mac1.
+cookiereply(r: ref Responder, m: array of byte): array of byte
+{
+	ckey := sha(cat(array of byte "cookie--", r.pub));
+	r.ctr++;
+	(c, tag) := keyring->ccpolyencrypt(array[16] of {* => byte 16r5a}, m[113:129], ckey, datanonce(r.ctr));
+	out := array[1 + 4 + 8] of byte;
+	out[0] = byte 4;
+	out[1:] = m[1:5];
+	for(i := 0; i < 8; i++)
+		out[5+i] = byte (r.ctr >> (8*i));
+	return cat(cat(out, c), tag);
+}
 
 # Answer initiations on fd until told to stop; report what was seen.
 responder(r: ref Responder, fd: ref Sys->FD, stop: chan of int, done: chan of ref Responder)
@@ -450,7 +465,11 @@ responder(r: ref Responder, fd: ref Sys->FD, stop: chan of int, done: chan of re
 		m := p[Udphdrlen:];
 		if(len m == INITLEN && int m[0] == Pinit){
 			r.inits++;
-			resp := answer(r, m);
+			resp: array of byte;
+			if(r.mode == Mcookies)
+				resp = cookiereply(r, m);
+			else
+				resp = answer(r, m);
 			if(resp != nil){
 				out := cat(hdr, resp);
 				sys->write(fd, out, len out);
@@ -737,6 +756,21 @@ testHandshakeWrongPSK(t: ref T)
 	t.assertnotnil(res.err, "a responder with another PSK: refused");
 }
 
+# Every initiation answered with a cookie, and never a response.  A
+# cookie restarted the try at once, each restart a counter kept and
+# three X25519s: the initiator went round as fast as it could until its
+# deadline, for whoever on the path cared to answer so.
+testHandshakeCookies(t: ref T)
+{
+	p := pair(t);
+	r := ref Responder(p.brick.priv, p.brick.pub, p.psk, Mcookies, Replyok, 0, 0, 0, 0, nil, nil, big 0);
+	(res, got) := handshake(t, r, keys(p), 15000);
+	t.assertnotnil(res.err, "a responder that only ever sends cookies: no session");
+	t.log(sys->sprint("%s after %d ms, %d initiations", res.err, res.ms, got.inits));
+	t.assert(got.inits >= 4, sys->sprint("a cookie is answered with another initiation at once, a few times (%d initiations)", got.inits));
+	t.assert(got.inits <= 16, sys->sprint("and then at the tries' own pace: %d initiations in %d ms", got.inits, res.ms));
+}
+
 # The responder's ephemeral key is a low-order point: ee and se give
 # no shared secret, and message 2 must not authenticate, though it
 # would have when nil was mixed in for them.
@@ -962,6 +996,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:cannot load";
 	}
 	testing->init();
+	testing->own();	# what this starts is killed at the end (reap)
 	err := sdg->init();
 	if(err != nil){
 		sys->fprint(sys->fildes(2), "sdg_test: %s\n", err);
@@ -983,6 +1018,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("CounterConcurrent", testCounterConcurrent);
 	run("HandshakeHonest", testHandshakeHonest);
 	run("HandshakeWrongPSK", testHandshakeWrongPSK);
+	run("HandshakeCookies", testHandshakeCookies);
 	run("HandshakeLowOrderEphemeral", testHandshakeLowOrderEphemeral);
 	run("HandshakeLowOrderStatic", testHandshakeLowOrderStatic);
 	run("HandshakeKeyLengths", testHandshakeKeyLengths);
@@ -992,6 +1028,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ReplyFramesMalformed", testReplyFramesMalformed);
 	run("RequestFrameBounds", testRequestFrameBounds);
 
+	# nothing of the test's is left running: run as emu's own program
+	# it never exited, for the servers and waiting procs it left
+	testing->reap();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

@@ -5,17 +5,23 @@
  * AES-GCM (Galois/Counter Mode) per NIST SP 800-38D.
  *
  * GHASH, multiplication by H = AES_K(0^128) in GF(2^128), is by PMULL
- * where the processor has it (ghasharm64.c) and otherwise by the C below,
+ * or PCLMULQDQ where the processor has it (ghasharm64.c, ghashamd64.c)
+ * and otherwise by the C below,
  * which takes the same time whatever the data and the key: it looks up no
  * table.  The 4-bit table it replaces (Shoup's) was indexed by nibbles of
  * the running hash, which a cache shared with an attacker shows.  The
  * counter mode is aes.c's aesCTR32: four counters at a time through its
- * bit planes, or aesarm64.c's where AES has its instructions.
+ * bit planes, or aesarm64.c's and aesamd64.c's where AES has its
+ * instructions.
  */
 
 /* ghasharm64.c: the ARMv8 instructions, where the processor has them */
 int	ghasharm64ok(void);
 void	ghasharm64(uchar y[16], const uchar h[16], const uchar *p, ulong n);
+
+/* ghashamd64.c: x86-64's, where cpuid says the processor has them */
+int	ghashamd64ok(void);
+void	ghashamd64(uchar y[16], const uchar h[16], const uchar *p, ulong n);
 
 static u64int
 be64(const uchar *b)
@@ -140,13 +146,25 @@ ghashct(uchar y[16], const uchar h[16], const uchar *p, ulong n)
 	put64(y + 8, y0);
 }
 
-/* the test's switch: nonzero forces the C (ghasharm64use is its own) */
+/* the test's switch: nonzero forces the C (ghasharm64use and ghashamd64use are their own) */
 static int ghashc;
 
 void
 aesgcmuseC(int on)
 {
 	ghashc = on;
+}
+
+/* whole blocks, by the instructions where there are any */
+static void
+ghash(uchar y[16], const uchar h[16], const uchar *p, ulong n)
+{
+	if(!ghashc && ghasharm64ok())
+		ghasharm64(y, h, p, n);
+	else if(!ghashc && ghashamd64ok())
+		ghashamd64(y, h, p, n);
+	else
+		ghashct(y, h, p, n);
 }
 
 /* GHASH over data, with zero-padding to a block's end */
@@ -157,19 +175,12 @@ ghash_update(AESGCMstate *s, uchar y[16], uchar *data, ulong len)
 	ulong whole;
 
 	whole = len & ~(ulong)15;
-	if(whole > 0){
-		if(!ghashc && ghasharm64ok())
-			ghasharm64(y, s->hkey, data, whole);
-		else
-			ghashct(y, s->hkey, data, whole);
-	}
+	if(whole > 0)
+		ghash(y, s->hkey, data, whole);
 	if(len > whole){
 		memset(block, 0, 16);
 		memmove(block, data + whole, len - whole);
-		if(!ghashc && ghasharm64ok())
-			ghasharm64(y, s->hkey, block, 16);
-		else
-			ghashct(y, s->hkey, block, 16);
+		ghash(y, s->hkey, block, 16);
 		secureZero(block, sizeof(block));
 	}
 }

@@ -1,6 +1,6 @@
 .TH FACTOTUM 2
 .SH NAME
-Factotum: attrtext, challenge, copyattrs, delattr, findattr, findattrval, getuserpassd, mount, open, parseattrs, proxy,
+Factotum: attrtext, challenge, copyattrs, delattr, findattr, findattrval, getuserpassd, open, parseattrs, proxy,
 publicattrs, takeattrs, respond, response, rpc, rpcattrs \- client interface to factotum
 .SH SYNOPSIS
 .EX
@@ -17,9 +17,6 @@ Authinfo: adt{
 AuthRpcMax: con \fR...\fP;
 
 init:          fn();
-mount:  fn(fd: ref Sys->FD, mnt: string, flags: int,
-            aname: string, keyspec: string): (int, ref Authinfo);
-
 getuserpasswd:	fn(keyspec: string): (string, string);
 
 Challenge: adt {
@@ -73,48 +70,6 @@ The high-level functions will be described first.
 .PP
 .B Init
 must be called before any other function.
-.PP
-.B Mount
-is similar to
-.B Sys->mount
-(see
-.IR sys-bind (2)),
-but uses
-.I factotum
-to authenticate,
-if the server requires it.
-.B Factotum->mount
-should be used instead of
-.B Sys->mount
-when mounting file servers that use
-.IR attach (5)
-to authenticate.
-(If the server on
-.I fd
-does not require authentication,
-.B Factotum->mount
-simply calls
-.BR Sys->mount .)
-.B Mount
-returns
-.RI ( v , ai ).
-If the integer
-.I v
-is non-negative, the mount succeeded;
-on error,
-.I v
-is negative, either the authentication or the mount failed,
-.I ai
-is nil, and the system error string contains a diagnostic.
-If the server required authentication and that was successful,
-.I ai
-is a non-nil reference to an
-.B Authinfo
-value containing the agreed user IDs, a capability for
-.IR cap (3)
-that is valid only on the server, and an array of bytes
-containing a shared secret that can be used by client
-and server to create encryption and hashing keys for the conversation.
 .PP
 .B Getuserpasswd
 returns a tuple

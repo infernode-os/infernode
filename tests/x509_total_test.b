@@ -968,6 +968,21 @@ decodes(m: array of byte): string
 	return nil;
 }
 
+# do two CRLs name one issuer?  (one that cannot be read names none)
+samecrlissuer(a, b: array of byte): int
+{
+	Name: import x509;
+	(ea, sa) := Signed.decode(a);
+	(eb, sb) := Signed.decode(b);
+	if(ea != "" || eb != "")
+		return 0;
+	(ca, ra) := CRL.decode(sa.tobe_signed);
+	(cb, rb) := CRL.decode(sb.tobe_signed);
+	if(ca != "" || cb != "")
+		return 0;
+	return ra.issuer.equal(rb.issuer);
+}
+
 testMutations(t: ref T)
 {
 	root := fixture(t, "root");
@@ -1015,12 +1030,17 @@ testMutations(t: ref T)
 		else
 			refusals++;
 		# A changed leaf or intermediate is another certificate or
-		# none, and a changed CRL one no root signed: the chain does
-		# not verify.  (A root is trusted as it is given, changed or
+		# none, and a changed CRL with the root's name one the root
+		# did not sign: the chain does not verify.  (A root is trusted as it is given, changed or
 		# not.)  That holds for a change to the bytes that are not
 		# signed too, the algorithm between the signed part and the
 		# signature: it is the signed part's own, or the certificate
 		# is refused (RFC 5280 4.1.1.2).
+		# A changed CRL that no longer has the root's name is some
+		# other CA's, and is not asked about this chain (it failed
+		# the call, as any CRL no root had signed did).
+		if(ok && which == 3 && !samecrlissuer(m, crl))
+			continue;
 		if(ok && which != 2 && which != 5) {
 			bad++;
 			t.error(sys->sprint("mutant %d (of fixture %d) verified", i, which));

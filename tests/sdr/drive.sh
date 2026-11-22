@@ -3,7 +3,8 @@
 # sdrfs driven through its files, for tests/host/sdrfs_test.sh (not a
 # test).  $1 is the test's directory; $2 the port of a fake rtl_tcp
 # (tests/host/sdr/fake_rtl_tcp.py), $3 of something that is not
-# rtl_tcp, $4 of nothing, $5 of an rtl_tcp busy with another client.
+# rtl_tcp, $4 of nothing, $5 of an rtl_tcp busy with another client,
+# $6 of one that sends two bytes at a time, $7 of one slow to greet.
 # What each step gives is written beside it.
 # A write that may be refused is made in a shell of its own.
 #
@@ -102,9 +103,44 @@ sdrfs -S -m $d/m2
 sh -c 'echo source 127.0.0.1!'^$2^' > '^$d^'/m2/ctl' >[2] $d/err.unposted
 read 4096 < $d/m2/iq > /dev/null
 ps | grep Sdrfs | wc -l > $d/procs.during
+# a setting written over and over while rtl_tcp is still applying the
+# last is sent once, as it then is: twelve in one write, twenty writes
+sleep 2
+echo 'freq 101000001
+freq 101000002
+freq 101000003
+freq 101000004
+freq 101000005
+freq 101000006
+freq 101000007
+freq 101000008
+freq 101000009
+freq 101000010
+freq 101000011
+freq 101000012' > $d/m2/ctl
+for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 { echo freq 2000000$i > $d/m2/ctl }
+cat $d/m2/ctl > $d/ctl.knob
+sleep 2
 unmount $d/m2
 sleep 2
 ps | grep Sdrfs | wc -l > $d/procs.after
+
+# an rtl_tcp that sends two bytes at a time: given in chunks
+sdrfs -S -m $d/m3 -t 200
+sh -c 'echo source 127.0.0.1!'^$6^' > '^$d^'/m3/ctl' >[2] $d/err.trickle
+{read 64 > /dev/null; read 16384 > $d/iq.trickle} < $d/m3/iq
+unmount $d/m3
+
+# a source command given up (its writer killed) is not done
+sdrfs -S -m $d/m4
+sh -c 'echo source 127.0.0.1!'^$7^' > '^$d^'/m4/ctl' >[2] /dev/null &
+p=$apid
+sleep 1
+kill $p > /dev/null
+sleep 3
+cat $d/m4/status > $d/status.givenup
+cat $d/m4/ctl > $d/ctl.givenup
+unmount $d/m4
 
 sdrfs >[2] $d/again
 echo R done

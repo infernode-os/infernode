@@ -20,6 +20,7 @@ include "attrdb.m";
 
 include "ip.m";
 	ip: IP;
+	IPaddr: import ip;
 include "ipattr.m";
 	ipattr: IPattr;
 
@@ -129,6 +130,9 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(file == nil)
 		error(sys->sprint("can't make %s/cs: %r", mntpt));
 	publish(svcname, mntpt+"/cs");
+	(sok, sd) := sys->stat(mntpt+"/cs");
+	if(sok >= 0)
+		myfile = sd.qid.path;
 	sys->pctl(Sys->FORKFD|Sys->NEWPGRP, nil);
 	refresh();
 	if(dialmod != nil){
@@ -256,10 +260,62 @@ rf(name: string): string
 	return string buf[0:n];
 }
 
+#
+# A cs started again removes the file of the one before and makes its
+# own: nothing more would ever come to the old one's loop, which waited
+# for it for good, with its database and its name space.  The loop now
+# looks every few seconds whether the file it serves is still the one
+# there, and ends when it is not.
+#
+Lookevery: con 5000;
+myfile := big -1;
+
+ticker(c: chan of int)
+{
+	c <-= sys->pctl(Sys->NEWFD, nil);
+	for(;;){
+		sys->sleep(Lookevery);
+		c <-= 1;
+	}
+}
+
+replaced(): int
+{
+	if(myfile == big -1)
+		return 0;
+	(ok, d) := sys->stat(mntpt+"/cs");
+	return ok < 0 || d.qid.path != myfile;
+}
+
+#
+# No more than Maxqueries are being answered at once: each is a Prog,
+# and one waiting for dns stays until its client goes.  There was no
+# bound; a program with the file could have cs make them without end.
+#
+Maxqueries: con 64;
+nqueries := 0;
+
 cs(file: ref Sys->FileIO)
 {
+	tick := chan of int;
+	donec := chan[Maxqueries] of int;
+	spawn ticker(tick);
+	tickpid := <-tick;
 	for (;;) {
 		alt {
+		<-tick =>
+			if(replaced()){
+				if(verbose)
+					sys->fprint(stderr, "cs: %s/cs is another's now: this one ends\n", mntpt);
+				# Queries still running answer their writers and
+				# end by themselves; with this loop's channels
+				# dropped, whoever still has the old file open is
+				# told it has hung up.
+				kill(tickpid);
+				exit;
+			}
+		<-donec =>
+			nqueries--;
 		(nil, buf, fid, wc) := <-file.write =>
 			cleanfid(fid);	# each write cancels previous requests
 			if(wc != nil && dialmod != nil){	# not for a close, which has nobody to tell
@@ -281,11 +337,16 @@ cs(file: ref Sys->FileIO)
 					wc <-= (nbytes, nil);
 					break;
 				}
+				if(nqueries >= Maxqueries){
+					wc <-= (0, "cs: too many queries outstanding");
+					break;
+				}
 				now := time();
 				r := ref Reply;
 				r.fid = fid;
 				r.cancel = chan[1] of int;
-				spawn request(r, query, nbytes, now, wc);
+				nqueries++;
+				spawn request(r, query, nbytes, now, wc, donec);
 				rlist = r :: rlist;
 			}
 
@@ -347,7 +408,7 @@ kill(pid: int)
 		sys->fprint(fd, "kill");
 }
 
-request(r: ref Reply, query: string, nbytes: int, now: int, wc: chan of (int, string))
+request(r: ref Reply, query: string, nbytes: int, now: int, wc: chan of (int, string), donec: chan of int)
 {
 	# Run the translation under an exception handler.  A fault in the
 	# resolver (e.g. a nil dereference deep in the ndb/ip lookup path)
@@ -378,10 +439,11 @@ request(r: ref Reply, query: string, nbytes: int, now: int, wc: chan of (int, st
 	}
 	if(r.err != nil){
 		if(verbose)
-			sys->fprint(stderr, "cs: %s: %s\n", query, r.err);
+			sys->fprint(stderr, "cs: %q: %s\n", query, r.err);
 		wc <-= (0, r.err);
 	} else
 		wc <-= (nbytes, nil);
+	donec <-= 1;	# cannot block: there is room for every query there may be
 }
 
 reply(r: ref Reply, off: int, nbytes: int, rc: chan of (array of byte, string))
@@ -421,7 +483,7 @@ lookcache(query: string, now: int): ref Cached
 		c := cache[i];
 		if(c != nil && c.query == query && now < c.expire){
 			if(verbose)
-				sys->print("cache: %s -> %s\n", query, hd c.addrs);
+				sys->print("cache: %q -> %q\n", query, hd c.addrs);
 			return c;
 		}
 	}
@@ -545,7 +607,7 @@ xlate(address: string, now: int, cancel: chan of int): (list of string, string)
 
 		repl = mntpt+"/"+dnetw+"/clone "+s;
 		if(verbose)
-			sys->fprint(stderr, "cs: %s!%s!%s -> %s\n", netw, mach, service, repl);
+			sys->fprint(stderr, "cs: %q!%q!%q -> %q\n", netw, mach, service, repl);
 
 		rl = repl :: rl;
 	}
@@ -590,16 +652,55 @@ askdns(name: string, rtype: string): (list of string, string)
 	rl: list of string;
 	buf := array[256] of byte;
 	sys->seek(fd, big 0, 0);
+	odd := 0;
 	while((n := sys->read(fd, buf, len buf)) > 0){
-		# name rtype value
-		(nf, fld) := sys->tokenize(string buf[0:n], " \t");
-		if(nf != 3){
-			sys->fprint(stderr, "cs: odd result from dns: %s\n", string buf[0:n]);
+		# name rtype value.  The value went into the answer as it
+		# came; an answer to an address query is an address, and
+		# what is not is left out and said (once the answers have
+		# all been read: a line each would be the sender's to fill
+		# the log with).
+		(nf, fld) := sys->tokenize(string buf[0:n], " \t\n");
+		if(nf != 3 || hd tl fld != rtype || rtype == "ip" && !isaddr(hd tl tl fld)){
+			if(odd++ == 0)
+				sys->fprint(stderr, "cs: odd result from dns for %q: %q\n", name, string buf[0:n]);
 			continue;
 		}
 		rl = hd tl tl fld :: rl;
 	}
+	# dns answered, with nothing that can be used: that is its answer,
+	# and nobody else is asked
+	if(rl == nil && odd > 0)
+		return (nil, "cs: dns gave no usable answer for " + name);
 	return (reverse(rl), nil);
+}
+
+# an IP address written out: four numbers of a byte each, or v6's digits
+# and colons that parse (IPaddr.parse alone takes 300.1.2.3.4.5)
+isaddr(s: string): int
+{
+	v6 := 0;
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		if(c == ':')
+			v6 = 1;
+		else if(!(c >= '0' && c <= '9' || c == '.' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'))
+			return 0;
+	}
+	if(v6)
+		return IPaddr.parse(s).t0 >= 0;
+	(n, f) := sys->tokenize(s, ".");
+	if(n != 4 || len s > 15)
+		return 0;
+	for(; f != nil; f = tl f){
+		d := hd f;
+		if(len d > 3 || !isnumeric(d) || int d > 255)
+			return 0;
+	}
+	# and no empty field between two dots
+	for(i = 0; i < len s; i++)
+		if(s[i] == '.' && (i == 0 || i == len s-1 || s[i+1] == '.'))
+			return 0;
+	return 1;
 }
 
 dblook(attr: string, val: string, rattr: string): list of string

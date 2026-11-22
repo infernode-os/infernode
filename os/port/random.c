@@ -96,6 +96,7 @@ enum
 	Stalems		= 10*60*1000,	/* the longest the old state serves while the generator is dry */
 	Chunk		= HMACDRBGmax,	/* the most one Generate gives (2^19 bits) */
 	Tellms		= 5000,
+	Tryms		= 5000,		/* how long genrandomtry waits for a generator that is dry */
 
 	/* SP 800-90B 4.4: H = 4 bits a byte, alpha = 2^-20 */
 	Rctcutoff	= 6,		/* 1 + ceil(20/H) */
@@ -380,14 +381,20 @@ waiting(int why, int r, int n, int waited)
 			waited/1000);
 }
 
-/* waiting with drbg.q free, so other readers wait (and say so) too */
-static void
-generate(uchar *p, int n, int why)
+/*
+ * waiting with drbg.q free, so other readers wait (and say so) too.
+ * limit is how long to wait, in milliseconds, or -1 for as long as it
+ * takes; 0 with p filled, -1 (only with a limit) with nothing given:
+ * at once when the machine has no generator, at the limit when it has
+ * one that is dry.
+ */
+static int
+generate(uchar *p, int n, int why, int limit)
 {
 	int r, waited, last;
 
 	if(n <= 0)
-		return;
+		return 0;
 	waited = 0;
 	last = 0;
 	for(;;){
@@ -396,9 +403,11 @@ generate(uchar *p, int n, int why)
 		if(r > 0){
 			fill(p, n);
 			qunlock(&drbg.q);
-			return;
+			return 0;
 		}
 		qunlock(&drbg.q);
+		if(limit >= 0 && (r < 0 || waited >= limit))
+			return -1;
 		waited += randomwait();
 		if(waited - last >= Tellms){
 			last = waited;
@@ -442,7 +451,7 @@ randomread(void *xp, ulong n)
 		m = left;
 		if(m > 64*1024)
 			m = 64*1024;
-		generate(p, m, Forpool);
+		generate(p, m, Forpool, -1);
 		p += m;
 	}
 	return n;
@@ -459,7 +468,25 @@ randomread(void *xp, ulong n)
 void
 genrandom(uchar *p, int n)
 {
-	generate(p, n, Forkey);
+	generate(p, n, Forkey, -1);
+}
+
+/*
+ * genrandomtry -- the same bytes for a caller that has an error to
+ * give instead (libsec.h: 0, or -1 with nothing given): the bytes a
+ * signature is hedged with, where "no signature" is an answer.
+ * genrandom's wait has no end on a machine with no generator, and a
+ * Keyring builtin signing with SLH-DSA or ML-DSA there never came
+ * back.  -1 at once when there is no generator, and after Tryms when
+ * there is one and it has given nothing for that long; never bytes
+ * from anywhere else.  (libsec's own genrandom.c, the emulator's, has
+ * a genrandomtry: without this one a kernel linked that file in beside
+ * this.)
+ */
+int
+genrandomtry(uchar *p, int n)
+{
+	return generate(p, n, Forkey, Tryms);
 }
 
 /*

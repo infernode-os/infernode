@@ -58,6 +58,21 @@ genrandom(uchar *p, int n)
 		abort();
 }
 
+/*
+ * the signatures' hedging bytes are asked for here (libsec.h: -1 and
+ * nothing when there is no generator); norng makes that the answer
+ */
+int	norng;
+
+int
+genrandomtry(uchar *p, int n)
+{
+	if(norng)
+		return -1;
+	genrandom(p, n);
+	return 0;
+}
+
 static int fails;
 
 static void
@@ -260,6 +275,10 @@ vectors(const char *file, int quick)
 				check(sign(set, h2, msg, n4, sk) == 0, "sign fails", set, lineno);
 				check(memcmp(h1, h2, L) != 0 && memcmp(h2, sig, L) != 0, "two signatures of one message are the same: no randomness went into them", set, lineno);
 				check(verify(set, h2, L, msg, n4, pk) == 1, "own hedged signature refused", set, lineno);
+				/* no generator: no signature, said (it did not return) */
+				norng = 1;
+				check(sign(set, h2, msg, n4, sk) != 0, "a signature was made with no generator to hedge it", set, lineno);
+				norng = 0;
 				free(h1); free(h2);
 			}
 			free(b);

@@ -1,8 +1,6 @@
 intro 0intro
 applylog applylog
 updatelog applylog
-bootpd bootpd
-tftpd bootpd
 changelogin changelogin
 convpasswd changelogin
 create create
@@ -29,8 +27,6 @@ osinit osinit
 ping ping
 plumber plumber
 rdbgsrv rdbgsrv
-register register
-rip rip
 dsagen rsagen
 rsagen rsagen
 rstyxd rstyxd
@@ -49,6 +45,6 @@ registry svc
 rstyx svc
 styx svc
 svc svc
-virgild virgild
 wpa wpa
 timesync timesync
+sdgsrv sdgsrv

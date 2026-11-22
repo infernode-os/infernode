@@ -234,7 +234,6 @@ udp=profile port=136
 udp=snmp port=161
 udp=rip port=520
 udp=bfs port=2201
-udp=virgil port=2202
 udp=bandt2 port=7331
 udp=oradius port=1645
 udp=chord-dhash port=11865

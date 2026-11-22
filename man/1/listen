@@ -4,7 +4,7 @@ listen, styxlisten, dial \- network connections
 .SH SYNOPSIS
 .B listen
 [
-.B -AMts
+.B -Ats
 ] [
 .B -a
 .I alg
@@ -35,7 +35,7 @@ listen, styxlisten, dial \- network connections
 .br
 .B styxlisten
 [
-.B -AMts
+.B -Ats
 ] [
 .B -a
 .I alg
@@ -122,18 +122,25 @@ or
 .BR clear ;
 given any other name (the algorithms of older systems, say) the listener
 says which it does not know and does not start.
-A caller's choice among the algorithms offered is sent in the clear after
-authentication and is not itself authenticated, so offering
+A caller chooses among the algorithms offered, and its choice is confirmed
+under the secret the two ends authenticated with and is part of the
+connection's keys (see
+.IR security-auth (2)):
+nobody on the path can change it, so
 .B none
-(or
-.BR clear )
-beside an algorithm protects no caller's session at this end:
-someone on the path can change any caller's choice to
-.B none
-and then speak to the listener's command as that caller.
-The listener therefore refuses to start with such a list unless
+may be offered beside an algorithm for callers that ask for it.
+(While the choice went in clear such a list was refused unless
 .B -M
-is given.
+was given; that option is gone.)
+.B -A
+and
+.B -a
+contradict each other, and a listener given both does not start.
+A listener can give each caller its own identity only when it is run by
+the host owner, who alone may write
+.BR /dev/user ;
+started by anyone else it says when it starts that every caller will be
+served under the listener's own name.
 If
 .I keyfile
 is specified, then that will be used as the server's certificate;
@@ -142,7 +149,11 @@ otherwise
 will be used.
 Unless
 .B -t
-is given, the listener forks its namespace, reads the authentication data once,
+is given, the listener forks its namespace (with
+.B -A
+too, so that what it hides from its command is not taken from the name
+space of whoever started it; binds made there afterwards are not seen by
+the command), reads the authentication data once,
 and binds
 .B /dev/null
 over the credential file before it starts accepting commands.  This removes the
@@ -162,6 +173,12 @@ new exchanges may start in each one-second window (8 by default), and at most
 .I persource
 of the active exchanges may come from any one remote address (4 by default),
 so that a single host cannot hold every slot with silent connections.
+One address may start at most half of a second's
+.I authrate
+exchanges (and always one), so that one host making connections as fast
+as it can leaves the other half to everyone else.
+An exchange not finished by its deadline is hung up, and the listener
+says so.
 Connections over any limit are closed before authentication output or
 cryptographic work.
 The global and per-source concurrency checks precede the shared rate check, so
@@ -246,7 +263,9 @@ authenticated user.
 When the command exits, the process listening
 on
 .I address
-is stopped.
+is stopped, and so are the connections it was serving.
+When the listener and its callers have all gone the command sees the end
+of its input.
 .PP
 .I Dial
 is the complement of

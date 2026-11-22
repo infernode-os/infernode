@@ -30,9 +30,29 @@ implement Sdgsrv;
 # toward the export, so a tag the commander reuses after giving up on a
 # request, and a Tflush, cannot reach the wrong request.
 #
-# Not here, as a closed bench does not need them: cookies under load,
-# mac2, the 4-a-second handshake budget, and deferred promotion (STYX-DGRAM
-# Rev S1).  A deployment needs those, and a CNSA suite in place of Noise's.
+# An initiation is two X25519s before anything says who sent it, so
+# anyone who has our public key (mac1 needs it) and can send datagrams,
+# from addresses of its own invention, could keep us at them.  As the
+# brick does: Budget initiations a second are looked at as they come;
+# past that we are under load, and an initiation is answered with a
+# cookie (an HMAC of its sender's address under a secret of ours,
+# sealed to the initiation's mac1: no X25519) unless its mac2 shows its
+# sender has had one, which only a sender at that address can have.
+# Senders that have are looked at, Budget a second each and Loaded a
+# second in all.  The secret changes every two minutes; the one before
+# is still good.
+#
+# A session's keys last as long as the session: the protocol has no
+# rekey (a new handshake is a new session, with a new export, which is
+# what a mount made again gets).  Each way's counter is the cipher's
+# nonce, and a session that has sent or been sent Maxmsgs (2^60)
+# packets is over.
+#
+# Not here: deferred promotion (STYX-DGRAM Rev S1).  The brick has one
+# session and a new one takes its place, so it waits for the first
+# packet under the new keys; here each handshake is a session beside
+# the others, and only the commander's key with a newer counter makes
+# one.  A CNSA suite in place of Noise's is not here either.
 #
 
 include "sys.m";
@@ -48,8 +68,13 @@ Sdgsrv: module
 
 NAME:	con "Noise_IKpsk2_25519_ChaChaPoly_SHA256";
 PROLOGUE:	con "styxbrick sdg 1";
-Pinit, Presp, Pdata: con 1+iota;
+Pinit, Presp, Pdata, Pcookie: con 1+iota;
 INITLEN:	con 1 + 4 + 108 + 16 + 16;
+Budget:	con 4;		# initiations a second looked at with no cookie; and a second a sender that has one
+Loaded:	con 16;		# initiations a second looked at under load, in all
+Cookies:	con 64;		# cookie replies a second
+Secretms:	con 120000;	# a cookie secret's life
+Maxmsgs:	con big 1 << 60;	# packets a session sends, or takes, under one key
 Udphdrlen:	con 52;
 MSIZE:	con 1200;
 ncachemax := 16;	# replies kept, as the brick keeps (-c)
@@ -64,6 +89,17 @@ Tflush:	con 108;
 verbose := 0;
 spriv, speer, psk: array of byte;
 mac1key: array of byte;
+ckey: array of byte;		# cookie replies are sealed under this (from our public key)
+cksecret, ckprev: array of byte;	# what cookies are made with, and were
+cktime := 0;			# when cksecret was made
+hswin := -1;			# the second being counted
+hsdone := 0;			# initiations looked at in it
+ncookies := 0;			# cookie replies sent in it
+hssrc: list of ref Src;		# senders with cookies looked at in it
+Src: adt {
+	addr:	array of byte;
+	n:	int;
+};
 lastctr: array of byte;		# the newest initiation counter accepted (12 bytes)
 ctrfile: string;		# where it is kept: ctrfile.a and ctrfile.b
 ctrslot := 0;			# the slot holding it (the next goes in the other)
@@ -114,6 +150,7 @@ init(nil: ref Draw->Context, args: list of string)
 		fatal("no keys in " + kd + " (sdgsrv -g makes them)");
 	spub := kr->x25519_base(spriv);
 	mac1key = sha(cat(array of byte "mac1", spub));
+	ckey = sha(cat(array of byte "cookie--", spub));
 	ctrfile = kd + "/sdgsrv.ctr";
 	cerr: string;
 	(lastctr, cerr) = ctrload(ctrfile);
@@ -135,7 +172,8 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: sdgsrv [-v] [-c ncache] [-d n] keydir addr dir\n       sdgsrv -g keydir\n");
+	sys->fprint(stderr, "usage: sdgsrv [-v] [-c ncache] [-d n] keydir addr dir\n       sdgsrv -g keydir\n" +
+		"(a session is not rekeyed: its keys last until it is made again; no deferred promotion; Noise's suite, not CNSA's)\n");
 	raise "fail:usage";
 }
 
@@ -735,6 +773,8 @@ ridonly(rid: int): array of byte
 # the 64-counter replay window
 fresh(ss: ref Session, n: big): int
 {
+	if(n < big 0 || n >= Maxmsgs)
+		return 0;	# past what one key is used for
 	if(ss.rhigh < big 0 || n > ss.rhigh)
 		return 1;
 	d := ss.rhigh - n;
@@ -869,6 +909,8 @@ send(ss: ref Session, plain: array of byte)
 	h := array[13] of byte;
 	h[0] = byte Pdata;
 	put4(h, 1, ss.them);
+	if(ss.sctr >= Maxmsgs)
+		return;		# the key has sealed all it may: the session is over
 	for(i := 0; i < 8; i++)
 		h[5+i] = byte (ss.sctr >> (8*i));
 	(c, tag) := kr->ccpolyencrypt(plain, h, ss.ksend, datanonce(ss.sctr));
@@ -891,6 +933,91 @@ lost(): int
 	return ((lossrand >> 8) & 16rFFFF) % lossy == 0;
 }
 
+# ---- the handshake's budget ----
+
+# the sender of a datagram, from its headers: address and port
+sender(hdr: array of byte): array of byte
+{
+	a := array[18] of byte;
+	a[0:] = hdr[0:16];
+	a[16:] = hdr[48:50];
+	return a;
+}
+
+cookie(secret, addr: array of byte): array of byte
+{
+	return hmac(secret, addr)[0:16];
+}
+
+# Whether initiation m is to be looked at (its X25519s done).  One that
+# is not, under load, is answered with a cookie.
+admit(m, hdr: array of byte): int
+{
+	# mac1, which anyone with our public key can make, before anything
+	if(!same(hmac(mac1key, m[0:113])[0:16], m[113:129]))
+		return 0;
+	now := sys->millisec();
+	if(now / 1000 != hswin){
+		hswin = now / 1000;
+		hsdone = 0;
+		ncookies = 0;
+		hssrc = nil;
+	}
+	if(hsdone < Budget){
+		hsdone++;
+		return 1;
+	}
+	# under load
+	if(cksecret == nil || now - cktime > Secretms){
+		ns := randbytes(32);
+		if(ns == nil)
+			return 0;
+		ckprev = cksecret;
+		cksecret = ns;
+		cktime = now;
+	}
+	addr := sender(hdr);
+	if(same(hmac(cookie(cksecret, addr), m[0:129])[0:16], m[129:145]) ||
+	   ckprev != nil && same(hmac(cookie(ckprev, addr), m[0:129])[0:16], m[129:145])){
+		# a sender at the address it says
+		if(hsdone >= Budget + Loaded)
+			return 0;
+		for(l := hssrc; l != nil; l = tl l)
+			if(same((hd l).addr, addr)){
+				if((hd l).n >= Budget)
+					return 0;
+				(hd l).n++;
+				hsdone++;
+				return 1;
+			}
+		hssrc = ref Src(addr, 1) :: hssrc;
+		hsdone++;
+		return 1;
+	}
+	if(ncookies >= Cookies)
+		return 0;
+	ncookies++;
+	# The reply is smaller than what it answers: nothing is amplified
+	# toward an address that was invented.  Its nonce is random: the
+	# key is the same for the life of ours.
+	n := randbytes(8);
+	if(n == nil)
+		return 0;
+	nb := array[12] of {* => byte 0};
+	nb[4:] = n;
+	(c, tag) := kr->ccpolyencrypt(cookie(cksecret, addr), m[113:129], ckey, nb);
+	out := array[Udphdrlen + 1 + 4 + 8 + 16 + 16] of byte;
+	out[0:] = hdr;
+	o := Udphdrlen;
+	out[o] = byte Pcookie;
+	out[o+1:] = m[1:5];
+	out[o+5:] = n;
+	out[o+13:] = c;
+	out[o+29:] = tag;
+	sys->write(udp, out, len out);
+	return 0;
+}
+
 # ---- the socket ----
 
 dispatch()
@@ -909,6 +1036,8 @@ dispatch()
 		case int m[0] {
 		Pinit =>
 			if(len m != INITLEN)
+				continue;
+			if(!admit(m, hdr))
 				continue;
 			(resp, ss) := answer(m, hdr);
 			if(resp == nil || ss == nil)

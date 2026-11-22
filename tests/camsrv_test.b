@@ -18,6 +18,19 @@ implement CamsrvTest;
 # one out of range ("exposure -1") are refused; ctl is not writable by
 # others.
 #
+# And the capture's own life (Settle, Stall), each against a camsrv of
+# its own:
+#   - a mode written just after the last close was taken while the
+#     capture was still making its last frame, which it then merged at
+#     one size into planes of another: the capture raised, never said it
+#     had gone, and no capture was started again (the next reader waited
+#     for ever).  The change waits for the capture.
+#   - a capture told to stop looks between frames; with a frame that
+#     never comes (a dead sensor link; "stall" with -t) it never went,
+#     and nor did anything after it.  It is given three seconds.
+#   - status said stream=on from the count of readers; it says what the
+#     capture is.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -255,8 +268,22 @@ testFrames(t: ref T)
 
 testStop(t: ref T)
 {
-	sys->sleep(300);
+	# the frame being made when the last reader went is finished first
+	# ("stopping"): how long that takes is the host's
+	for(i := 0; i < 50 && !has(file("status"), "stream=off"); i++)
+		sys->sleep(100);
 	t.assert(has(file("status"), "stream=off"), "the last close stops the stream: " + file("status"));
+}
+
+# the status at dir once it has stream=want, waiting at most ms for it
+waitstatus(dir, want: string, ms: int): string
+{
+	s := rd(dir + "/0/status");
+	for(; ms > 0 && !has(s, "stream=" + want); ms -= 100){
+		sys->sleep(100);
+		s = rd(dir + "/0/status");
+	}
+	return s;
 }
 
 testCtl(t: ref T)
@@ -367,6 +394,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	testing = load Testing Testing->PATH;
 	testing->init();
+	testing->own();	# what this starts is killed at the end (reap)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
@@ -389,7 +417,12 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Posted", testPosted);
 		run("HostileRead", testHostileRead);
 		run("HostileCtl", testHostileCtl);
+		run("Settle", testSettle);
+		run("Stall", testStall);
 	}
+	# nothing of the test's is left running: run as emu's own program
+	# it never exited, for the servers and waiting procs it left
+	testing->reap();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }
@@ -584,6 +617,126 @@ hostilectl(out: chan of string)
 	check(out, has(c, "fps 12\n") && has(c, "gain 300\n") && has(c, "flip 1\n") && has(c, "exposure 0\n") &&
 		has(c, "focus 400\n") && has(c, "mode 576 324\n") && has(c, "rotate 180\n"), "and read back: " + c);
 	check(out, try(dir, "status", nil, big 0) == "ok", "status reads after them");
+	sys->unmount(nil, dir);
+	out <-= "END";
+}
+
+testSettle(t: ref T)
+{
+	hostile(t, settle);
+}
+
+# one frame read of the camsrv at dir, whole: "ok", an error, or "hung"
+oneframe(dir: string, fs: int): string
+{
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn frameop(dir, fs, done, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, 8000);
+	alt {
+	r := <-done =>
+		return r;
+	<-tc =>
+		k := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+		if(k != nil)
+			sys->fprint(k, "kill");
+		return "hung";
+	}
+}
+
+frameop(dir: string, fs: int, done: chan of string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	fd := sys->open(dir + "/0/frame", Sys->OREAD);
+	if(fd == nil){
+		done <-= sys->sprint("open: %r");
+		return;
+	}
+	b := array[fs] of byte;
+	for(try := 0; try < 5; try++){
+		n := postednewest(dir);
+		(got, e) := readat(fd, b, n);
+		if(e == "frame expired")
+			continue;
+		if(e != nil)
+			done <-= e;
+		else if(got != fs)
+			done <-= sys->sprint("short frame: %d of %d", got, fs);
+		else
+			done <-= "ok";
+		return;
+	}
+	done <-= "frame expired, five times";
+}
+
+settle(out: chan of string)
+{
+	dir := MNT + ".s";
+	if(own(dir) < 0){
+		out <-= sys->sprint("FAIL mount: %r");
+		out <-= "END";
+		return;
+	}
+	check(out, try(dir, "ctl", "fps 56", big 0) == "ok", "fps 56");
+	big1 := 576*324*3/2;
+	small := 288*162*3/2;
+	for(i := 0; i < 12; i++){
+		r := try(dir, "ctl", "mode 576 324", big 0);
+		check(out, r == "ok", sys->sprint("round %d: mode 576 324 after the close: %s", i, r));
+		r = oneframe(dir, big1);
+		if(r == "hung"){
+			out <-= sys->sprint("FAIL round %d: no frame at 576x324: the capture never started again", i);
+			break;
+		}
+		check(out, r == "ok", sys->sprint("round %d: a frame at 576x324: %s", i, r));
+		# the reader has just closed: its capture is still in a frame
+		r = try(dir, "ctl", "mode 288 162", big 0);
+		check(out, r == "ok", sys->sprint("round %d: mode 288 162 after the close: %s", i, r));
+		r = oneframe(dir, small);
+		if(r == "hung"){
+			out <-= sys->sprint("FAIL round %d: no frame at 288x162: the capture never started again", i);
+			break;
+		}
+		check(out, r == "ok", sys->sprint("round %d: a frame at 288x162: %s", i, r));
+	}
+	sys->unmount(nil, dir);
+	out <-= "END";
+}
+
+testStall(t: ref T)
+{
+	hostile(t, stall);
+}
+
+stall(out: chan of string)
+{
+	dir := MNT + ".t";
+	if(own(dir) < 0){
+		out <-= sys->sprint("FAIL mount: %r");
+		out <-= "END";
+		return;
+	}
+	hold := sys->open(dir + "/0/frame", Sys->OREAD);
+	check(out, hold != nil, "frame opens");
+	sys->sleep(300);
+	check(out, has(rd(dir + "/0/status"), "stream=on"), "streaming: " + rd(dir + "/0/status"));
+	check(out, try(dir, "ctl", "stall", big 0) == "ok", "stall is taken by the simulated sensor");
+	sys->sleep(300);
+	hold = nil;
+	sys->sleep(300);
+	# the capture is in a frame that will not come: not off, and it says so
+	s := rd(dir + "/0/status");
+	check(out, has(s, "stream=stopping"), "a capture told to stop and not yet gone: " + s);
+	# Stopwait (3 s), and the host's time to kill it and say so
+	s = waitstatus(dir, "off", 8000);
+	check(out, has(s, "stream=off"), "given up after three seconds: " + s);
+	r := oneframe(dir, FS);
+	if(r == "hung")
+		out <-= "FAIL after a capture that never stopped, no capture starts: a reader waits for ever";
+	else
+		check(out, r == "ok", "a reader after it gets a frame: " + r);
 	sys->unmount(nil, dir);
 	out <-= "END";
 }

@@ -5,8 +5,6 @@ typedef struct PK PK;
 typedef struct Certificate Certificate;
 typedef struct XDigestState XDigestState;
 typedef struct XAESstate XAESstate;
-typedef struct XDESstate XDESstate;
-typedef struct XIDEAstate XIDEAstate;
 typedef struct XRC4state XRC4state;
 
 enum
@@ -67,20 +65,6 @@ struct XECpoint
 {
 	Keyring_ECpoint	x;
 	ECpoint	point;
-};
-
-/* DES state */
-struct XDESstate
-{
-	Keyring_DESstate	x;
-	DESstate	state;
-};
-
-/* IDEA state */
-struct XIDEAstate
-{
-	Keyring_IDEAstate	x;
-	IDEAstate	state;
 };
 
 /* RC4 state */

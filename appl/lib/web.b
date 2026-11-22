@@ -87,39 +87,84 @@ webstart(): string
 	return "";
 }
 
+# What a read of the status line brought past its newline: the start
+# of the body, which webcontents takes first.
+pending: array of byte;
+
+# webget's answer begins "OK length id type url\n" or "ERROR id
+# message\n", and the body follows.  The line was taken to be exactly
+# what one read of 1000 bytes gave: a line longer than that (a long
+# URL) was cut and its end read as the body's start, and body bytes
+# that came with the line were dropped, so the body was short by them
+# and the next answer began in the middle of this one.  The line is
+# read to its newline, in as many reads as it takes, and what came
+# after it is kept.
+MAXSTATUS: con 64*1024;
+
 getstatus(loc: string): (string, string, int)
 {
 	clen := 0;
 	dtype := "";
 	nbase := "";
-	bstatus := array[1000] of byte;
-	n := sys->read(webio, bstatus, len bstatus);
-	if(n < 0)
-		error(sys->sprint("error reading webget response header: %r"), loc);
-	else {
-		status := string bstatus[0:n];
-		if(DEBUG)
-			sys->print("webget response: %s\n", status);
-		(nl, l) := sys->tokenize(status, " \n");
-		if(nl < 3)
-			error("unexpected webget response: " + status, loc);
-		else {
-			s := hd l;
-			l = tl l;
-			if(s == "ERROR") {
-				(nil, msg) := stringmod->splitl(status[6:], " ");
-				error(msg, loc);
-			}
-			else if(s == "OK") {
-				clen = int (hd l);
-				l = tl(tl l);
-				dtype = hd l;
-				l = tl l;
-				nbase = hd l;
-			}
-			else
-				error("webget protocol error", loc);
+	pending = nil;
+	buf := array[1000] of byte;
+	have := 0;
+	nl := -1;
+	while(nl < 0) {
+		if(have == len buf) {
+			if(len buf >= MAXSTATUS)
+				break;
+			nb := array[2 * len buf] of byte;
+			nb[0:] = buf;
+			buf = nb;
 		}
+		n := sys->read(webio, buf[have:], len buf - have);
+		if(n < 0) {
+			error(sys->sprint("error reading webget response header: %r"), loc);
+			return (dtype, nbase, clen);
+		}
+		if(n == 0)
+			break;
+		for(i := have; i < have + n; i++)
+			if(buf[i] == byte '\n') {
+				nl = i;
+				break;
+			}
+		have += n;
+	}
+	if(nl < 0) {
+		error("unexpected webget response: " + string buf[0:have], loc);
+		return (dtype, nbase, clen);
+	}
+	status := string buf[0:nl];
+	if(DEBUG)
+		sys->print("webget response: %s\n", status);
+	(nf, l) := sys->tokenize(status, " ");
+	if(nf < 3)
+		error("unexpected webget response: " + status, loc);
+	else {
+		s := hd l;
+		l = tl l;
+		if(s == "ERROR") {
+			(nil, msg) := stringmod->splitl(status[6:], " ");
+			error(msg, loc);
+		}
+		else if(s == "OK" && nf >= 5) {
+			clen = int (hd l);
+			l = tl(tl l);
+			dtype = hd l;
+			l = tl l;
+			nbase = hd l;
+			if(clen < 0) {
+				clen = 0;
+				dtype = "";
+				error("webget protocol error", loc);
+			}
+			else if(have > nl + 1)
+				pending = buf[nl+1:have];
+		}
+		else
+			error("webget protocol error", loc);
 	}
 	return (dtype, nbase, clen);
 }
@@ -192,11 +237,20 @@ webcontents(clen: int) : array of byte
 	contents := array[clen] of byte;
 	i := 0;
 	n := 0;
+	if(pending != nil) {
+		i = len pending;
+		if(i > clen)
+			i = clen;
+		contents[0:] = pending[0:i];
+		pending = nil;
+	}
 	while(i < clen) {
 		n = sys->read(webio, contents[i:], clen-i);
-		if(n < 0)
+		# no more is the end of it: a read of nothing was read again,
+		# for ever
+		if(n <= 0)
 			break;
 		i += n;
 	}
-	return contents;
+	return contents[0:i];
 }

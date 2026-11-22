@@ -188,6 +188,21 @@ If another instance of
 .IR cs (8)
 is started on the same mount point, the file it serves replaces the
 earlier one if permissions allow.
+The earlier
+.I cs
+finds within a few seconds that its file is no longer the one there, and
+ends; a client that still had the old file open is told it has hung up.
+.PP
+.I Cs
+answers at most 64 queries at once; one more is refused
+.RB (` "too many queries outstanding" ').
+A name it must ask
+.IR dns (8)
+about is taken only as addresses: an answer that is not an address record
+holding an IP address is left out and reported, and if
+.I dns
+answered with nothing else the name does not translate (the host is not
+then asked).
 (On Plan 9, Plan 9's native connection service will be used by default if Inferno's
 .I cs
 is not started.)

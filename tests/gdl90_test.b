@@ -271,6 +271,85 @@ testCallsign(t: ref T)
 	t.asserteq(n, len names, "a line a craft in the traffic file");
 }
 
+# An address is one of six kinds; the kind was dropped, so a TIS-B
+# track file with an aircraft's 24 bits replaced the aircraft.  The
+# report's "extrapolated" bit and its emergency code were dropped too.
+testAddress(t: ref T)
+{
+	d := Framer.new();
+	p := Parser.new();
+	plane := report(16rAB0001, array of byte "PLANE");
+	track := report(16rAB0001, array of byte "TRACK3");
+	track[1] = byte (int track[1] & 16rF0 | 3);
+	tisb := report(16rAB0001, array of byte "PLANE");
+	tisb[1] = byte (int tisb[1] & 16rF0 | 2);
+	for(l := plane :: track :: tisb :: nil; l != nil; l = tl l){
+		(nil, ts) := d.feed(gdl90->frame(hd l));
+		if(ts != nil)
+			p.target(hd ts);
+	}
+	s := p.traffic(sys->millisec());
+	(n, nil) := sys->tokenize(s, "\n");
+	t.asserteq(n, 2, "an ICAO address and a track file of the same 24 bits are two craft: " + s);
+	t.assert(contains(s, "id=ab0001 ") && contains(s, "id=3.ab0001 "), "the track file's id says its kind: " + s);
+	t.assert(contains(s, "name=PLANE") && contains(s, "name=TRACK3"), "each keeps its name: " + s);
+
+	m := report(16rAB0009, array of byte "MAYDAY");
+	m[12] = byte (int m[12] | 4);
+	m[27] = byte 16r10;
+	(nil, ts) := d.feed(gdl90->frame(m));
+	t.asserteq(len ts, 1, "a report: a target");
+	if(ts != nil){
+		x := (hd ts).text((hd ts).seen);
+		t.assert(contains(x, " extrapolated=1 emergency=general "), "a reckoned position and an emergency are said: " + x);
+	}
+	(nil, ts) = d.feed(gdl90->frame(report(16rAB000A, array of byte "CALM")));
+	if(ts != nil){
+		x := (hd ts).text((hd ts).seen);
+		t.assert(!contains(x, "extrapolated") && !contains(x, "emergency"), "and not of a craft with neither: " + x);
+	}
+}
+
+# The heartbeat's word that the GPS position is good was kept for
+# ever: one heartbeat, and every own-ship report after was a valid fix.
+testHeartbeat(t: ref T)
+{
+	d := Framer.new();
+	heartbeat := bytes(array[] of {16r00, 16r81, 16r41, 16rDB, 16rD0, 16r08, 16r02});
+	d.feed(gdl90->frame(heartbeat));
+	nvalid := 0;
+	fl: list of ref Fix;
+	for(i := 0; i < 40; i++){
+		(fl, nil) = d.feed(gdl90->frame(ownship()));
+		if(fl != nil && (hd fl).valid)
+			nvalid++;
+	}
+	t.asserteq(nvalid, 10, "forty own-ship reports after one heartbeat: the first ten are fixes");
+	d.feed(gdl90->frame(heartbeat));
+	(fl, nil) = d.feed(gdl90->frame(ownship()));
+	t.assert(fl != nil && (hd fl).valid, "a heartbeat again: a fix again");
+}
+
+# A group whose ETX was lost and whose successor begins with STX was
+# dropped; a record saying "not available" after one that gave a value
+# left the value.
+testGarminGroups(t: ref T)
+{
+	g := Grouper.new();
+	fl := g.feed(array of byte "\u0002z00100\r\nAN4000.00\r\nBW07400.00\r\n\u0002z00200\r\nAN4100.00\r\nBW07400.00\r\n\u0003");
+	t.asserteq(len fl, 2, "two groups, the first's ETX lost, the second begun with STX");
+	if(len fl == 2)
+		t.assertseq(sys->sprint("%.1f %.1f", (hd fl).lat, (hd tl fl).lat), "40.0 41.0", "each its own");
+
+	g = Grouper.new();
+	fl = g.feed(array of byte "\u0002z00100\r\nAN4000.00\r\nBW07400.00\r\nD045\r\nA----------\r\nD---\r\n\u0003");
+	t.asserteq(len fl, 1, "a group");
+	if(fl != nil){
+		t.assert(!(hd fl).valid && !(hd fl).haspos, "a latitude taken back by a later record: no fix");
+		t.assert(!(hd fl).hasspeed, "and a speed");
+	}
+}
+
 # a group fed in a proc of its own: the fixes' text, "raised ...", or
 # "hung" if it has not returned in three seconds
 garminproc(s: string, done: chan of string, pidc: chan of int)
@@ -479,6 +558,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Framing", testFraming);
 	run("Garmin", testGarmin);
 	run("Callsign", testCallsign);
+	run("Address", testAddress);
+	run("Heartbeat", testHeartbeat);
+	run("GarminGroups", testGarminGroups);
 	run("GarminHostile", testGarminHostile);
 	run("Fuzz", testFuzz);
 

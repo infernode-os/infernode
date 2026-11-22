@@ -344,7 +344,7 @@ sequenceDiagram
     activate L
     Note over L: read /mnt/factotum/ctl<br/>are keys already loaded?
     alt yes
-        L-->>B: skip (touch /tmp/.secstore-unlocked)
+        L-->>B: skip
     else no, no PAK file
         L->>L: first-boot flow (§5.1)
     else no, PAK file exists
@@ -366,8 +366,7 @@ stateDiagram-v2
     ConfirmPwd --> NewPwd: mismatch
     CreateAccount --> ConnectFactotum: write &lt;user&gt;/PAK locally
     ConnectFactotum --> EnableSaveBack: no factotum file yet (new account)
-    EnableSaveBack --> Sentinel: ctl: secstore tcp!localhost!5356 user pass
-    Sentinel --> [*]: touch /tmp/.secstore-unlocked
+    EnableSaveBack --> [*]: ctl: secstore tcp!localhost!5356 user pass
     ConfirmPwd --> Skip: Esc twice
     Skip --> [*]: empty factotum
 ```
@@ -392,8 +391,7 @@ stateDiagram-v2
     Decrypt --> LoadKeys: ok
     Decrypt --> RetryOrSkip: wrong password / corrupt
     LoadKeys --> EnableSaveBack: each key → /mnt/factotum/ctl
-    EnableSaveBack --> Sentinel: ctl: secstore ...
-    Sentinel --> [*]
+    EnableSaveBack --> [*]: ctl: secstore ...
     Skip --> [*]: factotum stays empty
 ```
 
@@ -473,7 +471,7 @@ Factotum exposes four files at `/mnt/factotum`:
 | File      | Mode  | Purpose                                                          |
 |-----------|-------|------------------------------------------------------------------|
 | `ctl`     | rw    | Add/remove keys; `sync`; `secstore <addr> <user> <pass>`         |
-| `proto`   | r     | List of known auth protocols (`pass`, `p9sk1`, …)                |
+| `proto`   | r     | List of known auth protocols (`pass`, `sign`, …)                 |
 | `rpc`     | rw    | Per-protocol RPC for delegated auth                              |
 | `needkey` | r     | Notification when factotum needs a key it does not have          |
 

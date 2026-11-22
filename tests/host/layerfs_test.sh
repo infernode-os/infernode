@@ -20,6 +20,8 @@
 #     read whole in pieces (the first piece was given and the rest lost)
 #   - a rune cut by the end of a write is the rune (it was two that are
 #     none)
+#   - a directory holds 256 layers and no more (each keeps its last 512
+#     lines; nothing counted them)
 #   - over a feed's layer/ (vid9p), a file written there is listed among
 #     its layers, and vidplay9p draws it, by pixel (with the SDL
 #     emulator; skipped with a headless one)
@@ -78,6 +80,14 @@ sleep 2
 echo '-- pieces'; cat /tmp/L.many; echo
 cat EDIR/rune.1 EDIR/rune.2 > /tmp/L/rune
 echo '-- rune'; read 8192 < /tmp/L/rune
+mkdir -p /tmp/L2
+mount -ac {layerfs} /tmp/L2
+{ for i in 0 1 2 3 4 5 6 7 8 9 { for j in 0 1 2 3 4 5 6 7 8 9 { for k in a b c {
+	sh -c 'echo ''frame=* point x=1 y=1'' > /tmp/L2/f'^$i^$j^$k
+} } } } >[2] /tmp/L2.err
+echo '-- count'; ls /tmp/L2 | wc -l
+echo '-- toomany'; cat /tmp/L2.err
+echo '-- stillreads'; read 8192 < /tmp/L2/f00a
 echo LAYERFS-DONE
 echo halt > '#c/sysctl'
 RUN
@@ -105,6 +115,8 @@ n=$(part pieces | grep -c 'label=region-')
 [ "$n" = 40 ] && [ "$(part pieces | grep -c '^frame=\* box x0=[0-9] y0=[0-3] x1=50 y1=50 label=region-[0-9][0-3]$')" = 40 ] &&
 	ok "what is due at an open is read whole in pieces of 300 bytes (40 records)" || bad "pieces: $n records whole of 40: $(part pieces | tail -2 | tr '\n' '|')"
 [ "$(part rune | head -1)" = "frame=* text x=1 y=1 label=café" ] && ok "a rune cut by the end of a write is the rune" || bad "rune: $(part rune)"
+[ "$(part count | tr -d ' ')" = 256 ] && part toomany | grep -q 'too many layers' && [ "$(part stillreads | head -1)" = "frame=* point x=1 y=1" ] &&
+	ok "a directory holds 256 layers and no more, and goes on serving them" || bad "300 files made: $(part count | tr -d ' ') kept; $(part toomany | head -1); $(part stillreads | head -1)"
 # over a feed's layer/, drawn: vidplay9p under wm/wm, by pixel
 if [ -f "$ROOT/dis/mpeg/vidplay9p.dis" ] && [ -f "$ROOT/dis/scap.dis" ] && command -v python3 >/dev/null 2>&1; then
 	python3 - "$W/grey.y4m" <<'PY'

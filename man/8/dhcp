@@ -80,7 +80,16 @@ Monitor the DHCP status and print a summary on standard output whenever it chang
 Do not configure the interface
 .TP
 .B -p
-Print the resulting configuration on standard output
+Print the resulting configuration on standard output, on one line: the
+address, mask, gateway and lease, and the names and servers the lease put
+in
+.IB net /ndb
+.RB ( sys ,
+.BR dom ,
+.BR dns ,
+.BR ntp ,
+.BR fs ,
+.BR auth ).
 .TP
 .B -r
 Retry DHCP periodically until it succeeds

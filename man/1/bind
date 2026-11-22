@@ -80,6 +80,10 @@ it is invoked as a
 .IR sh (1)
 command and its standard input is mounted (no
 authentication takes place in this case).
+The command has its end of the connection and the standard files and no
+other file of
+.IR mount 's,
+so it sees the end of its input when it is unmounted.
 If
 .I source
 contains an exclamation mark
@@ -233,30 +237,28 @@ The default is
 See 
 .IR keyring-auth (2)
 for more details.
-(If the
-.B -9
-option is given, this option is interpreted differently: see below.)
 .TP
-.B -9
+.BI -u " user"
 For
 .I mount
-only, and only when hosted on Plan 9.
-.I Source
-is a Plan 9 file server; use Plan 9's
-.I factotum
-as authentication agent to authenticate the mount.
-(Note that a Plan 9 file service that is known not to authenticate can be mounted from
-any Inferno host, by using the
-.B -A
-option to suppress Inferno authentication.)
-The existing Plan 9 file servers do not encrypt connections, so the
-.B -C
-option is ignored.
-The value of the
-.B -k
-option is added to the key specification for
+only: the server must authenticate as
+.IR user ,
+or nothing is mounted.
+Without it the server may be anyone with a certificate from the signer of
+the key file.
+It is refused where nothing is authenticated
+.RB ( -A ,
+a file or a command).
+.TP
+.B -9
+Refused.
+It authenticated to a Plan 9 file server with Plan 9's own protocol, which
 .IR factotum (4)
-for authentication.
+no longer has.
+A 9P server that asks for no authentication is mounted with
+.BR -A ;
+its service is usually
+.BR 9fs .
 .TP
 .B -P
 When
@@ -265,6 +267,12 @@ is a network address, use
 .IR styxpersist (2)
 to try to simulate a permanent connection, even should the server reboot.
 Note the caveats on that page.
+A new connection is used only if its server authenticates under the name
+the first did (or
+.BR -u 's);
+otherwise
+.I mount
+says who answered and tries again.
 .TP
 .B -o
 For

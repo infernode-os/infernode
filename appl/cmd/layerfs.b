@@ -46,6 +46,7 @@ Qroot: con 0;
 Keep: con 512;		# the lines kept for readers that have not had them
 Maxline: con 4096;	# a record's bytes; a longer line is none
 Maxdue: con 1024;	# the frame=* records kept, and the newest frame's
+Maxfiles: con 256;	# the layers of one directory
 
 File: adt {
 	path:	big;
@@ -54,15 +55,18 @@ File: adt {
 	star:	list of string;		# frame=* records, newest first
 	frame:	int;			# the newest frame written, -1 none
 	flines:	list of string;		# its records, newest first
-	seq:	int;			# lines written since the last rewrite
-	log:	array of (int, string);	# the last Keep of them, by seq
+	# Lines are counted in 64 bits: a stream of a thousand records a
+	# second passed an int in 25 days, and a negative count indexed
+	# the log before its start.
+	seq:	big;			# lines written since the last rewrite
+	log:	array of (big, string);	# the last Keep of them, by seq
 	gone:	int;
 };
 
 Rd: adt {
 	fid:	int;
 	f:	ref File;
-	pos:	int;		# the next line it has not had
+	pos:	big;		# the next line it has not had
 	fresh:	int;		# its next read is what is due now
 	part:	string;		# a writer's line not yet ended
 	writer:	int;
@@ -109,12 +113,32 @@ init(nil: ref Draw->Context, nil: list of string)
 	tree.quit();
 }
 
+# A request that raises costs itself, not the directory: with no
+# handler, one (no room for a line, a record the parser trips on) ended
+# the server, and every layer with it.
 serve(tc: chan of ref Tmsg)
 {
 	while((tmsg := <-tc) != nil){
+		done := 0;
+		{
+			done = request(tmsg);
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "layerfs: a request raised: %s\n", e);
+			srv.reply(ref Rmsg.Error(tmsg.tag, "layerfs: " + e));
+		}
+		if(done)
+			return;
+	}
+}
+
+# one request; 1 at the connection's end
+request(tmsg: ref Tmsg): int
+{
+	{
 		pick tm := tmsg {
 		Readerror =>
-			return;
+			return 1;
 		Create =>
 			(c, mode, d, e) := srv.cancreate(tm);
 			if(c == nil){
@@ -127,11 +151,16 @@ serve(tc: chan of ref Tmsg)
 			}
 			d.qid.path = nextpath++;
 			d.mtime = d.atime = now();
+			# each file keeps its last Keep lines: the files are counted
+			if(len files >= Maxfiles){
+				srv.reply(ref Rmsg.Error(tm.tag, "layerfs: too many layers"));
+				break;
+			}
 			if((e = tree.create(c.path, *d)) != nil){
 				srv.reply(ref Rmsg.Error(tm.tag, e));
 				break;
 			}
-			f := ref File(d.qid.path, d.name, 0, nil, -1, nil, 0, array[Keep] of (int, string), 0);
+			f := ref File(d.qid.path, d.name, 0, nil, -1, nil, big 0, array[Keep] of (big, string), 0);
 			files = f :: files;
 			c.open(mode, d.qid);
 			opened(c, f, mode);
@@ -228,6 +257,7 @@ serve(tc: chan of ref Tmsg)
 			srv.default(tmsg);
 		}
 	}
+	return 0;
 }
 
 opened(c: ref Fid, f: ref File, mode: int)
@@ -242,7 +272,7 @@ rewrite(f: ref File)
 	f.star = nil;
 	f.frame = -1;
 	f.flines = nil;
-	f.seq = 0;
+	f.seq = big 0;
 	f.vers++;
 	d := sys->nulldir;
 	d.qid.vers = f.vers;
@@ -250,7 +280,7 @@ rewrite(f: ref File)
 	tree.wstat(f.path, d);
 	for(l := rds; l != nil; l = tl l)
 		if((hd l).f == f){
-			(hd l).pos = 0;
+			(hd l).pos = big 0;
 			(hd l).fresh = 1;
 			(hd l).rest = nil;
 		}
@@ -296,7 +326,7 @@ addline(f: ref File, line: string)
 		f.flines = line :: nil;
 	} else
 		f.flines = line :: without(f.flines, nil, Maxdue-1);
-	f.log[f.seq % Keep] = (f.seq, line);
+	f.log[int (f.seq % big Keep)] = (f.seq, line);
 	f.seq++;
 }
 
@@ -335,7 +365,7 @@ answer(tm: ref Tmsg.Read, r: ref Rd): int
 		return 1;
 	}
 	text := "";
-	if(r.fresh || r.pos < f.seq - Keep){
+	if(r.fresh || r.pos < f.seq - big Keep){
 		# what is due now: the frame=* records and the newest frame's
 		for(l := rev(f.star); l != nil; l = tl l)
 			text += hd l + "\n";
@@ -345,7 +375,7 @@ answer(tm: ref Tmsg.Read, r: ref Rd): int
 		r.pos = f.seq;
 	} else {
 		while(r.pos < f.seq){
-			(n, line) := f.log[r.pos % Keep];
+			(n, line) := f.log[int (r.pos % big Keep)];
 			if(n != r.pos)
 				break;
 			if(text != nil && len array of byte (text + line) >= tm.count)

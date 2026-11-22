@@ -47,11 +47,13 @@ start() {	# name args... -> its port
 PR=$(start rtl serve "$D/rtl.log" 6)
 PH=$(start http http)
 PB=$(start busy busy)
+PT=$(start trickle trickle)
+PS=$(start slow slow)
 PN=$(python3 -I "$ROOT/tests/host/gps/fake_feed.py" port)	# nothing there
 [ -n "$PR" ] && [ -n "$PH" ] && [ -n "$PB" ] || { echo "FAIL: a fake did not start"; cat "$D"/*.err; exit 1; }
 
 cd "$ROOT"
-with_timeout 90 "$EMU" -r"$ROOT" /dis/sh.dis /tests/sdr/drive.sh "/$T" "$PR" "$PH" "$PN" "$PB" \
+with_timeout 90 "$EMU" -r"$ROOT" /dis/sh.dis /tests/sdr/drive.sh "/$T" "$PR" "$PH" "$PN" "$PB" "$PT" "$PS" \
 	</dev/null >"$D/log" 2>&1 || true
 
 failed=0
@@ -185,6 +187,28 @@ b=$(f procs.before | tr -d ' '); u=$(f procs.during | tr -d ' '); a=$(f procs.af
 [ -z "$(f err.unposted)" ] && [ -n "$b" ] && [ "${u:-0}" -gt "$b" ] && [ "$a" -le "$b" ] && grep -q '^hangup 5' "$D/rtl.log" &&
 	pass "an unposted server ends whole with its mount ($b sdrfs processes before, $u while it ran, $a after)" ||
 	fail "an unposted server after its mount went: $b processes before, $u while it ran, $a after; '$(f err.unposted)'"
+
+# a setting written over and over
+n1=$(conn 5 | grep -c '^cmd freq 1010000')
+n2=$(conn 5 | grep -c '^cmd freq 2000000')
+[ "$n1" = 1 ] && conn 5 | grep -q '^cmd freq 101000012$' &&
+	pass "a setting written twelve times in one write is one command, the last value" ||
+	fail "twelve freq lines in one write: $n1 commands: $(conn 5 | grep '^cmd freq 1010000' | tr '\n' '|')"
+[ "$n2" -ge 1 ] && [ "$n2" -le 4 ] && [ "$(conn 5 | grep '^cmd freq 2000000' | tail -1)" = "cmd freq 200000020" ] &&
+	has ctl.knob '^freq 200000020$' &&
+	pass "twenty writes while rtl_tcp applies the first: $n2 commands, the last value last" ||
+	fail "twenty freq writes: $n2 commands, last '$(conn 5 | grep '^cmd freq 2000000' | tail -1)'; ctl $(f ctl.knob | grep freq)"
+
+# two bytes at a time
+tb=$(wc -c < "$D/iq.trickle" 2>/dev/null | tr -d ' ')
+[ -z "$(f err.trickle)" ] && [ "${tb:-0}" -ge 4096 ] && [ "$(samples iq.trickle)" = ok ] &&
+	pass "an rtl_tcp sending two bytes at a time: a read gets a chunk ($tb bytes), whole samples in order" ||
+	fail "an rtl_tcp sending two bytes at a time: the first read got ${tb:-0} bytes: $(samples iq.trickle) '$(f err.trickle)'"
+
+# a source command given up
+has status.givenup '^link=none ' && ! has status.givenup 'source=' && ! has ctl.givenup '^source ' &&
+	pass "a source command given up is not done: $(f status.givenup | cut -d' ' -f1)" ||
+	fail "a source command given up: status '$(f status.givenup)'"
 
 [ $failed = 0 ] && echo "sdrfs_test: PASS"
 exit $failed

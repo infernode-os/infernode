@@ -156,6 +156,10 @@ node(c: Sys->Connection, mode: string, done: chan of int)
 		ans = "{\"jsonrpc\":\"2.0\",\"id\":null,\"result\":\"0x10\"}";
 	"noversion" =>
 		ans = "{\"id\":" + id + ",\"result\":\"0x10\"}";
+	"number" =>
+		ans = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":16}";
+	"object" =>
+		ans = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"x\":\"0x10\"}}";
 	"neither" =>
 		ans = "{\"jsonrpc\":\"2.0\",\"id\":" + id + "}";
 	"array" =>
@@ -241,6 +245,47 @@ has(s, sub: string): int
 	return 0;
 }
 
+# A quantity is a string of hex.  A result of another type was read as
+# its JSON text and then as hex: the number 16 was a balance of 22.
+testResultType(t: ref T)
+{
+	(bal, err) := balance(t, "number");
+	t.assert(bal == nil && err != nil, sys->sprint("a result that is a JSON number is no balance (%q, %q)", bal, err));
+	(bal, err) = balance(t, "object");
+	t.assert(bal == nil && err != nil, sys->sprint("nor one that is an object (%q, %q)", bal, err));
+	(bal, err) = balance(t, "ok");
+	t.assert(err == nil && bal == "16", sys->sprint("a hex string is (%q, %q)", bal, err));
+}
+
+# The node is asked over https, or over http on this machine alone:
+# any URL was taken, and to an http one the signed transactions went in
+# clear.
+testScheme(t: ref T)
+{
+	bad := array[] of {
+		"http://node.example/", "http://127.0.0.1.example/", "http://localhost.example:8545/",
+		"http://user@127.0.0.1/", "http://127.0.0.1@node.example/", "ftp://127.0.0.1/", "file:///etc/passwd",
+		"node.example", "", "https://node.example/\n", "http://[::2]/", "HTTP://node.example/",
+	};
+	for(i := 0; i < len bad; i++)
+		t.assert(ethrpc->setrpc(bad[i]) != nil, sys->sprint("%q refused", bad[i]));
+	good := array[] of {
+		"https://node.example/", "HTTPS://Node.Example/v1", "http://127.0.0.1:8545", "http://localhost:8545/x",
+		"http://[::1]:8545/", "http://LOCALHOST/",
+	};
+	for(i = 0; i < len good; i++)
+		t.assertnil(ethrpc->setrpc(good[i]), sys->sprint("%q taken", good[i]));
+	# a URL refused leaves the node as it was
+	(c, url) := announce(t);
+	done := chan[1] of int;
+	spawn node(c, "ok", done);
+	t.assertnil(ethrpc->setrpc(url), "the test's node");
+	t.assert(ethrpc->setrpc("http://node.example/") != nil, "an http node elsewhere refused");
+	(bal, err) := ethrpc->getbalance(ADDR);
+	<-done;
+	t.assert(err == nil && bal == "16", sys->sprint("and the node is still the one before (%q, %q)", bal, err));
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -269,6 +314,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NotOurs", testNotOurs);
 	run("EmptyQuantity", testEmptyQuantity);
 	run("NodeError", testNodeError);
+	run("ResultType", testResultType);
+	run("Scheme", testScheme);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

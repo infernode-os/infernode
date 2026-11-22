@@ -50,6 +50,20 @@ It forwards the message to the selected application's input port, starting it if
 If no rule applies (or some other error occurs),
 .I plumber
 returns an error to the message's sender.
+A rule that does not match leaves the message as it was for the next:
+what its patterns set or found before the one that failed is undone.
+A file a rule asks after
+.RB ( isfile ,
+.BR isdir )
+is given two seconds to be found, and a click's match begins within
+2048 characters of the click.
+A port's application says
+.B start
+when it begins to read the port; anyone can say so, so it is believed
+while the port is read: a message that has waited five seconds unread
+makes the next one start the port's application again.
+Text of a message's is shown in diagnostics with its control
+characters replaced and no more than a line of it.
 The
 .B -v
 option causes
@@ -70,6 +84,8 @@ a window manager listening on
 .BR /chan/wm ,
 allowing
 the window manager to track every application started.
+If that file cannot be written the application is not started (and the
+sender is told); the plumber does not then start it itself.
 The
 .B -c
 option can select an alternative

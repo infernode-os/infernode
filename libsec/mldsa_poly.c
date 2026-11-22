@@ -532,6 +532,7 @@ mldsa_poly_chknorm(const int32 r[MLDSA_N], int32 bound)
 /*
  * Pack hint polynomial (sparse representation).
  * Returns the number of nonzero hints (omega).
+ * The hints are part of the signature: its branches on them are public.
  */
 int
 mldsa_pack_hint(uchar *out, int outlen, const int32 h[][MLDSA_N], int k, int omega)

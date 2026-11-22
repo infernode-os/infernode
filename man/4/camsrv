@@ -349,7 +349,9 @@ records mostly near-infrared in red and visible light in blue: healthy
 plants reflect near-infrared strongly, soil, water and stressed plants
 do not, and
 .B 0/ndvi
-shows which is which. It needs daylight, or a halogen or incandescent
+shows which is which; one frame of it is cut as a picture's is,
+.B "read 126280 < /mnt/video/0/ndvi"
+at 410\(mu308. It needs daylight, or a halogen or incandescent
 lamp: fluorescent and LED light have almost no near-infrared. It is
 relative: there is no reference panel yet to make it a reflectance,
 and without a lens shading table it falls off toward the corners.

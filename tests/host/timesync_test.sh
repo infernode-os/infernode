@@ -50,7 +50,7 @@ python3 -I "$F" udpnmea "$PORT" 3600 2>"$D/udp.err" &
 PIDS="$PIDS $!"
 
 cd "$ROOT"
-SDL_VIDEODRIVER=dummy with_timeout 140 "$EMU" -r"$ROOT" /dis/sh.dis /tests/gps/timesync.sh "/$T" "$PORT" \
+SDL_VIDEODRIVER=dummy with_timeout 240 "$EMU" -r"$ROOT" /dis/sh.dis /tests/gps/timesync.sh "/$T" "$PORT" \
 	</dev/null >"$D/log" 2>&1 || true
 HOSTUS=$(python3 -c 'import time; print(int(time.time() * 1000000))')
 

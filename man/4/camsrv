@@ -152,6 +152,24 @@ A frame as the sensor gave it, 16 bits a sample, little-endian, at the
 size and mosaic in
 .BR status .
 .TP
+.B 0/ndvi
+Plant health: frames numbered as
+.BR frame 's,
+one byte a pixel at the picture's size and turn, 128 + 127 times
+NDVI = (NIR \- VIS)/(NIR + VIS), rounded: 1 is \-1, 128 is 0, 255 is +1.
+0 is no reading, a pixel whose two channels are under
+.B ndvifloor
+above black. NIR and VIS are the raw channels
+.B ndvi
+names, averaged over the same samples as the picture's pixel, before
+any white balance. Made only while it has a reader: a frame made before
+it was opened is refused as expired.
+.TP
+.B 0/ndvifmt
+.RI `` w
+.I h
+.BR ndvi8 ''.
+.TP
 .B 0/status
 One line of
 .IB key = value\f1:
@@ -174,6 +192,14 @@ otherwise; with readers and
 the sensor would not run.
 .BR autofocus=
 says how the last run went.
+While
+.B ndvi
+is read,
+.B ndvi= mean : p10 : p50 : p90
+gives the last NDVI frame's mean and its tenth, fiftieth and ninetieth
+percentiles, in thousandths, and
+.B ndvireadings=
+how many of its pixels were readings.
 .TP
 .B 0/layer/
 Empty as served: where what is drawn over the frames is bound, a file a
@@ -227,6 +253,20 @@ raw frames too. Taken while streaming: the sensor reads out the new
 mirror from its next frame, and the colours are merged in its order from
 then.
 .TP
+.BI ndvi " nir vis
+Which raw channels are near-infrared and visible light for
+.BR 0/ndvi :
+.BR red ,
+.B green
+or
+.BR blue ;
+.B red blue
+by default.
+.TP
+.BI ndvifloor " n
+The least NIR + VIS above black, in the sensor's steps, for a reading:
+0 to 2046, 16 by default.
+.TP
 .BI wb " red blue
 White balance fixed: the red and blue gains to green's, 256 a gain of
 one, 128 to 2048. For a camera whose channels must keep their own ratio
@@ -252,6 +292,21 @@ and readers are told
 at the first of them.
 .PD
 .RE
+.SH PLANT HEALTH
+A NoIR camera (a Camera Module 2 or 3 without its infrared-cut filter)
+with the blue gel filter it comes with, Roscolux #2007, over the lens
+records mostly near-infrared in red and visible light in blue: healthy
+plants reflect near-infrared strongly, soil, water and stressed plants
+do not, and
+.B 0/ndvi
+shows which is which. It needs daylight, or a halogen or incandescent
+lamp: fluorescent and LED light have almost no near-infrared. It is
+relative: there is no reference panel yet to make it a reflectance,
+and with no lens shading correction it falls off toward the corners.
+Fixed white balance
+.RB ( wb )
+keeps the picture's colours honest beside it; the index is taken from
+the raw channels either way.
 .SH EXAMPLES
 A video with known answers to point the camera at during a soak:
 exposure steps, white balance, a focus chart, motion:

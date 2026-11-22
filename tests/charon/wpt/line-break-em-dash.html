@@ -1,0 +1,12 @@
+<!doctype html><meta charset=utf-8><title>an em dash is a break opportunity on either side, but not between two</title>
+<!-- UAX #14's B2: a break before an em dash and after it (LB31), none between two (LB17).  Charon
+     took it for a letter, so "anyone—human" was one word, and Bootstrap 6's lead wrapped a line
+     later than Chromium's.  Each paragraph is green over a red box as tall as the lines it must
+     make: xxxx—xxxx two in 100px (it was one, overflowing), xx——xx three in 37px (xx, ——, xx; two
+     if the dashes parted).  The green band below is the area the harness counts. -->
+<style>body{margin:0} div{position:relative;margin-bottom:10px}
+p{margin:0;font:20px/20px monospace;color:transparent;background:green;position:relative}
+.r{position:absolute;left:0;top:0;background:red}</style>
+<div><span class=r style="width:100px;height:40px"></span><p style="width:100px">xxxx—xxxx</p></div>
+<div><span class=r style="width:37px;height:60px"></span><p style="width:37px">xx——xx</p></div>
+<div style="width:300px;height:100px;background:green"></div>

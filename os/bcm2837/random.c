@@ -1,33 +1,47 @@
 /*
  * BCM2837 hardware random number generator.
  *
- * os/port/random.c gathers entropy the way Plan 9 always has: a
- * background process spins a counter, the clock interrupt samples it,
- * and the jitter between them is the randomness. That works on hardware
- * with no RNG, which is what it was written for.
+ * This file supplies hwrandom() for the BCM2835-family generator
+ * (BCM2835, BCM2836, BCM2837): it starts the block with the warm-up
+ * count Broadcom's code uses, reads how many words are waiting from the
+ * top byte of the status register, and tests for a word and reads it as
+ * one step under one lock, so two cores never take the same word. It
+ * returns what the generator had, which may be short, and never makes
+ * bytes up.
  *
- * It does not work here, and the failure is silent and total. Nothing
- * blocks visibly -- the first caller that wants a random number sleeps
- * in randomread() waiting for the pool to fill, and never wakes. The
- * path that found it was five levels deep and looked nothing like a
- * randomness problem:
+ * Everything above that is os/port/random.c's: the HMAC_DRBG with
+ * SHA-512 (SP 800-90A) that every reader is served from, its
+ * instantiation and reseeding from hwrandom() alone, the SP 800-90B
+ * repetition-count and adaptive-proportion tests on the bytes this
+ * file returns, and what readers do while the hardware has nothing.
+ * Its header comment tells that policy; nothing here sets it.
+ *
+ * Unlike the RNG200 of the Pi 4 and later (os/bcm/rng200.c), this block
+ * exposes no health-test status: there is no failure bit to read and no
+ * reset to answer one with. The only health tests on its output are the
+ * port's.
+ *
+ * History. The driver was written when os/port/random.c still gathered
+ * entropy as Plan 9 had: a background process spinning a counter, the
+ * clock interrupt sampling it, and callers sleeping in randomread()
+ * until a pool filled. On this machine the pool never filled, and the
+ * failure was silent and total. The path that found it was five levels
+ * deep and looked nothing like a randomness problem:
  *
  *     connect 127.0.0.1!1        (an ICMP conversation)
  *       -> Fsstdconnect
  *       -> setlport              picks a local port
  *       -> nrand                 needs a seed
  *       -> seedrand
- *       -> randomread            sleeps for entropy that never arrives
+ *       -> randomread            slept for entropy that never arrived
  *
  * So the machine could bring up an interface, insert routes and print
- * statistics, and hang the moment anything tried to open a
- * conversation.
- *
- * This SoC has a hardware RNG, so the honest fix is to use it rather
- * than to make the jitter loop work harder. It is also the better
- * source: jitter entropy on a single-core in-order machine running one
- * mostly-idle workload is thin, and its quality is impossible to argue
- * for from first principles.
+ * statistics, and hung the moment anything tried to open a
+ * conversation. The SoC has a hardware generator, so the fix was to use
+ * it rather than make the jitter loop work harder. That pool is gone
+ * now, and nrand no longer waits on it (devcons.c's seedrand), but the
+ * lesson stands: hwrandom() must never spin, which is why it is bounded
+ * below.
  */
 
 #include "u.h"

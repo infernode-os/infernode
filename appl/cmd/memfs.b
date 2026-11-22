@@ -451,11 +451,34 @@ Serve:
 			# a file's owner is not changed by wstat
 			if (err == nil && stat.uid != nil && stat.uid != mf.owner)
 				err = Styxlib->Eperm;
+			# A length given is the file's new length: cut, or
+			# lengthened with zeros.  It was not looked at, and the
+			# wstat answered as done: truncate(2)'s caller had its
+			# file as long as before.  It takes write permission,
+			# as a write would, and room for what it adds.
+			newlen := -1;
+			if (err == nil && stat.length != ~big 0 && stat.length != big mf.length) {
+				if (mf.perm & Sys->DMDIR)
+					err = "a directory's length is not set";
+				else if (!modeok(OWRITE, mf.perm, c.uname, mf.owner))
+					err = Styxlib->Eperm;
+				else if (stat.length < big 0 || stat.length > big Maxoff)
+					err = Ebadoff;
+				else if ((mf.perm & Sys->DMAPPEND) && stat.length < big mf.length)
+					err = Styxlib->Eperm;	# append-only: not cut, as OTRUNC is not taken
+				else {
+					newlen = int stat.length;
+					if (blocksfor(newlen) - mf.nblks > freeblks)
+						err = Efull;
+				}
+			}
 			if (err != nil) {
 				srv.reply(ref Rmsg.Error(tm.tag, err));
 				continue;
 			}
 			isdir := mf.perm & Sys->DMDIR;
+			if(newlen >= 0)
+				setlength(mf, newlen);
 			if(stat.name != nil)
 				mf.name = stat.name;
 			if(stat.mode != ~0)
@@ -479,6 +502,47 @@ Serve:
 			srv.reply(ref Rmsg.Attach(tm.tag, c.qid));
 		}
 	}
+}
+
+# a file of n bytes is charged so many blocks (never none)
+blocksfor(n: int): int
+{
+	nb := (n + blksz - 1) / blksz;
+	if(nb < 1)
+		nb = 1;
+	return nb;
+}
+
+# The caller has checked the length and that there is room.
+setlength(mf: ref Memfile, n: int)
+{
+	nb := blocksfor(n);
+	if (n < mf.length) {
+		for (i := nb; i < len mf.data; i++)
+			mf.data[i] = nil;
+		if (nb < mf.nblks) {
+			freeblks += mf.nblks - nb;
+			mf.nblks = nb;
+		}
+	} else {
+		if (nb > mf.nblks) {
+			freeblks -= nb - mf.nblks;
+			mf.nblks = nb;
+		}
+		if (nb > len mf.data) {
+			nd := array [nb] of array of byte;
+			nd[0:] = mf.data;
+			mf.data = nd;
+		}
+	}
+	# what is past the shorter of the two lengths in its block reads
+	# as zeros if the file grows over it; the blocks after are holes
+	short := min(n, mf.length);
+	if (short/blksz < len mf.data && (b := mf.data[short/blksz]) != nil)
+		for (i := short % blksz; i < len b; i++)
+			b[i] = byte 0;
+	mf.length = n;
+	mf.mtime = now();
 }
 
 writefile(mf: ref Memfile, offset: int, data: array of byte): string
@@ -537,14 +601,16 @@ writefile(mf: ref Memfile, offset: int, data: array of byte): string
 	# handle (possibly incomplete first block) separately
 	offset %= blksz;
 	end := min(blksz-offset, len data);
+	# a block is made zeroed: the part of it a write skips over is a
+	# hole like any other
 	if (mf.data[startblk] == nil)
-		mf.data[startblk] = array [blksz] of byte;
+		mf.data[startblk] = array [blksz] of {* => byte 0};
 	mf.data[startblk++][offset:] = data[:end];
 
 	ix := blksz - offset;
 	while (ix < len data) {
 		if (mf.data[startblk] == nil)
-			mf.data[startblk] = array [blksz] of byte;
+			mf.data[startblk] = array [blksz] of {* => byte 0};
 		end = min(ix+blksz,len data);
 		mf.data[startblk++][:] = data[ix:end];
 		ix += blksz;

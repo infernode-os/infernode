@@ -1653,6 +1653,19 @@ watchdog(s: ref Session, pc: chan of int)
 		trace("lease lost: " + e);
 		removecfg(s.net, s.ctlifc, s.conf);
 		notify(s, nil, "lease lost: " + e);
+		#
+		# And the interface, with no address now, made speakable
+		# again, as dhcp() makes it before the first DISCOVER: the
+		# stack sends nothing from an interface without one, so
+		# every DISCOVER below went nowhere and a lease lost was
+		# lost for good -- a Zero 2 W whose server was down past
+		# its lease asked every 30 s and sent nothing. applycfg
+		# takes it off when a lease comes; leaving, we do.
+		#
+		placeheld := 0;
+		if(s.ctlifc != nil && sys->fprint(s.ctlifc, "add %s %s", Anyaddr, Anyaddr) >= 0)
+			placeheld = 1;
+		got := 0;
 		for(;;){
 			if(s.halt)
 				break;
@@ -1671,6 +1684,7 @@ watchdog(s: ref Session, pc: chan of int)
 				}
 				s.conf = c;
 				notify(s, c, nil);
+				got = 1;
 				break;
 			}
 			notify(s, nil, de);
@@ -1678,6 +1692,8 @@ watchdog(s: ref Session, pc: chan of int)
 			if(napsecs(s, Retrywait))
 				break;
 		}
+		if(placeheld && !got)
+			sys->fprint(s.ctlifc, "remove %s %s", Anyaddr, Anyaddr);
 	}
 	if(s.halt && s.conf != nil && s.conf.ip != nil){
 		#

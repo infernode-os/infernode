@@ -162,7 +162,7 @@ consuartputc(Queue *q, int c)
 		uartputc('\r');
 	uartputc(c);
 	uartunlock(held);
-	return kbdputc(kbdq, c);
+	return kbdputbyte(kbdq, c);
 }
 
 /*

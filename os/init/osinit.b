@@ -987,6 +987,7 @@ rootwalk(name: string, nports: int): int
 	}
 
 	found := 0;
+	hubs := 0;	# root ports with a hub on them
 	devs := array[nports+1] of { * => "" };	# port -> the device on it
 	seen := array[nports+1] of { * => 0 };	# port -> was anything there when this looked
 	for(port := 1; port <= nports; port++){
@@ -1040,17 +1041,24 @@ rootwalk(name: string, nports: int): int
 			detachdev(dev);
 		else
 			devs[port] = dev;
+		if(ok >= 0 && enumhub)
+			hubs++;
 	}
 
 	#
 	# Root ports that are sockets get the watcher a hub's ports get: the
 	# same code, since a root hub answers the same requests. A controller
-	# with ONE root port is a DWC OTG, and on the boards this runs on
-	# that port has a hub soldered to it -- it is left as it always was,
-	# unwatched. An xHCI's ports are where things are plugged in: all of
+	# with ONE root port is a DWC OTG. On a 3B+ that port has a hub
+	# soldered to it (its Ethernet's) -- left as it always was, unwatched.
+	# On a Zero 2 W it is the OTG socket: nothing on it at boot, or a
+	# device that is no hub, means a socket, and it is watched, so what
+	# is plugged in after boot is set up (it was never seen). A hub
+	# plugged into a Zero's socket before boot is walked and its ports
+	# watched, as on a 3B+; the hub's own unplugging is not.
+	# An xHCI's ports are where things are plugged in: all of
 	# them under QEMU, the SuperSpeed ones on a Raspberry Pi 4.
 	#
-	if(nports > 1)
+	if(nports > 1 || hubs == 0)
 		spawn hubwatch(d, name, nports, "", devs, seen);
 	return found;
 }
@@ -1103,8 +1111,12 @@ reresetport(d: ref Sys->FD, port: int, indent: string): int
 # has to be able to detach it. Nothing about the device is kept in a
 # global: this runs concurrently, once per hub watcher.
 #
+# Set by enumerate when the device it brought up was a hub.
+enumhub := 0;
+
 enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): (int, string)
 {
+	enumhub = 0;
 	c := sys->open(hubctl, Sys->ORDWR);
 	if(c == nil){
 		sys->print("init: cannot open %s: %r\n", hubctl);
@@ -1284,6 +1296,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 
 	if(class == Clhub){
 		hubwalk(name, d, dctl, indent + "  ");
+		enumhub = 1;		# after the walk: its own enumerates clear it
 		return (0, name);
 	}
 
@@ -1352,15 +1365,13 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
 			string hidproto :: nil);
 	#
-	# A disk. Only on a machine with an xHCI controller, for now: the
-	# driver has run on QEMU's xHCI and nowhere else, and a Raspberry
-	# Pi 3 gets no new behaviour on emulator evidence (#679 says why).
-	# On a Pi 3 the disk is enumerated, listed, and left alone.
+	# A disk, on any controller. It was xHCI's alone until it had run on
+	# a DWC OTG board (#679: no new Pi 3 behaviour on emulator evidence):
+	# on a Zero 2 W, a disk on its OTG socket read back whole (16 MB,
+	# the same MD5 as the image) and its FAT mounted.
 	#
-	else if(isdisk && havexhci)
-		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 	else if(isdisk)
-		sys->print("init: %s%s is a USB disk; diskusb is not started on this machine\n", indent, name);
+		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 
 	#
 	# Hand it to a class driver, which is a program. The bus walk's
@@ -1386,14 +1397,13 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# A serial port: a CDC-ACM control interface that is not part of a
 	# network adapter (the Jetson's gadget is serial AND Ethernet, and
 	# stays etherusb's), or a vendor interface on an FTDI or CP210x.
-	# usbserial serves it as /dev/eiaU<n>. On an xHCI machine only, as
-	# with disks: it has not run on a Pi 3's controller, and a Pi 3
-	# keeps what it did before -- an ACM device goes to etherusb, which
-	# refuses it.
+	# usbserial serves it as /dev/eiaU<n>, on any controller: it was
+	# xHCI's alone (as disks were, #679) until it had run on a DWC OTG
+	# board, the Zero 2 W's socket.
 	#
 	serial := (isacm && !isether) ||
 		(isvendorif && (vendor == Vftdi || vendor == Vsilabs));
-	if(serial && havexhci)
+	if(serial)
 		startdriver("/dis/usbserial.dis", name, -1, 0, 0, nil);
 	#
 	# Ethernet by the device's class (2), or by an Ethernet interface
@@ -1408,8 +1418,6 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	#
 	else if(class == Clcomm || isether && !isdisk || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name, -1, 0, 0, nil);
-	if(serial && !havexhci)
-		sys->print("init: %s%s is a USB serial port; usbserial is not started on this machine\n", indent, name);
 	return (0, name);
 }
 
@@ -2504,12 +2512,30 @@ killproc(pid: int)
 # An interface with an address: its status file lists them one per
 # line after the header, each indented.
 #
+#
+# Whether the interface has an address of its own: a line of the status
+# file after the first, other than the unspecified address. The DHCP
+# client adds 0.0.0.0 before it asks (the stack sends nothing from an
+# interface with no address) and only replaces it when a lease comes.
+# Counted as an address, it made init take the first instant of every
+# DHCP exchange for success: the Wi-Fi was reported up with an empty
+# /net/ndb and never asked again, so a lost offer -- a Zero 2 W on a
+# phone's hotspot at -70 dBm lost one boot in two -- left the board
+# with no address for good.
+#
 hasaddress(ifcno: string): int
 {
 	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
 	for(i := 0; i + 1 < len st; i++)
-		if(st[i] == '\n' && st[i+1] == '\t')
-			return 1;
+		if(st[i] == '\n' && st[i+1] == '\t'){
+			j := i + 2;
+			k := j;
+			while(k < len st && st[k] != ' ' && st[k] != '\t' && st[k] != '\n')
+				k++;
+			a := st[j:k];
+			if(a != "0.0.0.0" && a != "::")
+				return 1;
+		}
 	return 0;
 }
 
@@ -2702,7 +2728,9 @@ wifidhcp(ifcno: string): int
 	pidc := chan of int;
 	spawn dhcprun(dhcp, ifcno, pidc);
 	dhcpgrp = <-pidc;
-	for(i := 0; i < 40 && !hasaddress(ifcno); i++)
+	# One round of the client's asking is 2+4+8+16 s (dhcpclient's
+	# Timeout0 and Ntries): wait it out rather than kill it in its last.
+	for(i := 0; i < 70 && !hasaddress(ifcno); i++)
 		sys->sleep(500);
 	return hasaddress(ifcno);
 }

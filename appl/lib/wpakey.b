@@ -538,6 +538,21 @@ Supp.recv(s: self ref Supp, frame, snonce: array of byte): (list of ref Action, 
 				s.ptk = cand;
 				s.amac = amac;
 				s.newptk = 1;
+				#
+				# A new pairwise key is a new association,
+				# and the radio forgot every key with the
+				# old one: the group key goes in again even
+				# when the access point sends the same one.
+				# Kept, it was taken for installed and
+				# skipped, and after a re-join this
+				# supplicant had not made itself (init's
+				# watcher, a firmware re-association) the
+				# board heard no broadcast -- no ARP
+				# request, no DHCP offer -- on a phone's
+				# hotspot, whose group key does not change.
+				#
+				s.gtk = nil;
+				s.gtkkid = -1;
 			}
 		}
 	}

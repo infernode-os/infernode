@@ -227,6 +227,20 @@ raw frames too. Taken while streaming: the sensor reads out the new
 mirror from its next frame, and the colours are merged in its order from
 then.
 .TP
+.BI wb " red blue
+White balance fixed: the red and blue gains to green's, 256 a gain of
+one, 128 to 2048. For a camera whose channels must keep their own ratio
+(plant health from a NoIR camera, a fixed light).
+.TP
+.B wb auto
+White balance from the picture (the default): grey world, over the
+cells with no sample near its top, so that a highlight clipped in one
+colour does not pull the balance away from that colour; moved a
+quarter of the way a frame.
+.B status 's
+.B wbgains= R : B
+says the gains in use, set or found.
+.TP
 .BI rotate " degrees
 Turn the picture clockwise: 0, 90, 180 or 270. A quarter turn swaps
 .B fmt 's
@@ -280,6 +294,7 @@ mount without a server and its readers waiting.
 .IR videnc (1),
 .IR wm-camera (1)
 .SH BUGS
-There is no ISP. White balance assumes the picture averages to grey, so
-a screenful of one colour comes out washed out, and there is no lens
-shading correction, so the corners are dark.
+There is no ISP. Automatic white balance assumes the picture averages to
+grey, so a screenful of one colour comes out washed out (fix it with
+.BR wb ),
+and there is no lens shading correction, so the corners are dark.

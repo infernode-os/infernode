@@ -298,6 +298,12 @@ testCtl(t: ref T)
 	t.assert(ctl("mode 144 80") < 0, "a mode that does not divide the sensor refused");
 	# white balance: fixed gains taken and read back, auto again, and
 	# what is not a pair of gains refused
+	# lens shading: on and off taken and read back; learning needs a camera
+	t.assert(ctl("shade off") > 0, "shade off taken");
+	t.assert(has(file("ctl"), "shade off\n"), "and reads back");
+	t.assert(ctl("shade on") > 0, "shade on taken");
+	t.assert(ctl("shade learn") < 0, "learning refused on the simulated sensor");
+	t.assert(ctl("shade maybe") < 0, "nonsense refused");
 	t.assert(ctl("wb 300 512") > 0, "fixed white balance taken");
 	t.assert(has(file("ctl"), "wb 300 512\n"), "and reads back");
 	t.assert(ctl("wb auto") > 0, "auto white balance taken");

@@ -57,7 +57,7 @@ union Note
  */
 struct Notes
 {
-	Channel*	c;		/* the server's channel (SrvFile.read or .write, while that is not H) */
+	Channel*	c;		/* the server's channel (SrvFile.read or .write), nil once it is going */
 	int	iswrite;
 	Prog	p;		/* stands in c's queue of senders with one of them */
 	int	queued;		/* p is there, with msg */
@@ -593,21 +593,32 @@ noted(Prog *p)
 	notequeue(n);
 }
 
-/* the channel is going: nothing more is sent on it */
+/*
+ * The channel is going: nothing more is sent on it.  Its free function
+ * calls this before it lets the interpreter go to take dev.l, which a
+ * closer may hold while it waits here for the interpreter: that closer
+ * must find the channel gone, not queue p on it for killcomm to hand
+ * back when the file may have been freed.
+ */
 static void
 notestop(Notes *n)
 {
+	if(n->c == nil)
+		return;
 	if(n->queued){
 		cqdelp(&n->c->send, &n->p);
 		n->p.ptr = nil;
 		n->queued = 0;
 	}
 	n->nfid = 0;
+	n->c = nil;
 }
 
 static void
 noteclose(Notes *n, int fid, int opens)
 {
+	if(n->c == nil)
+		return;
 	if(notefind(n, fid) < 0){
 		if(n->nfid >= n->mfid){
 			/* not to be: noteroom took the room when it was opened */
@@ -672,18 +683,21 @@ noteroom(SrvFile *sf)
  * forgets nothing it should keep.
  */
 static void
-noteflush(SrvFile *sf, Notes *n, int fid)
+noteflush(Notes *n, int fid)
 {
 	int i;
 	Note m;
 
+	if(n->c == nil)
+		return;
+	notego(n);	/* what could not be queued before */
 	i = notefind(n, fid);
-	if(i < 0 || (n->iswrite? sf->write: sf->read) == H)
+	if(i < 0)
 		return;
 	notedel(n, i);
 	mknote(n, &m, fid);
 	if(waserror()){
-		if((n->iswrite? sf->write: sf->read) != H && notefind(n, fid) < 0 && n->nfid < n->mfid){
+		if(n->c != nil && notefind(n, fid) < 0 && n->nfid < n->mfid){
 			n->fid[n->nfid++] = fid;
 			notego(n);
 		}
@@ -703,10 +717,8 @@ srvunblock(SrvFile *sf, int fid)
 		srvrelease(home);
 		nexterror();
 	}
-	if(sf->read != H)
-		noteclose(&sf->rnote, fid, sf->opens);
-	if(sf->write != H)
-		noteclose(&sf->wnote, fid, sf->opens);
+	noteclose(&sf->rnote, fid, sf->opens);
+	noteclose(&sf->wnote, fid, sf->opens);
 	poperror();
 	srvrelease(home);
 }
@@ -1037,7 +1049,7 @@ srvread(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	noteflush(sp, &sp->rnote, c->fid);
+	noteflush(&sp->rnote, c->fid);
 	rd = sp->read;		/* noteflush can wait */
 	if(rd == H)
 		error(Ehungup);
@@ -1152,7 +1164,7 @@ srvwrite(Chan *c, void *va, long count, vlong offset)
 		nexterror();
 	}
 
-	noteflush(sp, &sp->wnote, c->fid);
+	noteflush(&sp->wnote, c->fid);
 	wr = sp->write;		/* noteflush can wait */
 	if(wr == H)
 		error(Ehungup);

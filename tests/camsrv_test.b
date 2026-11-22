@@ -269,8 +269,13 @@ testCtl(t: ref T)
 	t.assert(ctl("focus 700") > 0, "focus taken with nothing running");
 	t.assert(has(file("ctl"), "focus 700"), "and reads back");
 	t.assert(ctl("mode 144 80") < 0, "a mode that does not divide the sensor refused");
+	# the sensor's own limit, from its timing: the IMX708's 56 (the
+	# simulated sensor's); more was taken and silently held to it
+	t.assert(ctl("fps 57") < 0, "fps past the sensor's timing refused");
+	t.assert(ctl("fps 56") > 0, "the sensor's most taken");
 	t.assert(ctl("fps 10") > 0, "fps taken");
 	t.assert(has(file("fmt"), " i420 10"), "fmt says so");
+	t.assert(has(file("status"), " rawformat=rggb10:"), "the simulated sensor's mosaic, whatever the flip");
 }
 
 testRaw(t: ref T)

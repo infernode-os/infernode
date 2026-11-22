@@ -570,7 +570,11 @@ status(): string
 		s += " sim=1";
 	else
 		s += " sensor=" + sensorname();
-	s += sys->sprint(" rawformat=rggb10:%d:%d", Sw/simdivr(), Sh/simdivr());
+	# the mosaic's order as the sensor now reads it out: flip changes it
+	order := "rggb";
+	if(!sim)
+		order = (array[] of {"rggb", "grbg", "gbrg", "bggr"})[flip & 3];
+	s += sys->sprint(" rawformat=%s10:%d:%d", order, Sw/simdivr(), Sh/simdivr());
 	if(linkbad)
 		s += sys->sprint(" linkbad=%d", linkbad);
 	if(regcheck != "")
@@ -642,8 +646,8 @@ doctl(s: string): string
 		fsize = framesize();
 		latest = nil;
 	"fps" =>
-		if(n != 2 || a < 1 || a > 56)
-			return "camsrv: fps 1..56";
+		if(n != 2 || a < 1 || a > maxfps())
+			return sys->sprint("camsrv: fps 1..%d", maxfps());
 		if(users > 0)
 			return "camsrv: in use";
 		fps = a;
@@ -804,7 +808,13 @@ capture(stop: chan of int)
 				wlines = -1;
 			}else if(c == "flip" && flip != newflip){
 				newflip = flip;
-				wr8(16r0101, flip);
+				# each sensor's own orientation register: this wrote
+				# the IMX708's to an IMX219, which then did not turn
+				# while its colours were merged as though it had
+				if(sensor == Imx219)
+					wr8(16r0172, flip);
+				else
+					wr8(16r0101, flip);
 				flipwait = 2;
 			}
 		* =>
@@ -831,7 +841,7 @@ capture(stop: chan of int)
 		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean);
 		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
-			rawc <-= raw[0:];
+			rawc <-= rawcopy(raw);
 		(lr, lg, lb) = wbal(mean);
 		focusing := afrun || (af != nil && af.on);
 		if(focusing)
@@ -851,6 +861,15 @@ capture(stop: chan of int)
 		}
 	}
 	sensoroff();
+}
+
+# A frame for /raw's readers, apart from raw: the next frame is read into
+# raw while a reader may still be given this one, and it came torn.
+rawcopy(raw: array of byte): array of byte
+{
+	c := array[len raw] of byte;
+	c[0:] = raw;
+	return c;
 }
 
 lastrawwanted(): int
@@ -1166,7 +1185,7 @@ simulate(stop: chan of int)
 		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean);
 		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
-			rawc <-= raw[0:];
+			rawc <-= rawcopy(raw);
 		d := 1000/fps - (sys->millisec()-t0);
 		if(d > 0)
 			sys->sleep(d);
@@ -1283,6 +1302,15 @@ Reggain := 16r0204;
 Gainbits := 16;
 Gainmax := 960;			# the highest gain code
 Gainfull := 1024;		# gain = Gainfull/(Gainfull-code)
+
+# The most frames a second the sensor's timing allows: its shortest frame
+# (its height and least vertical blank) at its pixel rate. The IMX708's
+# is 56, the IMX219's 41; asking more was taken and silently held to it
+# while fmt said what was asked.
+maxfps(): int
+{
+	return int (big Pixrate / (big Linelen * big (Sh + Vblankmin)));
+}
 
 ctlset(fd: ref Sys->FD, s: string): int
 {

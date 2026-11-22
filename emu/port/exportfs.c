@@ -31,7 +31,7 @@ struct Export
 	Egrp*	egrp;
 	Fgrp*	fgrp;
 	int	async;
-	int	readonly;
+	int	readonly;	/* Sys->EXPREADONLY: nothing is changed through it */
 	int	uid;
 	int	gid;
 	int	msize;
@@ -114,6 +114,7 @@ static char	Eaccess[] = "read/write -- not open in suitable mode";
 static char	Ecount[] = "read/write -- count too big";
 static char	Emanyfids[] = "too many fids";
 static char	Emanyreqs[] = "too many requests outstanding";
+static char	Ereadonly[] = "file system read only";
 
 /*
  * What one connection may hold.  A request keeps a buffer of msize bytes
@@ -130,8 +131,16 @@ enum
 };
 int	exdebug = 0;
 
+/*
+ * readonly (Sys->EXPREADONLY) refuses what would change the tree: a
+ * create, write, remove or wstat, and an open that could write,
+ * truncate or remove on close.  The field was here and was looked at,
+ * by a refusal no flag reached; it stood in the reader, before the
+ * request had a fid, where a refused Tremove did not clunk its fid as
+ * a remove must.  Each request's own function refuses now.
+ */
 int
-export(int fd, char *dir, int async)
+export(int fd, char *dir, int async, int readonly)
 {
 	Chan *c, *dc;
 	Pgrp *pg;
@@ -174,6 +183,7 @@ export(int fd, char *dir, int async)
 	fs->msize = 0;
 	c->flag |= CMSG;
 	fs->async = async;
+	fs->readonly = readonly;
 
 	if(async){
 		if(waserror())
@@ -318,24 +328,6 @@ exportproc(void *a)
 
 		q->export = fs;
 		incref(&fs->r);
-
-		if(fs->readonly){
-			switch(type){
-			case Topen:
-				if((q->in.mode & (ORCLOSE|OTRUNC|3)) == OREAD)
-					break;
-				/* FALL THROUGH */
-			case Tcreate:
-			case Twrite:
-			case Tremove:
-			case Twstat:
-				q->out.type = Rerror;
-				q->out.ename = "file system read only";
-				exreply(q, "exportproc");
-				exfreeq(q);
-				continue;
-			}
-		}
 
 		if(q->in.type == Tflush){
 			if(exflushed(fs, q)){
@@ -1106,6 +1098,8 @@ Exopen(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	if(fs->readonly && mutatingmode(t->mode))
+		error(Ereadonly);
 	tm = nil;
 	c = exmount(f->chan, &tm, 1);	/* which gives tm back itself if it raises */
 	m = tm;
@@ -1159,6 +1153,8 @@ Excreate(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	if(fs->readonly)
+		error(Ereadonly);
 	validname(t->name, 0);
 	if(t->name[0] == '.' && (t->name[1] == '\0' || t->name[1] == '.' && t->name[2] == '\0'))
 		error(Efilename);	/* underlying server should check, but stop it here */
@@ -1349,6 +1345,8 @@ Exwrite(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	if(fs->readonly)
+		error(Ereadonly);
 	c = f->chan;
 	checkwritable(c);
 	if((c->flag & COPEN) == 0)
@@ -1412,6 +1410,8 @@ Exwstat(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	if(fs->readonly)
+		error(Ereadonly);
 	validstat(t->stat, t->nstat);	/* check name */
 
 	c = exmount(f->chan, nil, 0);
@@ -1456,6 +1456,8 @@ Exremove(Export *fs, Fcall *t, Fcall *r)
 		Exputfid(fs, f);
 		return up->env->errstr;
 	}
+	if(fs->readonly)
+		error(Ereadonly);	/* and the fid is clunked, as above */
 	c = exmount(f->chan, nil, 0);
 	rm.removing = 0;
 	if(waserror()){

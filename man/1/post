@@ -3,6 +3,9 @@
 post \- post a directory of the name space for any other to mount
 .SH SYNOPSIS
 .B post
+[
+.B -r
+]
 .I spec dir
 .SH DESCRIPTION
 .I Post
@@ -39,6 +42,12 @@ mount -A '#svideo/fs' /mnt/video
 A connection that cannot be served (the directory has gone) is told why
 in answer to its first message.
 .PP
+The same, for clients that are only to watch:
+.IP
+.EX
+post -r video /mnt/video
+.EE
+.PP
 .BI #s spec
 is the user's own: another user cannot attach it, nor can a process that
 has given up its devices
@@ -50,12 +59,19 @@ that could post there can already do all the user can.
 .PP
 Whoever opens the posted file has the directory with
 .IR post 's
-own rights to it, writing included.
-There is no read-only post:
-.IR sys-export (2)
-has no such mode (the kernel's export has the check, and nothing that
-turns it on).
-A client can make its own view read-only with
+own rights to it, writing included, unless it is posted with
+.BR -r .
+Then the export is read-only
+.RB ( Sys->EXPREADONLY ,
+.IR sys-export (2)):
+its mounts can walk, stat and read, and are refused
+.RB (`` "file system read only" '')
+a create, write, remove or wstat, and an open to write, truncate or
+remove on close.
+That includes writing to a server's control files: a feed posted
+.B -r
+is watched, not steered.
+A client can also make its own view read-only with
 .BR "mount -R" ,
 which protects the client's side only.
 .SH SOURCE

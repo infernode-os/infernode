@@ -12,6 +12,9 @@
 #     (a post nobody could reach) refused
 #   - post's group killed (kill -g, by its pid): the posted file gone and
 #     its connections with it (#s relays them through post)
+#   - post -r (Sys->EXPREADONLY): a mount of it reads the directory and
+#     is refused a write, a create, a mkdir and a remove, the directory
+#     as it was; the same directory posted without -r is written to
 #   - the time to read the clip direct and through post printed
 #
 # Run from project root: ./tests/host/post_test.sh
@@ -60,6 +63,22 @@ echo '-- times'; time cat /mnt/a/0/frame > /dev/null; time cat /mnt/b/0/frame > 
 echo '-- killed'; kill -g \$postpid; sleep 1
 mkdir -p /mnt/d; mount -A '#s$S/fs' /mnt/d; echo NEWMOUNT-\$status
 cmp /mnt/a/0/frame /mnt/b/0/frame; echo STILL-\$status
+echo '-- readonly'; mkdir -p $E/d /mnt/r /mnt/w; echo kept > $E/d/f
+post -r ${S}r $E/d &
+sleep 1
+mount -Ac '#s${S}r/fs' /mnt/r
+echo -n RO-READ-; cat /mnt/r/f
+sh -c 'echo changed > /mnt/r/f'; echo RO-WRITE-\$status
+sh -c 'echo new > /mnt/r/new'; echo RO-CREATE-\$status
+mkdir /mnt/r/dir; echo RO-MKDIR-\$status
+rm /mnt/r/f; echo RO-REMOVE-\$status
+echo -n RO-AFTER-; cat $E/d/f; echo -n RO-LS-; ls $E/d
+post -x ${S}x $E/d; echo BADOPT-\$status
+post ${S}w $E/d &
+sleep 1
+mount -Ac '#s${S}w/fs' /mnt/w
+sh -c 'echo changed > /mnt/w/f'; echo RW-WRITE-\$status
+echo -n RW-AFTER-; cat $E/d/f
 echo POST-DONE
 echo halt > '#c/sysctl'
 RUN
@@ -77,5 +96,13 @@ grep -q '^TAKEN-..*' "$W/log" && ok "a spec taken refused" || bad "taken: $(grep
 grep -q '^NOSPEC-..*' "$W/log" && ok "no spec refused" || bad "nospec: $(grep NOSPEC "$W/log")"
 grep -q '^NEWMOUNT-..*' "$W/log" && ok "killed: no new connection" || bad "killed: $(grep NEWMOUNT "$W/log")"
 grep -q '^STILL-..*' "$W/log" && ok "killed: its connections end with it" || bad "still: $(grep STILL "$W/log")"
+grep -q '^RO-READ-kept$' "$W/log" && ok "post -r: a mount reads the directory" || bad "ro read: $(grep RO-READ "$W/log")"
+for what in WRITE CREATE MKDIR REMOVE; do
+	grep -q "^RO-$what-..*" "$W/log" && ok "post -r: $what refused" || bad "ro $what: $(grep "RO-$what" "$W/log")"
+done
+grep -q 'file system read only' "$W/log" && ok "post -r: the refusal says the file system is read only" || bad "ro: no reason given"
+grep -q '^RO-AFTER-kept$' "$W/log" && grep -q "^RO-LS-$E/d/f\$" "$W/log" && ok "post -r: the directory is as it was" || bad "ro after: $(grep 'RO-AFTER\|RO-LS' "$W/log" | tr '\n' ' ')"
+grep -q '^BADOPT-..*' "$W/log" && ok "an option that is none refused" || bad "badopt: $(grep BADOPT "$W/log")"
+grep -q '^RW-WRITE-$' "$W/log" && grep -q '^RW-AFTER-changed$' "$W/log" && ok "the same directory posted without -r is written to" || bad "rw: $(grep '^RW-' "$W/log" | tr '\n' ' ')"
 echo "times (direct, posted): $(sed -n '/^-- times/,/^-- killed/p' "$W/log" | grep -o '[0-9.]*r' | tr '\n' ' ')"
 exit $fail

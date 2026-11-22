@@ -3,11 +3,13 @@ implement Post;
 #
 # post - a directory of this name space, posted for any other to mount
 #
-#	post spec dir
+#	post [-r] spec dir
 #
 # posts #s<spec>/fs (post9p(2)), refusing a spec whose fs is taken;
 # each open of it is a connection of its
 # own, served by exporting dir as this name space has it (sys-export(2)).
+# With -r the export is read-only (Sys->EXPREADONLY): its mounts can
+# look and read, and change nothing.
 # So a server mounted here can be mounted from any Dis VM (vm(1)), or by
 # any process of the user whatever its name space, with no option of
 # its own for it:
@@ -36,8 +38,13 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	stderr := sys->fildes(2);
 	args = tl args;
-	if(len args != 2){
-		sys->fprint(stderr, "usage: post spec dir\n");
+	flag := Sys->EXPASYNC;
+	if(args != nil && hd args == "-r"){
+		flag |= Sys->EXPREADONLY;
+		args = tl args;
+	}
+	if(len args != 2 || len hd args > 0 && (hd args)[0] == '-'){
+		sys->fprint(stderr, "usage: post [-r] spec dir\n");
 		raise "fail:usage";
 	}
 	(spec, dir) := (hd args, hd tl args);
@@ -66,7 +73,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	for(;;){
 		fd := <-conns;
-		if(sys->export(fd, dir, Sys->EXPASYNC) < 0){
+		if(sys->export(fd, dir, flag) < 0){
 			e := sys->sprint("%r");
 			sys->fprint(stderr, "post: export %s: %s\n", dir, e);
 			spawn refuse(fd, "post: cannot export " + dir + ": " + e);

@@ -87,6 +87,8 @@ void	flowinit(Flowtab *t, uint n, uvlong k0, uvlong k1);
 Flowent*	flowlookup(Flowtab *t, Flowkey *k, int dir, int len, uvlong now);
 Flowent*	flowadd(Flowtab *t, Flowkey *k, int dir, int verdict, uint idle, uvlong now);
 int	flowsweep(Flowtab *t, uvlong now, Flowent *out, int max);
+Flowent*	flowpeek(Flowtab *t, Flowkey *k);
+int	flowdel(Flowtab *t, Flowkey *k);
 
 
 static uchar v4prefix[12] = { 0,0,0,0, 0,0,0,0, 0,0,0xff,0xff };
@@ -418,4 +420,35 @@ flowsweep(Flowtab *t, uvlong now, Flowent *out, int max)
 		}
 	}
 	return n;
+}
+
+/* the live entry for k, untouched: no packet counted, nothing ended */
+Flowent*
+flowpeek(Flowtab *t, Flowkey *k)
+{
+	Flowent *e;
+	uint h;
+	int i;
+
+	h = flowhash(t->k0, t->k1, (uchar*)k, sizeof *k);
+	for(i = 0; i < Flook; i++){
+		e = &ENTS(t)[(h+i) & (t->n-1)];
+		if(e->used == Ulive && memcmp(&e->k, k, sizeof *k) == 0)
+			return e;
+	}
+	return 0;
+}
+
+/* forget flow k now, with no record: 1 if it was there */
+int
+flowdel(Flowtab *t, Flowkey *k)
+{
+	Flowent *e;
+
+	e = flowpeek(t, k);
+	if(e == 0)
+		return 0;
+	e->used = Ufree;
+	t->nent--;
+	return 1;
 }

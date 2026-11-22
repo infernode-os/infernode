@@ -145,6 +145,40 @@ Flow_sweep(void *fp)
 	*f->ret = flowsweep(t, f->now, (Flowent*)f->out->data, f->out->len/sizeof(Flowent));
 }
 
+void
+Flow_stat(void *fp)
+{
+	F_Flow_stat *f;
+	Flowtab *t;
+	Flowent *e;
+	Flowkey k;
+
+	f = fp;
+	t = table(f->tab);
+	memmove(&k, flkey(f->k), sizeof k);
+	if(f->out == H)
+		error(exNilref);
+	if(f->out->len < sizeof(Flowent))
+		error(exBounds);
+	e = flowpeek(t, &k);
+	if(e != nil)
+		memmove(f->out->data, e, sizeof *e);
+	*f->ret = e != nil;
+}
+
+void
+Flow_del(void *fp)
+{
+	F_Flow_del *f;
+	Flowtab *t;
+	Flowkey k;
+
+	f = fp;
+	t = table(f->tab);
+	memmove(&k, flkey(f->k), sizeof k);
+	*f->ret = flowdel(t, &k);
+}
+
 /*
  * The loop that moves frames, for the flows already judged. The VM is
  * let go for each read and write, as Sys->read and Sys->write let it

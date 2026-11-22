@@ -251,13 +251,22 @@ other than
 .B cpu
 are refused; such a session is for pictures its owner writes.
 Holders of the mount who are the server's own user are one principal
-with it: an agent given
-.B /mnt/vision
-through its vision tool has, as files, everything the user has there,
-and it is that tool's fixed arguments
-.RB ( classes ,
-.BR thresh ),
-not this server, that keep a model from naming a feed.
+with it, so what such a holder may do is decided by what of the mount
+it is given.
+An agent's vision tool is given the
+.B models
+directory and one session, made for it, with that session's
+.BR image ,
+.B detections
+and
+.B status
+and nothing else: no
+.BR clone ,
+neither
+.BR ctl ,
+no other session.
+It can therefore have a picture looked at, and cannot load a model,
+name a feed or read another's answers.
 A
 .B src
 command is answered when the feed's

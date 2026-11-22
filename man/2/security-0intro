@@ -147,14 +147,15 @@ and
 .I auth
 are also available to an application. These routines enable an application to create alternate methods for establishing security, or to perform specialized functions like signing files.
 .PP
-Inferno also provides security routines tailored for set-top boxes. For example, a set-top-box can use
-.IR register (8)
+Inferno also provided security routines tailored for set-top boxes: such a box ran a
+.B register
+command (not in this system; see
+.IR signer (8))
 instead of
 .I login
 (see 
 .IR security-login (2)).
-.I Register
-obtains a certificate without requiring a user to enter a password.
+It obtained a certificate without requiring a user to enter a password.
 .PP
 There are also commands in section 8 that establish a server as a Certifying Authority or `signer'. For example, a CA needs a key and password to create a certificate. These can be created on the server using the commands
 .IR changelogin (8)

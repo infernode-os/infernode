@@ -268,7 +268,10 @@ testTitles(t: ref T)
 	long := "";
 	for(i := 0; i < Wiki->Maxtitle + 1; i++)
 		long[i] = 'a' + i%26;
-	bad := array[] of {"Map", " new", "NEW", "map_", "42", " 0 ", "   ", "", "___", ".", "..", "a/b", "a\u0001b", long};
+	# (and those httpd serves nothing by: a page so titled was made,
+	# and could be asked for only by its number)
+	bad := array[] of {"Map", " new", "NEW", "map_", "42", " 0 ", "   ", "", "___", ".", "..", "a/b", "a\u0001b", long,
+		".hidden", "etc.", "a\\b", "CON", "nul.txt", "Com1", "lpt9.old", "progra~1", " .dot"};
 	for(i = 0; i < len bad; i++){
 		n := w->allocnum(bad[i], 0);
 		t.assert(n < 0, sys->sprint("title %q refused (%d)", clip(bad[i]), n));
@@ -284,6 +287,9 @@ testTitles(t: ref T)
 	t.asserteq(w->allocnum("A_good  TITLE", 0), n, "in any spelling");
 	t.assert(w->allocnum("a good title", 1) < 0, "and refused where it must be new");
 	t.assert(w->allocnum(long[0:Wiki->Maxtitle], 0) >= 0, "a title of Maxtitle characters taken");
+	good := array[] of {"console", "a.b", "v1.2 notes", "como", "com10", "a~b", "nullable"};
+	for(i = 0; i < len good; i++)
+		t.assert(w->allocnum(good[i], 0) >= 0, sys->sprint("title %q taken: %r", good[i]));
 	rmrf(dir);
 }
 
@@ -439,6 +445,62 @@ testWriteChecked(t: ref T)
 }
 
 # ---- templates and diffs
+
+# A page's history is at most Maxvers versions and Maxhist bytes: an
+# edit past either is refused, saying which file is full, and the page
+# and its history are as they were.  (Nothing was bounded.)
+testHistoryQuota(t: ref T)
+{
+	dir := hoststore(t);
+	w := wikion(t, dir);
+	n := w->allocnum("quota", 0);
+	t.assert(n >= 0, "a page");
+	# a history one version short of full, written as wikifs writes it
+	h := "quota\n";
+	for(i := 1; i < Wiki->Maxvers; i++)
+		h += sys->sprint("D%d\nAtest\n#v\n\n", 1000+i);
+	putfile(sys->sprint("%s/d/%d.hist", dir, n), h);
+	last := 1000 + Wiki->Maxvers - 1;
+	putfile(sys->sprint("%s/d/%d", dir, n), sys->sprint("quota\nD%d\nAtest\n#v\n", last));
+	t.asserteq(w->writepage(n, last, sys->sprint("D%d\nAtest\n#one more", last+1), "quota"), 0, sys->sprint("the last version it has room for is taken: %r"));
+	cur := getfile(sys->sprint("%s/d/%d", dir, n));
+	hist := getfile(sys->sprint("%s/d/%d.hist", dir, n));
+	r := w->writepage(n, version0(cur), "D99999\nAtest\n#too many", "quota");
+	e := sys->sprint("%r");
+	t.assert(r < 0 && contains(e, "history is full"), sys->sprint("an edit past %d versions is refused, saying why (%d, %s)", Wiki->Maxvers, r, e));
+	t.assertseq(getfile(sys->sprint("%s/d/%d", dir, n)), cur, "the page is as it was");
+	t.assertseq(getfile(sys->sprint("%s/d/%d.hist", dir, n)), hist, "and its history");
+
+	# and by bytes
+	m := w->allocnum("big", 0);
+	big1 := "";
+	for(i = 0; i < 1024; i++)
+		big1 += "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\n#";
+	hb := "big\n";
+	chunk := sys->sprint("D%d\nAtest\n#%s\n\n", 2000, big1);
+	while(len hb + len chunk <= Wiki->Maxhist - 1000)
+		hb += chunk;
+	# to within a thousand bytes of full
+	fill := Wiki->Maxhist - 1000 - len hb - 40;
+	if(fill > 0)
+		hb += sys->sprint("D%d\nAtest\n#%s\n\n", 2000, big1[0:fill]);
+	putfile(sys->sprint("%s/d/%d.hist", dir, m), hb);
+	putfile(sys->sprint("%s/d/%d", dir, m), "big\nD2000\nAtest\n#x\n");
+	r = w->writepage(m, 2000, "D2001\nAtest\n#" + big1, "big");
+	e = sys->sprint("%r");
+	t.assert(r < 0 && contains(e, "history is full"), sys->sprint("an edit that takes a history past %d bytes is refused (%d, %s)", Wiki->Maxhist, r, e));
+	t.asserteq(w->writepage(m, 2000, "D2001\nAtest\n#small", "big"), 0, sys->sprint("one that fits is taken: %r"));
+	rmrf(dir);
+}
+
+# the version a page file says it is
+version0(s: string): int
+{
+	for(i := 0; i + 1 < len s; i++)
+		if(s[i] == '\n' && s[i+1] == 'D')
+			return int s[i+2:];
+	return -1;
+}
 
 testTextTemplate(t: ref T)
 {
@@ -796,6 +858,95 @@ testStatBadFid(t: ref T)
 	rmrf(dir);
 }
 
+# A request that is flushed is answered no more.  One handed to a
+# worker and not yet noted by the flush process was not found by its
+# flush, so its answer came after the flush's, for a tag the client had
+# taken back; one that was found had its worker killed, wherever it
+# was.  Here the read of a page and its flush arrive together, forty
+# times, and no read is answered after its flush; the page is then
+# read whole.
+testFlush(t: ref T)
+{
+	dir := hoststore(t);
+	addpage(dir, 0, "front page", "the front page");
+	fd := startwikifs(t, dir);
+	r := rpc(fd, ref Tmsg.Version(Styx->NOTAG, 8192, "9P2000"));
+	t.assert(r != nil && tagof r == tagof Rmsg.Version, "version");
+	r = rpc(fd, ref Tmsg.Attach(1, 0, Styx->NOFID, "test", ""));
+	t.assert(r != nil && tagof r == tagof Rmsg.Attach, "attach");
+	r = rpc(fd, ref Tmsg.Walk(2, 0, 1, array[] of {"0", "index.html"}));
+	t.assert(r != nil && tagof r == tagof Rmsg.Walk, "walk to the page");
+	r = rpc(fd, ref Tmsg.Open(3, 1, Sys->OREAD));
+	t.assert(r != nil && tagof r == tagof Rmsg.Open, "open it");
+	late := 0;
+	lost := 0;
+	for(i := 0; i < 40; i++){
+		tag := 10 + 2*i;
+		a := (ref Tmsg.Read(tag, 1, big 0, 4096)).pack();
+		b := (ref Tmsg.Flush(tag+1, tag)).pack();
+		both := array[len a + len b] of byte;
+		both[0:] = a;
+		both[len a:] = b;
+		if(sys->write(fd, both, len both) != len both)
+			t.fatal(sys->sprint("write: %r"));
+		# up to its flush's answer; then nothing more may come for it,
+		# which the next request's answer coming first shows
+		flushed := 0;
+		while(!flushed){
+			m := rmsg(fd);
+			if(m == nil){
+				lost++;
+				break;
+			}
+			if(m.tag == tag+1 && tagof m == tagof Rmsg.Flush)
+				flushed = 1;
+		}
+		c := (ref Tmsg.Stat(1000+i, 0)).pack();
+		sys->write(fd, c, len c);
+		for(;;){
+			m := rmsg(fd);
+			if(m == nil){
+				lost++;
+				break;
+			}
+			if(m.tag == tag)
+				late++;
+			if(m.tag == 1000+i)
+				break;
+		}
+	}
+	t.asserteq(lost, 0, "every flush and every stat after it is answered");
+	t.asserteq(late, 0, "no read is answered after its flush");
+	r = rpc(fd, ref Tmsg.Read(5, 1, big 0, 4096));
+	ok := 0;
+	if(r != nil)
+		pick rr := r {
+		Read =>
+			ok = contains(string rr.data, "front");
+		}
+	t.assert(ok, "and the page is read after them");
+	fd = nil;
+	rmrf(dir);
+}
+
+# the next reply, or nil after five seconds
+rmsg(fd: ref Sys->FD): ref Rmsg
+{
+	rc := chan[1] of ref Rmsg;
+	pidc := chan[1] of int;
+	spawn rreader(fd, rc, pidc);
+	pid := <-pidc;
+	(tick, tpid) := timer(5000);
+	alt {
+	r := <-rc =>
+		kill(tpid);
+		return r;
+	<-tick =>
+		kill(pid);
+		return nil;
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -824,9 +975,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WriteChecked", testWriteChecked);
 	run("PostRefusals", testPostRefusals);
 	run("Simultaneous", testSimultaneous);
+	run("HistoryQuota", testHistoryQuota);
 	run("TextTemplate", testTextTemplate);
 	run("DiffBound", testDiffBound);
 	run("StatBadFid", testStatBadFid);
+	run("Flush", testFlush);
 	run("EndsWithConnection", testEndsWithConnection);
 
 	if(testing->summary(passed, failed, skipped) > 0)

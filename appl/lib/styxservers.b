@@ -123,10 +123,20 @@ Styxserver.replydirect(srv: self ref Styxserver, m: ref Rmsg): int
 	if(srv.msize == 0 && tagof m != tagof Rmsg.Version && tagof m != tagof Rmsg.Error)
 		m = ref Rmsg.Error(m.tag, "Tversion not seen");
 	d := m.pack();
+	# a reply that cannot be a message (a stat whose name passes its
+	# 16-bit count, more qids than a walk holds) packs to nil: writing
+	# those no bytes was, to a pipe's reader, the end of the connection.
+	# The request is answered with an error instead.
+	if(d == nil){
+		m = ref Rmsg.Error(m.tag, "Styx reply cannot be packed");
+		d = m.pack();
+	}
 	if(srv.msize != 0 && len d > srv.msize){
 		m = ref Rmsg.Error(m.tag, "Styx reply didn't fit");
 		d = m.pack();
 	}
+	if(d == nil)
+		return -1;
 	return sys->write(srv.fd, d, len d);
 }
 
@@ -479,7 +489,7 @@ Styxserver.default(srv: self ref Styxserver, gm: ref Tmsg)
 		# version not known, left the connection as though agreed
 		max := srv.msize;
 		if(max <= 0)
-			max = Styx->MAXRPC;
+			max = Styx->DEFMSIZE;
 		(msize, version) := styx->compatible(m, max, Styx->VERSION);
 		if(m.msize < 256 || msize < 256){
 			srv.reply(ref Rmsg.Error(m.tag, "message size too small"));

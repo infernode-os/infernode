@@ -18,6 +18,9 @@ implement StyxserversHostileTest;
 #  - a walk or create to a name with a slash in it is refused, and the
 #    new fid of a refused walk is not left behind
 #  - a connection holds Styxservers->MAXFIDS fids and no more
+#  - a reply that cannot be a 9P message (a stat whose owner is longer
+#    than its 16-bit count) is answered with an error: no bytes were
+#    written for it, which the reader of a pipe took for the server's end
 #
 
 include "sys.m";
@@ -39,7 +42,7 @@ StyxserversHostileTest: module
 };
 
 SRCFILE: con "/tests/styxservers_hostile_test.b";
-Qroot, Qfile: con big iota;
+Qroot, Qfile, Qlong: con big iota;
 CONTENT: con "twenty bytes of file\n";
 BATCH: con 128;
 
@@ -78,6 +81,11 @@ dirof(path: big): ref Sys->Dir
 		d.name = ".";
 		d.qid = Sys->Qid(Qroot, 0, Sys->QTDIR);
 		d.mode = Sys->DMDIR | 8r777;
+	}else if(path == Qlong){
+		d.name = "long";
+		d.uid = string array[70000] of {* => byte 'u'};
+		d.qid = Sys->Qid(Qlong, 0, Sys->QTFILE);
+		d.mode = 8r666;
 	}else{
 		d.name = "file";
 		d.qid = Sys->Qid(Qfile, 0, Sys->QTFILE);
@@ -99,6 +107,8 @@ navigator(c: chan of ref Navop)
 		Walk =>
 			if(m.path == Qroot && m.name == "file")
 				m.reply <-= (dirof(Qfile), nil);
+			else if(m.path == Qroot && m.name == "long")
+				m.reply <-= (dirof(Qlong), nil);
 			else if(m.name == "..")
 				m.reply <-= (dirof(Qroot), nil);
 			else
@@ -317,6 +327,43 @@ testNames(t: ref T)
 	refused(t, rpc(t, fd, ref Tmsg.Create(7, 1, "plain", 8r666, Sys->OWRITE)), "created", "create of a plain name gets as far as the server");
 }
 
+reader(fd: ref Sys->FD, rc: chan of ref Rmsg)
+{
+	rc <-= Rmsg.read(fd, 64*1024);
+}
+
+after(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+testUnpackable(t: ref T)
+{
+	(fd, nil) := served(t);
+	version(t, fd);
+	want(t, rpc(t, fd, ref Tmsg.Attach(1, 1, Styx->NOFID, "t", "")), tagof Rmsg.Attach, "attach");
+	want(t, rpc(t, fd, ref Tmsg.Walk(2, 1, 2, array[] of {"long"})), tagof Rmsg.Walk, "walk to the file with the long owner");
+	# under a deadline: the old code wrote nothing, and the request was
+	# never answered (or, over a connection that carries an empty write,
+	# the reader saw its end)
+	sm: ref Tmsg = ref Tmsg.Stat(3, 2);
+	send(t, fd, array[] of {sm});
+	rc := chan[1] of ref Rmsg;
+	tmo := chan[1] of int;
+	spawn reader(fd, rc);
+	spawn after(tmo, 5000);
+	alt{
+	r := <-rc =>
+		if(r == nil)
+			t.fatal("stat of a file whose owner is 70000 bytes: the connection ended");
+		refused(t, r, "cannot be packed", "stat of a file whose owner is 70000 bytes");
+	<-tmo =>
+		t.fatal("stat of a file whose owner is 70000 bytes: no answer in 5 s");
+	}
+	want(t, rpc(t, fd, ref Tmsg.Stat(4, 1)), tagof Rmsg.Stat, "the server answers after it");
+}
+
 testFidLimit(t: ref T)
 {
 	(fd, nil) := served(t);
@@ -376,6 +423,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ReadCounts", testReadCounts);
 	run("DirOffset", testDirOffset);
 	run("Names", testNames);
+	run("Unpackable", testUnpackable);
 	run("FidLimit", testFidLimit);
 
 	if(testing->summary(passed, failed, skipped) > 0)

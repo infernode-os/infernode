@@ -1014,7 +1014,7 @@ qid2text(q: Sys->Qid): string
 readmsg(fd: ref Sys->FD, msglim: int): (array of byte, string)
 {
 	if(msglim <= 0)
-		msglim = MAXRPC;
+		msglim = DEFMSIZE;
 	sbuf := array[BIT32SZ] of byte;
 	# A message the connection ended in the middle of is said to be
 	# that.  With some of its bytes read there is no error string: %r
@@ -1074,10 +1074,4 @@ compatible(t: ref Tmsg.Version, msize: int, version: string): (int, string)
 	if(v < version)
 		version = v;
 	return (msize, version);
-}
-
-# only here to support an implementation of this module that talks the previous version of Styx
-write(fd: ref Sys->FD, buf: array of byte, nb: int): int
-{
-	return sys->write(fd, buf, nb);
 }

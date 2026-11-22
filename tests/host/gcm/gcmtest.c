@@ -1,16 +1,21 @@
 /*
- * libsec's AES-GCM (aesgcm.c), its GHASH in C and by PMULL
- * (ghasharm64.c) and its counter mode by aes.c and by the AES
- * instructions (aesarm64.c), against OpenSSL's answers
+ * libsec's AES-GCM (aesgcm.c), its GHASH in C and by the processor's
+ * carry-less multiply (ghasharm64.c's PMULL, ghashamd64.c's PCLMULQDQ)
+ * and its counter mode by aes.c and by the AES instructions
+ * (aesarm64.c, aesamd64.c), against OpenSSL's answers
  * (tests/host/gcm/vectors.txt, made by gen.py) and against each other.
  * Built by tests/host/armcrypto_test.sh.
  *
  *	gcmtest vectors.txt	known answers in each configuration, then
  *				random cases compared across them, opened
- *				again, and refused once changed; speeds
+ *				again, and refused once changed; GHASH by
+ *				the C and by the instructions at every
+ *				number of blocks; speeds
  *	gcmtest ct		the C GHASH on a key and data valgrind is told
  *				are secret (-DCTGRIND): any branch or address
  *				that depends on them is reported
+ *	gcmtest ct hw		the same of the instructions' GHASH, and of
+ *				a whole seal through them
  */
 
 #include "../../../libsec/aesgcm.c"
@@ -29,24 +34,29 @@
 void aesarm64use(int);
 int aesarm64ok(void);
 void ghasharm64use(int);
+void aesamd64use(int);
+int aesamd64ok(void);
+void ghashamd64use(int);
 
 static int fails;
 
-/* the configurations: what aesgcm.c uses */
+/* the configurations: what aesgcm.c uses.  The instructions are ARMv8's or x86-64's, whichever are here */
 enum { Call, Pmull, Pmullaes, Nconf };
-static char *confname[] = { "C", "PMULL with aes.c", "PMULL and the AES instructions" };
+static char *confname[] = { "C", "carry-less multiply with aes.c", "carry-less multiply and the AES instructions" };
 
 static int
 setconf(int c)
 {
 	aesgcmuseC(c == Call);
 	ghasharm64use(c != Call);
+	ghashamd64use(c != Call);
 	aesarm64use(c == Pmullaes);
+	aesamd64use(c == Pmullaes);
 	if(c == Call)
 		return 1;
-	if(!ghasharm64ok())
+	if(!ghasharm64ok() && !ghashamd64ok())
 		return 0;
-	return c != Pmullaes || aesarm64ok();
+	return c != Pmullaes || aesarm64ok() || aesamd64ok();
 }
 
 static int
@@ -241,19 +251,79 @@ speeds(void)
 	}
 }
 
-/* the C GHASH with its key and data secret: valgrind reports any use of them in a branch or an address */
+/*
+ * GHASH by the C and by the instructions, from the same Y and H, at
+ * every number of blocks to 40 (so the four-at-a-time code, its
+ * threshold and what is left over) and a few long ones.
+ */
 static void
-ct(void)
+ghashcross(void)
 {
-	static uchar y[16], h[16], data[4096];
+	static uchar y[16], h[16], data[65*16], a[16], b[16];
+	int i, n, bad;
+
+	setconf(Pmull);
+	if(!ghasharm64ok() && !ghashamd64ok())
+		return;
+	srand(11);
+	bad = 0;
+	for(i = 0; i < 2000; i++){
+		n = i < 41 ? i : i < 100 ? 41 + rand()%24 : rand()%66;
+		rnd(y, 16); rnd(h, 16); rnd(data, 16*n);
+		if(i % 7 == 0)
+			memset(h, i % 14 ? 0xff : 0, 16);
+		if(i % 11 == 0)
+			memset(data, 0xff, 16*n);
+		memmove(a, y, 16);
+		memmove(b, y, 16);
+		ghashct(a, h, data, 16*n);
+		ghash(b, h, data, 16*n);
+		if(memcmp(a, b, 16) != 0)
+			bad++;
+	}
+	if(bad){
+		printf("FAIL: GHASH by the instructions differs from the C in %d of 2000 cases\n", bad);
+		fails++;
+	}else
+		printf("ghash: the instructions' is the C's on 2000 random Y, H and 0 to 65 blocks\n");
+}
+
+/*
+ * GHASH with its key and data secret: valgrind reports any use of them in
+ * a branch or an address.  The C's; or, with hw, the instructions', and
+ * a seal through them with the key and the text secret (opening is the
+ * same code, and then whether the tag matched, which is public).
+ */
+static int
+ct(int hw)
+{
+	static uchar y[16], h[16], data[4096], key[32], iv[12], tag[16];
+	AESGCMstate s;
 
 	rnd(h, 16); rnd(data, sizeof data);
 	VALGRIND_MAKE_MEM_UNDEFINED(h, sizeof h);
 	VALGRIND_MAKE_MEM_UNDEFINED(data, sizeof data);
 	VALGRIND_MAKE_MEM_UNDEFINED(y, sizeof y);
-	ghashct(y, h, data, sizeof data);
+	if(!hw){
+		ghashct(y, h, data, sizeof data);
+		VALGRIND_MAKE_MEM_DEFINED(y, sizeof y);
+		printf("%02x\n", y[0]);
+		return 0;
+	}
+	if(!setconf(Pmullaes))
+		return 2;	/* no instructions here: nothing was checked */
+	ghash(y, h, data, sizeof data);
+	ghash(y, h, data, 3*16);
+	rnd(key, 32); rnd(iv, 12);
+	VALGRIND_MAKE_MEM_UNDEFINED(key, sizeof key);
+	setupAESGCMstate(&s, key, 32, iv, 12);
+	VALGRIND_MAKE_MEM_DEFINED(&s.a.setup, sizeof s.a.setup);
+	VALGRIND_MAKE_MEM_DEFINED(&s.a.rounds, sizeof s.a.rounds);
+	aesgcm_encrypt(data, 1000, h, 16, tag, &s);
+	VALGRIND_MAKE_MEM_DEFINED(data, sizeof data);
 	VALGRIND_MAKE_MEM_DEFINED(y, sizeof y);
-	printf("%02x\n", y[0]);
+	printf("%02x %02x\n", y[0], data[0]);
+	return 0;
 }
 
 /*
@@ -310,17 +380,16 @@ refusals(void)
 int
 main(int argc, char **argv)
 {
-	if(argc > 1 && strcmp(argv[1], "ct") == 0){
-		ct();
-		return 0;
-	}
+	if(argc > 1 && strcmp(argv[1], "ct") == 0)
+		return ct(argc > 2 && strcmp(argv[2], "hw") == 0);
 	if(argc < 2){
-		fprintf(stderr, "usage: gcmtest vectors.txt | ct\n");
+		fprintf(stderr, "usage: gcmtest vectors.txt | ct [hw]\n");
 		return 2;
 	}
 	vectors(argv[1]);
 	refusals();
 	random_cases();
+	ghashcross();
 	speeds();
 	setconf(Pmullaes);
 	return fails != 0;

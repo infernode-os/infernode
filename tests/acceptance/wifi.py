@@ -72,6 +72,12 @@ def wifi_ifc(b):
 # battery saw, six times
 CLEAR = "{ echo essid default >[1=0] } <> /net/ether1/clone"
 
+def supplicant_running(b):
+    """Whether ip/wpa is still a process on the board.  The answer is
+    spelt so that the console's echo of the command does not contain it."""
+    out = bsh(b, "load std", "if {ps | grep -s Wpa} {echo wpa^alive} {echo wpa^gone}", wait=1.0)
+    return "wpagone" not in out
+
 def join(b, ssid, passphrase, timeout=90):
     """Join as osinit.b does; return (authenticated, seconds, log tail)."""
     bsh(b, "kill Wpa >[2] /dev/null", "kill Dhcp >[2] /dev/null",
@@ -84,7 +90,12 @@ def join(b, ssid, passphrase, timeout=90):
         log = bsh(b, "cat /tmp/wpa.log", wait=1.0)
         if "group key" in log:
             return True, time.time() - t0, log[-200:]
-        if re.search(r"wpa: .*(fail|refused|timed out|did not|no passphrase)", log):
+        # The join has failed when the supplicant has ended: it reports
+        # why and exits.  A log line with "refused" in it is not that:
+        # ip/wpa reports each kind of frame it refuses (a replayed
+        # message, a bad MIC from another station's handshake) and goes
+        # on, and a join that then completed was called failed here.
+        if not supplicant_running(b):
             break
         time.sleep(3)
     return False, time.time() - t0, bsh(b, "cat /tmp/wpa.log", wait=1.0)[-300:]

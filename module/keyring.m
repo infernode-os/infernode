@@ -119,29 +119,8 @@ Keyring: module
 		x:	int;		# dummy for C compiler for runt.h
 	};
 
-	# expanded DES key + state for chaining
-	DESstate: adt
-	{
-		x:	int;		# dummy for C compiler for runt.h
-		# all the state is hidden
-	};
-
-	# expanded IDEA key + state for chaining
-	IDEAstate: adt
-	{
-		x:	int;		# dummy for C compiler for runt.h
-		# all the state is hidden
-	};
-
 	# expanded RC4 key + encryption state
 	RC4state: adt
-	{
-		x:	int;		# dummy for C compiler for runt.h
-		# all the state is hidden
-	};
-
-	# expanded Blowfish key + state for chaining
-	BFstate: adt
 	{
 		x:	int;		# dummy for C compiler for runt.h
 		# all the state is hidden
@@ -194,8 +173,6 @@ Keyring: module
 	sktopk: fn (sk: ref SK): ref PK;
 
 	# digests
-	md4: fn(buf: array of byte, n: int, digest: array of byte, state: ref DigestState):
-		ref DigestState;
 	md5: fn(buf: array of byte, n: int, digest: array of byte, state: ref DigestState):
 		ref DigestState;
 	sha1: fn(buf: array of byte, n: int, digest: array of byte, state: ref DigestState):
@@ -226,7 +203,6 @@ Keyring: module
 	SHA384dlen:	con 48;
 	SHA512dlen:	con 64;
 	MD5dlen:	con 16;
-	MD4dlen:	con 16;
 	SHA3_256dlen:	con 32;
 	SHA3_512dlen:	con 64;
 
@@ -312,24 +288,9 @@ Keyring: module
 	mlkem1024_encaps: fn(pk: array of byte): (array of byte, array of byte);	# => (ct, ss)
 	mlkem1024_decaps: fn(sk: array of byte, ct: array of byte): array of byte;	# => ss
 
-	DESbsize: con 8;
-
-	dessetup: fn(key: array of byte, ivec: array of byte): ref DESstate;
-	desecb: fn(state: ref DESstate, buf: array of byte, n: int, direction: int);
-	descbc: fn(state: ref DESstate, buf: array of byte, n: int, direction: int);
-
-	IDEAbsize: con 8;
-
-	ideasetup: fn(key: array of byte, ivec: array of byte): ref IDEAstate;
-	ideaecb: fn(state: ref IDEAstate, buf: array of byte, n: int, direction: int);
-	ideacbc: fn(state: ref IDEAstate, buf: array of byte, n: int, direction: int);
-
-	BFbsize: con 8;
-
-	blowfishsetup: fn(key: array of byte, ivec: array of byte): ref BFstate;
-#	blowfishecb: fn(state: ref BFstate, buf: array of byte, n: int, direction: int);
-	blowfishcbc: fn(state: ref BFstate, buf: array of byte, n: int, direction: int);
-
+	# RC4 is here for one thing: a PDF encrypted with it (revisions 2
+	# to 4 of the standard security handler) cannot be read without.
+	# Nothing else may use it.  DES, IDEA, Blowfish and MD4 are gone.
 	rc4setup:	fn(seed: array of byte): ref RC4state;
 	rc4:	fn(state: ref RC4state, buf: array of byte, n: int);
 	rc4skip:	fn(state: ref RC4state, n: int);

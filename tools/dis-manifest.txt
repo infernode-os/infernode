@@ -25,7 +25,6 @@ acme/dis/win.dis
 acme/dis/winm.dis
 dis/2fa.dis
 dis/9660srv.dis
-dis/9cpu.dis
 dis/9export.dis
 dis/9win.dis
 dis/acme.dis
@@ -78,7 +77,6 @@ dis/auth/passwd.dis
 dis/auth/proto/btlink.dis
 dis/auth/proto/btltk.dis
 dis/auth/proto/btpin.dis
-dis/auth/proto/p9any.dis
 dis/auth/proto/pass.dis
 dis/auth/proto/sign.dis
 dis/auth/proto/wpapsk.dis
@@ -238,7 +236,6 @@ dis/gunzip.dis
 dis/gzip.dis
 dis/history.dis
 dis/hostplumb.dis
-dis/idea.dis
 dis/import.dis
 dis/install/applylog.dis
 dis/install/arch.dis
@@ -261,13 +258,9 @@ dis/install/wfind.dis
 dis/install/wrap.dis
 dis/install/wrap2list.dis
 dis/iostats.dis
-dis/ip/bootpd.dis
 dis/ip/dhcp.dis
 dis/ip/ping.dis
-dis/ip/rip.dis
 dis/ip/sntp.dis
-dis/ip/tftpd.dis
-dis/ip/virgild.dis
 dis/ip/wpa.dis
 dis/jitbench.dis
 dis/jitbench2.dis
@@ -292,7 +285,6 @@ dis/lib/audit.dis
 dis/lib/auditchain.dis
 dis/lib/auditprov.dis
 dis/lib/auth.dis
-dis/lib/auth9.dis
 dis/lib/bidi.dis
 dis/lib/bioauth.dis
 dis/lib/bloomfilter.dis
@@ -351,7 +343,6 @@ dis/lib/encoding/base32a.dis
 dis/lib/encoding/base64.dis
 dis/lib/env.dis
 dis/lib/ethcrypto.dis
-dis/lib/ether.dis
 dis/lib/ethrpc.dis
 dis/lib/exception.dis
 dis/lib/factotum.dis
@@ -405,8 +396,6 @@ dis/lib/names.dis
 dis/lib/nametree.dis
 dis/lib/newns.dis
 dis/lib/nmea.dis
-dis/lib/ninep.dis
-dis/lib/oldauth.dis
 dis/lib/osklayout.dis
 dis/lib/outlinefont.dis
 dis/lib/parseman.dis
@@ -474,7 +463,6 @@ dis/lib/tables.dis
 dis/lib/tabs.dis
 dis/lib/testing.dis
 dis/lib/textwidget.dis
-dis/lib/tftp.dis
 dis/lib/timers.dis
 dis/lib/titlebar.dis
 dis/lib/tkclient.dis
@@ -487,7 +475,6 @@ dis/lib/url.dis
 dis/lib/vac.dis
 dis/lib/venti.dis
 dis/lib/viewport.dis
-dis/lib/virgil.dis
 dis/lib/visnet.dis
 dis/lib/visrec.dis
 dis/lib/w3c/css.dis
@@ -615,7 +602,6 @@ dis/ndb/mkhash.dis
 dis/ndb/query.dis
 dis/ndb/registry.dis
 dis/ndb/regquery.dis
-dis/netkey.dis
 dis/netstat.dis
 dis/newer.dis
 dis/newuser.dis
@@ -714,7 +700,6 @@ dis/tests/auditchain_test.dis
 dis/tests/auditprov_test.dis
 dis/tests/auditsign_test.dis
 dis/tests/auditverify_test.dis
-dis/tests/auth9_short_test.dis
 dis/tests/auth_keyfile_test.dis
 dis/tests/authneg_test.dis
 dis/tests/authnode.dis
@@ -871,7 +856,6 @@ dis/tests/msg_inject_test.dis
 dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
 dis/tests/msg_triage_test.dis
-dis/tests/ninep_pack_test.dis
 dis/tests/parread_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/nmea_test.dis
@@ -905,7 +889,6 @@ dis/tests/dial_edge_test.dis
 dis/tests/nsunion_race_test.dis
 dis/tests/spawn_budget_test.dis
 dis/tests/sheetview_test.dis
-dis/tests/p9any_timeout_test.dis
 dis/tests/pqauth_test.dis
 dis/tests/pqc_fuzz_test.dis
 dis/tests/pres_launch_test.dis
@@ -1344,3 +1327,14 @@ dis/tests/file2chan_gaveup_test.dis
 dis/tests/dial_kernel_test.dis
 dis/tests/udp_empty_test.dis
 dis/tests/prime_kill_test.dis
+dis/tests/web_status_test.dis
+dis/tests/wercfs_stat_test.dis
+dis/tests/listeners_test.dis
+dis/tests/mounts_test.dis
+dis/tests/feed_flush_test.dis
+dis/tests/cnsa_auth_test.dis
+dis/tests/keyring_noresult_test.dis
+dis/tests/keyring_rsapub_test.dis
+dis/tests/file2chan_close_test.dis
+dis/tests/export_readonly_test.dis
+dis/tests/vision_capability_test.dis

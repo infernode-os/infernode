@@ -101,6 +101,12 @@ bayermod.h:D: $MODULES bayerif.m
 bayerif.h:D: $MODULES bayerif.m
 	rm -f $target && limbo -a -I$ROOT/module bayerif.m > $target
 
+# Below, keyring.c and ipint.c name libmp's and libsec's headers, and
+# keyring.c libkeyring's: they are compiled against those structures,
+# and with one changed and the old object kept the library links and
+# the first call through a changed structure crashes.
+# (A comment line straight after a rule is that rule's recipe.)
+
 xec.$O:		optab.h  ../include/pool.h
 draw.$O: 	../include/draw.h ../include/drawif.h
 
@@ -109,6 +115,8 @@ draw.$O:	drawmod.h
 math.$O:	mathmod.h
 tk.$O:		$ROOT/include/draw.h $ROOT/include/tk.h $ROOT/include/pool.h tkmod.h
 keyring.$O:	keyring.h ipint.h keyringif.h
+keyring.$O:	../include/mp.h ../include/libsec.h ../libkeyring/keys.h
+ipint.$O:	../include/mp.h ../include/libsec.h
 i420.$O:	i420mod.h i420if.h
 tensor.$O:	tensormod.h tensorif.h
 
@@ -140,5 +148,5 @@ kif.$O: kif.c
 #	it works only on UNIX and Plan 9.
 
 nuke:EV:	nuke-std
-	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h kif.c keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h
+	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h freetypemod.h kif.c keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h
 

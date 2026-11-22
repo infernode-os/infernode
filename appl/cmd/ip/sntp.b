@@ -98,15 +98,27 @@ init(nil: ref Draw->Context, args: list of string)
 	ip->init();
 	arg := load Arg Arg->PATH;
 	arg->init(args);
-	arg->setusage("sntp [-d] [server]");
+	arg->setusage("sntp [-di] [-m seconds] [server]");
 
 	doset := 1;
 	while((o := arg->opt()) != 0)
 		case o {
 		'd' => debug++;
 		'i' => doset = 0;
+		'm' =>
+			a := arg->earg();
+			if(a == nil || len a > 9)
+				arg->usage();
+			for(k := 0; k < len a; k++)
+				if(a[k] < '0' || a[k] > '9')
+					arg->usage();
+			maxstep = big a;
 		* =>	arg->usage();
 		}
+	floor = big Written;
+	(fok, fd) := sys->stat("#c/time");
+	if(fok >= 0 && big fd.mtime > floor)
+		floor = big fd.mtime;	# the kernel's build date
 	args = arg->argv();
 	if(len args > 1)
 		arg->usage();
@@ -170,6 +182,14 @@ init(nil: ref Draw->Context, args: list of string)
 			if(debug)
 				sys->print("%bd\n", now);
 			if(doset){
+				# the answer is believed for its time, but not
+				# to move a clock already set by any amount
+				cur := clock();
+				if(maxstep > big 0 && cur >= floor && (now - cur > maxstep || cur - now > maxstep)){
+					sys->fprint(stderr, "sntp: %s says %bd, %bd s from the clock: more than the %bd s a clock already set is stepped: not set (-m seconds allows more, -m 0 any step)\n",
+						server, now, now - cur, maxstep);
+					quit("step too large");
+				}
 				e := settime("#r/rtc", now, 0);
 				if(e == nil)
 					e = settime("/dev/time", now*Microsec, 1);
@@ -209,9 +229,34 @@ refuse(reply, request: ref SNTP, now: big): string
 		return "kiss-of-death (stratum 0): " + printable(reply.clockid);
 	if(reply.xmttime == big 0)
 		return "no transmit timestamp";
-	if(now <= big 1120000000)
-		return sys->sprint("a time before 2005 (%bd)", now);
+	if(now < floor)
+		return sys->sprint("a time before this system was built (%bd)", now);
 	return nil;
+}
+
+#
+# What an answer may do to the clock is bounded as timesync(8) bounds a
+# GPS receiver's: SNTP is not authenticated, and one answer set the
+# clock anywhere from 2005 to 2036.  A time before this was written
+# (or the kernel built) is none, and a clock that already says a time
+# since then is stepped at most Maxstep seconds unless -m says more.
+#
+Written: con 1793491200;	# 2026-11-01
+Maxstep: con 86400;
+maxstep := big Maxstep;
+floor: big;
+
+# the clock, in seconds
+clock(): big
+{
+	fd := sys->open("/dev/time", Sys->OREAD);
+	if(fd == nil)
+		return big 0;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return big 0;
+	return big string buf[0:n] / Microsec;
 }
 
 printable(s: string): string

@@ -22,6 +22,13 @@ NAME:	con "Noise_IKpsk2_25519_ChaChaPoly_SHA256";
 PROLOGUE:	con "styxbrick sdg 1";
 
 Pinit, Presp, Pdata, Pcookie: con 1+iota;
+# A session's keys last as long as the session: the protocol has no
+# rekey, and a mount made again is a new handshake.  A counter is the
+# cipher's nonce: a session that has sent, or been sent, this many
+# packets under one key is over.
+Maxmsgs:	con big 1 << 60;
+Maxcookies:	con 3;	# cookies in one connect that restart a try at once
+Maxresps:	con 8;	# responses looked at (two X25519s each) in one try
 INITLEN:	con 1 + 4 + 108 + 16 + 16;
 RESPLEN:	con 1 + 4 + 4 + 32 + 1 + 16;
 COOKIELEN:	con 1 + 4 + 8 + 16 + 16;
@@ -302,6 +309,8 @@ Sess: adt {
 
 Sess.send(s: self ref Sess, plain: array of byte)
 {
+	if(s.ctr >= Maxmsgs)
+		return;		# the key has sealed all it may: the requests time out, and the mount is made again
 	hdr := array[13] of byte;
 	hdr[0] = byte Pdata;
 	put4(hdr, 1, s.them);
@@ -318,7 +327,7 @@ Sess.fresh(s: self ref Sess, c: big): int
 {
 	# a counter with its top bit set is negative here, and no sender
 	# reaches it: the comparisons below are of signed numbers
-	if(c < big 0)
+	if(c < big 0 || c >= Maxmsgs)
 		return 0;
 	if(s.recvmax >= big 64 && c + big 64 <= s.recvmax)
 		return 0;
@@ -557,6 +566,7 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 	reader := <-rpid;
 	deadline := sys->millisec() + HSDEADLINE;
 	wait := 250;
+	ncookies := 0;
 	while(sys->millisec() < deadline){
 		# A fresh initiation each try (an accepted one would be refused as old).
 		mer := randbytes(4);
@@ -594,6 +604,7 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 		spawn ticker(timer, wait);
 		if(wait < 2000)
 			wait *= 2;
+		nresp := 0;
 	wait:
 		for(;;) alt {
 		<-timer =>
@@ -608,8 +619,18 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 				ck := unseal(ckey, ctr, p[len p - 32:len p - 16], r[13:]);
 				if(ck != nil){
 					cookie = ck;
-					wipe(hs);
-					break wait;
+					# A cookie restarts the try at once only a few
+					# times.  Each restart is a counter kept and three
+					# X25519s, and a cookie reply can be made by anyone
+					# on the path who has the server's public key: one
+					# who answered every initiation with a cookie had
+					# us at that, as fast as we could go, until the
+					# deadline.  After Maxcookies the next try comes
+					# when this one's wait is over.
+					if(ncookies++ < Maxcookies){
+						wipe(hs);
+						break wait;
+					}
 				}
 				continue;
 			}
@@ -618,6 +639,12 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 				# checked, and a forged response (anyone who saw the
 				# initiation has our index) would otherwise spoil it for
 				# the genuine one that follows (review 2026-10-30, F1).
+				# A response is two X25519s before its tag says whether
+				# it is one (the format has no mac on it), and anyone who
+				# saw the initiation can send what looks like one: a try
+				# looks at Maxresps of them and no more.
+				if(++nresp > Maxresps)
+					continue;
 				h := ref *hs;
 				v := handshake2(h, r[9:]);
 				if(v == nil || len v != 1 || int v[0] != 1)
@@ -626,6 +653,10 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 				hs = h;
 				endreader(reader, stop);	# from here on the relay reads the network
 				s.me = me;
+				# The responder's index is not in the handshake's hash
+				# (nor is WireGuard's): one on the path who changes it
+				# gets a session that carries nothing, which it has
+				# anyway by dropping the packets.
 				s.them = get4(r, 1);
 				(s.ksend, s.krecv) = split(hs);
 				wipe(hs);

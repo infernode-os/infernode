@@ -794,10 +794,17 @@ void
 Sys_export(void *fp)
 {
 	F_Sys_export *f;
+	int flag;
 
 	f = fp;
+	flag = f->flag;
 	release();
-	*f->ret = export(fdchk(f->c), string2c(f->dir), f->flag&Sys_EXPASYNC);
+	if(flag & ~(Sys_EXPASYNC|Sys_EXPREADONLY)){
+		/* a flag that is none was taken for EXPWAIT or EXPASYNC by its low bit */
+		kwerrstr("%s", Ebadarg);
+		*f->ret = -1;
+	}else
+		*f->ret = export(fdchk(f->c), string2c(f->dir), flag&Sys_EXPASYNC, flag&Sys_EXPREADONLY);
 	acquire();
 }
 

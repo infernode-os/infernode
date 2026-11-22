@@ -90,7 +90,6 @@ InferNode provides a native cryptocurrency wallet that enables Veltro AI agents 
    a. Connects to secstore, authenticates (PAK)
    b. Loads encrypted keys into factotum
    c. Establishes save-back path for new keys
-   d. Creates /tmp/.secstore-unlocked sentinel
 6. llmsrv, tools9p, lucibridge, lucifer start
 7. System fully operational with all keys available
 ```
@@ -128,7 +127,7 @@ The profile detects the variable and starts factotum with secstore backing (`-S 
 
 ### Secstore Status Detection
 
-After successful unlock, `wm/logon` creates a sentinel file at `/tmp/.secstore-unlocked`. Other apps (Keyring, Settings) check this file to display persistence status:
+Keyring and Settings read factotum's `secstore` file (`/mnt/factotum/secstore`, factotum(4)), which says where a key added now is saved, to display persistence status. (They used to ask whether `/tmp/.secstore-unlocked`, which `wm/logon` created after an unlock, existed: a file anything can make. `wm/logon` no longer makes it.)
 - **Keyring**: "Keys persist to secstore" or "Keys are in-memory only (login was skipped)"
 - **Settings**: "Key persistence: active" or "Key persistence: inactive (login skipped)"
 
@@ -482,7 +481,12 @@ payment and returns `pending:<id>` to the first read of that fid; a read
 there again at offset 0 waits until the payment is approved, denied or
 expires, and gives the outcome. Requests are validated *before* queueing
 (malformed or over-budget requests are rejected immediately), and pending
-entries expire after 15 minutes if unapproved. One account holds at most 16
+entries expire after 15 minutes if unapproved. An x402 authorization is its
+requester's: when the file it was written to is closed, or `withdraw` is written
+to it (as `x402->authorize` does when its wait runs out), a request still
+awaiting approval is withdrawn, leaves the list, and an approval of it is
+refused, so nothing is signed or taken from a budget for a requester that has
+gone. A payment (`pay`) stays until it is approved, denied or expires. One account holds at most 16
 proposals awaiting approval (and all accounts 100), so one requester cannot use
 up the queue for the others. An amount is written one way, with no leading zero;
 anything else is refused, since the approver is shown the amount as it was
@@ -494,11 +498,20 @@ right-click menu (the status bar shows a count when payments are waiting),
 or from a trusted shell:
 
 ```sh
-cat /mnt/wallet/pending   # "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
+cat /mnt/wallet/pending   # "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent> <symbol> <decimals>"
 echo 'approve 3' > /mnt/wallet/ctl      # or: deny 3
 ```
 
 A controller that shows the count, as the wallet GUI does, reads
+The last two fields of a `pending` line are what the wallet itself knows the
+token to be and its decimals (`ETH 18`, `USDC 6`, `USD 2`; `unknown -` for an
+x402 asset that is not the active network's USDC contract, whatever name the
+402 server gave it). The approver is shown the amount in the token's units
+with its base units beside it, and for an unknown token base units only, said
+to be of a token the wallet does not know. The RPC endpoint (`rpc <url>`, and
+each network's) must be `https`, or `http` to this machine (127.0.0.1,
+localhost, [::1]); any other is refused.
+
 `/mnt/wallet/event` and re-reads `pending` on each line; nothing polls. It
 shows each proposal with the account, the amount, the token, the whole payee
 and the network on lines of their own, however long they are.

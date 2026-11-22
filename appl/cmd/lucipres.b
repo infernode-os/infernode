@@ -4,7 +4,7 @@ implement LuciPres;
 # lucipres - Presentation zone for Lucifer
 #
 # Standard wmclient app: gets its window Image from lucifer's wmsrv
-# (preswmloop), so it can in future run remotely via 9cpu.
+# (preswmloop), so it can in future run remotely (wmexport, wmimport).
 # Usage: lucipres [mountpt [actid]]
 # args passed by lucifer: "lucipres" mountpt actid_string
 #

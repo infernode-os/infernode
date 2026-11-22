@@ -310,6 +310,57 @@ nogenerator(void)
 	check(logged("a reader of #c/random has waited 5 seconds"), "no generator: the console says why #c/random waits");
 }
 
+/*
+ * genrandomtry: the bytes a signature is hedged with, for a caller that
+ * returns an error when there are none.  genrandom's wait has no end
+ * on a machine with no generator.
+ */
+static void
+trying(void)
+{
+	uchar buf[32], want[32];
+
+	/* no generator: -1 at once, nothing written, no wait */
+	hwmode = None;
+	up->type = Interp;
+	memset(buf, 0x5A, sizeof buf);
+	sleeplimit = 3;
+	if(setjmp(escape) == 0)
+		check(genrandomtry(buf, sizeof buf) == -1, "no generator: genrandomtry says -1");
+	else
+		check(0, "no generator: genrandomtry waited");
+	check(sleeps == 0, "no generator: genrandomtry does not wait");
+	check(untouched(buf, sizeof buf), "no generator: genrandomtry wrote nothing");
+
+	/* a dry one: waited for five seconds, with the VM let go, then -1 */
+	hwmode = Dry;
+	sleeps = 0;
+	releases = acquires = 0;
+	sleeplimit = 200;
+	if(setjmp(escape) == 0)
+		check(genrandomtry(buf, sizeof buf) == -1, "a dry generator: genrandomtry says -1");
+	else
+		check(0, "a dry generator: genrandomtry went on waiting");
+	check(sleeps == 50, "a dry generator: genrandomtry waits five seconds and no more");
+	check(releases == 50 && acquires == 50 && badrelease == 0, "a dry generator: the VM is let go for each wait and taken back");
+	check(untouched(buf, sizeof buf), "a dry generator: genrandomtry wrote nothing");
+
+	/* one that comes back within the wait: the bytes, 0 */
+	sleeps = 0;
+	switchat = 7;
+	switchto = Good;
+	if(setjmp(escape) == 0)
+		check(genrandomtry(buf, sizeof buf) == 0, "a generator back within the wait: genrandomtry gives bytes");
+	else
+		check(0, "a generator back within the wait: genrandomtry went on waiting");
+	check(sleeps == 7 && !untouched(buf, sizeof buf), "a generator back within the wait: after seven waits, with bytes");
+
+	/* and with a generator it is genrandom */
+	memset(want, 0, sizeof want);
+	check(genrandomtry(buf, sizeof buf) == 0 && memcmp(buf, want, sizeof buf) != 0, "a good generator: genrandomtry gives bytes");
+	check(genrandomtry(buf, 0) == 0, "nothing asked for: 0");
+}
+
 static void
 notvm(void)
 {
@@ -590,6 +641,7 @@ static struct {
 	void (*f)(void);
 } cases[] = {
 	{ "no generator", nogenerator },
+	{ "genrandomtry", trying },
 	{ "a process without the VM", notvm },
 	{ "insecurerandom", insecure },
 	{ "NIST's HMAC_DRBG vectors (the model)", vectors },

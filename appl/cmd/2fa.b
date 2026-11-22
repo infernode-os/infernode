@@ -69,6 +69,22 @@ prompt(msg: string): string
 	return s;
 }
 
+# 32 random bytes for a key's salt, or nil and why.  randombuf raises
+# when the generator has nothing to give (it returned zeros, and a salt
+# of zeros was used); the exception ended the command with no word.
+newsalt(): (array of byte, string)
+{
+	{
+		salt := random->randombuf(Random->ReallyRandom, 32);
+		if(salt == nil || len salt != 32)
+			return (nil, "the random number generator gave nothing");
+		return (salt, nil);
+	} exception e {
+	"random:*" =>
+		return (nil, e);
+	}
+}
+
 tohex(a: array of byte): string
 {
 	h := "0123456789abcdef";
@@ -180,9 +196,9 @@ doenroll(user: string)
 		sys->fprint(stderr, "2fa: enroll credential failed: %s\n", ce);
 		return;
 	}
-	salt := random->randombuf(Random->ReallyRandom, 32);
-	if(salt == nil || len salt != 32){
-		sys->fprint(stderr, "2fa: cannot generate salt\n");
+	(salt, serr) := newsalt();
+	if(salt == nil){
+		sys->fprint(stderr, "2fa: cannot generate salt: %s\n", serr);
 		return;
 	}
 	keys: list of (string, string, string);
@@ -227,9 +243,9 @@ doaddkey(user: string)
 		sys->fprint(stderr, "2fa: backup credential failed: %s\n", ce);
 		return;
 	}
-	salt := random->randombuf(Random->ReallyRandom, 32);
-	if(salt == nil || len salt != 32){
-		sys->fprint(stderr, "2fa: cannot generate salt\n");
+	(salt, serr) := newsalt();
+	if(salt == nil){
+		sys->fprint(stderr, "2fa: cannot generate salt: %s\n", serr);
 		return;
 	}
 	sys->print("Binding the backup key — touch it again...\n");

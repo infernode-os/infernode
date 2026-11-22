@@ -3,17 +3,21 @@
 # tests/host/httpd/auth.py: httpd(8)'s client certificates, passwords
 # and rules, from outside.  Run by tests/host/httpd_auth_test.sh:
 #
-#   auth.py RULES DEFAULTS PLAINRULES LOCKOUT WORKDIR
+#   auth.py RULES DEFAULTS PLAINRULES LOCKOUT WORKDIR INTCRL
 #
 # RULES:      -A -P -x rules (below) -p /led/ctl, TLS
 # DEFAULTS:   -A -P -p /led/ctl, no -x
 # PLAINRULES: -x with only "/open none", no TLS
 # LOCKOUT:    -P -x "/ password", for the ten-failures lockout
+# INTCRL:     -A with the root, its CRL and the intermediate's CRL (not its
+#             certificate), -P, -x with a none
+#             rule under a protected directory
 #
 import os, re, socket, ssl, sys, time, base64, threading
 
 R, D, PL, LO = (int(x) for x in sys.argv[1:5])
 W = sys.argv[5]
+IC = int(sys.argv[6])
 SITE = W + "/site"
 fails = 0
 
@@ -214,6 +218,73 @@ def rules():
     check(re.search(r' - alice \[.*"GET / HTTP/1.1" 200 ', log) is not None, "the log's user field: alice")
     check(re.search(r' - cert:alice-laptop \[.*"GET /admin/x.txt HTTP/1.1" 200 ', log) is not None, "the log's user field: cert:alice-laptop")
 
+def intercrl():
+    # The intermediate's CRL in the trust file, the intermediate's
+    # certificate not there (its clients send it), and another CA's
+    # CRL beside it: what the intermediate's revokes is refused, what
+    # it does not is taken, and the root's own clients are too.
+    check(st(IC, "/admin/x.txt", cert="bob", user="alice:opensesame") == 200, "an intermediate's CRL in the file: bob, whom it does not list, is taken")
+    r = request(IC, "/public/ok.txt", cert="carl")
+    check(r.err is not None, "and carl, whom it revokes, refused at the handshake", "%s %s" % (r.status, r.err))
+    check(st(IC, "/public/ok.txt", cert="alice") == 200, "and alice, from the root itself")
+    check(st(IC, "/public/ok.txt", cert="revoked") != 200, "the root's CRL still counts")
+    # a none rule under a protected directory opens nothing, and httpd
+    # says so at start (it said nothing)
+    check(st(IC, "/admin/dl/f.txt") == 401, "a none rule under a protected directory: still protected")
+    check(st(IC, "/public/ok.txt") == 200, "a none rule under an open one: open")
+    log = open(W + "/emu.log", errors="replace").read()
+    check(re.search(r"warnrules:3: /admin/dl none opens nothing: it is under /admin \(line 2\)", log) is not None,
+          "and named at start, with the rule it is under")
+    check("warnrules:5:" not in log and "warnrules:6:" not in log and log.count("opens nothing") == 1,
+          "a none under another method's rule, or under an open directory, is not",
+          str(re.findall(r"warnrules:\d+:[^\n]*", log)))
+
+def cachefirst():
+    # A password found right is answered without waiting for the
+    # guesses being hashed: there was one process for both, so a user
+    # already in waited behind every guess (each a PBKDF2).
+    check(st(LO, "/", user="bob:bobpass") == 200, "bob in before the guessing")
+    took = []
+    def guess(i):
+        t0 = time.time(); st(LO, "/", user="nobody%d:x" % i); took.append(time.time() - t0)
+    ts = [threading.Thread(target=guess, args=(i,)) for i in range(6)]
+    t0 = time.time()
+    for t in ts: t.start()
+    time.sleep(0.15)
+    tb = time.time(); ok = st(LO, "/", user="bob:bobpass"); tb = time.time() - tb
+    for t in ts: t.join()
+    check(ok == 200 and tb < 0.4 * max(took), "a password already found right is answered while six guesses are hashed (%.0f ms; the guesses took up to %.0f)" % (tb*1000, max(took)*1000))
+    # the same wrong guess asked six times at once is hashed once
+    took = []
+    def same():
+        t0 = time.time(); st(LO, "/", user="carol:sameguess"); took.append(time.time() - t0)
+    one = time.time(); st(LO, "/", user="carol:oneguess"); one = time.time() - one
+    ts = [threading.Thread(target=same) for i in range(6)]
+    t0 = time.time()
+    for t in ts: t.start()
+    for t in ts: t.join()
+    allsix = time.time() - t0
+    check(allsix < 2 * one, "one guess asked six times at once costs about one hash (%.0f ms, one alone %.0f)" % (allsix*1000, one*1000))
+
+def clockstep():
+    # The lockout is ten minutes by a clock that only goes forward:
+    # the time of day stepped an hour (as timesync does, or anyone who
+    # can set it) forgot every lockout.
+    check(st(LO, "/", user="carol:carolpass") == 429, "carol is locked out")
+    step = W + "/step"
+    open(step + ".tmp", "w").write("%d" % int((time.time() + 3600) * 1e6))
+    os.rename(step + ".tmp", step)
+    for i in range(50):
+        if os.path.exists(W + "/stepped"):
+            break
+        time.sleep(0.2)
+    time.sleep(0.5)
+    r = request(R, "/public/ok.txt")
+    import email.utils
+    d = email.utils.parsedate_to_datetime(r.headers["date"]).timestamp()
+    check(abs(d - (time.time() + 3600)) < 30, "the clock stepped an hour")
+    check(st(LO, "/", user="carol:carolpass") == 429, "and carol is still locked out")
+
 def lockout():
     check(st(LO, "/", user="bob:bobpass") == 200, "bob in before the guessing")
     for i in range(10):
@@ -379,7 +450,7 @@ def wedge():
     r = request(R, "/", user="alice:opensesame")
     check(r.status == 200, "and the authenticator answers the next login (%.0f s later)" % (time.time() - t0), str(r.status))
 
-for f in (certs, passwords, rules, tlsdetail, review, lockout, wedge):
+for f in (certs, passwords, rules, tlsdetail, review, intercrl, cachefirst, lockout, wedge, clockstep):
     try:
         f()
     except Exception as e:

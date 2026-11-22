@@ -729,9 +729,21 @@ def events():
     # a stream of a file whose read never answers, left by its client:
     # its reader went on waiting for good, in a group nothing could
     # name any more (the leak check at the end, by httpd's own Progs)
+    # And its going is seen at once, by a read of the connection: it
+    # was learnt from a write that failed, the second comment's here,
+    # 30 s on, the client's place among the streams held until then.
+    time.sleep(1)
+    n0 = httpdprogs()
     s, rd, st, h = open_stream("/block")
     check(st == b"HTTP/1.1 200 OK", "a stream of a file that never answers: opened")
+    n1 = httpdprogs()
     s.close()
+    t0 = time.time()
+    n2 = httpdprogs()
+    while n2 > n0 and time.time() - t0 < 6:
+        n2 = httpdprogs()
+    check(n1 > n0 and n2 <= n0, "its client gone: the stream's processes go with it, at once",
+          "%d of httpd's Progs before, %d with the stream, %d %.0f s after its client left" % (n0, n1, n2, time.time() - t0))
     # many events a second: no process to an event (there was a
     # sleeper each, alive 15 s)
     n0 = httpdprogs()

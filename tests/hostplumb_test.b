@@ -14,6 +14,17 @@ implement HostplumbTest;
 # message longer than its reader's buffer stayed at the head of the
 # port's queue, and nothing after it was ever delivered.
 #
+# And what round two closed.  hostplumb: a message's host= named any
+# mount under /n (HostNotNamed; -h now says which hosts are taken); a
+# message that called itself "hostopen" was plumbed as a file the host
+# had asked to open (Src); a message no rule takes held the stream
+# fifteen seconds (NoRule).  The plumber: a rule that did not match left
+# what its patterns had done to the message for the next (SideEffects);
+# message text went to its standard error as it came (Log); "start" from
+# anyone, for a port nobody reads, had every later message queued as
+# delivered and the port's program never started (SpoofStart); a file
+# named on a server that does not answer stopped it for good (DeadStat).
+#
 # A plumber is run in this test's own namespace with one rule (all
 # text to the edit port). Messages in the host plumber's format are fed
 # to hostplumb on its standard input, and what reaches the edit port is
@@ -37,6 +48,10 @@ include "testing.m";
 include "sh.m";
 	sh: Sh;
 
+include "styx.m";
+	styx: Styx;
+	Tmsg, Rmsg: import styx;
+
 include "plumbmsg.m";
 	plumbmsg: Plumbmsg;
 	Msg: import plumbmsg;
@@ -48,6 +63,9 @@ HostplumbTest: module
 
 SRCFILE: con "/tests/hostplumb_test.b";
 RULES: con "/tmp/hostplumb_test.rules";
+ERRS: con "/tmp/hostplumb_test.err";
+STARTED: con "/tmp/hostplumb_test.started";
+DEAD: con "/tmp/hostplumb_test.dead";
 Waitms: con 5000;
 
 passed := 0;
@@ -137,7 +155,7 @@ killplumber()
 
 startplumber(sync: chan of int)
 {
-	loaderr = sh->system(nil, "plumber -n " + RULES);	# -n: stay in this group, for killgrp
+	loaderr = sh->system(nil, "plumber -n " + RULES + " >[2] " + ERRS);	# -n: stay in this group, for killgrp
 	if(loaderr != nil){
 		sync <-= 0;
 		return;
@@ -222,7 +240,7 @@ testRoot(t: ref T)
 testOtherHost(t: ref T)
 {
 	# from another host (tools/rplumb): its own name, its own paths
-	spawn hostplumb(nil, hostmsg("/home/u/src", "host=hephaestus addr=12", "/home/u/src/f.c") :: nil);
+	spawn hostplumb("-h" :: "zeus,hephaestus" :: nil, hostmsg("/home/u/src", "host=hephaestus addr=12", "/home/u/src/f.c") :: nil);
 	m := next(t);
 	t.assertseq(string m.data, "/n/hephaestus/home/u/src/f.c:12", "under /n/<host>, not /n/local");
 	t.assertseq(m.dir, "/n/hephaestus/home/u/src", "its directory too");
@@ -234,6 +252,155 @@ testBadHost(t: ref T)
 	spawn hostplumb(nil, hostmsg("/", "host=../etc", "/x") :: hostmsg("/a", "", "/a/after") :: nil);
 	m := next(t);
 	t.assertseq(string m.data, "/n/local/a/after", "the bad message is skipped, the next delivered");
+}
+
+testHostNotNamed(t: ref T)
+{
+	# a host -h does not name (or none named at all) is not a mount to
+	# open files of, "local" least of all
+	spawn hostplumb(nil, hostmsg("/home/u", "host=hephaestus", "/home/u/a") :: hostmsg("/a", "", "/a/one") :: nil);
+	m := next(t);
+	t.assertseq(string m.data, "/n/local/a/one", "with no -h, a message from another host is dropped");
+	spawn hostplumb("-h" :: "hephaestus" :: nil,
+		hostmsg("/home/u", "host=local", "/home/u/b") :: hostmsg("/home/u", "host=zeus", "/home/u/c") :: hostmsg("/a", "", "/a/two") :: nil);
+	m = next(t);
+	t.assertseq(string m.data, "/n/local/a/two", "and from a host -h does not name");
+}
+
+testSrc(t: ref T)
+{
+	b := array of byte sys->sprint("hostopen\nxenith\n/home/u\ntext\n\n%d\n%s", len "/home/u/s", "/home/u/s");
+	spawn hostplumb(nil, b :: nil);
+	m := next(t);
+	t.assertseq(string m.data, "/n/local/home/u/s", "the message");
+	t.assertseq(m.src, "hostplumb", "a message that calls itself hostopen is not taken at its word");
+}
+
+testNoRule(t: ref T)
+{
+	# kind is not text: no rule takes it, and never will
+	b := array of byte sys->sprint("plumb\nxenith\n/home/u\nimage\n\n%d\n%s", len "/home/u/i", "/home/u/i");
+	t0 := sys->millisec();
+	spawn hostplumb(nil, b :: hostmsg("/a", "", "/a/next") :: nil);
+	m := next(t);
+	t.assertseq(string m.data, "/n/local/a/next", "the message after one no rule takes");
+	t.assert(sys->millisec() - t0 < 4000, sys->sprint("is not held behind it (%d ms; it was 15 s)", sys->millisec() - t0));
+}
+
+testSideEffects(t: ref T)
+{
+	t.assert(plumbin("", "side effect") > 0, "a message whose first rule sets its data and then fails");
+	m := next(t);
+	t.assertseq(string m.data, "side effect", "reaches the next rule as it was sent");
+}
+
+testLog(t: ref T)
+{
+	t.assert(plumbin("bad\u001b[2Jport", "/a/x") < 0, "a message to a port that is none is refused");
+	sys->sleep(200);
+	fd := sys->open(ERRS, Sys->OREAD);
+	b := array[8192] of byte;
+	n := 0;
+	if(fd != nil)
+		n = sys->read(fd, b, len b);
+	if(n < 0)
+		n = 0;
+	esc := 0;
+	for(i := 0; i < n; i++)
+		if(b[i] == byte 16r1b)
+			esc = 1;
+	t.assert(has(string b[0:n], "unrecognized port bad?[2Jport"), "its name is shown in the plumber's log: " + string b[0:n]);
+	t.assert(!esc, "without its control characters");
+}
+
+ctlmsg(src, text: string): int
+{
+	fd := sys->open("/chan/plumb.input", Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	b := array of byte sys->sprint("%s\nplumb\n/\ntext\n\n%d\n%s", src, len text, text);
+	return sys->write(fd, b, len b);
+}
+
+testSpoofStart(t: ref T)
+{
+	sys->remove(STARTED);
+	# anyone may say a port has started; nobody reads this one
+	t.assert(ctlmsg("spoofed", "start") > 0, "\"start\" for a port, from a writer that does not read it");
+	t.assert(plumbin("", "spoof one") > 0, "a message to the port is queued");
+	t.assert(sys->stat(STARTED).t0 < 0, "its program not started yet: the port is believed started");
+	sys->sleep(5500);
+	t.assert(plumbin("", "spoof two") > 0, "five seconds unread, the next message");
+	sys->sleep(500);
+	t.assert(sys->stat(STARTED).t0 >= 0, "starts the port's program: a port nobody reads is not started");
+}
+
+# a 9P server that answers a version and an attach, and nothing after
+deadserver(fd: ref Sys->FD)
+{
+	for(;;){
+		m := Tmsg.read(fd, 8192);
+		if(m == nil)
+			return;
+		r: ref Rmsg;
+		pick x := m {
+		Version =>
+			r = ref Rmsg.Version(x.tag, 8192, "9P2000");
+		Attach =>
+			r = ref Rmsg.Attach(x.tag, Sys->Qid(big 0, 0, Sys->QTDIR));
+		* =>
+			continue;
+		}
+		b := r.pack();
+		sys->write(fd, b, len b);
+	}
+}
+
+plumbproc(data: string, done: chan of int, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	done <-= plumbin("", data);
+}
+
+testDeadStat(t: ref T)
+{
+	styx = load Styx Styx->PATH;
+	if(styx == nil)
+		t.skip("no styx");
+	styx->init();
+	sys->create(DEAD, Sys->OREAD, Sys->DMDIR|8r777);
+	p := array[2] of ref Sys->FD;
+	sys->pipe(p);
+	spawn deadserver(p[1]);
+	p[1] = nil;
+	if(sys->mount(p[0], nil, DEAD, Sys->MREPL, nil) < 0)
+		t.fatal(sys->sprint("mount: %r"));
+	rb := array of byte ("kind is text\ndata matches 'isfile (.+)'\ndata isfile $1\nplumb to edit\n\n" +
+		"kind is text\ndata matches '.*'\nplumb to edit\n");
+	rfd := sys->open("/chan/plumb.rules", Sys->OWRITE);
+	if(rfd == nil || sys->write(rfd, rb, len rb) != len rb)
+		t.fatal(sys->sprint("rules: %r"));
+	rfd = nil;
+	done := chan[1] of int;
+	pidc := chan of int;
+	spawn plumbproc("isfile " + DEAD + "/x", done, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, 8000);
+	alt {
+	<-done =>
+		;
+	<-tc =>
+		fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+		t.fatal("a message naming a file on a server that does not answer was never answered: the plumber waits with it");
+	}
+	m := next(t);
+	t.assertseq(string m.data, "isfile " + DEAD + "/x", "the file not found in time, the message goes to the next rule");
+	t.assert(plumbin("", "/a/alive") > 0, "and the plumber takes the next message");
+	m = next(t);
+	t.assertseq(string m.data, "/a/alive", "which is delivered");
 }
 
 testPlain(t: ref T)
@@ -400,6 +567,9 @@ init(nil: ref Draw->Context, args: list of string)
 	if(fd == nil)
 		raise sys->sprint("skip:cannot create %s: %r", RULES);
 	rules := "kind is text\ndata matches 'startme.*'\nplumb to nostart\nplumb start /dis/nonexistent.dis $0\n\n" +
+		"kind is text\ndata matches 'side (.+)'\ndata set changed-$1\ndata matches 'never'\nplumb to edit\n\n" +
+		"kind is text\ndata matches 'spoof.*'\nplumb to spoofed\nplumb start /dis/touch.dis " + STARTED + "\n\n" +
+		"kind is text\ndata matches 'isfile (.+)'\ndata isfile $1\nplumb to edit\n\n" +
 		"kind is text\ndata matches '.*'\nplumb to edit\n";
 	sys->write(fd, array of byte rules, len array of byte rules);
 	fd = nil;
@@ -422,8 +592,16 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Unrooted", testUnrooted);
 	run("Garbage", testGarbage);
 	run("StartFails", testStartFails);
+	# before RulesInPieces, which replaces the rules
+	run("SideEffects", testSideEffects);
+	run("Log", testLog);
+	run("SpoofStart", testSpoofStart);
 	run("RulesInPieces", testRulesInPieces);
 	run("Oversize", testOversize);
+	run("HostNotNamed", testHostNotNamed);
+	run("Src", testSrc);
+	run("NoRule", testNoRule);
+	run("DeadStat", testDeadStat);
 
 	# the plumber's processes would keep the emulator up
 	killplumber();

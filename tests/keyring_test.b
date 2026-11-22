@@ -680,28 +680,6 @@ testRC4(t: ref T)
 	t.assert(byteseq(cipher, plain), "RC4 encrypt/decrypt roundtrip");
 }
 
-# ── DES tests ────────────────────────────────────────────────────────────────
-
-testDESCBC(t: ref T)
-{
-	key := array[8] of byte;
-	for(i := 0; i < len key; i++)
-		key[i] = byte (i + 1);
-
-	rejected := 0;
-	{
-		state := kr->dessetup(key, nil);
-		if(state != nil)
-			t.error("DES setup unexpectedly succeeded");
-	} exception {
-	"DES is disabled" =>
-		rejected = 1;
-	"*" =>
-		t.error("DES setup failed with an unexpected exception");
-	}
-	t.assert(rejected, "DES setup rejected");
-}
-
 # ── Authentication message framing ─────────────────────────────────────────
 
 getframed(raw: string): array of byte
@@ -836,7 +814,6 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AESCBC", testAESCBC);
 	run("AES256", testAES256);
 	run("RC4", testRC4);
-	run("DESDisabled", testDESCBC);
 	run("MessageFraming", testMessageFraming);
 
 	# Asymmetric key tests

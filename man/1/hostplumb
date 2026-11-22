@@ -10,6 +10,9 @@ hostplumb \- re-plumb messages from the host's plumber
 [
 .B -r
 .I root
+] [
+.B -h
+.IR host ,...
 ]
 .br
 .B hostplumb -p
@@ -66,10 +69,27 @@ over
 .IR ssh (1)
 with
 .IR u9fs ),
-so a file opened from it is saved back to it;
+so a file opened from it is saved back to it.
+Only a host named by
+.B -h
+is taken (the hosts
+.B tools/xen
+mounted, from
+.BR $XEN_HOSTS ):
+a message says its own host, and one naming any other, or none of
+.BR -h 's
+when there is no
+.BR -h ,
+is reported and dropped;
 .IP \(bu
 the destination and attributes are cleared, so this name space's
 plumbing rules decide where the message goes.
+.PP
+A message's source is
+.BR hostplumb ,
+whatever it says of itself.
+One that no rule here takes is reported and passed over at once; one
+whose receiver is not yet there is tried again for fifteen seconds.
 .PP
 Attributes are read as plan9port writes them: separated by blanks,
 a value with blanks in it quoted.

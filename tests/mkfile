@@ -16,6 +16,7 @@ TARG=\
 	nmea_test.dis\
 	gdl90_test.dis\
 	gps_capability_test.dis\
+	vision_capability_test.dis\
 	audit_canon_test.dis\
 	auditchain_test.dis\
 	auditprov_test.dis\
@@ -90,7 +91,6 @@ TARG=\
 	factotum_needkey_test.dis\
 	factotum_proto_test.dis\
 	spki_pre0_test.dis\
-	auth9_short_test.dis\
 	ninep_disconnect_test.dis\
 	crypto_bench.dis\
 	tcpwatch.dis\
@@ -157,12 +157,20 @@ TARG=\
 	print_edge_test.dis\
 	math_edge_test.dis\
 	alt_edge_test.dis\
+	web_status_test.dis\
+	wercfs_stat_test.dis\
+	listeners_test.dis\
+	mounts_test.dis\
+	feed_flush_test.dis\
 	auth_bind_test.dis\
 	tls_record_test.dis\
 	random_fail_test.dis\
+	cnsa_auth_test.dis\
 	cnsa_mode_test.dis\
 	secstored_test.dis\
 	wstat_owner_test.dis\
+	file2chan_close_test.dis\
+	export_readonly_test.dis\
 	file2chan_gaveup_test.dis\
 	dial_kernel_test.dis\
 	udp_empty_test.dis\
@@ -199,6 +207,8 @@ TARG=\
 	ninep_nul_test.dis\
 	keyring_rsa_test.dis\
 	keyring_dsa_test.dis\
+	keyring_noresult_test.dis\
+	keyring_rsapub_test.dis\
 	ipints_prime_test.dis\
 	prime_kill_test.dis\
 	elgamal_forge_test.dis\
@@ -277,7 +287,6 @@ TARG=\
 	pdf_conformance_test.dis\
 	pdf_test.dis\
 	pqauth_test.dis\
-	p9any_timeout_test.dis\
 	publicnet_test.dis\
 	interop_test.dis\
 	authneg_test.dis\
@@ -347,7 +356,6 @@ TARG=\
 	utf21_test.dis\
 	vm_size_edge_test.dis\
 	styx_pack_test.dis\
-	ninep_pack_test.dis\
 	parread_test.dis\
 	devprog_read_test.dis\
 	devprog_nslock_test.dis\
@@ -600,9 +608,7 @@ SYSMODULES=\
 	gdl90.m\
 	keyboard.m\
 	wmclient.m\
-	auth9.m\
 	styxlib.m\
-	9p.m\
 	ipints.m\
 	sdg.m\
 	sdrdsp.m\
@@ -623,6 +629,7 @@ SYSMODULES=\
 	pop3.m\
 	webget.m\
 	smtp.m\
+	web.m\
 
 DISBIN=$ROOT/dis/tests
 

@@ -48,7 +48,8 @@ implement Vid9p;
 # Three source modes share one server:
 #   - static  (a file): the whole .y4m is read into the frame buffer and
 #     served with random access; reads never block (this is the original,
-#     canned path).
+#     canned path).  A file of more than a gigabyte is not held whole:
+#     it is refused, and -r replays one of any length.
 #   - live    (-c): a host decoder is spawned through the `os` command
 #     and its y4m stdout is parsed incrementally; frames are appended as
 #     they decode and blocked readers are woken. This is the INFR-266
@@ -88,6 +89,7 @@ Qroot, Qstream, Qctl, Qfmt, Qframe, Qstatus, Qlayer: con iota;
 
 Maxdim: con 8192;	# a frame's width or height: 100 MB a frame
 Maxline: con 4096;	# a y4m header or FRAME line
+Maxstatic: con 1<<30;	# a file held whole: the most one array is
 
 tc: chan of ref Tmsg;
 srv: ref Styxserver;
@@ -191,7 +193,13 @@ init(nil: ref Draw->Context, args: list of string)
 		else if((e := startreplay(hd tl args)) != nil)
 			sys->fprint(stderr, "vid9p: %s\n", e);
 	} else if(args != nil) {
-		e := loadvideo(hd args);
+		e: string;
+		{
+			e = loadvideo(hd args);
+		} exception x {
+		"*" =>
+			e = hd args + ": " + x;	# no room for it: served as no source
+		}
 		if(e != nil)
 			sys->fprint(stderr, "vid9p: %s\n", e);
 	}
@@ -347,6 +355,18 @@ serve1()
 			} else {
 				srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 			}
+		Flush =>
+			# The read flushed is forgotten, parked or not.  It stayed
+			# parked: the next frame answered a tag its client had
+			# given up, and might have used again for another request.
+			unpark(tm.oldtag, -1, nil);
+			srv.default(tmsg);
+		Clunk =>
+			unpark(-1, tm.fid, "vid9p: fid clunked");
+			srv.default(tmsg);
+		Remove =>
+			unpark(-1, tm.fid, "vid9p: fid clunked");
+			srv.default(tmsg);
 		* =>
 			srv.default(tmsg);
 		}
@@ -481,6 +501,25 @@ serviceframe(tm: ref Tmsg.Read)
 {
 	if(!replyframe(tm))
 		parked = tm :: parked;
+}
+
+# Take the parked reads of a tag (flushed: no answer is owed) or of a
+# fid (clunked under its read: each is answered with why, so its tag is
+# not left waiting for ever) off the list.
+unpark(tag, fid: int, why: string)
+{
+	still: list of ref Tmsg.Read;
+	for(p := parked; p != nil; p = tl p){
+		tm := hd p;
+		if(tm.tag == tag)
+			continue;
+		if(tm.fid == fid){
+			srv.reply(ref Rmsg.Error(tm.tag, why));
+			continue;
+		}
+		still = tm :: still;
+	}
+	parked = still;
 }
 
 wakeparked()
@@ -761,9 +800,13 @@ hostrun(wfd: ref Sys->FD, cmd: list of string)
 	# Detach the child's stdin from the server's fd 0 — when vid9p is a
 	# mounted server, fd 0 IS the 9P channel, and letting the host process
 	# read it would steal bytes from the mount protocol and wedge it.
+	# With no /dev/null the command is not run: it went on with the 9P
+	# channel as its standard input.
 	nullfd := sys->open("/dev/null", Sys->OREAD);
-	if(nullfd != nil)
-		sys->dup(nullfd.fd, 0);
+	if(nullfd == nil || sys->dup(nullfd.fd, 0) < 0){
+		sys->fprint(stderr, "vid9p: /dev/null: %r: the decoder is not started\n");
+		return;
+	}
 	sys->dup(wfd.fd, 1);
 	wfd = nil;
 	os := load Command "/dis/os.dis";
@@ -925,6 +968,12 @@ loadvideo(path: string): string
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return sys->sprint("open %s: %r", path);
+	# The whole file is held: one past what an array can be is refused
+	# by its length (cut to an int, a file past 2GB was a negative size
+	# and an exception before the mount was served; past 4GB, its start).
+	(ok, d) := sys->fstat(fd);
+	if(ok >= 0 && d.length > big Maxstatic)
+		return sys->sprint("%s: %bd bytes is more than is held whole (replay it: -r)", path, d.length);
 	data := readall(fd);
 	if(len data < 10 || string data[0:9] != "YUV4MPEG2")
 		return sys->sprint("%s: not a YUV4MPEG2 stream", path);
@@ -978,7 +1027,7 @@ readall(fd: ref Sys->FD): array of byte
 {
 	size := 0;
 	(ok, d) := sys->fstat(fd);
-	if(ok >= 0 && d.length > big 0)
+	if(ok >= 0 && d.length > big 0 && d.length <= big Maxstatic)
 		size = int d.length;
 	buf := array[size] of byte;
 	n := 0;

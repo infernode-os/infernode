@@ -91,10 +91,18 @@ or
 .BI accounts/ name /compose
 A full RFC822 message written here is sent via SMTP using
 factotum credentials, to the addresses of its
-.B To:
-header, from the address of its
+.BR To: ,
+.B Cc:
+and
+.B Bcc:
+headers (every occurrence, with its continuation lines), from the
+address of its
 .B From:
 header (the account's user if it has none).
+A
+.B Bcc:
+header is taken out of the message before it is sent; a message that
+names nobody is refused.
 The message is everything written between the file's open and its
 close, in as many writes as it takes (32MB at most); it is sent when
 the file is closed.
@@ -200,44 +208,63 @@ and
 .B References
 auto-injected from the original envelope (the caller's body wins if
 it already supplies any of them).
-The reply is from the account: a text with a
-.B From:
+The reply is from the account, and to the message's sender: a text
+with a
+.BR From: ,
+.B Cc:
+or
+.B Bcc:
 of its own is refused.
 So is a reply to a message whose address, subject or id would add
 lines of its own to the reply (a line break in one of them).
 When the server has taken it, the original message is STOREd
 .BR \eAnswered .
 .SH CAPABILITY MODEL
-The namespace is the only enforcement primitive. Bind paths into a
-sub-agent's namespace to grant capabilities; refuse to bind to deny
-them:
-.PP
-.RS
-.PD 0
-.TP
-\fBTriage-only\fP:
-bind
-.B from to subject date flags
-and
-.BR boxes/.../ctl ;
-do not bind
-.BR compose
-or
-.BR draft-reply .
-.TP
-\fBReply-allowed\fP:
-additionally bind specific
-.B draft-reply
-files per thread.
-.TP
-\fBCompose-from-scratch\fP:
-additionally bind
-.BR compose .
-.PD
-.RE
-.PP
-There is no permission system inside
+The namespace is the only enforcement primitive: there is no
+permission system inside
 .IR mail9p .
+What is bound into a name space is what its programs can do.
+.PP
+.B Compose
+and
+.B draft-reply
+are the owner's: whoever can write one sends mail as the account, to
+anyone
+.RB ( compose )
+or to a message's sender
+.RB ( draft-reply ),
+with nobody asked.
+They are not bound into an agent's name space.
+An agent that is to answer mail is given
+.B /mnt/msg
+instead (the message service,
+.BR /docs/MESSAGE-INTEGRATION.md ):
+it proposes a reply in
+.BR /mnt/msg/draft ,
+and the reply is sent only when the user approves the text and the
+recipient shown.
+.IR Nsaudit (1)
+reports a grant of
+.BR /mnt/mail ,
+of an account's directory or of a message's as
+.B DIRECT_MAIL_SEND
+(severity high;
+.BR /lib/veltro/nsaudit/rules/direct-mail-send ).
+.PP
+What may be bound for an agent is a message's read-only files
+.RB ( from ,
+.BR to ,
+.BR subject ,
+.BR date ,
+.BR body ,
+.BR raw ),
+each by its own path.
+A message's
+.B flags
+and a box's
+.B ctl
+change the mailbox (flags, search, archive, move): bind them only for
+an agent that is to do that.
 .SH AUTHENTICATION
 IMAP credentials are read from
 .IR factotum (4)
@@ -245,12 +272,24 @@ at connect time using
 .PP
 .B proto=pass service=imap dom=\fIhost\fP
 .PP
-SMTP send tries the
-.BR service=smtp
-key first and falls back to the
-.BR service=imap
-key for the corresponding IMAP server, since most providers share
-credentials. Sends follow the account's IMAP mode: implicit TLS on
+SMTP send uses the key
+.PP
+.B proto=pass service=smtp dom=\fIsmtphost\fP
+.PP
+and, if there is none, the IMAP server's key, but only when the SMTP
+host is the IMAP host or was named with
+.BR smtp= .
+With no
+.B smtp=
+the SMTP host of an IMAP server
+.BI imap. rest
+is taken to be
+.BI smtp. rest
+(of any other, the IMAP host itself); that is a guess, and a host
+that was guessed is sent only a key that names it: without a
+.B service=smtp
+key for it the send is refused, saying so.
+Sends follow the account's IMAP mode: implicit TLS on
 port 465 for
 .BR tls ,
 STARTTLS on port 587 for

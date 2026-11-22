@@ -59,6 +59,26 @@ init(): string
 	return nil;	
 }
 
+# In CNSA mode (/env/cnsamode: login(2)) a key file that is not the
+# mode's (ML-DSA-87 keys and certificate, SHA-384 or SHA-512, a modulus
+# of 3072 bits) authenticates nobody: nil, or why it is refused, before
+# anything is sent.  The mode was asked of the programs that make keys
+# and not of the ones that use them, so a node in it went on
+# authenticating with the Ed25519 key file it had.  (Keyring's auth
+# refuses the same, by the emulator's own switch.)
+cnsarefuses(ai: ref Keyring->Authinfo): string
+{
+	login := load Login Login->PATH;
+	if(login == nil || !login->cnsamode())
+		return nil;
+	if(ai == nil)
+		return nil;	# no key at all is Keyring's to say
+	e := login->cnsakey(ai);
+	if(e != nil)
+		return "CNSA mode: the key file is not taken: " + e;
+	return nil;
+}
+
 server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: int): (ref Sys->FD, string)
 {
 	if(sys == nil)
@@ -66,6 +86,8 @@ server(algs: list of string, ai: ref Keyring->Authinfo, fd: ref Sys->FD, setid: 
 	kr := load Keyring Keyring->PATH;
 	if(kr == nil)
 		return (nil, sys->sprint("%r"));
+	if((cerr := cnsarefuses(ai)) != nil)
+		return (nil, cerr);
 	if(encalgs == nil && hashalgs == nil)
 		(encalgs, hashalgs) = sslalgs();
 
@@ -400,6 +422,8 @@ client(alg: string, ai: ref Keyring->Authinfo, fd: ref Sys->FD): (ref Sys->FD, s
 
 	if(alg == nil)
 		alg = "none";
+	if((cerr := cnsarefuses(ai)) != nil)
+		return (nil, cerr);
 
 	# mutual authentication
 	(id_or_err, secret) := kr->auth(fd, ai, 0);
@@ -426,6 +450,8 @@ auth(ai: ref Keyring->Authinfo, keyspec: string, alg: string, fd: ref Sys->FD): 
 		if(ai == nil)
 			return (nil, nil, sys->sprint("can't obtain key: %r"));
 	}
+	if((cerr := cnsarefuses(ai)) != nil)
+		return (nil, nil, cerr);
 
 	# mutual authentication
 	(id_or_err, secret) := kr->auth(fd, ai, 0);

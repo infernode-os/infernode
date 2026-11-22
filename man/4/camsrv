@@ -253,6 +253,29 @@ raw frames too. Taken while streaming: the sensor reads out the new
 mirror from its next frame, and the colours are merged in its order from
 then.
 .TP
+.B shade on\fR|\fPoff
+Lens shading correction, from the sensor's table (below), on by
+default when there is one.
+.TP
+.B shade learn
+Make the table: point the camera at an even white field (a sheet of
+plain paper flat against the lens, evenly lit), at an exposure that
+puts it well above black and below the top. The next eight frames are
+summed at 17 by 13 points for each of the cell's four positions, each
+position's gain is its brightest point over each point (at most eight),
+and the table is saved and used. A field too dark or nearly clipped is
+refused and the table kept.
+.B status 's
+.B shadelearn=
+says how it went:
+.B learning ,
+.BI learnt:darkest= N %
+(the darkest point against the brightest),
+.BI refused:dark= N
+or
+.BI refused:clipped= N .
+Needs a reader of the camera; not the simulated sensor's.
+.TP
 .BI ndvi " nir vis
 Which raw channels are near-infrared and visible light for
 .BR 0/ndvi :
@@ -292,6 +315,33 @@ and readers are told
 at the first of them.
 .PD
 .RE
+.SH LENS SHADING
+A lens gives its corners less light than its middle, and in some
+colours more than others.
+.BI /lib/camera/ sensor .shade
+.RB ( imx708
+or
+.BR imx219 ),
+if there is one, corrects it: every raw sample above black is multiplied
+by its cell position's gain, found bilinearly in the table, before the
+picture, white balance and
+.B 0/ndvi
+are made;
+.B 0/raw
+stays the sensor's own. Its first line is
+.BI "shade " "sensor gw gh" ,
+the grid's size (17 13); each of the next four lines is the gains of
+one cell position (top left, top right, bottom left, bottom right, as
+the sensor reads out) at the grid's points row by row from the top
+left corner, 1024 a gain of one, 512 to 8192.
+.B shade learn
+writes it.
+.B status
+says
+.BR shade=none ,
+.B on
+or
+.BR off .
 .SH PLANT HEALTH
 A NoIR camera (a Camera Module 2 or 3 without its infrared-cut filter)
 with the blue gel filter it comes with, Roscolux #2007, over the lens
@@ -302,7 +352,7 @@ do not, and
 shows which is which. It needs daylight, or a halogen or incandescent
 lamp: fluorescent and LED light have almost no near-infrared. It is
 relative: there is no reference panel yet to make it a reflectance,
-and with no lens shading correction it falls off toward the corners.
+and without a lens shading table it falls off toward the corners.
 Fixed white balance
 .RB ( wb )
 keeps the picture's colours honest beside it; the index is taken from
@@ -352,4 +402,5 @@ mount without a server and its readers waiting.
 There is no ISP. Automatic white balance assumes the picture averages to
 grey, so a screenful of one colour comes out washed out (fix it with
 .BR wb ),
-and there is no lens shading correction, so the corners are dark.
+and its corners are dark until a lens shading table is learnt
+.RB ( "shade learn" ).

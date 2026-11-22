@@ -288,6 +288,7 @@ extern void tkmodinit(void);
 extern void mathmodinit(void);
 extern void keyringmodinit(void);
 extern void tensormodinit(void);
+extern void flowmodinit(void);
 extern void i420modinit(void);
 extern void bayermodinit(void);
 
@@ -300,6 +301,7 @@ modinit(void)
 	mathmodinit();
 	keyringmodinit();
 	tensormodinit();
+	flowmodinit();
 	i420modinit();
 	bayermodinit();
 }

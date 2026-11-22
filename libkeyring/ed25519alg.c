@@ -572,6 +572,15 @@ typedef struct {
 } ge_cached;
 
 /*
+ * carry times two to the n.  ref10 writes it "carry << n", and a carry
+ * out of a signed limb is negative half the time: a left shift of a
+ * negative value, which C leaves undefined (C11 6.5.7).  The compilers
+ * in use shift all the same, but one may reason from "carry is not
+ * negative".  The product is defined, and is compiled to the shift.
+ */
+#define SHL(x, n)	((x) * ((i64)1 << (n)))
+
+/*
  * Load/store functions
  */
 static u64
@@ -669,17 +678,17 @@ fe_frombytes(fe h, const uchar *s)
 	i64 carry0, carry1, carry2, carry3, carry4;
 	i64 carry5, carry6, carry7, carry8, carry9;
 
-	carry9 = (h9 + (i64)(1 << 24)) >> 25; h0 += carry9 * 19; h9 -= carry9 << 25;
-	carry1 = (h1 + (i64)(1 << 24)) >> 25; h2 += carry1; h1 -= carry1 << 25;
-	carry3 = (h3 + (i64)(1 << 24)) >> 25; h4 += carry3; h3 -= carry3 << 25;
-	carry5 = (h5 + (i64)(1 << 24)) >> 25; h6 += carry5; h5 -= carry5 << 25;
-	carry7 = (h7 + (i64)(1 << 24)) >> 25; h8 += carry7; h7 -= carry7 << 25;
+	carry9 = (h9 + (i64)(1 << 24)) >> 25; h0 += carry9 * 19; h9 -= SHL(carry9, 25);
+	carry1 = (h1 + (i64)(1 << 24)) >> 25; h2 += carry1; h1 -= SHL(carry1, 25);
+	carry3 = (h3 + (i64)(1 << 24)) >> 25; h4 += carry3; h3 -= SHL(carry3, 25);
+	carry5 = (h5 + (i64)(1 << 24)) >> 25; h6 += carry5; h5 -= SHL(carry5, 25);
+	carry7 = (h7 + (i64)(1 << 24)) >> 25; h8 += carry7; h7 -= SHL(carry7, 25);
 
-	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= carry0 << 26;
-	carry2 = (h2 + (i64)(1 << 25)) >> 26; h3 += carry2; h2 -= carry2 << 26;
-	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= carry4 << 26;
-	carry6 = (h6 + (i64)(1 << 25)) >> 26; h7 += carry6; h6 -= carry6 << 26;
-	carry8 = (h8 + (i64)(1 << 25)) >> 26; h9 += carry8; h8 -= carry8 << 26;
+	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= SHL(carry0, 26);
+	carry2 = (h2 + (i64)(1 << 25)) >> 26; h3 += carry2; h2 -= SHL(carry2, 26);
+	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= SHL(carry4, 26);
+	carry6 = (h6 + (i64)(1 << 25)) >> 26; h7 += carry6; h6 -= SHL(carry6, 26);
+	carry8 = (h8 + (i64)(1 << 25)) >> 26; h9 += carry8; h8 -= SHL(carry8, 26);
 
 	h[0] = (i32)h0;
 	h[1] = (i32)h1;
@@ -724,16 +733,16 @@ fe_reduce(fe h, const fe f)
 
 	h0 += 19 * q;
 
-	carry0 = h0 >> 26; h1 += carry0; h0 -= carry0 << 26;
-	carry1 = h1 >> 25; h2 += carry1; h1 -= carry1 << 25;
-	carry2 = h2 >> 26; h3 += carry2; h2 -= carry2 << 26;
-	carry3 = h3 >> 25; h4 += carry3; h3 -= carry3 << 25;
-	carry4 = h4 >> 26; h5 += carry4; h4 -= carry4 << 26;
-	carry5 = h5 >> 25; h6 += carry5; h5 -= carry5 << 25;
-	carry6 = h6 >> 26; h7 += carry6; h6 -= carry6 << 26;
-	carry7 = h7 >> 25; h8 += carry7; h7 -= carry7 << 25;
-	carry8 = h8 >> 26; h9 += carry8; h8 -= carry8 << 26;
-	carry9 = h9 >> 25; h9 -= carry9 << 25;
+	carry0 = h0 >> 26; h1 += carry0; h0 -= SHL(carry0, 26);
+	carry1 = h1 >> 25; h2 += carry1; h1 -= SHL(carry1, 25);
+	carry2 = h2 >> 26; h3 += carry2; h2 -= SHL(carry2, 26);
+	carry3 = h3 >> 25; h4 += carry3; h3 -= SHL(carry3, 25);
+	carry4 = h4 >> 26; h5 += carry4; h4 -= SHL(carry4, 26);
+	carry5 = h5 >> 25; h6 += carry5; h5 -= SHL(carry5, 25);
+	carry6 = h6 >> 26; h7 += carry6; h6 -= SHL(carry6, 26);
+	carry7 = h7 >> 25; h8 += carry7; h7 -= SHL(carry7, 25);
+	carry8 = h8 >> 26; h9 += carry8; h8 -= SHL(carry8, 26);
+	carry9 = h9 >> 25; h9 -= SHL(carry9, 25);
 
 	h[0] = h0;
 	h[1] = h1;
@@ -756,32 +765,32 @@ fe_tobytes(uchar *s, const fe h)
 	s[0] = (uchar)(t[0]);
 	s[1] = (uchar)(t[0] >> 8);
 	s[2] = (uchar)(t[0] >> 16);
-	s[3] = (uchar)((t[0] >> 24) | (t[1] << 2));
+	s[3] = (uchar)((t[0] >> 24) | ((u32)t[1] << 2));
 	s[4] = (uchar)(t[1] >> 6);
 	s[5] = (uchar)(t[1] >> 14);
-	s[6] = (uchar)((t[1] >> 22) | (t[2] << 3));
+	s[6] = (uchar)((t[1] >> 22) | ((u32)t[2] << 3));
 	s[7] = (uchar)(t[2] >> 5);
 	s[8] = (uchar)(t[2] >> 13);
-	s[9] = (uchar)((t[2] >> 21) | (t[3] << 5));
+	s[9] = (uchar)((t[2] >> 21) | ((u32)t[3] << 5));
 	s[10] = (uchar)(t[3] >> 3);
 	s[11] = (uchar)(t[3] >> 11);
-	s[12] = (uchar)((t[3] >> 19) | (t[4] << 6));
+	s[12] = (uchar)((t[3] >> 19) | ((u32)t[4] << 6));
 	s[13] = (uchar)(t[4] >> 2);
 	s[14] = (uchar)(t[4] >> 10);
 	s[15] = (uchar)(t[4] >> 18);
 	s[16] = (uchar)(t[5]);
 	s[17] = (uchar)(t[5] >> 8);
 	s[18] = (uchar)(t[5] >> 16);
-	s[19] = (uchar)((t[5] >> 24) | (t[6] << 1));
+	s[19] = (uchar)((t[5] >> 24) | ((u32)t[6] << 1));
 	s[20] = (uchar)(t[6] >> 7);
 	s[21] = (uchar)(t[6] >> 15);
-	s[22] = (uchar)((t[6] >> 23) | (t[7] << 3));
+	s[22] = (uchar)((t[6] >> 23) | ((u32)t[7] << 3));
 	s[23] = (uchar)(t[7] >> 5);
 	s[24] = (uchar)(t[7] >> 13);
-	s[25] = (uchar)((t[7] >> 21) | (t[8] << 4));
+	s[25] = (uchar)((t[7] >> 21) | ((u32)t[8] << 4));
 	s[26] = (uchar)(t[8] >> 4);
 	s[27] = (uchar)(t[8] >> 12);
-	s[28] = (uchar)((t[8] >> 20) | (t[9] << 6));
+	s[28] = (uchar)((t[8] >> 20) | ((u32)t[9] << 6));
 	s[29] = (uchar)(t[9] >> 2);
 	s[30] = (uchar)(t[9] >> 10);
 	s[31] = (uchar)(t[9] >> 18);
@@ -812,18 +821,18 @@ fe_mul(fe h, const fe f, const fe g)
 	h8 = (i64)f0*g8 + (i64)f1_2*g7 + (i64)f2*g6 + (i64)f3_2*g5 + (i64)f4*g4 + (i64)f5_2*g3 + (i64)f6*g2 + (i64)f7_2*g1 + (i64)f8*g0 + (i64)f9_2*g9_19;
 	h9 = (i64)f0*g9 + (i64)f1*g8 + (i64)f2*g7 + (i64)f3*g6 + (i64)f4*g5 + (i64)f5*g4 + (i64)f6*g3 + (i64)f7*g2 + (i64)f8*g1 + (i64)f9*g0;
 
-	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= carry0 << 26;
-	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= carry4 << 26;
-	carry1 = (h1 + (i64)(1 << 24)) >> 25; h2 += carry1; h1 -= carry1 << 25;
-	carry5 = (h5 + (i64)(1 << 24)) >> 25; h6 += carry5; h5 -= carry5 << 25;
-	carry2 = (h2 + (i64)(1 << 25)) >> 26; h3 += carry2; h2 -= carry2 << 26;
-	carry6 = (h6 + (i64)(1 << 25)) >> 26; h7 += carry6; h6 -= carry6 << 26;
-	carry3 = (h3 + (i64)(1 << 24)) >> 25; h4 += carry3; h3 -= carry3 << 25;
-	carry7 = (h7 + (i64)(1 << 24)) >> 25; h8 += carry7; h7 -= carry7 << 25;
-	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= carry4 << 26;
-	carry8 = (h8 + (i64)(1 << 25)) >> 26; h9 += carry8; h8 -= carry8 << 26;
-	carry9 = (h9 + (i64)(1 << 24)) >> 25; h0 += carry9 * 19; h9 -= carry9 << 25;
-	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= carry0 << 26;
+	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= SHL(carry0, 26);
+	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= SHL(carry4, 26);
+	carry1 = (h1 + (i64)(1 << 24)) >> 25; h2 += carry1; h1 -= SHL(carry1, 25);
+	carry5 = (h5 + (i64)(1 << 24)) >> 25; h6 += carry5; h5 -= SHL(carry5, 25);
+	carry2 = (h2 + (i64)(1 << 25)) >> 26; h3 += carry2; h2 -= SHL(carry2, 26);
+	carry6 = (h6 + (i64)(1 << 25)) >> 26; h7 += carry6; h6 -= SHL(carry6, 26);
+	carry3 = (h3 + (i64)(1 << 24)) >> 25; h4 += carry3; h3 -= SHL(carry3, 25);
+	carry7 = (h7 + (i64)(1 << 24)) >> 25; h8 += carry7; h7 -= SHL(carry7, 25);
+	carry4 = (h4 + (i64)(1 << 25)) >> 26; h5 += carry4; h4 -= SHL(carry4, 26);
+	carry8 = (h8 + (i64)(1 << 25)) >> 26; h9 += carry8; h8 -= SHL(carry8, 26);
+	carry9 = (h9 + (i64)(1 << 24)) >> 25; h0 += carry9 * 19; h9 -= SHL(carry9, 25);
+	carry0 = (h0 + (i64)(1 << 25)) >> 26; h1 += carry0; h0 -= SHL(carry0, 26);
 
 	h[0] = (i32)h0; h[1] = (i32)h1; h[2] = (i32)h2; h[3] = (i32)h3; h[4] = (i32)h4;
 	h[5] = (i32)h5; h[6] = (i32)h6; h[7] = (i32)h7; h[8] = (i32)h8; h[9] = (i32)h9;
@@ -1385,18 +1394,18 @@ sc_reduce(uchar *s)
 	s11 -= s18 * 683901;
 	s18 = 0;
 
-	carry6 = (s6 + (1 << 20)) >> 21; s7 += carry6; s6 -= carry6 << 21;
-	carry8 = (s8 + (1 << 20)) >> 21; s9 += carry8; s8 -= carry8 << 21;
-	carry10 = (s10 + (1 << 20)) >> 21; s11 += carry10; s10 -= carry10 << 21;
-	carry12 = (s12 + (1 << 20)) >> 21; s13 += carry12; s12 -= carry12 << 21;
-	carry14 = (s14 + (1 << 20)) >> 21; s15 += carry14; s14 -= carry14 << 21;
-	carry16 = (s16 + (1 << 20)) >> 21; s17 += carry16; s16 -= carry16 << 21;
+	carry6 = (s6 + (1 << 20)) >> 21; s7 += carry6; s6 -= SHL(carry6, 21);
+	carry8 = (s8 + (1 << 20)) >> 21; s9 += carry8; s8 -= SHL(carry8, 21);
+	carry10 = (s10 + (1 << 20)) >> 21; s11 += carry10; s10 -= SHL(carry10, 21);
+	carry12 = (s12 + (1 << 20)) >> 21; s13 += carry12; s12 -= SHL(carry12, 21);
+	carry14 = (s14 + (1 << 20)) >> 21; s15 += carry14; s14 -= SHL(carry14, 21);
+	carry16 = (s16 + (1 << 20)) >> 21; s17 += carry16; s16 -= SHL(carry16, 21);
 
-	carry7 = (s7 + (1 << 20)) >> 21; s8 += carry7; s7 -= carry7 << 21;
-	carry9 = (s9 + (1 << 20)) >> 21; s10 += carry9; s9 -= carry9 << 21;
-	carry11 = (s11 + (1 << 20)) >> 21; s12 += carry11; s11 -= carry11 << 21;
-	carry13 = (s13 + (1 << 20)) >> 21; s14 += carry13; s13 -= carry13 << 21;
-	carry15 = (s15 + (1 << 20)) >> 21; s16 += carry15; s15 -= carry15 << 21;
+	carry7 = (s7 + (1 << 20)) >> 21; s8 += carry7; s7 -= SHL(carry7, 21);
+	carry9 = (s9 + (1 << 20)) >> 21; s10 += carry9; s9 -= SHL(carry9, 21);
+	carry11 = (s11 + (1 << 20)) >> 21; s12 += carry11; s11 -= SHL(carry11, 21);
+	carry13 = (s13 + (1 << 20)) >> 21; s14 += carry13; s13 -= SHL(carry13, 21);
+	carry15 = (s15 + (1 << 20)) >> 21; s16 += carry15; s15 -= SHL(carry15, 21);
 
 	s5 += s17 * 666643;
 	s6 += s17 * 470296;
@@ -1446,40 +1455,19 @@ sc_reduce(uchar *s)
 	s5 -= s12 * 683901;
 	s12 = 0;
 
-	carry0 = (s0 + (1 << 20)) >> 21; s1 += carry0; s0 -= carry0 << 21;
-	carry2 = (s2 + (1 << 20)) >> 21; s3 += carry2; s2 -= carry2 << 21;
-	carry4 = (s4 + (1 << 20)) >> 21; s5 += carry4; s4 -= carry4 << 21;
-	carry6 = (s6 + (1 << 20)) >> 21; s7 += carry6; s6 -= carry6 << 21;
-	carry8 = (s8 + (1 << 20)) >> 21; s9 += carry8; s8 -= carry8 << 21;
-	carry10 = (s10 + (1 << 20)) >> 21; s11 += carry10; s10 -= carry10 << 21;
+	carry0 = (s0 + (1 << 20)) >> 21; s1 += carry0; s0 -= SHL(carry0, 21);
+	carry2 = (s2 + (1 << 20)) >> 21; s3 += carry2; s2 -= SHL(carry2, 21);
+	carry4 = (s4 + (1 << 20)) >> 21; s5 += carry4; s4 -= SHL(carry4, 21);
+	carry6 = (s6 + (1 << 20)) >> 21; s7 += carry6; s6 -= SHL(carry6, 21);
+	carry8 = (s8 + (1 << 20)) >> 21; s9 += carry8; s8 -= SHL(carry8, 21);
+	carry10 = (s10 + (1 << 20)) >> 21; s11 += carry10; s10 -= SHL(carry10, 21);
 
-	carry1 = (s1 + (1 << 20)) >> 21; s2 += carry1; s1 -= carry1 << 21;
-	carry3 = (s3 + (1 << 20)) >> 21; s4 += carry3; s3 -= carry3 << 21;
-	carry5 = (s5 + (1 << 20)) >> 21; s6 += carry5; s5 -= carry5 << 21;
-	carry7 = (s7 + (1 << 20)) >> 21; s8 += carry7; s7 -= carry7 << 21;
-	carry9 = (s9 + (1 << 20)) >> 21; s10 += carry9; s9 -= carry9 << 21;
-	carry11 = (s11 + (1 << 20)) >> 21; s12 += carry11; s11 -= carry11 << 21;
-
-	s0 += s12 * 666643;
-	s1 += s12 * 470296;
-	s2 += s12 * 654183;
-	s3 -= s12 * 997805;
-	s4 += s12 * 136657;
-	s5 -= s12 * 683901;
-	s12 = 0;
-
-	carry0 = s0 >> 21; s1 += carry0; s0 -= carry0 << 21;
-	carry1 = s1 >> 21; s2 += carry1; s1 -= carry1 << 21;
-	carry2 = s2 >> 21; s3 += carry2; s2 -= carry2 << 21;
-	carry3 = s3 >> 21; s4 += carry3; s3 -= carry3 << 21;
-	carry4 = s4 >> 21; s5 += carry4; s4 -= carry4 << 21;
-	carry5 = s5 >> 21; s6 += carry5; s5 -= carry5 << 21;
-	carry6 = s6 >> 21; s7 += carry6; s6 -= carry6 << 21;
-	carry7 = s7 >> 21; s8 += carry7; s7 -= carry7 << 21;
-	carry8 = s8 >> 21; s9 += carry8; s8 -= carry8 << 21;
-	carry9 = s9 >> 21; s10 += carry9; s9 -= carry9 << 21;
-	carry10 = s10 >> 21; s11 += carry10; s10 -= carry10 << 21;
-	carry11 = s11 >> 21; s12 += carry11; s11 -= carry11 << 21;
+	carry1 = (s1 + (1 << 20)) >> 21; s2 += carry1; s1 -= SHL(carry1, 21);
+	carry3 = (s3 + (1 << 20)) >> 21; s4 += carry3; s3 -= SHL(carry3, 21);
+	carry5 = (s5 + (1 << 20)) >> 21; s6 += carry5; s5 -= SHL(carry5, 21);
+	carry7 = (s7 + (1 << 20)) >> 21; s8 += carry7; s7 -= SHL(carry7, 21);
+	carry9 = (s9 + (1 << 20)) >> 21; s10 += carry9; s9 -= SHL(carry9, 21);
+	carry11 = (s11 + (1 << 20)) >> 21; s12 += carry11; s11 -= SHL(carry11, 21);
 
 	s0 += s12 * 666643;
 	s1 += s12 * 470296;
@@ -1489,17 +1477,38 @@ sc_reduce(uchar *s)
 	s5 -= s12 * 683901;
 	s12 = 0;
 
-	carry0 = s0 >> 21; s1 += carry0; s0 -= carry0 << 21;
-	carry1 = s1 >> 21; s2 += carry1; s1 -= carry1 << 21;
-	carry2 = s2 >> 21; s3 += carry2; s2 -= carry2 << 21;
-	carry3 = s3 >> 21; s4 += carry3; s3 -= carry3 << 21;
-	carry4 = s4 >> 21; s5 += carry4; s4 -= carry4 << 21;
-	carry5 = s5 >> 21; s6 += carry5; s5 -= carry5 << 21;
-	carry6 = s6 >> 21; s7 += carry6; s6 -= carry6 << 21;
-	carry7 = s7 >> 21; s8 += carry7; s7 -= carry7 << 21;
-	carry8 = s8 >> 21; s9 += carry8; s8 -= carry8 << 21;
-	carry9 = s9 >> 21; s10 += carry9; s9 -= carry9 << 21;
-	carry10 = s10 >> 21; s11 += carry10; s10 -= carry10 << 21;
+	carry0 = s0 >> 21; s1 += carry0; s0 -= SHL(carry0, 21);
+	carry1 = s1 >> 21; s2 += carry1; s1 -= SHL(carry1, 21);
+	carry2 = s2 >> 21; s3 += carry2; s2 -= SHL(carry2, 21);
+	carry3 = s3 >> 21; s4 += carry3; s3 -= SHL(carry3, 21);
+	carry4 = s4 >> 21; s5 += carry4; s4 -= SHL(carry4, 21);
+	carry5 = s5 >> 21; s6 += carry5; s5 -= SHL(carry5, 21);
+	carry6 = s6 >> 21; s7 += carry6; s6 -= SHL(carry6, 21);
+	carry7 = s7 >> 21; s8 += carry7; s7 -= SHL(carry7, 21);
+	carry8 = s8 >> 21; s9 += carry8; s8 -= SHL(carry8, 21);
+	carry9 = s9 >> 21; s10 += carry9; s9 -= SHL(carry9, 21);
+	carry10 = s10 >> 21; s11 += carry10; s10 -= SHL(carry10, 21);
+	carry11 = s11 >> 21; s12 += carry11; s11 -= SHL(carry11, 21);
+
+	s0 += s12 * 666643;
+	s1 += s12 * 470296;
+	s2 += s12 * 654183;
+	s3 -= s12 * 997805;
+	s4 += s12 * 136657;
+	s5 -= s12 * 683901;
+	s12 = 0;
+
+	carry0 = s0 >> 21; s1 += carry0; s0 -= SHL(carry0, 21);
+	carry1 = s1 >> 21; s2 += carry1; s1 -= SHL(carry1, 21);
+	carry2 = s2 >> 21; s3 += carry2; s2 -= SHL(carry2, 21);
+	carry3 = s3 >> 21; s4 += carry3; s3 -= SHL(carry3, 21);
+	carry4 = s4 >> 21; s5 += carry4; s4 -= SHL(carry4, 21);
+	carry5 = s5 >> 21; s6 += carry5; s5 -= SHL(carry5, 21);
+	carry6 = s6 >> 21; s7 += carry6; s6 -= SHL(carry6, 21);
+	carry7 = s7 >> 21; s8 += carry7; s7 -= SHL(carry7, 21);
+	carry8 = s8 >> 21; s9 += carry8; s8 -= SHL(carry8, 21);
+	carry9 = s9 >> 21; s10 += carry9; s9 -= SHL(carry9, 21);
+	carry10 = s10 >> 21; s11 += carry10; s10 -= SHL(carry10, 21);
 
 	s[0] = (uchar)(s0);
 	s[1] = (uchar)(s0 >> 8);

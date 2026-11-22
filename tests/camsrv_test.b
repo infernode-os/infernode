@@ -320,7 +320,10 @@ testNdvi(t: ref T)
 	if(fd == nil)
 		t.fatal(sys->sprint("open ndvi: %r"));
 	nd := array[W*H] of byte;
-	t.asserteq(readframe(fd, nd), W*H, "a whole NDVI frame");
+	# the next frame, waited for: those made before 0/ndvi was opened
+	# have none, and are refused as expired
+	(got, e) := readat(fd, nd, newest() + 1);
+	t.asserteq(got, W*H, "a whole NDVI frame: " + e);
 	row := H-8;
 	bar := array[] of {128, 255, 1, 0};	# white, red alone, blue alone, neither
 	for(i := 0; i < len bar; i++){

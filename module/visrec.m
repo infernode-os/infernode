@@ -38,4 +38,9 @@ Visrec: module
 	# a picture as an uncompressed image(6) file, r8g8b8, or as a PNG
 	writeimage:	fn(fd: ref Sys->FD, pix: array of byte, w, h: int): string;
 	writepng:	fn(fd: ref Sys->FD, pix: array of byte, w, h: int): string;
+	# a picture from an image(6) file, all of fd, as writeimage's pixels:
+	# (pixels, w, h, nil), or nil and why. Uncompressed r8g8b8 is taken
+	# as it is; any other channels or compression go through the draw
+	# device (a display is then needed).
+	readrgb:	fn(fd: ref Sys->FD): (array of byte, int, int, string);
 };

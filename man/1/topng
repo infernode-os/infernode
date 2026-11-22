@@ -1,0 +1,56 @@
+.TH TOPNG 1
+.SH NAME
+topng, tojpg \- a picture as PNG or JPEG
+.SH SYNOPSIS
+.B topng
+.br
+.B tojpg
+[
+.B -q
+.I quality
+]
+.SH DESCRIPTION
+.I Topng
+reads an
+.IR image (6)
+picture from its standard input and writes it on its standard output
+as a PNG: 8-bit RGB, rows unfiltered, compressed with deflate.
+.I Tojpg
+writes a baseline JPEG instead, 4:2:0, at
+.I quality
+1 to 100 (85 if not given), through
+.IR jpegenc (2).
+.PP
+An uncompressed r8g8b8 picture, as
+.IR i420 (1)
+writes, is taken as it is, with no display needed. Any other
+.IR image (6)
+picture, compressed or of other channels (a screen's, a window's),
+is read through the draw device, which then has to be there.
+.PP
+Neither knows where the picture came from: they are the last link of a
+pipe whose first is whatever makes pictures.
+.SH EXAMPLES
+A still from a camera:
+.IP
+.EX
+read 189420 < /mnt/video/0/frame | i420 410 308 | topng > still.png
+.EE
+.PP
+A smaller one:
+.IP
+.EX
+read 189420 < /mnt/video/0/frame | i420 410 308 | tojpg -q 70 > still.jpg
+.EE
+.SH SOURCE
+.B /appl/cmd/topng.b
+.br
+.B /appl/cmd/tojpg.b
+.br
+.B /appl/lib/visrec.b
+(the reading and the PNG)
+.SH SEE ALSO
+.IR i420 (1),
+.IR camsrv (4),
+.IR image (6),
+.IR jpegenc (2)

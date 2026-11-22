@@ -151,6 +151,9 @@ stays where it was.
 A frame as the sensor gave it, 16 bits a sample, little-endian, at the
 size and mosaic in
 .BR status .
+One frame an open: the newest, copied when it was made, so the next
+frame does not overwrite it while it is read; offsets past it are the
+end of the file.
 .TP
 .B 0/status
 One line of
@@ -163,6 +166,15 @@ One line of
 this is what marks a feed live to its readers.
 .BR autofocus=
 says how the last run went.
+.B rawformat=
+is the mosaic as the sensor reads it out now
+.RB ( rggb ,
+.BR grbg ,
+.B gbrg
+or
+.BR bggr :
+.B flip
+changes it), the sample width and the raw size.
 .TP
 .B 0/layer/
 Empty as served: where what is drawn over the frames is bound, a file a
@@ -184,7 +196,8 @@ Picture size: 576 324 or 1152 648, or 324 576 or 648 1152 turned a
 quarter. Not while streaming.
 .TP
 .BI fps " n
-1 to 56. Not while streaming.
+1 to the sensor's most, from its timing: 56 for the Camera Module 3,
+41 for the Camera Module 2. Not while streaming.
 .TP
 .BI exposure " lines
 0, the default, is automatic.

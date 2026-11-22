@@ -263,9 +263,6 @@ build_kernel() {
         # $Tensor, a network's arithmetic for vision(4) (#1086).
         "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/tensorif.m" > "$BUILD/tensorif.h" 2>>"$BUILD/cc.log" || return 1
         "$LIMBO" -t Tensor -I"$ROOT/module" "$ROOT/libinterp/tensorif.m" > "$BUILD/tensormod.h" 2>>"$BUILD/cc.log" || return 1
-        # $Flow, a flow table for minos's measurements (experimental).
-        "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/flowif.m" > "$BUILD/flowif.h" 2>>"$BUILD/cc.log" || return 1
-        "$LIMBO" -t Flow -I"$ROOT/module" "$ROOT/libinterp/flowif.m" > "$BUILD/flowmod.h" 2>>"$BUILD/cc.log" || return 1
     fi
 
 
@@ -657,13 +654,6 @@ build_kernel() {
             "/fonts/vera/Vera/unicode.14.font=$BUILD/unicode.14.font"
             "/fonts/vera/Vera/Vera.14.0000=$ROOT/fonts/vera/vera/vera.14.0000"
         )
-
-        # BAREMETAL_EXTRA_ROOT: more files for the root, as
-        # "/path/in/root=/host/file" words, for an experiment's own
-        # programs (minos's exp/bridge).
-        for x in ${BAREMETAL_EXTRA_ROOT:-}; do
-            rootmanifest+=("$x")
-        done
 
         python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
             "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1

@@ -124,7 +124,7 @@ tensorif.h:D: $MODULES tensorif.m
 
 bayer.$O:	bayermod.h bayerif.h
 
-flow.$O:	flowmod.h flowif.h flowtab.h
+flow.$O:	flowmod.h flowif.h flowtab.c flowtab.h
 
 flowmod.h:D: $MODULES flowif.m
 	rm -f $target && limbo -t Flow -I$ROOT/module flowif.m > $target

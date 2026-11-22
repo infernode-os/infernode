@@ -1,8 +1,8 @@
 /*
  * $Flow: the flow table (module/flow.m), for minos's measurements.
- * The table itself is flowtab.h, generated from infernode-os/minos's
- * exp/flow, where it is tested on the host; this is only the checking
- * of what Limbo hands it.
+ * The table itself is flowtab.c, which is infernode-os/minos's
+ * exp/flow/flow.c and is tested there on the host; this is only the
+ * checking of what Limbo hands it.
  */
 #include "lib9.h"
 #include "interp.h"
@@ -13,7 +13,7 @@
 #include "flowmod.h"
 
 #define FLOW_HAVE_TYPES
-#include "flowtab.h"
+#include "flowtab.c"
 
 void
 flowmodinit(void)

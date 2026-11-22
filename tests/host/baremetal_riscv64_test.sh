@@ -150,9 +150,6 @@ build_kernel() {
     # $Tensor, a network's arithmetic for vision(4) (#1086).
     "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/tensorif.m" > "$BUILD/tensorif.h" 2>>"$BUILD/cc.log" || return 1
     "$LIMBO" -t Tensor -I"$ROOT/module" "$ROOT/libinterp/tensorif.m" > "$BUILD/tensormod.h" 2>>"$BUILD/cc.log" || return 1
-    # $Flow, a flow table for minos's measurements (experimental).
-    "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/flowif.m" > "$BUILD/flowif.h" 2>>"$BUILD/cc.log" || return 1
-    "$LIMBO" -t Flow -I"$ROOT/module" "$ROOT/libinterp/flowif.m" > "$BUILD/flowmod.h" 2>>"$BUILD/cc.log" || return 1
 
     # init and the programs it may start, then the root filesystem
     for f in osinit etherusb kbdusb mouseusb diskusb touch drawtest tktest isotest; do

@@ -471,6 +471,58 @@ is joined: `ip/wpa` offers TKIP for the group when the access point
 refuses CCMP (wpa(8)). The console is the mini-UART on header pins 8
 and 10 (GPIO 14 and 15), as on the 3B+.
 
+### Clock speed
+
+The ARM clock is set in `config.txt`, by the Raspberry Pi firmware's
+own options; nothing in InferNode changes it while the machine runs,
+and no other software is needed. The firmware brings the cores up at
+`arm_freq_min`; at boot the kernel asks it, through the mailbox, for
+the most it allows and takes that (`boardclock()`, `os/bcm/board.c`),
+and the console says what came of it:
+
+    mbox: ARM clock 600 MHz, max 1400, now 1400 MHz
+
+The last number is what the machine runs at from then on. The maximum
+is the board's rating unless `config.txt` says otherwise: 1400 MHz on a
+3B+, 1000 on a Zero 2 W, 1500 on a Pi 4 (1800 with `arm_boost=1` on a
+board that can, as the Pi 4's card has it).
+
+The options are the firmware's, documented by Raspberry Pi under
+config.txt, "Overclocking options": `arm_freq` (the maximum, lower to
+underclock, higher to overclock), `arm_freq_min`, `over_voltage`,
+`force_turbo` and `temp_limit` (where the firmware throttles, default
+85 C). Add them to the card's `config.txt`, for instance to run a 3B+
+at a Zero 2 W's clock:
+
+    arm_freq=1000
+
+or to overclock a Zero 2 W (with a heatsink; not every chip takes it):
+
+    arm_freq=1200
+    over_voltage=2
+
+Three things to keep:
+
+- **Make the same change in `tryboot.txt`.** After a tryboot reset the
+  firmware reads it instead of `config.txt` (above), so a candidate
+  kernel otherwise runs at another clock.
+- **Leave `core_freq` and `core_freq_min` as they are.** They are the
+  VPU's clock, not the ARM's, and the console's baud is divided from it
+  once at boot (above).
+- Some combinations of `force_turbo` and `over_voltage` set a bit in
+  the chip's OTP that cannot be cleared; the firmware's documentation
+  says which.
+
+The firmware still caps the clock when it is hot or the supply sags.
+`#P` says whether it has (`os/bcm/devarch.c`):
+
+    cat '#P/cputemp' '#P/maxtemp' '#P/throttled'
+
+`throttled` is the firmware's flag word and what it means: `ok`, or
+`under-voltage`, `arm-capped`, `throttled` and `soft-temp-limit`,
+now and `-since-boot`. A benchmark run with anything there but `ok`
+did not run at the clock asked for. The files are read-only.
+
 ### Displays
 
 The firmware decides what is a display, **once, at power-on**, and the

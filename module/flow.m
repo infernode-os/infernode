@@ -52,13 +52,6 @@ Flow: module
 	# out; how many. Each is reported once
 	sweep:	fn(tab: array of byte, now: big, out: array of byte): int;
 
-	# flow k's record as it stands (Entlen bytes into out), counting
-	# nothing and ending nothing: 1, or 0 if the table has no such flow
-	stat:	fn(tab: array of byte, k: array of byte, out: array of byte): int;
-
-	# forget flow k now, with no record: 1 if it was there
-	del:	fn(tab: array of byte, k: array of byte): int;
-
 	# forward without Limbo: read frames from file descriptor in; one
 	# whose flow passes is written to out, one whose flow drops is
 	# dropped. The first frame the table cannot decide (no such flow,

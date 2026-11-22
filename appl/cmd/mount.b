@@ -196,12 +196,7 @@ popen(ctxt: ref Draw->Context, argv: list of string): ref Sys->FD
 
 runcmd(sh: Sh, ctxt: ref Draw->Context, argv: list of string, stdin: ref Sys->FD, sync: chan of int)
 {
-	# The command's end of the pipe and the standard files, and no
-	# other: a copy of everything (FORKFD) gave the command, and the
-	# shell that runs it, the mount's own end too, so the pipe stayed
-	# open after an unmount and the server never saw it close. (listen(1)
-	# had the same with a connection's files.)
-	sys->pctl(Sys->NEWFD, stdin.fd :: 0 :: 1 :: 2 :: nil);
+	sys->pctl(Sys->FORKFD, nil);
 	sys->dup(stdin.fd, 0);
 	stdin = nil;
 	sync <-= 0;

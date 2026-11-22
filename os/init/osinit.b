@@ -2321,12 +2321,30 @@ killproc(pid: int)
 # An interface with an address: its status file lists them one per
 # line after the header, each indented.
 #
+#
+# Whether the interface has an address of its own: a line of the status
+# file after the first, other than the unspecified address. The DHCP
+# client adds 0.0.0.0 before it asks (the stack sends nothing from an
+# interface with no address) and only replaces it when a lease comes.
+# Counted as an address, it made init take the first instant of every
+# DHCP exchange for success: the Wi-Fi was reported up with an empty
+# /net/ndb and never asked again, so a lost offer -- a Zero 2 W on a
+# phone's hotspot at -70 dBm lost one boot in two -- left the board
+# with no address for good.
+#
 hasaddress(ifcno: string): int
 {
 	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
 	for(i := 0; i + 1 < len st; i++)
-		if(st[i] == '\n' && st[i+1] == '\t')
-			return 1;
+		if(st[i] == '\n' && st[i+1] == '\t'){
+			j := i + 2;
+			k := j;
+			while(k < len st && st[k] != ' ' && st[k] != '\t' && st[k] != '\n')
+				k++;
+			a := st[j:k];
+			if(a != "0.0.0.0" && a != "::")
+				return 1;
+		}
 	return 0;
 }
 
@@ -2498,7 +2516,9 @@ wifidhcp(ifcno: string): int
 	pidc := chan of int;
 	spawn dhcprun(dhcp, ifcno, pidc);
 	dhcpgrp = <-pidc;
-	for(i := 0; i < 40 && !hasaddress(ifcno); i++)
+	# One round of the client's asking is 2+4+8+16 s (dhcpclient's
+	# Timeout0 and Ntries): wait it out rather than kill it in its last.
+	for(i := 0; i < 70 && !hasaddress(ifcno); i++)
 		sys->sleep(500);
 	return hasaddress(ifcno);
 }

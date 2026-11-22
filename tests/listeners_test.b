@@ -6,7 +6,8 @@ implement ListenersTest;
 #  - with -A, and no -t, the listener unmounted /mnt/keys in the name
 #    space of whoever started it: it hides the key store from its
 #    command in a name space of its own only when it authenticates, and
-#    with -A it had none.  It forks one either way now.
+#    with -A it had none.  It forks one either way now, and so do the
+#    grid's reglisten and regstyxlisten, which did the same.
 #  - styxlisten's command held a copy of the listener's end of its own
 #    pipe (its fd table was a copy of the listener's), so when the
 #    listener had gone the command never saw the end of its input and
@@ -245,6 +246,24 @@ testNsKept(t: ref T)
 	t.assert(e == nil, "listen -A starts: " + e);
 	t.assert(sys->stat("/mnt/keys/marker").t0 >= 0, "listen -A leaves /mnt/keys mounted for whoever started it");
 	killall(fresh(progs("Listen"), ll));
+
+	# the grid's own listeners, which register what they serve, did the
+	# same and had not been changed with those two
+	rl := progs("Listen");
+	spawn callproc("/dis/grid/reglisten.dis", "reglisten" :: "-A" :: "tcp!127.0.0.1!" + freeport(t) :: "{echo hi}" :: nil, c);
+	e = <-c;
+	t.assert(e == nil, "reglisten -A starts: " + e);
+	t.assert(sys->stat("/mnt/keys/marker").t0 >= 0, "reglisten -A leaves /mnt/keys mounted for whoever started it");
+	killall(fresh(progs("Listen"), rl));
+
+	rs := progs("Styxlisten");
+	ex = progs("Export");
+	spawn callproc("/dis/grid/regstyxlisten.dis", "regstyxlisten" :: "-A" :: "tcp!127.0.0.1!" + freeport(t) :: "export" :: D + "/dir" :: nil, c);
+	e = <-c;
+	t.assert(e == nil, "regstyxlisten -A starts: " + e);
+	t.assert(sys->stat("/mnt/keys/marker").t0 >= 0, "regstyxlisten -A leaves /mnt/keys mounted for whoever started it");
+	killall(fresh(progs("Styxlisten"), rs));
+	killall(fresh(progs("Export"), ex));
 }
 
 startstyx(t: ref T, port: string): (list of int, list of int)

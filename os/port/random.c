@@ -214,7 +214,7 @@ hwbytes(uchar *p, int n, char **why)
 
 	*why = nil;
 	for(got = 0; got < n; got += r){
-		r = hwrandom(p + got, n - got);
+		r = rnghw(p + got, n - got);
 		if(r < 0 && insecureok()){
 			weakrandom(p + got, n - got);
 			return 2;
@@ -539,5 +539,162 @@ weakrandom(uchar *p, int n)
 	if(warn)
 		print("\nrandom: NO ENTROPY SOURCE, and the command line says insecurerandom:\n"
 			"        random numbers on this boot are a counter. Keys made on it are PREDICTABLE.\n\n");
+	return n;
+}
+
+/*
+ * Measuring the generator (docs/ENTROPY-ASSESSMENT.md). Everything
+ * above takes the hardware's entropy on trust: Seedbytes and the
+ * health tests' cutoffs assume 4 bits a byte, which no one has
+ * measured. With the word "rngassess" on the boot command line, two
+ * files of #c give eve what SP 800-90B's assessment needs:
+ *
+ *	hwrandom	the hardware's bytes as hwrandom gives them, read
+ *			as fast as it gives them: no DRBG, no health test,
+ *			nothing refused. The non-IID and IID estimates are
+ *			made from a million or more of these.
+ *	hwrandomboot	the first Firstbytes the hardware gave on this
+ *			boot, before anything else took one. The restart
+ *			test (90B 3.1.4) is a thousand boots of these.
+ *
+ * Without the word both refuse to open, so an ordinary boot is as it
+ * was. With it, the first bytes are the capture's: every reader of the
+ * hardware in the kernel (the DRBG's seeds here, seedrand's word in
+ * devcons.c, TCP's isnkey) asks rnghw, which gives nothing until the
+ * capture is whole, and then what hwrandom gives. A key still comes
+ * only from the hardware; it waits for the capture, which takes a few
+ * milliseconds. A byte read through hwrandom is read once and used
+ * for nothing else, so reading the file shows no seed.
+ */
+enum
+{
+	Firstbytes	= 4096,
+	Firsttries	= 64,		/* hwrandom calls one rnghw may make for the capture */
+	Rawwaitms	= 10*1000,	/* the most a read of hwrandom waits for a dry generator */
+};
+
+static struct
+{
+	Lock	l;
+	int	state;		/* 0 not begun or partial, 1 whole, -1 no generator */
+	int	n;
+	uchar	b[Firstbytes];
+} first;
+
+int
+rngassessing(void)
+{
+	char *p, *q, *w;
+	int n;
+
+	w = "rngassess";
+	n = strlen(w);
+	p = boardcmdline();
+	if(p == nil)
+		return 0;
+	for(; *p != 0; p = q){
+		while(*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+			p++;
+		for(q = p; *q != 0 && *q != ' ' && *q != '\t' && *q != '\r' && *q != '\n'; q++)
+			;
+		if(q - p == n && memcmp(p, w, n) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+/* the capture, as far as the generator will take it now: its state */
+static int
+capture(void)
+{
+	int r, try, s;
+
+	ilock(&first.l);
+	for(try = 0; first.state == 0 && try < Firsttries; try++){
+		r = hwrandom(first.b + first.n, Firstbytes - first.n);
+		if(r < 0){
+			first.state = -1;
+			break;
+		}
+		first.n += r;
+		if(first.n == Firstbytes)
+			first.state = 1;
+		else if(r == 0)
+			break;		/* dry, or not probed yet: later */
+	}
+	s = first.state;
+	iunlock(&first.l);
+	return s;
+}
+
+/*
+ * hwrandom for the kernel's own readers: the same, except that in an
+ * assessment boot it gives nothing (0, dry) until the first bytes have
+ * been captured.
+ */
+int
+rnghw(uchar *p, int n)
+{
+	if(rngassessing() && capture() == 0)
+		return 0;
+	return hwrandom(p, n);
+}
+
+void
+rngassessopen(void)
+{
+	if(!rngassessing())
+		error("the boot command line does not say rngassess");
+	if(!iseve())
+		error(Eperm);
+}
+
+/* #c/hwrandom */
+long
+hwrandomread(void *xp, long n)
+{
+	uchar *p;
+	int r, waited;
+	long got;
+
+	if(capture() < 0)
+		error("this machine has no hardware generator");
+	p = xp;
+	got = 0;
+	waited = 0;
+	while(got < n){
+		r = hwrandom(p + got, n - got);
+		if(r < 0)
+			error("this machine has no hardware generator");
+		if(r > 0){
+			got += r;
+			continue;
+		}
+		if(got > 0 || waited >= Rawwaitms)
+			break;
+		tsleep(&up->sleep, return0, 0, 10);
+		waited += 10;
+	}
+	if(got == 0)
+		error("the hardware generator has given nothing for ten seconds");
+	return got;
+}
+
+/* #c/hwrandomboot */
+long
+hwrandombootread(void *p, long n, vlong offset)
+{
+	int s;
+
+	s = capture();
+	if(s < 0)
+		error("this machine has no hardware generator");
+	if(s == 0)
+		error("the first bytes are not captured yet: the generator has given too few");
+	if(offset >= Firstbytes)
+		return 0;
+	if(n > Firstbytes - offset)
+		n = Firstbytes - offset;
+	memmove(p, first.b + offset, n);
 	return n;
 }

@@ -640,6 +640,7 @@ dis/ramfile.dis
 dis/randpass.dis
 dis/raw2iaf.dis
 dis/rawdbfs.dis
+dis/rngdump.dis
 dis/rcmd.dis
 dis/read.dis
 dis/rm.dis

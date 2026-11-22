@@ -481,6 +481,9 @@ build_kernel() {
             # read, for taking a bounded number of bytes off a serial
             # port: cat would wait for an EOF a UART never sends.
             "/dis/read.dis=$ROOT/dis/read.dis"
+            # rngdump, the hardware generator's bytes for SP 800-90B's
+            # assessment (docs/ENTROPY-ASSESSMENT.md; rngassess boots).
+            "/dis/rngdump.dis=$ROOT/dis/rngdump.dis"
             # rm, for removing a file through dossrv and looking at
             # what it left on the card afterwards.
             "/dis/rm.dis=$ROOT/dis/rm.dis"
@@ -5488,6 +5491,44 @@ if grep -aqE '^(; )*VIRT-DATE.* 20[2-9][0-9]' <<<"$OUT"; then
     pass "virt: date(1) has the PL031's year, with no time server"
 else
     fail "virt: date -- $(grep -aE '^(; )*VIRT-DATE' <<<"$OUT" | head -1)"
+fi
+
+#
+# The generator's own bytes, for SP 800-90B's assessment
+# (docs/ENTROPY-ASSESSMENT.md): on a boot whose command line says
+# rngassess, eve reads #c/hwrandom and this boot's first 4096 bytes in
+# #c/hwrandomboot (the same on every read), rngdump writes exactly what
+# it is asked for, and keys are still made; on a boot without the word
+# (the one above) both refuse to open, saying why.
+#
+RNGOUT="$(QEMUARGS="$VIRTARGS -append rngassess" shell_session "$BUILD/$PLAT-kernel.img" \
+        'rngdump -n 300000 /tmp/raw.bin' \
+        'rngdump -b /tmp/b1.bin' \
+        'rngdump -b /tmp/b2.bin' \
+        'ls -l /tmp/raw.bin /tmp/b1.bin' \
+        'read 32 < /dev/random | wc -c')"
+printf '%s\n' "$RNGOUT" > "$BUILD/$PLAT-rngassess.txt"
+NORNG="$(shell_session "$BUILD/$PLAT-kernel.img" 'rngdump -n 10 /tmp/x' 'rngdump -b /tmp/y')"
+if grep -aq 'src=/dev/hwrandom bytes=300000 ' <<<"$RNGOUT" && grep -aq ' 300000 .*/tmp/raw.bin' <<<"$RNGOUT"; then
+    pass "virt: rngassess: rngdump writes exactly the bytes of #c/hwrandom asked for"
+else
+    fail "virt: rngassess: #c/hwrandom -- $(grep -a 'rngdump\|hwrandom' <<<"$RNGOUT" | head -3)"
+fi
+B1="$(grep -ao 'src=/dev/hwrandomboot bytes=4096 [^ ]* [^ ]* sha256=[0-9a-f]*' <<<"$RNGOUT" | sed 's/.*sha256=//' | sort -u)"
+if [[ -n "$B1" && "$(wc -l <<<"$B1")" -eq 1 ]] && [[ "$(grep -ac 'src=/dev/hwrandomboot bytes=4096 ' <<<"$RNGOUT")" -eq 2 ]]; then
+    pass "virt: rngassess: #c/hwrandomboot is this boot's first 4096 bytes, the same on each read"
+else
+    fail "virt: rngassess: #c/hwrandomboot -- $(grep -a 'hwrandomboot' <<<"$RNGOUT" | head -3)"
+fi
+if grep -aqE '^ *32[[:space:]]*$' <<<"$(tr -d '\r' <<<"$RNGOUT")"; then
+    pass "virt: rngassess: /dev/random still gives keys on an assessment boot"
+else
+    fail "virt: rngassess: /dev/random gave nothing on an assessment boot"
+fi
+if [[ "$(grep -ac 'does not say rngassess' <<<"$NORNG")" -ge 2 ]] && ! grep -aq 'src=/dev/hwrandom' <<<"$NORNG"; then
+    pass "virt: without rngassess neither file opens, and says why"
+else
+    fail "virt: without rngassess -- $(grep -a 'rngdump' <<<"$NORNG" | head -3)"
 fi
 
 #

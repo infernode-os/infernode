@@ -309,6 +309,13 @@ init()
 	strictlinksetup();
 
 	#
+	# SP 800-90B's restart test, if the card and the command line ask
+	# for it (rngrestart): this boot's first generator bytes kept, and
+	# the next boot begun.
+	#
+	rngrestart();
+
+	#
 	# The radio's firmware lives on the card just mounted. The kernel
 	# names no path: this is where the paths come from.
 	#
@@ -2828,6 +2835,90 @@ cnsasetup()
 	if(fd == nil || sys->fprint(fd, "1") < 0)
 		sys->print("init: cnsamode: /env/cnsamode: %r\n");
 	sys->print("init: cnsamode: CNSA 2.0 strict (ML-KEM-1024) for every authentication\n");
+}
+
+#
+# The restart test of SP 800-90B (3.1.4; docs/ENTROPY-ASSESSMENT.md):
+# the first bytes the hardware generator gives after each of a thousand
+# boots. It runs only when the command line says rngassess (the kernel
+# gives #c/hwrandomboot on no other boot) and the card has a file
+# /n/dos/rngrestart holding the number of boots wanted. Each boot
+# appends its Firstbytes (4096) to /n/dos/rngboot.bin and resets the
+# machine until the file holds that many; then it says so and boots on.
+#
+# Anything that goes wrong stops the loop rather than resetting again:
+# a loop that cannot write would reset for ever. To stop it by hand,
+# take rngassess off cmdline.txt or remove /n/dos/rngrestart.
+#
+Rngrestartfile: con "/n/dos/rngrestart";
+Rngbootfile: con "/n/dos/rngboot.bin";
+Rngfirst: con 4096;
+
+rngrestart()
+{
+	fd := sys->open(Rngrestartfile, Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	want := 0;
+	if(n > 0)
+		want = int string buf[0:n];
+	if(want <= 0){
+		sys->print("init: rngrestart: %s does not hold a number of boots; not collecting\n", Rngrestartfile);
+		return;
+	}
+	in := sys->open("/dev/hwrandomboot", Sys->OREAD);
+	if(in == nil){
+		sys->print("init: rngrestart: /dev/hwrandomboot: %r; not collecting\n");
+		return;
+	}
+	b := array[Rngfirst] of byte;
+	for(got := 0; got < Rngfirst; got += n){
+		n = sys->read(in, b[got:], Rngfirst - got);
+		if(n <= 0){
+			sys->print("init: rngrestart: /dev/hwrandomboot: %r; not collecting\n");
+			return;
+		}
+	}
+	(ok, d) := sys->stat(Rngbootfile);
+	out: ref Sys->FD;
+	if(ok < 0)
+		out = sys->create(Rngbootfile, Sys->OWRITE, 8r644);
+	else{
+		if(d.length % big Rngfirst != big 0){
+			sys->print("init: rngrestart: %s is %bd bytes, not whole boots; not collecting\n", Rngbootfile, d.length);
+			return;
+		}
+		out = sys->open(Rngbootfile, Sys->OWRITE);
+	}
+	if(out == nil){
+		sys->print("init: rngrestart: %s: %r; not collecting\n", Rngbootfile);
+		return;
+	}
+	off := big 0;
+	if(ok >= 0)
+		off = d.length;
+	if(sys->pwrite(out, b, Rngfirst, off) != Rngfirst){
+		sys->print("init: rngrestart: %s: %r; not collecting\n", Rngbootfile);
+		return;
+	}
+	out = nil;	# its clunk is dossrv's sync
+	(ok, d) = sys->stat(Rngbootfile);
+	if(ok < 0 || d.length != off + big Rngfirst){
+		sys->print("init: rngrestart: %s did not grow by one boot; stopped\n", Rngbootfile);
+		return;
+	}
+	boots := int (d.length / big Rngfirst);
+	if(boots >= want){
+		sys->print("init: rngrestart: %d boots collected in %s; done (remove %s)\n",
+			boots, Rngbootfile, Rngrestartfile);
+		return;
+	}
+	sys->print("init: rngrestart: boot %d of %d kept; resetting\n", boots, want);
+	ctl := sys->open("#c/sysctl", Sys->OWRITE);
+	if(ctl == nil || sys->fprint(ctl, "reboot") < 0)
+		sys->print("init: rngrestart: reboot: %r; stopped\n");
 }
 
 #

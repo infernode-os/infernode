@@ -53,6 +53,7 @@ mod
 	i420
 	tensor
 	bayer
+	flow
 #	loader
 #	freetype
 

@@ -32,6 +32,7 @@ OFILES=\
 	i420.$O\
 	tensor.$O\
 	bayer.$O\
+	flow.$O\
 
 HFILES=\
 	../include/interp.h\
@@ -56,6 +57,8 @@ MODULES=\
 	tensorif.m\
 	$ROOT/module/bayer.m\
 	bayerif.m\
+	$ROOT/module/flow.m\
+	flowif.m\
 
 
 <$ROOT/mkfiles/mksyslib-$SHELLTYPE
@@ -121,6 +124,14 @@ tensorif.h:D: $MODULES tensorif.m
 
 bayer.$O:	bayermod.h bayerif.h
 
+flow.$O:	flowmod.h flowif.h flowtab.c flowtab.h
+
+flowmod.h:D: $MODULES flowif.m
+	rm -f $target && limbo -t Flow -I$ROOT/module flowif.m > $target
+
+flowif.h:D: $MODULES flowif.m
+	rm -f $target && limbo -a -I$ROOT/module flowif.m > $target
+
 ipint.$O:	ipint.h ipintsmod.h
 crypt.$O:	ipint.h runt.h cryptmod.h
 loader.$O:	loadermod.h
@@ -142,5 +153,5 @@ kif.$O: kif.c
 #	it works only on UNIX and Plan 9.
 
 nuke:EV:	nuke-std
-	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h kif.c cryptmod.h keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h
+	rm -f runt.h sysmod.h drawmod.h prefabmod.h tkmod.h mathmod.h keyring.h readimagemod.h loadermod.h freetypemod.h kif.c cryptmod.h keyringif.h ipintsmod.h i420mod.h i420if.h tensormod.h tensorif.h flowmod.h flowif.h
 

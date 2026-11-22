@@ -72,7 +72,6 @@ encoding encoding
 env env
 exception exception
 factotum factotum
-mount factotum
 proxy factotum
 rpc factotum
 expand filepat

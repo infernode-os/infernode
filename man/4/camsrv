@@ -252,6 +252,38 @@ at the first of them.
 .PD
 .RE
 .SH EXAMPLES
+A still picture is one frame, cut from the stream with
+.IR read (1),
+whose
+.I count
+is the frame size,
+.IR w × h ×3/2
+for
+.BR fmt 's
+size: 189420 at 410\(mu308.
+.IP
+.EX
+mount -A {camsrv} /mnt/video
+read 189420 < /mnt/video/0/frame > still.i420
+.EE
+.PP
+The same works for any feed in this schema,
+.IR vid9p 's
+recordings and a camera mounted from another machine alike: the feed
+serves frames and knows nothing of picture formats; converting one is
+a filter's job. Its plant health, likewise:
+.IP
+.EX
+read 126280 < /mnt/video/0/ndvi > still.ndvi
+.EE
+.PP
+.I Cp
+will not do: a feed's
+.B frame
+is a stream that does not end, and
+.I cp
+copies until it does.
+.PP
 A video with known answers to point the camera at during a soak:
 exposure steps, white balance, a focus chart, motion:
 .IP

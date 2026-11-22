@@ -33,19 +33,32 @@ enum{
 	Qdir,
 	Qctl,
 	Qdata,
+#ifdef NVME0
+	Qnvme,		/* a second disk: one whole-disk file */
+	Qnvmestat,	/* and what it says of itself */
+#endif
 	Qpart,		/* and upwards, one per partition */
 
 	Blen	= 512,
 	Maxblks	= 64,	/* blocks per multiple-block read: 32KB */
+#ifdef NVME0
+	Npart	= 24,
+#else
 	Npart	= 8,
+#endif
 	Namelen	= 32,
 };
+
+#define	Maxpartblk	(((vlong)1<<62)/Blen)	/* no partition starts or ends past this block */
 
 typedef struct Part Part;
 struct Part {
 	char	name[Namelen];
 	vlong	off;		/* bytes from the start of the card */
 	vlong	len;
+#ifdef NVME0
+	int	nvme;		/* of the second disk, not the card */
+#endif
 };
 
 static struct {
@@ -69,18 +82,56 @@ static struct {
  * Plan 9's disk devices draw the line in the same place and for the
  * same reason.
  */
-static void
-sdaddpart(char *name, vlong startblk, vlong nblk)
+/*
+ * Whether blocks startblk to startblk+nblk-1 are a range a partition can
+ * be, on a device of devblks blocks (0 when that is not known).
+ *
+ * The numbers are whatever was written to sdctl, and those are what a
+ * card's or a disk's partition table says: a start of ffffffff in an MBR
+ * arrives as -1, a GPT's are 64 bits as they come. Nothing looked. A
+ * negative start made every offset in the partition negative, and the
+ * part of a block an unaligned read or write copies was then taken from
+ * before the bounce buffer: the kernel's memory, read and written. A
+ * start large enough for start*512 to wrap did the same; a length of
+ * none, or negative, made a file with no end.
+ */
+static int
+partok(vlong startblk, vlong nblk, vlong devblks)
+{
+	if(startblk < 0 || nblk <= 0)
+		return 0;
+	if(startblk > Maxpartblk || nblk > Maxpartblk - startblk)
+		return 0;
+	if(devblks > 0 && startblk >= devblks)
+		return 0;
+	return 1;
+}
+
+/* nil, or why not; it raises nothing, as the disk's own scan runs at boot with no error label */
+static char*
+addpart(char *name, vlong startblk, vlong nblk, vlong devblks, int nvme)
 {
 	Part *p;
 	int i;
 
+	if(name[0] == 0 || strchr(name, '/') != nil)
+		return Ebadctl;
+	if(!partok(startblk, nblk, devblks))
+		return "bad partition";
+	/* one that runs past the end of its device is cut at it */
+	if(devblks > 0 && nblk > devblks - startblk)
+		nblk = devblks - startblk;
+
+	/* under the lock I/O takes: the table was changed with none held */
+	qlock(&sd.q);
 	for(i = 0; i < sd.npart; i++)
 		if(strcmp(sd.part[i].name, name) == 0)
 			break;
 	if(i == sd.npart){
-		if(sd.npart >= Npart)
-			error("too many partitions");
+		if(sd.npart >= Npart){
+			qunlock(&sd.q);
+			return "too many partitions";
+		}
 		sd.npart++;
 	}
 	p = &sd.part[i];
@@ -88,7 +139,33 @@ sdaddpart(char *name, vlong startblk, vlong nblk)
 	p->name[Namelen-1] = 0;
 	p->off = startblk * Blen;
 	p->len = nblk * Blen;
+#ifdef NVME0
+	p->nvme = nvme;
+#else
+	USED(nvme);
+#endif
+	qunlock(&sd.q);
+	return nil;
 }
+
+static void
+sdaddpart(char *name, vlong startblk, vlong nblk, vlong devblks, int nvme)
+{
+	char *e;
+
+	e = addpart(name, startblk, nblk, devblks, nvme);
+	if(e != nil)
+		error(e);
+}
+
+#ifdef NVME0
+/* nvme.c's, from the disk's partition table: in 512-byte units, as nvmepart */
+char*
+sdaddnvmepart(char *name, vlong start, vlong n)
+{
+	return addpart(name, start, n, nvmelength()/Blen, 1);
+}
+#endif
 
 static vlong
 sdlength(void)
@@ -123,11 +200,30 @@ sdgen(Chan *c, char *nm, Dirtab *tab, int ntab, int i, Dir *dp)
 		return 1;
 	}
 	if(i == 1){
+#ifdef NVME0
+		if(!sdblkpresent())
+			return 0;	/* booted from the drive, with no card */
+#endif
 		q.path = Qdata;
 		devdir(c, q, "sdcard", sdlength(), eve, 0640, dp);
 		return 1;
 	}
 	i -= 2;
+#ifdef NVME0
+	if(nvmepresent()){
+		if(i == 0){
+			q.path = Qnvme;
+			devdir(c, q, "nvme0", nvmelength(), eve, 0640, dp);
+			return 1;
+		}
+		if(i == 1){
+			q.path = Qnvmestat;
+			devdir(c, q, "nvmestat", 0, eve, 0444, dp);
+			return 1;
+		}
+		i -= 2;
+	}
+#endif
 	if(i >= sd.npart)
 		return -1;
 	p = &sd.part[i];
@@ -139,8 +235,13 @@ sdgen(Chan *c, char *nm, Dirtab *tab, int ntab, int i, Dir *dp)
 static Chan*
 sdattach(char *spec)
 {
+#ifdef NVME0
+	if(!sdblkpresent() && !nvmepresent())
+		error("no SD card");
+#else
 	if(!sdblkpresent())
 		error("no SD card");
+#endif
 	return devattach('S', spec);
 }
 
@@ -203,6 +304,9 @@ sdio(int iswrite, void *a, long n, vlong off, vlong base, vlong total)
 	}
 	if(n <= 0)
 		return 0;
+	/* (a second check on what partok lets by: nothing below copes with either) */
+	if(off < 0 || base < 0 || off > Maxpartblk*Blen || base > Maxpartblk*Blen)
+		error(Ebadarg);
 	off += base;
 
 	p = a;
@@ -272,10 +376,14 @@ sdrange(Chan *c, vlong *base, vlong *len)
 		return;
 	}
 	i = path - Qpart;
-	if(i < 0 || i >= sd.npart)
+	qlock(&sd.q);
+	if(i < 0 || i >= sd.npart){
+		qunlock(&sd.q);
 		error(Ebadusefd);
+	}
 	*base = sd.part[i].off;
 	*len = sd.part[i].len;
+	qunlock(&sd.q);
 }
 
 static long
@@ -298,7 +406,34 @@ sdread(Chan *c, void *a, long n, vlong off)
 		return readstr(off, a, n, buf);
 	}
 
+#ifdef NVME0
+	if((ulong)c->qid.path == Qnvme)
+		return nvmerw(0, a, n, off);
+	if((ulong)c->qid.path == Qnvmestat){
+		char *s;
+
+		s = smalloc(READSTR);
+		if(waserror()){
+			free(s);
+			nexterror();
+		}
+		nvmestat(s, READSTR);
+		n = readstr(off, a, n, s);
+		poperror();
+		free(s);
+		return n;
+	}
+#endif
 	sdrange(c, &base, &len);
+#ifdef NVME0
+	if((ulong)c->qid.path >= Qpart && sd.part[c->qid.path - Qpart].nvme){
+		if(off >= len)
+			return 0;
+		if(off + n > len)
+			n = len - off;
+		return nvmerw(0, a, n, base + off);
+	}
+#endif
 	return sdio(0, a, n, off, base, len);
 }
 
@@ -316,7 +451,19 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 		}
 		if(cb->nf == 4 && strcmp(cb->f[0], "part") == 0)
 			sdaddpart(cb->f[1], strtoll(cb->f[2], nil, 0),
-				strtoll(cb->f[3], nil, 0));
+				strtoll(cb->f[3], nil, 0), sdblknblocks(), 0);
+#ifdef NVME0
+		else if(cb->nf == 4 && strcmp(cb->f[0], "nvmepart") == 0){
+			sdaddpart(cb->f[1], strtoll(cb->f[2], nil, 0),
+				strtoll(cb->f[3], nil, 0), nvmelength()/Blen, 1);
+		}
+		else if(cb->nf == 1 && strcmp(cb->f[0], "nvmeslow") == 0)
+			nvmeslow();
+		else if(cb->nf == 1 && strcmp(cb->f[0], "flush") == 0)
+			nvmeflush();
+#endif
+		else if(cb->nf == 1 && strcmp(cb->f[0], "flush") == 0)
+			;	/* an SD card has no cache to flush */
 		else
 			error(Ebadctl);
 		poperror();
@@ -324,7 +471,20 @@ sdwrite(Chan *c, void *a, long n, vlong off)
 		return n;
 	}
 
+#ifdef NVME0
+	if((ulong)c->qid.path == Qnvme)
+		return nvmerw(1, a, n, off);
+#endif
 	sdrange(c, &base, &len);
+#ifdef NVME0
+	if((ulong)c->qid.path >= Qpart && sd.part[c->qid.path - Qpart].nvme){
+		if(off >= len)
+			return 0;
+		if(off + n > len)
+			n = len - off;
+		return nvmerw(1, a, n, base + off);
+	}
+#endif
 	return sdio(1, a, n, off, base, len);
 }
 

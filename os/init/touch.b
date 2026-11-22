@@ -29,10 +29,18 @@ implement Touch;
 # orientation: if the board shows the panel mirrored or rotated, that is
 # an inversion flag in this program, never a change to the kernel file.
 #
+# A panel has no buttons 2 and 3 and no wheel, so a finger held still is
+# button 3 and two dragged are the wheel: touchgest(2) makes them, for
+# this panel and a USB touchscreen (mouseusb) alike, and as the hosted
+# emulator makes them of a phone's touches.
+#
 
 include "sys.m";
 	sys: Sys;
 include "draw.m";
+include "touchgest.m";
+	touchgest: Touchgest;
+	Gest: import touchgest;
 
 Touch: module
 {
@@ -48,9 +56,19 @@ Evlift:		con 1;		# a point's event: 0 down, 1 up, 2 contact
 Width:		con 800;
 Height:		con 480;
 
+# the gestures' distances, in this panel's pixels: emu/port/draw-sdl3.c's
+# slop, and a step shorter than its 50, the panel being only 480 high
+Slop:		con 16;		# pixels a held finger may wander and still be held
+Step:		con 40;		# pixels two fingers move for a wheel tick
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	touchgest = load Touchgest Touchgest->PATH;
+	if(touchgest == nil){
+		sys->print("touch: cannot load %s: %r\n", Touchgest->PATH);
+		return;
+	}
 
 	if(args != nil && tl args != nil && hd tl args == "-t"){
 		selftest();
@@ -126,9 +144,7 @@ poll(fd, ptr: ref Sys->FD)
 {
 	buf := array[Framelen] of byte;
 	nerr := 0;
-	down := 0;
-	lastx := -1;
-	lasty := -1;
+	g := Gest.new("m", Slop, Step);
 	for(;;){
 		sys->sleep(Pollms);
 		n := sys->read(fd, buf, len buf);
@@ -141,35 +157,34 @@ poll(fd, ptr: ref Sys->FD)
 		}
 		nerr = 0;
 		np := int buf[2];
-		if(np == Consumed)
-			continue;
-		if(np > Maxpoints)
-			continue;	# torn or garbage frame; the next one is 16ms away
-		postfingers(buf, np);
-		if(np == 0){
-			if(down){
-				if(!post(ptr, lastx, lasty, 0))
-					return;
-				down = 0;
-			}
-			continue;
+		out: list of string;
+		if(np == Consumed || np > Maxpoints)
+			out = g.tick(sys->millisec());	# a finger held still sends nothing new
+		else {
+			postfingers(buf, np);
+			out = g.frame(points(buf, np), sys->millisec());
 		}
-		(x, y, nil, nil) := decode(buf, 0);
-		if(x < 0 || y < 0)
-			continue;
-		if(!down || x != lastx || y != lasty){
-			if(!post(ptr, x, y, 1))
+		for(; out != nil; out = tl out)
+			if(!post(ptr, hd out))
 				return;
-		}
-		down = 1;
-		lastx = x;
-		lasty = y;
 	}
 }
 
-post(ptr: ref Sys->FD, x, y, b: int): int
+# The fingers on the panel in a frame, in its order: those lifted left out.
+points(buf: array of byte, np: int): list of (int, int)
 {
-	s := sys->sprint("m %d %d %d", x, y, b);
+	l: list of (int, int);
+	for(i := np-1; i >= 0; i--){
+		(x, y, nil, ev) := decode(buf, i);
+		if(x < 0 || y < 0 || ev == Evlift)
+			continue;
+		l = (x, y) :: l;
+	}
+	return l;
+}
+
+post(ptr: ref Sys->FD, s: string): int
+{
 	a := array of byte s;
 	if(sys->write(ptr, a, len a) < 0){
 		sys->print("touch: write to /dev/pointer failed: %r\n");
@@ -227,8 +242,41 @@ selftest()
 	(x, y, nil, nil) = decode(buf, Maxpoints+1);
 	ok = ok && x == -1 && y == -1;
 
-	if(ok)
+	if(!ok){
+		sys->print("touch: selftest FAILED (x %d y %d id %d ev %d)\n", x, y, id, ev);
+		return;
+	}
+
+	# the gestures are touchgest(2)'s, tested on their own
+	# (tests/touchgest_test.b); here, that this panel's frames reach
+	# them: a frame's fingers, and a hold
+	buf[2] = byte 1;
+	buf[3] = byte (16r80 | 0);
+	buf[4] = byte 100;
+	buf[5] = byte 0;
+	buf[6] = byte 200;
+	g := Gest.new("m", Slop, Step);
+	e := expect("a tap", g.frame(points(buf, 1), 0), "m 100 200 1") +
+		expect("held", g.tick(Touchgest->Longms), "m 100 200 4");
+	buf[3] = byte (16r40 | 0);	# event 1: lifted
+	e += expect("a lifted point is no finger", g.frame(points(buf, 1), 0), "m 100 200 0");
+
+	if(e == nil)
 		sys->print("touch: selftest OK\n");
 	else
-		sys->print("touch: selftest FAILED (x %d y %d id %d ev %d)\n", x, y, id, ev);
+		sys->print("touch: selftest FAILED:%s\n", e);
+}
+
+# "" if got is want (its lines joined by blanks), else what differed
+expect(what: string, got: list of string, want: string): string
+{
+	s := "";
+	for(; got != nil; got = tl got){
+		if(s != "")
+			s += " ";
+		s += hd got;
+	}
+	if(s == want)
+		return "";
+	return sys->sprint(" [%s: got '%s', want '%s']", what, s, want);
 }

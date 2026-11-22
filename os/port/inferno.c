@@ -172,7 +172,8 @@ Sys_pipe(void *fp)
 	*f->ret = -1;
 
 	a = f->fds;
-	if(a->len < 2)
+	/* (a nil array was read: a fault, in the native kernel's own code) */
+	if(a == (Array*)H || a->len < 2)
 		return;
 	if(kpipe(fd) < 0)
 		return;
@@ -578,7 +579,10 @@ Sys_print(void *fp)
 	char buf[1024], *b = buf;
 	F_Sys_print *f;
 	f = fp;
+	/* under the group's lock: the table is replaced, and the old freed, when it grows */
+	lock(&up->env->fgrp->l);
 	c = up->env->fgrp->fd[1];
+	unlock(&up->env->fgrp->l);
 	if(c == nil)
 		return;
 	p = currun();
@@ -738,6 +742,15 @@ Sys_stream(void *fp)
 	int nbytes, t, n;
 
 	f = fp;
+	/*
+	 * The size is the program's: negative, it was a size no allocator
+	 * should be asked for and a count no read should be given.
+	 */
+	if(f->bufsiz <= 0) {
+		kwerrstr(Ebadarg);
+		*f->ret = -1;
+		return;
+	}
 	buf = malloc(f->bufsiz);
 	if(buf == nil) {
 		kwerrstr(Enomem);
@@ -838,6 +851,7 @@ Sys_pctl(void *fp)
 	volatile struct {Pgrp *np;} np;
 	Pgrp *opg;
 	Chan *dot;
+	Cname *cn;
 	Osenv *o;
 	F_Sys_pctl *f;
 	Fgrp *fg, *ofg, *nfg;
@@ -913,8 +927,14 @@ Sys_pctl(void *fp)
 		np.np->dot = cclone(dot);
 		np.np->slash = cclone(dot);
 		cclose(dot);
+		/*
+		 * the new name first: made after the old was let go, a
+		 * failure to make it left the name space closing a name
+		 * it no longer had a reference to
+		 */
+		cn = newcname("/");
 		cnameclose(np.np->slash->name);
-		np.np->slash->name = newcname("/");
+		np.np->slash->name = cn;
 		opg = pg;
 		o->pgrp = np.np;
 		np.np = nil;
@@ -945,9 +965,6 @@ Sys_pctl(void *fp)
 		closeegrp(oe);
 	}
 
-	if(f->flags & Sys_NEWPGRP)
-		newgrp(p);
-
 	if(f->flags & Sys_NODEVS)
 		o->pgrp->nodevs = 1;
 
@@ -955,6 +972,22 @@ Sys_pctl(void *fp)
 
 	if(f->flags & BlockingPctl)
 		acquire();
+
+	/*
+	 * With the VM, as the hosted kernel has it: the groups' lists are
+	 * the VM's, changed by spawn, exit and kill on other processors.
+	 * newgrp ran above with the VM let go when the same call also
+	 * forked the name space (a common pairing), and a list could keep
+	 * a Prog that had exited and been freed.
+	 */
+	if(f->flags & Sys_NEWPGRP){
+		if(waserror()){
+			*f->ret = -1;
+			return;
+		}
+		newgrp(p);
+		poperror();
+	}
 
 	*f->ret = p->pid;
 }
@@ -1024,6 +1057,7 @@ Sys_fversion(void *fp)
 	void *r;
 	F_Sys_fversion *f;
 	int n;
+	uint got;
 	char buf[20], *s;
 
 	f = fp;
@@ -1038,10 +1072,11 @@ Sys_fversion(void *fp)
 	memmove(buf, s, n);
 	buf[n] = 0;
 	release();
-	n = kfversion(fdchk(f->fd), f->msize, buf, sizeof(buf));
+	n = kfversion(fdchk(f->fd), f->msize, buf, sizeof(buf), &got);
 	acquire();
 	if(n >= 0){
-		f->ret->t0 = f->msize;
+		/* the size agreed, not the size asked (it gave the second) */
+		f->ret->t0 = got;
 		retnstr(buf, n, &f->ret->t1);
 	}
 }

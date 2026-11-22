@@ -21,7 +21,7 @@ docview : Docview;
 edit : Edit;
 ecmd : Editcmd;
 
-ALLLOOPER, ALLTOFILE, ALLMATCHFILE, ALLFILECHECK, ALLELOGTERM, ALLEDITINIT, ALLUPDATE, ALLINCREF, ALLDECREF, FIXINDENT: import Edit;
+ALLLOOPER, ALLTOFILE, ALLMATCHFILE, ALLFILECHECK, ALLELOGTERM, ALLEDITINIT, ALLUPDATE, ALLINCREF, ALLDECREF, FIXINDENT, FIXWRAP: import Edit;
 sprint : import sys;
 FALSE, TRUE, XXX : import Dat;
 BUFSIZE, Astring : import Dat;
@@ -854,6 +854,8 @@ allwindows(o: int, aw: ref  Dat->Allwin)
 				w.close();
 			FIXINDENT =>
 				w.autoindent = dat->globalautoindent;
+			FIXWRAP =>
+				w.setwrap(dat->globalwrapword);
 			}
 		}
 	}

@@ -64,3 +64,4 @@ sleep 1
 file $Exit
 show dirty-exit
 echo R done
+echo halt > '#c/sysctl'

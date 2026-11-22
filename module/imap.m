@@ -31,12 +31,18 @@ Imap: module
 		cc:		string;
 		replyto:	string;
 		messageid:	string;
+		# The From and Reply-To addresses as the server gave them, one
+		# "mailbox@host" each.  sender and replyto are for showing (a
+		# display name is the sender's text and may hold anything); a
+		# reply is addressed from these.
+		fromaddrs:	list of string;
+		replytoaddrs:	list of string;
 	};
 
 	# Msg: per-message metadata from FETCH
 	Msg: adt {
 		seq:		int;		# sequence number
-		uid:		int;		# unique identifier
+		uid:		int;		# unique identifier: 32 bits unsigned (uidstr prints it)
 		flags:		int;		# FSEEN|FANSWERED|...
 		size:		int;		# RFC822.SIZE
 		envelope:	ref Envelope;
@@ -54,6 +60,15 @@ Imap: module
 
 	# Connect, authenticate, return error string or nil
 	open:		fn(user, password, server: string, mode: int): string;
+
+	# Every operation ends by a deadline: ms without a byte from the
+	# server (30 seconds unless set here), twenty times that for one
+	# command in all.  After it, as after any failure of the connection
+	# or an answer past the limits (a line of 1MB, a literal of 64MB,
+	# 128MB for one command), the connection is closed: isup is 0 and
+	# open starts again.
+	timeout:	fn(ms: int);
+	isup:		fn(): int;
 
 	# List all mailbox names
 	folders:	fn(): (list of string, string);
@@ -79,12 +94,27 @@ Imap: module
 	# COPY messages to another mailbox
 	copy:		fn(seqs: string, dest: string): string;
 
+	# The same by UID (UID SEARCH, UID FETCH, UID STORE, UID COPY).  A
+	# sequence number is the message's place in the mailbox, which moves
+	# when any client expunges; a UID stays the message's.  uidfetch
+	# gives only the text of the message with that UID.
+	uidsearch:	fn(criteria: string): (list of int, string);
+	uidfetch:	fn(uid: int): (string, string);
+	uidstore:	fn(uid, flags, add: int): string;
+	uidcopy:	fn(uid: int, dest: string): string;
+	uidstr:		fn(uid: int): string;
+
 	# IDLE: pushes untagged EXISTS/EXPUNGE lines to updates channel.
-	# Send anything on stop channel to end IDLE.
+	# Send anything on stop channel to end IDLE: idle returns once the
+	# server has answered DONE, and the connection is the caller's again.
+	# If the connection fails first, nil is sent on updates and idle
+	# returns the error.
 	idle:		fn(updates: chan of string, stop: chan of int): string;
 
 	# Clean disconnect
 	logout:		fn(): string;
+	# Hang up with nothing said: the connection and its processes go
+	hangup:		fn();
 
 	# Parsing helpers (exported for testing)
 	parseflags:	fn(s: string): int;

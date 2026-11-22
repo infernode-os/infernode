@@ -245,6 +245,12 @@ build_kernel() {
         "$LIMBO" -t Draw -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/drawmod.h" 2>>"$BUILD/cc.log" || return 1
         "$LIMBO" -t Tk -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/tkmod.h" 2>>"$BUILD/cc.log" || return 1
 
+        # $I420 and $Bayer, the video pixel loops.
+        "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/i420if.m" > "$BUILD/i420if.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -t I420 -I"$ROOT/module" "$ROOT/libinterp/i420if.m" > "$BUILD/i420mod.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/bayerif.m" > "$BUILD/bayerif.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -t Bayer -I"$ROOT/module" "$ROOT/libinterp/bayerif.m" > "$BUILD/bayermod.h" 2>>"$BUILD/cc.log" || return 1
+
         # $Keyring's C view, and $IPints' -- the bignum module keyring's
         # public-key paths stand on. Same recipe as every other builtin.
         "$LIMBO" -t Keyring -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/keyringmod.h" 2>>"$BUILD/cc.log" || return 1
@@ -254,6 +260,9 @@ build_kernel() {
         # draw: appl/wm/clock.b loads it for sin and cos, and a module
         # that fails to load is a window that never opens.
         "$LIMBO" -t Math -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/mathmod.h" 2>>"$BUILD/cc.log" || return 1
+        # $Tensor, a network's arithmetic for vision(4) (#1086).
+        "$LIMBO" -a -I"$ROOT/module" "$ROOT/libinterp/tensorif.m" > "$BUILD/tensorif.h" 2>>"$BUILD/cc.log" || return 1
+        "$LIMBO" -t Tensor -I"$ROOT/module" "$ROOT/libinterp/tensorif.m" > "$BUILD/tensormod.h" 2>>"$BUILD/cc.log" || return 1
     fi
 
 
@@ -349,11 +358,6 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/niltest.dis" \
             "$ROOT/os/init/niltest.b" 2>>"$BUILD/cc.log" || return 1
 
-        # The camera device (#V) against its simulated sensor: the
-        # settings, a frame's colours after debayering, raw, pacing.
-        "$LIMBO" -I"$ROOT/module" -o "$BUILD/camtest.dis" \
-            "$ROOT/os/init/camtest.b" 2>>"$BUILD/cc.log" || return 1
-
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
@@ -364,6 +368,10 @@ build_kernel() {
             # osinit asks it whether an interface that names no boot
             # protocol is a keyboard
             "/dis/lib/hid.dis=$ROOT/dis/lib/hid.dis"
+            # what a finger on a touch screen means (touchgest(2)): the
+            # touch panel's driver and mouseusb's for a USB touchscreen
+            # both load it, and may start before the card is read
+            "/dis/lib/touchgest.dis=$ROOT/dis/lib/touchgest.dis"
             "/dis/diskusb.dis=$BUILD/diskusb.dis"
             "/dis/usbserial.dis=$BUILD/usbserial.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
@@ -372,13 +380,18 @@ build_kernel() {
             "/dis/isotest.dis=$BUILD/isotest.dis"
             "/dis/iplocktest.dis=$BUILD/iplocktest.dis"
             "/dis/niltest.dis=$BUILD/niltest.dis"
-            "/dis/camtest.dis=$BUILD/camtest.dis"
 
             # The FAT filesystem, as a program. Imported from upstream
             # Inferno (appl/cmd/dossrv.b) -- MIT, the same provenance as
             # os/port and os/ip, and byte-identical to the copy in the
             # local hellaphone tree.
             "/dis/dossrv.dis=$ROOT/dis/dossrv.dis"
+            # The gefs(4) file server, for a root on a disk (rootpath
+            # "gefs part"): what the machine lives on must be reachable,
+            # checkable and repairable from the recovery shell however
+            # the card is, and must be the build that matches the disk.
+            # Everything it loads is here already (arg, daytime, styx).
+            "/dis/disk/gefs.dis=$ROOT/dis/disk/gefs.dis"
             "/dev="
             "/net="
             "/prog="
@@ -418,6 +431,11 @@ build_kernel() {
             # (the listener boot-baremetal.sh starts when the card has
             # cpulisten; docs/REMOTE-DESKTOP.md)
             "/n/client="
+            # ...and a gefs root's three: the file system, its adm tree,
+            # every snapshot -- 9front's places for them
+            "/n/gefs="
+            "/n/gefs.adm="
+            "/n/dump="
             # ...and where diskusb mounts a USB disk's FAT: one per disk
             "/n/usb0="
             "/n/usb1="
@@ -609,6 +627,9 @@ build_kernel() {
             "/dis/tests/fltfmt_test.dis=$ROOT/dis/tests/fltfmt_test.dis"
             # NaN and infinity in the kernel's own VM (libkernfp/nan.c)
             "/dis/tests/nan_test.dis=$ROOT/dis/tests/nan_test.dis"
+            # AES-GCM, AES-CBC and SHA-256 against answers made elsewhere, in
+            # the kernel's libsec (the ARMv8 instructions where the core has them)
+            "/dis/tests/libsec_kat_test.dis=$ROOT/dis/tests/libsec_kat_test.dis"
             # 150 threads blocked in sys->sleep at once -- 150 concurrent
             # kprocs (os/port/dis.c release()) -- proves conf.nproc holds
             # more than the 100 that hung the board under a real GUI
@@ -942,8 +963,7 @@ SBEOF
         case "$(basename "$f")" in
         comp-arm64.c) ;;			# the one we want
         comp-*.c) continue;;			# every other code generator
-        gpu.c|crypt.c) continue;;
-        i420.c) continue;;			# $I420: registered by the emulators only
+        gpu.c) continue;;
         # ipint.c stays: keyring's public-key paths stand on IPint_*.
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
@@ -961,12 +981,23 @@ SBEOF
     for f in "$ROOT"/libmp/*.c "$ROOT"/libsec/*.c "$ROOT"/libkeyring/*.c; do
         [[ -e "$f" ]] || continue
         case "$(basename "$f")" in
-        # standalone test programs and demo mains, not library members
-        bigtest.c|crttest.c|mtest.c|test.c|egtest.c|hmactest.c|md4test.c|p384ecdhtest.c|rsatest.c|primetest.c) continue;;
-        decodepem.c) continue;;		# wants Plan 9 libc.h; PEM is not a kernel concern
         prng.c) continue;;		# host entropy (getentropy/urandom); the kernel's own random.c stands in
         esac
         o="$BUILD/crypto-$(basename "$f").o"
+        case "$(basename "$f")" in
+        aesarm64.c|ghasharm64.c|sha256arm64.c)
+            # The ARMv8 instructions (AES, PMULL, SHA-256): built with
+            # NEON, as libinterp is, and used only where
+            # ID_AA64ISAR0_EL1 says the core has them (a Pi 5; not a
+            # Pi 3 or 4). Only processes call them -- devssl, Keyring,
+            # the generator -- and procsave keeps a process's FP/SIMD
+            # registers across every switch; no interrupt path reaches
+            # them, and interrupts are built general-regs-only.
+            "$CC" "${IFLAGS[@]}" -I"$ROOT/libmp" -I"$ROOT/libsec" -I"$BUILD" -Wno-everything \
+                 -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+            libobjs+=("$o")
+            continue;;
+        esac
         "$CC" "${CFLAGS[@]}" -I"$ROOT/libmp" -I"$ROOT/libsec" -I"$BUILD" -Wno-everything              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
@@ -1648,6 +1679,8 @@ check "lbl:  setlabel/gotolabel OK"     "context switch restores sp AND callee-s
 check "gcpc: getcallerpc OK"            "getcallerpc names the caller from both the macro and the asm"
 check "proc: procinit/newproc OK"       "os/port/proc allocates processes with distinct pids and stacks"
 check "qlok: qlock/rwlock OK"           "os/port/qlock blocking locks work uncontended"
+check "qlok: canrlock punts for a writer only" \
+                                      "canrlock fails for a writer, not beside another reader (os/ip dropped packets)"
 check "pgrp: newpgrp OK"                "os/port/pgrp allocates a process group"
 check "chan: newchan/cname OK"          "os/port/chan allocates channels and composes paths"
 check "root: devattach/walk/cclose OK"   "root device attaches, walks to /dev, and closes cleanly"
@@ -1756,7 +1789,11 @@ check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
 check "etherusb: ep3.0 configuration 2 offers rndis" "the driver reads the first configuration: RNDIS"
 check "etherusb: ep3.0 configuration 1 offers ecm (interfaces 0, 1)" "and the second: ECM, with its union descriptor"
 check "etherusb: ep3.0 bulk in ep3.2 out ep3.2" "the driver creates a bulk endpoint through #u, from the data interface's setting 1"
-check "etherusb: ep3.0 ecm, MAC 40:54:00:12:34:57" "ECM is chosen over RNDIS and the MAC read out of the device"
+if grep -qE 'etherusb: ep3\.0 ecm, MAC ([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}' <<<"$OUT"; then
+    pass "ECM is chosen over RNDIS and a valid MAC is read out of the device"
+else
+    fail "ECM was not chosen or its device supplied no valid MAC"
+fi
 refute "SET_INTERFACE"                         "the data interface accepts setting 1"
 check "etherusb: ep3.0 ready"                  "the device is in the configuration asked for"
 
@@ -1823,7 +1860,7 @@ check "init: starting the shell"        "the initial Dis program hands over to /
 # hardware that never answers -- a bounded wait, exercised.
 check "ether4330: no radio"             "the radio probe reports an absent radio in one line under QEMU, and the boot went on to a shell"
 check "init: radio: ether4330: no radio" "osinit's attempt to name the firmware files is refused with the driver's words, and init carries on"
-refute "init: radio: firmware loaded"   "nothing claims a firmware load under emulation"
+refute "init: radio: firmware"   "nothing claims a firmware load under emulation"
 
 #
 # The shell, driven for real.
@@ -1847,6 +1884,7 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'echo 0 > /dev/jit; /dis/tests/fltfmt_test.dis; echo 1 > /dev/jit' \
         '/dis/tests/nan_test.dis' \
         'echo 0 > /dev/jit; /dis/tests/nan_test.dis; echo 1 > /dev/jit' \
+        '/dis/tests/libsec_kat_test.dis -v' \
         '/dis/procstorm.dis 150' \
         'echo env-round-trip > /env/probe' \
         'cat /env/probe' \
@@ -1858,6 +1896,10 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat /net/iproute' \
         'cat /net/tcp/stats' \
         'iplocktest' \
+        'cat /dev/audiostat' \
+        "dial 'tcp!nosuchhost!9' echo DIALBAD-connected &" \
+        "dial 'tcp!0.0.0.0!9' echo DIALZERO-connected &" \
+        "dial 'tcp!127.0.0.1!9' echo DIALLOOP-connected &" \
         'niltest' \
         'cd /dis; pwd; cd /' \
         'date' \
@@ -1882,9 +1924,9 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "echo PTHROT; cat '#P/throttled'" \
         "listen 'tcp!*!17030' export / &" \
         'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis' \
-        'ls /dev/camera' \
-        'cat /dev/camera/modes' \
-        'camtest')"
+        'echo cnsamode on > /dev/sysctl; echo CNSALATE-$status' \
+        'echo console > /dev/sysctl; echo CONSOLEARGS-$status' \
+        'echo SHELL-ENDS')"
 
 # Strip carriage returns once, here.
 #
@@ -1975,6 +2017,23 @@ if grep -q '^AUTHMOUNT-$' <<<"$SHOUT" && grep -q '^/n/remote/dis/sh.dis' <<<"$SH
 else
     fail "authenticated 9P mount failed -- $(grep -a -E 'AUTHMOUNT|mount:|listen:|auth' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
 fi
+# CNSA strict mode is the machine's, fixed before anything authenticates
+# (os/port/devcons.c): after the ML-KEM-768 mount above, turning it on
+# is refused, since the handshake's answer is already given. virt turns
+# it on before its mount, and authenticates in it.
+if grep -q 'too late, an authentication has already run without it' <<<"$SHOUT" && grep -q '^CNSALATE-..*' <<<"$SHOUT"; then
+    pass "cnsamode is refused once an authentication has run without it"
+else
+    fail "cnsamode after an authentication -- $(grep -a -E 'CNSALATE|cnsamode' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+# sysctl's console verb takes on or off: lookupcmd counts the verb, and
+# with a count of 1 "console off" was refused and a bare "console" read
+# past its arguments in the kernel (upstream's, from 2006)
+if grep -q 'wrong #args in control message "console"' <<<"$SHOUT" && grep -q '^CONSOLEARGS-..*' <<<"$SHOUT"; then
+    pass "sysctl: console with no on or off is refused"
+else
+    fail "sysctl: console with no argument -- $(grep -a -E 'CONSOLEARGS|console' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
 
 # The interface lock after an unanswerable IPv6 datagram (#721).
 # os/init/iplocktest.b: a loopback interface of its own, ::1, one UDP
@@ -1987,6 +2046,35 @@ if grep -q "iplocktest: PASS" <<<"$SHOUT"; then
     pass "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)"
 else
     fail "os/ip: interface lock leaked by the ICMPv6 unreachable reply -- $(grep -a 'iplocktest:' <<<"$SHOUT" | tail -1)"
+fi
+
+# #A/audiostat: what the jack has done (os/port/devaudio.c, the board's
+# line from os/bcm/audiopwm.c). QEMU has no PWM, so nothing is played
+# here: the file is bound in /dev, and at boot nothing is open and
+# nothing has been missed. Underruns used to count the silence the
+# engine plays after the last close, about 21 a second for ever; a
+# board run is what checks that they no longer do.
+if grep -a -q "engine idle open 0 rate 44100 chans 2 bits 16 frames [0-9]* ahead [0-9]* played 0 underruns 0" <<<"$SHOUT"; then
+    pass "#A/audiostat is in /dev: the jack idle, nothing played, no underruns"
+else
+    fail "#A/audiostat -- $(grep -a -E 'engine |audiostat' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+# A connect to something that is not an IP address fails at once.
+# parseip reads a name it cannot ("localhost", with no connection
+# server) as 0.0.0.0, and TCP sent its SYN there and sat in Syn_sent
+# for ever: an old sdrfs's "source localhost" hung on a Pi 4 that way.
+# Dialled in the background, so a hang is a missing line, not a wedged
+# shell. A closed port on loopback is refused, as it always was.
+if grep -a -q "cannot dial tcp!nosuchhost!9.*invalid IP address" <<<"$SHOUT" &&
+   grep -a -q "cannot dial tcp!0.0.0.0!9.*invalid IP address" <<<"$SHOUT"; then
+    pass "os/ip: a connect to a name or to 0.0.0.0 is refused as an invalid IP address, not sent to 0.0.0.0"
+else
+    fail "os/ip: connect to a non-address -- $(grep -a -E 'DIAL|cannot dial tcp!(nosuchhost|0\.0\.0\.0)' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+if grep -a -q "cannot dial tcp!127.0.0.1!9.*connection refused" <<<"$SHOUT"; then
+    pass "os/ip: a connect to a closed loopback port is refused"
+else
+    fail "os/ip: loopback connect to a closed port -- $(grep -a -E 'DIALLOOP|cannot dial tcp!127' <<<"$SHOUT" | head -1)"
 fi
 
 # A nil dereference in JIT-compiled code is the program's exception.
@@ -2006,37 +2094,6 @@ if grep -q '^niltest: OFFSET CAUGHT dereference of nil' <<<"$SHOUT"; then
     pass "page zero is not mapped: a nil ref's later field faults too (#735)"
 else
     fail "page zero -- $(grep -a -E 'niltest: OFFSET|unhandled exception|panic:' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
-fi
-
-# The camera, #V (os/port/devcam.c; infernode-os/infernode#1005),
-# bound after /dev by osinit. QEMU has no Pi camera, so what is here is
-# the simulated sensor (os/port/campattern.c), which makes raw Bayer
-# frames as the IMX708 will: os/init/camtest.b checks the settings, a
-# frame's colours after debayering, raw's samples, the pacing and the
-# refusals, one "camtest:" line each.
-# Typed after the authenticated mount, so ls answers while the shell is
-# still printing prompts for the lines typed ahead of it: its first
-# name came back as "; /dev/camera/ctl". And the harness's drain line,
-# typed as ls prints, is echoed into its output: one run had
-# "; e/dev/camera/ctl", then "cho dRaInEd" after the listing (#1050's
-# bcm2837 job). So a name is looked for anywhere in a line, not as the
-# whole line; camtest's lines, which name these files when they fail,
-# are left out, and camtest is checked on its own below.
-CAMLS="$(grep -v '^\(; \)*camtest:' <<<"$SHOUT")"
-if grep -q '\(^\|[^/]\)/dev/camera/frame' <<<"$CAMLS" && grep -q '\(^\|[^/]\)/dev/camera/ctl' <<<"$CAMLS"; then
-    pass "#V is bound after /dev: /dev/camera/ctl and frame"
-else
-    fail "/dev/camera -- $(reply_to "$SHOUT" 'ls /dev/camera' | head -3 | tr '\n' ' ')"
-fi
-if grep -qx 'test 640 480 60 rggb10' <<<"$SHOUT"; then
-    pass "/dev/camera/modes lists the simulated sensor's modes"
-else
-    fail "/dev/camera/modes -- $(reply_to "$SHOUT" 'cat /dev/camera/modes' | head -3 | tr '\n' ' ')"
-fi
-if grep -q '^camtest: PASS' <<<"$SHOUT" && ! grep -q '^camtest: FAIL' <<<"$SHOUT"; then
-    pass "camtest: the camera's files against the simulated sensor ($(grep -a '^camtest: PASS' <<<"$SHOUT"))"
-else
-    fail "camtest -- $(grep -a -E '^camtest: (FAIL|PASS)|panic:' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
 fi
 
 # The exception handler's search, in the kernel's own interpreter: an
@@ -2060,6 +2117,18 @@ if [[ "$(grep -c '^8 passed$' <<<"$SHOUT")" -ge 2 ]]; then
     pass "fltfmt_test: %g, %f, %e, string and real of a string are right in the kernel, JIT and interpreter (8 passed twice)"
 else
     fail "fltfmt_test did not report 8 passed with the JIT and without: $(grep -E 'passed|got ' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
+fi
+
+# libsec in the kernel against answers made elsewhere (OpenSSL's for
+# AES-GCM, NIST's for CBC and SHA-256). The kernel takes the ARMv8 AES,
+# PMULL and SHA-256 instructions where ID_AA64ISAR0_EL1 says the core
+# has them (QEMU's cortex-a53 and the Pi 5 do; the Pi 3 and 4 do not),
+# so this is what checks those paths as the kernel builds them.
+if grep -q -- '--- PASS: Libsec/AESGCM' <<<"$SHOUT" && grep -q -- '--- PASS: Libsec/AESCBC' <<<"$SHOUT" \
+        && grep -q -- '--- PASS: Libsec/SHA256' <<<"$SHOUT" && ! grep -q -- '--- FAIL: Libsec/' <<<"$SHOUT"; then
+    pass "libsec_kat_test: the kernel's AES-GCM, AES-CBC and SHA-256 give OpenSSL's and NIST's answers"
+else
+    fail "libsec_kat_test did not pass in the kernel: $(grep -aE 'Libsec/|passed' <<<"$SHOUT" | head -6 | tr '\n' ' ')"
 fi
 
 # NaN and infinity in the kernel's VM. libkernfp/nan.c took a double as
@@ -3628,7 +3697,7 @@ fi
 
 #
 #     The remote-desktop listener (docs/REMOTE-DESKTOP.md). boot-baremetal.sh
-#     starts auxi/rstyxd under listen -a aes_256_cbc when, and only when,
+#     starts auxi/rstyxd under listen -a aes_256_gcm when, and only when,
 #     the card has /n/dos/cpulisten and this machine has a certificate.
 #     Its block is read out of the script, as the narrowing above is, and
 #     typed three times into child shells:
@@ -3636,7 +3705,8 @@ fi
 #       no cpulisten        nothing is started and nothing is said
 #       cpulisten, a key    it listens; an encrypted cpu(1) session from
 #                           this same kernel runs a command through it,
-#                           and a cleartext one (-C none) is refused
+#                           and a cleartext one (-C none) and a MAC-only
+#                           one (-C hmac_sha384) are refused
 #       cpulisten, no key   it refuses to start, and says why
 #
 #     The first is the one that matters for every card in the field: the
@@ -3647,8 +3717,8 @@ fi
 CPUL=()
 while IFS= read -r l; do CPUL+=("$l"); done \
     < <(sed -n '/^if {ftest -f \/n\/dos\/cpulisten} {$/,/^}$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
-if [[ ${#CPUL[@]} -ge 8 ]] && printf '%s\n' "${CPUL[@]}" | grep -q 'listen -a aes_256_cbc -a sha256 \$cpuaddr auxi/rstyxd &'; then
-    pass "boot-baremetal.sh gates the cpu listener on /n/dos/cpulisten and requires AES-256 + SHA-256"
+if [[ ${#CPUL[@]} -ge 8 ]] && printf '%s\n' "${CPUL[@]}" | grep -q 'listen -a aes_256_gcm \$cpuaddr auxi/rstyxd &'; then
+    pass "boot-baremetal.sh gates the cpu listener on /n/dos/cpulisten and requires AES-256-GCM"
 else
     fail "could not read the cpu listener block out of boot-baremetal.sh (${#CPUL[@]} lines)"
 fi
@@ -3678,7 +3748,7 @@ CLOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'exit' \
         'sleep 1' \
         "cpu -C none tcp!127.0.0.1!17031 echo CLEAR-GOT-IN; echo CLEAR-DONE" \
-        "cpu -C aes_256_cbc tcp!127.0.0.1!17031 echo CIPHERONLY-GOT-IN; echo CIPHERONLY-DONE" \
+        "cpu -C hmac_sha384 tcp!127.0.0.1!17031 echo MACONLY-GOT-IN; echo MACONLY-DONE" \
         "cpu tcp!127.0.0.1!17031 echo CPU-RAN-REMOTELY &" \
         'sleep 8' \
         'rm -f /n/dos/cpulisten' \
@@ -3694,7 +3764,7 @@ if grep -q '^CPUL-NOKEY$' <<<"$CLOUT" && ! grep -q '^boot: cpu listener\|^boot: 
 else
     fail "cpu listener: started, or spoke, without /n/dos/cpulisten"
 fi
-if grep -q '^boot: cpu listener on tcp!\*!17031 (AES-256 + SHA-256' <<<"$CLON" && grep -q '^CPU-RAN-REMOTELY$' <<<"$CLON"; then
+if grep -q '^boot: cpu listener on tcp!\*!17031 (AES-256-GCM' <<<"$CLON" && grep -q '^CPU-RAN-REMOTELY$' <<<"$CLON"; then
     pass "cpu listener: with cpulisten and a certificate, an encrypted and MAC'd cpu(1) session runs a command"
 else
     fail "cpu listener: no encrypted session -- $(grep -a -E 'boot: cpu|cpu:|CPU-RAN' <<<"$CLON" | head -2 | tr '\n' ' ')"
@@ -3704,10 +3774,10 @@ if grep -q '^CLEAR-DONE$' <<<"$CLON" && ! grep -q '^CLEAR-GOT-IN$' <<<"$CLON"; t
 else
     fail "cpu listener: cleartext was not refused -- $(grep -a -E 'CLEAR|cpu:' <<<"$CLON" | head -2 | tr '\n' ' ')"
 fi
-if grep -q '^CIPHERONLY-DONE$' <<<"$CLON" && ! grep -q '^CIPHERONLY-GOT-IN$' <<<"$CLON"; then
-    pass "cpu listener: a cipher-only session (AES without the SHA-256 MAC) is refused"
+if grep -q '^MACONLY-DONE$' <<<"$CLON" && ! grep -q '^MACONLY-GOT-IN$' <<<"$CLON"; then
+    pass "cpu listener: a MAC-only session (hmac_sha384, the data in clear) is refused"
 else
-    fail "cpu listener: cipher-only was not refused -- $(grep -a -E 'CIPHERONLY|cpu:' <<<"$CLON" | head -2 | tr '\n' ' ')"
+    fail "cpu listener: MAC-only was not refused -- $(grep -a -E 'MACONLY|cpu:' <<<"$CLON" | head -2 | tr '\n' ' ')"
 fi
 if grep -q '^boot: /n/dos/cpulisten is set but /usr/.*/keyring/default is missing; NOT starting' <<<"$CLNOKEY"; then
     pass "cpu listener: with cpulisten but no certificate it refuses to start, and says why"
@@ -4548,10 +4618,10 @@ printf '%s\n' "$TOUCH2" > "$BUILD/$PLAT-shell-touch.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
 
 OUT_SAVED="$OUT"; OUT="$TOUCH2"
-check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel"
+check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel; its frames reach touchgest (a held finger is button 3)"
 check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
 check "usbserial: selftest OK"        "usbserial: FTDI baud divisors, line settings for FTDI, CP210x and ACM, and the ports found in a Pico's and an FT2232's descriptors"
-check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded"
+check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded; a multi-touch digitizer's fingers, its frames (hybrid too) and device mode, through touchgest; the tablet no touch screen"
 OUT="$OUT_SAVED"
 
 #
@@ -5060,6 +5130,11 @@ vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv
 # the adversarial cases: claimed IPv4/transport lengths beyond received bytes,
 # and hundreds of one-byte descending TCP segments (head insertion).
 if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PLAT-kernel.img" 2>&1)"; then
+    if grep -q '^ARP-PADDING-PASS$' <<<"$NETSEC"; then
+        pass "virt: ARP replies do not disclose kernel bytes in Ethernet padding"
+    else
+        fail "virt: ARP reply padding was not cleared -- $NETSEC"
+    fi
     if grep -q '^FRAGMENT-VALID-PASS$' <<<"$NETSEC"; then
         pass "virt: valid fragmented ICMP is still reassembled"
     else
@@ -5080,8 +5155,8 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: IPv4 ingress length checks did not pass -- $NETSEC"
     fi
-    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC"; then
-        pass "virt: malformed UDP/TCP header lengths are rejected without panic"
+    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC" && grep -q '^TRANSPORT-HEADER-PASS$' <<<"$NETSEC"; then
+        pass "virt: incomplete and malformed UDP/TCP headers are rejected without panic"
     else
         fail "virt: transport header length checks did not pass -- $NETSEC"
     fi
@@ -5089,6 +5164,16 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
         pass "virt: a negative IP device attach is rejected without corruption"
     else
         fail "virt: negative IP device attach check did not pass -- $NETSEC"
+    fi
+    if grep -q '^TCP-LIMBO-REAP-PASS$' <<<"$NETSEC"; then
+        pass "virt: a half-open TCP flood is fully reaped"
+    else
+        fail "virt: TCP half-open entries did not age out -- $NETSEC"
+    fi
+    if grep -q '^TCP-WINDOW-SCALE-PASS$' <<<"$NETSEC"; then
+        pass "virt: TCP applies the peer's window scale to its send window"
+    else
+        fail "virt: TCP window-scale directions are reversed -- $NETSEC"
     fi
     if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
         pass "virt: descending one-byte TCP segments hit the packet-count limit"
@@ -5206,15 +5291,16 @@ try:
     typed("cat /net/ether0/ifstats")
     typed("iplocktest", 3)
     typed("niltest", 2)
-    # the camera (os/init/camtest.b): it debayers a few frames, which
-    # takes seconds under emulation, so wait for its verdict rather
-    # than type over it
-    typed("camtest", 0.5)
-    end = time.time() + 60
-    while time.time() < end and b"camtest: PASS" not in buf and b"camtest: FAILED" not in buf:
-        time.sleep(0.2)
+    # libsec against OpenSSL's and NIST's answers on a cortex-a53, which
+    # has the AES, PMULL and SHA-256 instructions the kernel then takes
+    typed("/dis/tests/libsec_kat_test.dis -v", 6)
+    # CNSA strict mode on before anything authenticates, as osinit does
+    # from the card's cnsamode file: the mount below is then ML-KEM-1024
+    # both ways, on kernel stacks (the bcm2837 boot keeps ML-KEM-768)
+    typed("echo cnsamode off > /dev/sysctl; echo CNSAOFF-$status")
+    typed("echo cnsamode on > /dev/sysctl; echo CNSAON-$status")
     typed("listen 'tcp!*!17030' export / &")
-    typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 4)
+    typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 6)
     typed("cat /dev/sdctl")
     typed("echo VIRT-DATE `{date}")
 
@@ -5276,6 +5362,16 @@ vcheck "init finds the kernel link driver"         "init: ether0 is a kernel lin
 # an authenticated 9P mount, both ends on this kernel (#725; the bcm2837
 # check tells the story)
 vcheck "os/ip + keyring: an authenticated 9P mount works on the kernel (#725)" "/n/remote/dis/sh.dis"
+if tr -d '\r' <<<"$OUT" | grep -qx 'CNSAON-'; then
+    pass "cnsamode on is taken before anything has authenticated; the mount above ran in it (ML-KEM-1024)"
+else
+    fail "cnsamode on -- $(tr -d '\r' <<<"$OUT" | grep -a -E 'CNSAON|cnsamode' | head -2 | tr '\n' ' ')"
+fi
+if tr -d '\r' <<<"$OUT" | grep -q 'cnsamode: only on' && tr -d '\r' <<<"$OUT" | grep -qx 'CNSAOFF-..*'; then
+    pass "cnsamode cannot be turned off"
+else
+    fail "cnsamode off was not refused -- $(tr -d '\r' <<<"$OUT" | grep -a -E 'CNSAOFF|cnsamode' | head -2 | tr '\n' ' ')"
+fi
 # os/init/iplocktest.b, typed at the shell: the interface lock is balanced
 # after an ICMPv6 unreachable reply (#721; see the bcm2837 check for the story)
 vcheck "os/ip: the interface lock is balanced after an unanswerable IPv6 datagram (#721)" "iplocktest: PASS"
@@ -5283,10 +5379,6 @@ vcheck "os/ip: the interface lock is balanced after an unanswerable IPv6 datagra
 # exception (the bcm2837 check tells the story)
 vcheck "a nil dereference in JIT code is the program's exception, not a panic" "niltest: STILL RUNNING"
 vcheck "page zero is not mapped: a nil ref's later field faults too (#735)" "niltest: OFFSET CAUGHT dereference of nil"
-# os/init/camtest.b: the camera device (#V) against its simulated sensor
-# (the bcm2837 check tells the story)
-vcheck "camtest: the camera's files against the simulated sensor" "camtest: PASS"
-vrefute "camtest: no camera check fails" "camtest: FAIL"
 vcheck "DHCP answers over virtio-net"              "etherusb: 10.0.2.15 mask"
 vcheck "a default route is installed"              "etherusb: default route via 10.0.2.2"
 # The USB adapter beside virtio-net: ether0 is the kernel driver's and
@@ -5384,6 +5476,13 @@ else
     fail "virt: screen -- '$scr'"
 fi
 vrefute "nothing panics with every device attached" "panic:"
+if grep -aq -- '--- PASS: Libsec/AESGCM' <<<"$OUT" && grep -aq -- '--- PASS: Libsec/AESCBC' <<<"$OUT" \
+        && grep -aq -- '--- PASS: Libsec/SHA256' <<<"$OUT" && ! grep -aq -- '--- FAIL: Libsec/' <<<"$OUT"; then
+    pass "virt: libsec_kat_test: AES-GCM, AES-CBC and SHA-256 by the ARMv8 instructions give OpenSSL's and NIST's answers"
+else
+    fail "virt: libsec_kat_test did not pass: $(grep -aE 'Libsec/|passed' <<<"$OUT" | head -6 | tr '\n' ' ')"
+fi
+
 # the shell's prompt can land on the line before the output: "; VIRT-DATE ..."
 if grep -aqE '^(; )*VIRT-DATE.* 20[2-9][0-9]' <<<"$OUT"; then
     pass "virt: date(1) has the PL031's year, with no time server"
@@ -5901,6 +6000,85 @@ fi
 vrefute "hotplug: nothing panics"                      "panic:"
 
 #
+# A device that drops off the bus and comes back between two of the
+# watcher's looks (one a second): present before, present after, and
+# the port it left disabled -- so every transfer after is a Transaction
+# Error and, until the watcher looked at the port's enable as well as
+# its presence, nothing ever set it up again. A Pi 5 soak lost its USB
+# Ethernet that way for the rest of the boot. Here a keyboard in a root
+# port is pulled and put back within a few milliseconds.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-bqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-blip.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp = sys.argv[1:5]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-device", "usb-mouse,port=4", "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if buf.find(what, start) >= 0:
+            return True
+        time.sleep(0.2)
+    return False
+def q(f, o):
+    f.write(json.dumps(o) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if "return" in r or "error" in r:
+            return r
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def keys(f, text):
+    for ch in text:
+        q(f, {"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": QCODE.get(ch, ch.lower())}], "hold-time": 40}})
+        time.sleep(0.12)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"mouseusb: ep", 30)
+    time.sleep(3)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw"); f.readline()
+    q(f, {"execute": "qmp_capabilities"})
+    mark = len(buf)
+    q(f, {"execute": "device_add", "arguments": {"driver": "usb-kbd", "id": "b1", "bus": "usb-bus.0", "port": "3"}})
+    waitfor(b"kbdusb: ep", 25, mark); time.sleep(1.5)
+    keys(f, "echo before-blip\n"); time.sleep(2)
+    mark = len(buf)
+    q(f, {"execute": "device_del", "arguments": {"id": "b1"}})
+    r = q(f, {"execute": "device_add", "arguments": {"driver": "usb-kbd", "id": "b2", "bus": "usb-bus.0", "port": "3"}})
+    print("BLIP-READD %s" % ("ok" if "return" in r else r))
+    waitfor(b"setting it up again", 20, mark)
+    waitfor(b"kbdusb: ep", 25, buf.find(b"setting it up again", mark) if buf.find(b"setting it up again", mark) >= 0 else mark)
+    time.sleep(1.5)
+    keys(f, "echo after-blip\n"); time.sleep(2)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-blip.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "hotplug: a keyboard in a root port works before the blip" "before-blip"
+if grep -aq '^BLIP-READD ok' <<<"$OUT"; then
+    vcheck "hotplug: a device gone and back between two looks is noticed" "fell off the bus and came back; setting it up again"
+    vcheck "hotplug: and set up again: keys typed on it reach the shell" "after-blip"
+else
+    skip "hotplug: QEMU would not put the keyboard back at once ($(grep -a '^BLIP-READD' <<<"$OUT"))"
+fi
+vrefute "hotplug: the blip panics nothing" "panic:"
+
+#
 # A keyboard in report protocol. Every boot keyboard is read with the
 # boot protocol unless it is asked otherwise, and QEMU offers no other
 # kind; "kbdusb=report" on the command line asks, so the report-
@@ -6186,6 +6364,61 @@ PYEOF
     vrefute "headless: nothing panics"                      "panic:"
 
     #
+    # The collector frees cycles with the desktop up. An object in a
+    # cycle -- every sh, which holds itself -- is freed only at the end
+    # of a collector epoch, and with the keyboard's lexicon in the heap
+    # (wm/osk, some 250000 objects) an epoch took 54 traversals of it:
+    # on the Pi 4 one ended every 4.5 minutes at idle and a load left a
+    # backlog, and here, under TCG, none ended at all. gc_cycle_test drops
+    # 1000 cycles and waits two minutes (twice Idlegcgap) for them to go, at the console of
+    # this desktop, osk's lexicon and all.
+    #
+    python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$VCARD" <<'PYEOF' > "$BUILD/$PLAT-gccycle.txt" 2>&1
+import re, subprocess, sys, threading, time
+qemu, img, extra, card = sys.argv[1:5]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % card, "-device", "virtio-blk-device,drive=sd",
+    "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",
+    "-device", "ramfb", "-device", "virtio-keyboard-device", "-device", "virtio-tablet-device"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def rd():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=rd, daemon=True).start()
+def waitfor(pat, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if re.search(pat, bytes(buf[start:])):
+            return True
+        time.sleep(0.3)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    waitfor(rb"lucifer: INIT", 180)
+    time.sleep(30)		# the desktop up, osk's lexicon loaded
+    typed("echo OSKPROCS `{ps | grep Osk | wc -l}")
+    m = len(buf)
+    typed("/dis/tests/gc_cycle_test.dis -v", 0.5)
+    waitfor(rb"\n(PASS|FAIL)\r?\n", 240, m)
+    time.sleep(1)
+finally:
+    p.kill()
+sys.stdout.write(buf.decode("utf-8", "replace"))
+PYEOF
+    OUT="$(tr -d '\r' < "$BUILD/$PLAT-gccycle.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    # without osk the heap is small and the old collector passed too
+    if grep -qE '(^|; )OSKPROCS [1-9]' <<<"$OUT"; then pass "virt: gc: osk is up, its lexicon in the heap"
+    else fail "virt: gc: osk is up, its lexicon in the heap -- $(grep -a OSKPROCS <<<"$OUT" | tail -1)"; fi
+    vcheck "gc: 1000 cycles are freed with the desktop up" "PASS: CyclesFreed"
+    vrefute "gc: nothing panics"                        "panic:"
+
+    #
     # More than one Dis VM (#944): #X, the vm command, programs in VMs 1
     # and 2 at once, and the two places the kernel crosses between VMs --
     # a VM 1 client of a file a VM 0 program serves through file2chan
@@ -6242,7 +6475,8 @@ try:
     m = len(buf)
     typed("load std; for(n in 1 2 3) { vm $n sh -c 'load std; for(i in 1 2 3 4 5 6 7 8){ sleep 0 }; echo CONCSH-ok' & }", 0.5)
     end = time.time() + 60
-    while bytes(buf[m:]).count(b"\nCONCSH-ok") < 3 and time.time() < end:
+    # a shell's "; " prompt can come out ahead of one on its line
+    while len(re.findall(rb"(?m)^(?:; )*CONCSH-ok\r?$", bytes(buf[m:]))) < 3 and time.time() < end:
         time.sleep(0.5)
     time.sleep(1)
     typed("ramfile /chan/vmrf served-from-vm0", 1)
@@ -6290,7 +6524,11 @@ PYEOF
         fail "virt: vm: jitbench2 in VMs 1 and 2 finished $nt time(s), not 2"
     fi
     vcheck "vm: with VM 2, four"                              "vms 4 max 4"
-    nc="$(tr -d '\r' <<<"$OUT" | grep -ac '^CONCSH-ok')"
+    # each on a line of its own, or after the prompts of the shell that
+    # started them: "; CONCSH-ok" was not counted, and three that had
+    # finished were reported as two (the typed command's own echo of
+    # the word is in the middle of its line and never counted)
+    nc="$(tr -d '\r' <<<"$OUT" | grep -acE '^(; )*CONCSH-ok$')"
     if [[ "$nc" -ge 3 ]]; then
         pass "virt: vm: sh started in VMs 1, 2 and 3 at the same instant -- three loads contending for the compiler -- all three run to the end"
     else
@@ -6673,6 +6911,35 @@ echo ""
 if want_platform bcm2711; then
 run_bcm2711
 fi
+
+# The fourth machine: a Raspberry Pi 5 (os/bcm2712). No emulator models
+# it, so this only builds; it is asked for by name.
+run_bcm2712() {
+PLAT=bcm2712
+SRC="$ROOT/os/$PLAT"
+SHARED="$ROOT/os/bcm"
+SHAREDSKIP="audiopwm.c devcam.c devi2c.c devtouch.c dma.c emmc.c gpio.c sdhost.c timers.c uart.c.none uartmini.c uartpl011.c usbdwc.c"
+ARCHSKIP=""
+PORTSKIP="devaudio.c ethermii.c pci.c usbxhcipci.c"
+platform_flags
+echo -e "${BOLD}--- $PLAT (build only) ---${NC}"
+rm -f "$BUILD/serialboot.img"
+if "$ROOT/os/bcm2712/loader/mkserialboot.sh" "$BUILD/serialboot.img" 2>>"$BUILD/cc.log"; then
+    pass "bcm2712: serialboot builds and is $(wc -c < "$BUILD/serialboot.img" | tr -d ' ') bytes"
+else
+    fail "bcm2712: serialboot failed to build"
+    return
+fi
+if build_kernel "$BUILD/$PLAT-kernel.img" "" "-DCOREAFF=8 -DPSCICORES -DEARLYWDOG -mstrict-align"; then
+    pass "bcm2712: kernel cross-builds for aarch64-elf"
+else
+    fail "bcm2712: kernel failed to build"
+    grep -m 40 'error:\|undefined symbol\|duplicate symbol' "$BUILD/cc.log"
+    tail -5 "$BUILD/cc.log"
+fi
+}
+
+case " ${BAREMETAL_PLATFORMS:-} " in *" bcm2712 "*) run_bcm2712;; esac
 
 echo ""
 echo -e "${BOLD}Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED${NC}"

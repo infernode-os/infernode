@@ -109,16 +109,21 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 	doauth := 1;
 	synchronous := 0;
 	trusted := 0;
-	arg->setusage("listen [-i {initscript}] [-Ast] [-L maxauth] [-P persource] [-R authrate] [-T ms] [-k keyfile] [-a alg]... addr command [arg...]");
+	mixed := 0;
+	arg->setusage("listen [-i {initscript}] [-AMst] [-L maxauth] [-P persource] [-R authrate] [-T ms] [-k keyfile] [-a alg]... addr command [arg...]");
 	while ((opt := arg->opt()) != 0) {
 		case opt {
 		'a' =>
 			algs = arg->earg() :: algs;
 		'A' =>
 			doauth = 0;
+		'M' =>
+			mixed = 1;
 		'f' or
 		'k' =>
 			keyfile = arg->earg();
+			if (keyfile == nil)
+				arg->usage();	# -k '' indexed an empty string
 			if (! (keyfile[0] == '/' || (len keyfile > 2 &&  keyfile[0:2] == "./")))
 				keyfile = "/usr/" + user() + "/keyring/" + keyfile;
 		'i' =>
@@ -150,12 +155,13 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 		}
 	}
 	if (doauth && algs == nil)
-		algs = "aes_256_cbc" :: "sha256" :: nil;
+		algs = "aes_256_gcm" :: nil;
 	if (doauth && algs == nil) {
 		sys->fprint(stderr(), "listen: authentication requested, but no SSL algorithms are available\n");
 		raise "fail:no auth algorithms";
 	}
 	if (algs != nil) {
+		checkalgs(algs, mixed);
 		authslots = chan[authlimit] of int;
 		srclock = chan[1] of int;
 		if (keyfile == nil)
@@ -245,8 +251,6 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 	listench := chan of (int, Sys->Connection);
 	spawn listener(listench, acon, addr);
 	for (;;) {
-		user := "";
-		ccon: Sys->Connection;
 		alt {
 		(lok, c) := <-listench =>
 			if (lok == -1){
@@ -284,22 +288,31 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 				}
 				continue;
 			}
-			ccon = c;
+			# A process of its own, as an authenticated connection
+			# has: run here, the command held the listener, and a
+			# connection arriving while it ran was not taken until
+			# it ended. One idle client kept every other waiting
+			# (a soak's sink stalled behind connections held open).
+			spawn plaincommand(c, ctxt, cmd);
+			c.dfd = c.cfd = nil;
 		}
-		if (user != nil)
-			ctxt.set("user", sh->stringlist2list(user :: nil));
-		ctxt.set("net", ref Sh->Listnode(nil, ccon.dir) :: nil);
-
-		# XXX could do this in a separate process too, to
-		# allow new connections to arrive and start authenticating
-		# while the shell command is still running.
-		sys->dup(ccon.dfd.fd, 0);
-		sys->dup(ccon.dfd.fd, 1);
-		ccon.dfd = ccon.cfd = nil;
-		ctxt.run(cmd, 0);
-		sys->dup(2, 0);
-		sys->dup(2, 1);
 	}
+}
+
+plaincommand(c: Sys->Connection, ctxt: ref Context, cmd: list of ref Sh->Listnode)
+{
+	# the connection's files alone, and the Context copied here, for
+	# the reasons given in authenticatedcommand
+	keep := 0 :: 1 :: 2 :: c.dfd.fd :: nil;
+	if(c.cfd != nil)
+		keep = c.cfd.fd :: keep;
+	sys->pctl(Sys->NEWFD, keep);
+	ctxt = ctxt.copy(1);
+	ctxt.set("net", ref Sh->Listnode(nil, c.dir) :: nil);
+	sys->dup(c.dfd.fd, 0);
+	sys->dup(c.dfd.fd, 1);
+	c.dfd = c.cfd = nil;
+	ctxt.run(cmd, 0);
 }
 
 rateallow(): int
@@ -343,16 +356,23 @@ listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: str
 authenticatedcommand(c: Sys->Connection, algs: list of string, addr: string,
 		ctxt: ref Context, cmd: list of ref Sh->Listnode, host: string)
 {
+	# A table of its own with only the connection's files in it: the
+	# dups onto 0 and 1 below went into the table it shared with the
+	# listener, which then held the connection open until the next one
+	# replaced it; and a copy of the listener's (FORKFD) held its
+	# announcement's ctl and listen files, so a connection that outlived
+	# its listen kept the address, and a listen started again on it was
+	# refused ("address in use") until that connection ended.
+	keep := 0 :: 1 :: 2 :: c.dfd.fd :: nil;
+	if(c.cfd != nil)
+		keep = c.cfd.fd :: keep;
+	sys->pctl(Sys->NEWFD, keep);
 	# The copy is made here, in the connection's own process: a
 	# Context's wait file is that of the process that copies it.  Made
 	# in the listener, every connection's shell waited for its command
 	# on the listener's wait file, never saw it end, and kept the
 	# connection open, so a cpu(1) session never ended (#732).
 	ctxt = ctxt.copy(1);
-	# Its own fd table, likewise: the dups onto 0 and 1 below went into
-	# the table it shared with the listener, which then held the
-	# connection open until the next one replaced it.
-	sys->pctl(Sys->FORKFD, nil);
 	err: string;
 	cancel := chan[1] of int;
 	spawn authwatchdog(cancel, sys->pctl(0, nil), c.cfd, authtimeout, host);
@@ -438,6 +458,52 @@ readfile(f: string): string
 		return nil;
 
 	return string buf[0:n];	
+}
+
+PROG: con "listen";
+
+# The algorithms a listener is given are checked when it starts, not at
+# each call.  A name ssl(3) does not have (a mistyped one; the rc4_256
+# and sha1 of old scripts) was passed on as it was, and a list of such
+# names let a caller that named nothing have a clear session.  And "none"
+# beside an algorithm protects nobody's session here: the caller's choice
+# is sent in clear and is not part of what was authenticated, so someone
+# on the path can change any caller's choice to "none" and speak to this
+# end as that caller.  That has to be asked for (-M).
+checkalgs(algs: list of string, mixed: int)
+{
+	known := getalgs();
+	bad := "";
+	plain := "";
+	prot := "";
+	for(l := algs; l != nil; l = tl l){
+		a := hd l;
+		if(a == "none" || a == "clear")
+			plain = a;
+		else if(member(a, known))
+			prot = a;
+		else
+			bad += " " + a;
+	}
+	if(bad != nil){
+		have := "";
+		for(; known != nil; known = tl known)
+			have += " " + hd known;
+		sys->fprint(stderr(), "%s: -a:%s: not an algorithm of ssl(3), which has:%s\n", PROG, bad, have);
+		raise "fail:bad algorithm";
+	}
+	if(plain != nil && prot != nil && !mixed){
+		sys->fprint(stderr(), "%s: -a %s beside -a %s: anyone on the path can make a caller's session here a clear one; give -M to allow that\n", PROG, plain, prot);
+		raise "fail:mixed algorithms";
+	}
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
 }
 
 getalgs(): list of string

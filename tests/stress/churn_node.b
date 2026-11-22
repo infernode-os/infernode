@@ -83,7 +83,7 @@ mkauthinfo(signersk: ref Keyring->SK, signerpk: ref Keyring->PK,
 # per-connection server handler, mirroring node_server.b's spawn-per-conn model
 serve(ai: ref Keyring->Authinfo, dfd: ref Sys->FD)
 {
-	(wrapped, nil) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, dfd, 0);
+	(wrapped, nil) := auth->server("aes_256_gcm" :: nil, ai, dfd, 0);
 	if(wrapped == nil)
 		return;
 	buf := array[256] of byte;
@@ -154,7 +154,7 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->print("dial failed at iter %d: %r\n", i);
 			break;
 		}
-		(wrapped, cerr) := auth->client("aes_256_cbc sha256", cliai, dc.dfd);
+		(wrapped, cerr) := auth->client("aes_256_gcm", cliai, dc.dfd);
 		if(wrapped == nil){
 			sys->print("client auth failed at iter %d: %s\n", i, cerr);
 			break;

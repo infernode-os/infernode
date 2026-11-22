@@ -645,11 +645,9 @@ own configuration (`OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`).
 
 ## Going further
 
-- **GPU services.** `appl/cmd/gpusrv.b` exposes TensorRT inference as a
-  9P filesystem at `/mnt/gpu` using the same architectural pattern as
-  `llmsrv`. It requires an `emu` rebuilt with `mkfile-gpu-1` (CUDA and
-  TensorRT linked in). On Jetson hardware, JetPack already provides the
-  needed libraries.
+- **Vision.** `appl/cmd/visionfs.b` serves recognition models as files
+  at `/mnt/vision` (`man/4/visionfs`), the same shape as `llmsrv`: mount
+  another machine's and its models answer here.
 - **Server-side UI.** `appl/cmd/luciuisrv.b` serves the UI state of the
   Lucifer interface as a 9P filesystem at `/mnt/ui/`. Combined with
   `appl/cmd/lucibridge.b`, it allows the agent loop to run on the

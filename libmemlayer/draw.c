@@ -20,8 +20,7 @@ ldrawop(Memimage *dst, Rectangle screenr, Rectangle clipr, void *etc, int insave
 {
 	struct Draw *d;
 	Point p0, p1;
-	Rectangle oclipr, srcr, r, mr;
-	int ok;
+	Rectangle srcr, r, mr;
 
 	d = etc;
 	if(insave && d->dstlayer->save==nil)
@@ -40,11 +39,7 @@ ldrawop(Memimage *dst, Rectangle screenr, Rectangle clipr, void *etc, int insave
 
 	/* clipr may have narrowed what we should draw on, so clip if necessary */
 	if(!rectinrect(r, clipr)){
-		oclipr = dst->clipr;
-		dst->clipr = clipr;
-		ok = drawclip(dst, &r, d->src, &p0, d->mask, &p1, &srcr, &mr);
-		dst->clipr = oclipr;
-		if(!ok)
+		if(!_drawclip(&dst->r, &clipr, &r, d->src, &p0, d->mask, &p1, &srcr, &mr))
 			return;
 	}
 	memdraw(dst, r, d->src, p0, d->mask, p1, d->op);

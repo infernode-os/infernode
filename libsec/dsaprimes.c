@@ -12,15 +12,9 @@
 static void
 Hrand(uchar *s)
 {
-	/* s is the 20-byte (5 x 32-bit) seed buffer. ulong is 8 bytes on
-	 * LP64, so the original ulong* stores wrote 40 bytes -- a 20-byte
-	 * stack smash on every DSA keygen (caught by __stack_chk_fail). */
-	u32int *u = (u32int*)s;
-	*u++ = fastrand();
-	*u++ = fastrand();
-	*u++ = fastrand();
-	*u++ = fastrand();
-	*u = fastrand();
+	/* the 20-byte seed, as bytes: it was stored through a u32int*,
+	 * which a byte array need not be aligned for */
+	genrandom(s, SHA1dlen);
 }
 
 static void
@@ -68,6 +62,10 @@ forever:
 	Hincr(sj);
 	mpleft(q, 1, q2);
 	while(i<4096){
+		// W is each candidate's own sum (HAC 4.56, step 10.2).  It
+		// kept the last candidate's X mod 2q less 1, so the p found
+		// was not the one its seed gives, about one time in two.
+		mpassign(mpzero, W);
 		memcpy(sjk, sj, 20);
 		for(k=0; k <= n; k++){
 			sha1(sjk, 20, Hs, 0);

@@ -53,7 +53,15 @@ The agent's action vocabulary is deliberately tiny and protocol-agnostic:
   write reports that approval is required and does not send.
 - **send an approved draft** → a trusted controller reviews `/mnt/msg/pending`
   and writes `approve <id>` to `/mnt/msg/approve`. The immutable request is
-  consumed before dispatch, so an ID cannot be replayed.
+  consumed before dispatch, so an ID cannot be replayed. Each request in
+  `pending` is a line `<id> <src> <origid> <len> <escaped body>` followed by
+  tab-indented `To:` and `Subject:` lines: the sender and subject of the
+  message the reply answers, asked of the source when the draft was written.
+  A draft against a message the source does not have is refused. At approval
+  the source is asked again, and if the message is gone, or `<origid>` now
+  names a message from someone else, nothing is sent. A source's ids must
+  therefore name one message for good: the email source's are
+  `<uidvalidity>.<uid>`, never a sequence number, which an expunge moves.
 - **send a new message** → write `send <src> <recipient>\n<body>` to `/mnt/msg/ctl`.
 - **flag a message** → write `<src> <origid> <word>` to `/mnt/msg/flag`,
   where `<word>` ∈ `seen | unseen | flagged | unflagged | urgent | draft`.

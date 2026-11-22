@@ -1,0 +1,141 @@
+.TH VISION 1
+.SH NAME
+vision/detect, vision/draw, vision/crop \- recognition as filters
+.SH SYNOPSIS
+.B vision/detect
+[
+.B -m
+.I model
+] [
+.B -t
+.I thresh
+] [
+.B -c
+.IR class , ...
+] [
+.B -j
+.I n
+] [
+.B -v
+.I mnt
+] [
+.I file ...
+]
+.br
+.B vision/draw
+[
+.B -d
+.I dir
+] [
+.B -o
+.BR bit | png
+]
+.br
+.B vision/crop
+[
+.B -d
+.I dir
+] [
+.B -o
+.BR bit | png
+]
+.SH DESCRIPTION
+Each is a filter over records, lines of
+.IB attr = value
+fields, so anything can stand between them:
+.IR grep (1),
+.IR awk (1),
+a file, a person.
+.PP
+.I Detect
+writes each
+.I file
+named, or with none each name read from standard input one a line, to a
+session of
+.IR visionfs (4)
+at
+.I mnt
+(default
+.BR /mnt/vision ),
+and prints what was found, the file's name first, in the order the
+files were named:
+.IP
+.EX
+file=photos/a.jpg class=dog score=0.91 x0=88 y0=140 x1=402 y1=455
+file=photos/b.jpg
+.EE
+.PP
+A file in which nothing was found is a line of its name alone.
+.B -m
+names the model,
+.B -t
+the threshold,
+.B -c
+the classes to keep;
+.B -j
+runs
+.I n
+sessions at once.
+.PP
+.I Draw
+reads records and draws each box (\c
+.B x0 y0 x1 y1\c
+) with its label (\c
+.BR label= ,
+or else
+.B class=
+and
+.BR score= )
+on the picture named by
+.BR file= ,
+a colour for each class, and writes the picture to
+.I dir
+(default
+.BR . )
+under its own name with
+.B .bit
+(an uncompressed
+.IR image (6))
+or
+.B .png
+added; it prints the names it writes.
+It knows nothing of models: the records may have come from anywhere.
+.PP
+.I Crop
+reads records and writes each box as a picture of its own,
+.IB dir / name . n .bit
+or
+.BR .png ,
+.I n
+counting the boxes of each picture from 0, and prints the names, so a
+second model can look at what a first found.
+.PP
+None of them needs a display.
+.SH EXAMPLES
+Every picture in a directory, drawn with what was found:
+.EX
+; ls /photos/*.jpg | vision/detect | vision/draw -d /out -o png
+.EE
+.PP
+Only the people, kept:
+.EX
+; vision/detect /photos/*.jpg > found
+; grep 'class=person' found | vision/draw -d /people
+.EE
+.PP
+A second model on the first's dogs:
+.EX
+; vision/detect *.jpg | grep 'class=dog' | vision/crop -d /tmp/dogs | vision/detect -m breeds
+.EE
+.PP
+Quote a pattern with
+.B =
+in it: the shell takes a bare
+.B =
+for its own.
+.SH SOURCE
+.B /appl/cmd/vision
+.br
+.B /appl/lib/visrec.b
+.SH SEE ALSO
+.IR visionfs (4)

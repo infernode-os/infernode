@@ -1,0 +1,60 @@
+.TH LAYERFS 4
+.SH NAME
+layerfs \- a directory where any file written is a layer
+.SH SYNOPSIS
+.B mount -ac {layerfs}
+.I dir
+.SH DESCRIPTION
+.I Layerfs
+serves an empty directory in which any file may be created, read,
+written and removed.
+Union-mounted with create
+.RB ( -c )
+over a video feed's
+.B layer
+directory, it makes whatever is written into the stack a layer
+.RI ( layers (2)):
+a file written once, or one written to continuously, a stream.
+.PP
+A file keeps only what is due now: its records for the newest frame
+written, and its
+.B frame=*
+records, never the frames before.
+A line that is no record is not kept.
+A read is not at an offset: an open's first read gives what is due, in
+one read, and each read after gives the records written since, waiting
+while there are none.
+So a viewer reads a file written once as it reads a vision session's
+detections.
+.PP
+Opening a file to write with truncation (the shell's
+.BR > )
+rewrites it: what it held is gone, and its version
+.RB ( qid.vers )
+and modification time change, which is how
+.IR layers (2)
+knows to read it again.
+Writing on
+.RB ( >> ,
+or a writer that stays open) changes neither.
+A file removed ends its readers.
+.SH EXAMPLES
+A region drawn on every frame of the camera, then only people boxed,
+live, then a head count, then the count taken off:
+.IP
+.EX
+mount -ac {layerfs} /mnt/video/0/layer
+echo 'frame=* box x0=100 y0=80 x1=500 y1=400 label=door' > /mnt/video/0/layer/roi
+cat /mnt/vision/1/detections | grep 'class=person' > /mnt/video/0/layer/people &
+rm /mnt/video/0/layer/people
+.EE
+.PP
+The shell takes
+.B =
+in a word as an assignment, so a pattern with one is quoted.
+.SH SOURCE
+.B /appl/cmd/layerfs.b
+.SH SEE ALSO
+.IR layers (2),
+.IR visionfs (4),
+.IR wm-camera (1)

@@ -36,7 +36,7 @@ mkdir -p /tmp/cpusess/usr/\$user/keyring
 bind -b /tmp/cpusess/usr /usr
 auth/createsignerkey -f /usr/\$user/keyring/signer \$user-signer
 auth/mkauthinfo -k 'key=signer' \$user /usr/\$user/keyring/default
-listen -a aes_256_cbc -a sha256 'tcp!*!$PORT' auxi/rstyxd &
+listen -a aes_256_gcm 'tcp!*!$PORT' auxi/rstyxd &
 sleep 2
 
 cpu 'tcp!127.0.0.1!$PORT' sh -c 'sleep 1000 & echo ONESHOT-RAN'
@@ -59,6 +59,7 @@ echo DONE
 echo halt > /dev/sysctl
 EOF
 
+rm -rf "$ROOT"/tmp/rstyxd-* 2>/dev/null
 out=$(timeout "$TIMEOUT" "$EMU" -c1 -r"$ROOT" /dis/sh.dis /tmp/cpu_session_test.sh 2>&1 < /dev/null)
 rc=0
 ok() {	# ok name condition-result
@@ -78,5 +79,68 @@ ok "what a session started ends with it" "$(hasnt '^AFTER-ONESHOT ' '^AFTER-ONES
 ok "a long session is running before its caller hangs up" "$(has '^DURING-SECOND .*Sleep')"
 ok "a session whose caller hangs up is ended by the node" "$(hasnt '^AFTER-HANGUP ' '^AFTER-HANGUP .*Sleep')"
 ok "the test ran to the end" "$(has '^DONE$')"
+# a session's directories in /tmp go with it: its jail was removed only by
+# an exporter that the session's end kills first, so each session left one
+left=$(ls -d "$ROOT"/tmp/rstyxd-* 2>/dev/null | wc -l | tr -d ' ')
+if [ "$left" = 0 ]; then
+	echo "PASS: no session left a directory in /tmp"
+else
+	echo "FAIL: $left session directories left in /tmp:"
+	ls -d "$ROOT"/tmp/rstyxd-* | head -5
+	rc=1
+fi
 [ $rc -eq 0 ] || echo "$out" | grep -v sdl3 | tail -30
-exit $rc
+
+#
+# The same with /tmp a memfs, as the native kernel has it.  memfs forgets
+# a directory the moment it is removed, whoever still has it; a host
+# directory lives on for those who do.  A session whose root was removed
+# as it was entered ran here and was refused there ("clone failed: file
+# does not exist"): every fork of the session's name space clones its
+# root.  The sessions' directories are in the memfs, so they are counted
+# from inside.
+#
+SCRIPT2="$ROOT/tmp/cpu_session_memfs_test.sh"
+PORT2=$((PORT + 1))
+cat > "$SCRIPT2" <<EOF
+load std
+user=\`{cat /dev/user}
+memfs /tmp
+mkdir -p /tmp/cpusess/usr/\$user/keyring
+bind -b /tmp/cpusess/usr /usr
+auth/createsignerkey -f /usr/\$user/keyring/signer \$user-signer
+auth/mkauthinfo -k 'key=signer' \$user /usr/\$user/keyring/default
+listen -a aes_256_gcm 'tcp!*!$PORT2' auxi/rstyxd &
+sleep 2
+cpu 'tcp!127.0.0.1!$PORT2' sh -c 'echo MEMFS-RAN; mkdir /tmp/made-in-session; echo MEMFS-FORKED'
+echo MEMFS-RETURNED
+cpu 'tcp!127.0.0.1!$PORT2' sh -c 'sleep 1000 & echo MEMFS-SECOND'
+sleep 3
+ls /tmp | sed 's/^/LEFT /'
+echo MEMFS-DONE
+echo halt > /dev/sysctl
+EOF
+out2=$(timeout "$TIMEOUT" "$EMU" -c1 -r"$ROOT" /dis/sh.dis /tmp/cpu_session_memfs_test.sh 2>&1 < /dev/null)
+rc2=0
+has2() { echo "$out2" | grep -q "$1" && echo yes || echo no; }
+ok2() {
+	if [ "$2" = yes ]; then
+		echo "PASS: $1"
+	else
+		echo "FAIL: $1"
+		rc2=1
+	fi
+}
+ok2 "with /tmp a memfs, a cpu session runs its command" "$(has2 '^MEMFS-RAN$')"
+ok2 "and goes on to run commands of its own (each forks the session's name space)" "$(has2 '^MEMFS-FORKED$')"
+ok2 "a second session, which leaves a process behind it, runs" "$(has2 '^MEMFS-SECOND$')"
+ok2 "the memfs test ran to the end" "$(has2 '^MEMFS-DONE$')"
+if echo "$out2" | grep -q '^MEMFS-DONE$' && ! echo "$out2" | grep -q '^LEFT .*rstyxd-'; then
+	echo "PASS: no session left a directory in the memfs"
+else
+	echo "FAIL: session directories left in the memfs: $(echo "$out2" | grep '^LEFT .*rstyxd-' | head -3 | tr '\n' ' ')"
+	rc2=1
+fi
+[ $rc2 -eq 0 ] || echo "$out2" | grep -v sdl3 | tail -20
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ]
+exit $?

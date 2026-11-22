@@ -8,6 +8,8 @@ dns, dnsquery \- domain name service
 ] [
 .B -h
 ] [
+.BI -p " port"
+] [
 .B -r
 ] [
 .BI -x " net"
@@ -46,6 +48,10 @@ The
 option stops
 .I dns
 from using the host data.
+The
+.B -p
+option gives the port name servers are asked on (default: 53);
+it is for testing against a server that is not on that port.
 In the absence of local data, by default
 .I dns
 consults the external DNS directly using some bootstrap data, but if

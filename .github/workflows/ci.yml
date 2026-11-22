@@ -91,7 +91,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -153,7 +153,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -263,6 +263,22 @@ jobs:
         chmod +x tests/host/charon_notpage_test.sh
         ROOT=. bash tests/host/charon_notpage_test.sh
 
+    - name: Check Charon's render fixtures
+      run: |
+        # tests/charon/wpt: one feature a page, each drawn solid green
+        # with no pure red when right (tests/charon/wpt/README.md); a
+        # layout or paint change that breaks one fails here
+        mkdir -p charon-wpt-out
+        sh tools/charon-wpt.sh charon-wpt-out
+
+    - name: Keep the render fixtures' images
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: failure()
+      with:
+        name: charon-wpt-images
+        path: charon-wpt-out
+        if-no-files-found: ignore
+
     - name: Check the DOM a page's scripts see
       run: |
         # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;
@@ -345,6 +361,15 @@ jobs:
         chmod +x tests/host/profile_proxy_test.sh
         rc=0
         ROOT=. bash tests/host/profile_proxy_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
+    - name: Run login-profile home directory check
+      run: |
+        # The profile finds the host's home with HOME set, with a blank in
+        # it, from passwd with no HOME, and goes on with none (#737).
+        chmod +x tests/host/profile_home_test.sh
+        rc=0
+        ROOT=. bash tests/host/profile_home_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run agent harness checks
@@ -440,6 +465,12 @@ jobs:
         chmod +x tests/host/dossrv_lfn_test.sh
         rc=0
         ROOT=. bash tests/host/dossrv_lfn_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # A card whose boot sector, FAT or entries are not what a
+        # FAT's are must not end dossrv or keep it reading for ever.
+        chmod +x tests/host/dossrv_hostile_test.sh
+        rc=0
+        ROOT=. bash tests/host/dossrv_hostile_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
         # The radio firmware tool's verification path: a mismatched
         # checksum must refuse to install. Network-free (--from a
@@ -558,6 +589,26 @@ jobs:
           fi
         fi
 
+        # styxbrick commander credentials: persistence is a USB provisioning
+        # barrier, retries are idempotent, and no raw key remains in /usr.
+        if [ -f tests/host/brick_factotum_test.sh ]; then
+          echo "--- brick factotum test ---"
+          chmod +x tests/host/brick_factotum_test.sh
+          set +e
+          ROOT=. sh tests/host/brick_factotum_test.sh > brick-factotum-test.txt 2>&1
+          rc=$?
+          set -e
+          cat brick-factotum-test.txt
+          if [ $rc -eq 0 ]; then
+            echo "brick factotum test: PASS"
+          elif [ $rc -eq 77 ]; then
+            echo "brick factotum test: SKIP (emu not built)"
+          else
+            echo "brick factotum test: FAIL"
+            exit 1
+          fi
+        fi
+
         # wallet persistence (secstore round-trip)
         if [ -f tests/host/wallet_persist_test.sh ]; then
           echo "--- wallet persistence test ---"
@@ -647,6 +698,14 @@ jobs:
         # cf. CVE-2026-22705). Whether a compiler emits one is per
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
+
+    - name: Run AES, AES-GCM and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES, AES-GCM and SHA-256 against the standards' and
+        # OpenSSL's vectors, the ARMv8 instructions' results against the
+        # C's where the processor has them (arm64 runners), and the C
+        # GHASH constant time under valgrind. Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
 
     - name: Run JIT correctness tests
       run: |
@@ -753,20 +812,36 @@ jobs:
               amd64_jit_typecom_slab_test commands_test devletters_test dhcp_client_test
               dis_parser_bounds_test editor_capability_test
               exec_fork_no_panic_test exec_timeout_kill_test
-              factotum_keyfile_test llmclient_pool_test llmctl_test
-              llmsrv_flush_test mail9p_imap_test network_capability_test
-              pathmanage_test
+              factotum_keyfile_test gpsfs_test llmclient_pool_test llmctl_test
+              llmsrv_flush_test llmsrv_models_stall_test location_test sdrfs_test
+              sdr_demod_test
+              timesync_test mail9p_imap_test network_capability_test pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
-              tools9p_integration_test ecc_test secp256k1_test tls_matrix_test
+              tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
+              tls_clientauth_test ssl_killedcall_test vid9p_hangup_test httpd_test httpd_auth_test
+              charon_netfile_test fetch_tools_test msg_email_bind_test editor_deputy_test
+              matrix_compose_test llmsrv_ctl_test llmctl9p_test veltrosrv_gate_test veltro_kill_test
+              keyfs_file_test aescbc_test keytools_test login_test x509_chain_test
+              mail9p_hostile_test pop3_tls_test webget_https_test legacy_ssl_gone_test
+              cs_cancel_test registry_test secstore_cmd_test logon_unlock_test sntp_test
+              vid9p_ctl_test wpa_log_test
+              acvp_pq_test sha3_test sign_nonce_test tls_keyupdate_test auth_services_test
           - shard: 2
             tests: >-
-              amd64_jit_code_leak_test audioring_test awk_builtins_test calendar9p_test
+              amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
               cpu_boundary_test dialogue_test emu_root_test emu_rwlock_test mpexp_test
+              libkern_copy_test
+              ethermedium_arp_test genet_rxlen_test icmp6_ndopt_test icmp_netlog_test
+              virtio_used_test ether4330_bounds_test dns_reply_test usbclass_selftest_test
+              usbdwc_bounds_test udp_len_test iproute_guard_test arp_enter_test ptclcsum_guard_test
+              usbxhci_trblen_test ip6reasm_test ipifc_guard_test devip_guard_test tcp_isn_test
+              bt9p_selftest_test
+              export_limits_test devip_conv_test arpadd_test factotum_persist_test devsd_part_test devether_rndis_test netif_multi_test devcmd_fdleak_test devprog_fdsnap_test errlabel_test flawfinder_filter_test print_heapfull_test load_heapfull_test nil_far_test jit_compile_fail_test jit_4gb_test limbo_stale_test slice_end_test draw_pools_test tk_nomem_test link_digest_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
-              listen_rate_fairness_test mail9p_test
+              listen_announce_test listen_plain_test listen_rate_fairness_test mail9p_test
               modifier_mouse_emulation_test mount_clone_walk_test
               nsaudit_metadata_test nosystemkeyboard_test osk_decoder_test prof_test profile_legacykey_test
               refadt_zero_test sdl3_keyboard_test secstore_apikey_test
@@ -775,7 +850,12 @@ jobs:
               strcat_test task_provisioning_test tcpseq_test themefs_test
               tls_malformed_server_test tools9p_activity_ns_test
               tools9p_basics_test tools9p_write_exec_view_test
-              write_capability_test xenith_build_test
+              write_capability_test xenith_build_test werc_test charon_werc_test
+              git_tool_test exec_fd_test limbo_tool_test lucibridge_promote_test lucibridge_turn_test
+              spawn_life_test spawn_provenance_test tools9p_call_test nsaudit_truth_test default_budget_test
+              digest_edge_test elgamal_test ipint_nomem_test libmp_edge_test rsa_edge_test
+              x25519_test mnt_unexpected_test ninep_conv_test mldsa_test mlkem_test slhdsa_test
+              pq_nodivide_test pq_residue_test
     permissions:
       contents: read
     env:
@@ -785,7 +865,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind python3-numpy python3-cryptography
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -824,7 +904,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -971,7 +1051,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1134,7 +1214,7 @@ jobs:
         # in dis/wm opening at a size that shows it, under wm/wm and in
         # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
+        for t in wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_view_plumb_test settings_stall_test settings_edit_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test ns_topology_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -1146,8 +1226,10 @@ jobs:
       run: |
         # wm/osk under wm/wm and as Lucifer's keyboard (desktop and
         # phone layouts), at the screens' sizes, through every theme,
-        # for wm/logon, and ground by its fuzzer.
-        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test; do
+        # for wm/logon (and its choice of interface, interface_test), and
+        # ground by its fuzzer; Lucifer's phone layout
+        # ground with it (phone_fuzz_test).
+        for t in osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test interface_test phone_fuzz_test tablet_layout_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -1171,7 +1253,8 @@ jobs:
             xenith_event_test xenith_image_test xenith_browse_test \
             xenith_scroll_focus_test xenith_scroll_quit_test \
             xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
-            xenith_race_test xenith_doc_test; do
+            xenith_race_test xenith_doc_test xenith_wrap_test \
+            xenith_ctlcut_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
@@ -1201,7 +1284,7 @@ jobs:
         # seek) paced by the clock, and the Matrix video pane driving it
         # through /dev/pointer and /dev/keyboard.  A skip fails, as above.
         failed=
-        for t in vid9p_test vid9p_transport_test uitest_transport_test; do
+        for t in vid9p_test vid9p_replay_test vid9p_transport_test uitest_transport_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
@@ -1220,6 +1303,22 @@ jobs:
           Linux/amd64/bin/limbo
           Linux/amd64/bin/mk
         retention-days: 14
+
+  # The required check master's ruleset names.  The GUI job above was
+  # split into parts, each reported as "... (part)"; no job reported the
+  # plain name any more, so the ruleset waited on it for ever.  This job
+  # reports it, and passes only when every part passed.
+  linux-amd64-gui-gate:
+    name: Linux AMD64 SDL3 GUI Build & Test
+    needs: linux-amd64-gui
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+    - name: Every part passed
+      run: |
+        echo "linux-amd64-gui: ${{ needs.linux-amd64-gui.result }}"
+        test "${{ needs.linux-amd64-gui.result }}" = success
 
   # ─────────────────────────────────────────────
   # Linux ARM64: Full bootstrap build from source
@@ -1244,7 +1343,7 @@ jobs:
         echo "Version: $(cat include/version.h)"
 
     - name: Install build dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev valgrind
 
     - name: Bootstrap build (mk, libraries, limbo, emulator)
       run: |
@@ -1297,7 +1396,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1375,6 +1474,14 @@ jobs:
         # cf. CVE-2026-22705). Whether a compiler emits one is per
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
+
+    - name: Run AES, AES-GCM and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES, AES-GCM and SHA-256 against the standards' and
+        # OpenSSL's vectors, the ARMv8 instructions' results against the
+        # C's where the processor has them (arm64 runners), and the C
+        # GHASH constant time under valgrind. Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |
@@ -1518,7 +1625,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1724,16 +1831,39 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The GUI tests are split between two Apple silicon runners, as
+          # the Linux GUI job's parts are: run after the suite in one job,
+          # wm's and osk's together ran past its 75 minutes, and from
+          # 2026-11-05 every run on master was cancelled in them.  gui
+          # names the half each runs; the osk half runs nothing else.
           - arch: arm64
             label: ARM64
             runner: macos-15
-            backstop: 1500  # the suite runs interpreted here (no -c1)
+            # The suite runs interpreted here (no -c1).  At 1500 it was cut
+            # off in bt_ns, the first sh test, on 2026-11-17, nothing hung:
+            # its Limbo tests alone add up to 1396 s, 192 s more than on
+            # master (wikifs, secstore_client, keyring_letgo and
+            # keyring_msg are new, webclient_deadline 37 s longer), and
+            # bt_ns takes 113 s here.  The backstop bounds a hang, and the
+            # job has 75 minutes, as AMD64's does.
+            backstop: 2400
+            gui: wm
+          - arch: arm64
+            label: ARM64 GUI (osk)
+            runner: macos-15
+            backstop: 1500
+            gui: osk
           # Intel Macs (#786).  macos-15-intel is GitHub's last Intel
           # macOS image; the job goes when it does.
           - arch: amd64
             label: AMD64
             runner: macos-15-intel
-            backstop: 1800  # an i7-8700B, interpreted: slower still
+            # An i7-8700B, interpreted: slower still.  At 1800 the suite
+            # was cut off in its last few tests on 2026-11-15, nothing
+            # hung: the tests it had finished add up to 1801 s (crypto
+            # 247 s, tls_server 209 s).  The backstop bounds a hang, and
+            # the job has 75 minutes.
+            backstop: 2400
     env:
       ROOT: ${{ github.workspace }}
       OBJTYPE: ${{ matrix.arch }}
@@ -1874,7 +2004,7 @@ jobs:
         for f in *.b; do
           name="${f%.b}"
           echo "Compiling $f..."
-          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+          if ! "$LIMBO" -I "$ROOT/module" -I "$ROOT/appl/veltro" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
             echo "ERROR: Failed to compile $f"
             COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
           fi
@@ -1892,6 +2022,7 @@ jobs:
         fi
 
     - name: Run memdraw rasteriser and fast-path checks
+      if: matrix.gui != 'osk'
       run: |
         # libmemdraw/aatest.c: exact coverage, fill rules, strokes, and the
         # special cases (coverdraw, blenddraw) against the general alphadraw
@@ -1902,6 +2033,7 @@ jobs:
         ROOT=. sh tests/host/aa_test.sh
 
     - name: Run sh script-execution check
+      if: matrix.gui != 'osk'
       run: |
         # A script without the execute bit must be reported as such,
         # not as a missing .dis module (what Xenith's B2 showed), and
@@ -1912,6 +2044,7 @@ jobs:
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run test suite
+      if: matrix.gui != 'osk'
       run: |
         # Create /tmp inside Inferno root for tmp_writable test
         mkdir -p tmp
@@ -1952,11 +2085,13 @@ jobs:
         fi
 
     - name: Run port verification
+      if: matrix.gui != 'osk'
       run: |
         chmod +x verify-port.sh
         ./verify-port.sh
 
     - name: Run JIT fault and bounds tests (JIT and interpreter)
+      if: matrix.gui != 'osk'
       run: |
         # Gating, unlike the suite above: faults raised from compiled
         # code must be the interpreter's exceptions, caught by the
@@ -1969,6 +2104,7 @@ jobs:
         ROOT=. sh tests/host/jit_small_test.sh
 
     - name: Run ML-DSA decompose test
+      if: matrix.gui != 'osk'
       run: |
         # Decompose sees values derived from the signing key, so it must
         # not divide (a hardware divide's time depends on its operands;
@@ -1976,7 +2112,16 @@ jobs:
         # architecture, hence on every runner. Host C, no emulator.
         ROOT=. bash tests/host/mldsa_decompose_test.sh
 
+    - name: Run AES, AES-GCM and SHA-256 test (ARMv8 and C)
+      run: |
+        # libsec's AES, AES-GCM and SHA-256 against the standards' and
+        # OpenSSL's vectors, the ARMv8 instructions' results against the
+        # C's where the processor has them (arm64 runners), and the C
+        # GHASH constant time under valgrind. Host C, no emulator.
+        ROOT=. bash tests/host/armcrypto_test.sh
+
     - name: Run wallet and secstore integration tests
+      if: matrix.gui != 'osk'
       run: |
         echo "Running host-side integration tests..."
 
@@ -2016,7 +2161,7 @@ jobs:
 
     - name: Upload macOS build artifacts
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-      if: success()
+      if: success() && matrix.gui != 'osk'
       with:
         name: infernode-macos-${{ matrix.arch }}
         path: |
@@ -2032,7 +2177,7 @@ jobs:
     # own: macos-15 runners are scarce at busy hours, and a job left
     # queued for one is cancelled.
     - name: Build SDL3 GUI emulator
-      if: matrix.arch == 'arm64'
+      if: matrix.gui != ''
       run: |
         export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
         (cd libfreetype && mk install) || true
@@ -2044,14 +2189,19 @@ jobs:
         nm o.emu | grep -q sdl3_mainloop || { echo "o.emu is not the SDL3 build"; exit 1; }
 
     - name: Run GUI tests
-      if: matrix.arch == 'arm64'
+      if: matrix.gui != ''
       env:
         SDL_VIDEODRIVER: dummy
+        GUI: ${{ matrix.gui }}
       run: |
-        # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
-        # here (77).
+        # As the Linux GUI job's wm and osk parts; wm_cursor_test and
+        # lucifer_cursor_test need LD_PRELOAD and skip here (77).
+        case $GUI in
+        wm)	tests="wm_test wm_cursor_test lucifer_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_view_plumb_test settings_stall_test settings_edit_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test road_test page_test ns_topology_test sam_gui_test lucifer_app_test lucictx_event_test llmsetup_phone_test" ;;
+        osk)	tests="osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test logon_osk_test interface_test phone_fuzz_test tablet_layout_test" ;;
+        esac
         failed=
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test wm_editor_keys_test wm_edit_test wm_dir_test ftree_test page_test sam_gui_test lucifer_app_test lucictx_event_test osk_test osk_lucifer_test osk_sizes_test osk_fuzz_test osk_logon_test osk_theme_test osk_mobile_test llmsetup_phone_test; do
+        for t in $tests; do
           echo "--- $t ---"
           rc=0
           ROOT=. sh tests/host/$t.sh || rc=$?
@@ -2130,6 +2280,46 @@ jobs:
         grep -vE '^$' /tmp/ios-gui.log | tail -40
         grep -q 'lucipres: plumb consumer listening' /tmp/ios-gui.log || {
           echo "::error::Lucifer did not finish booting in the iOS Simulator"; exit 1; }
+
+    # iPadOS: the same universal app (UIDeviceFamily 1 and 2) on an iPad
+    # simulator. The iPhone is shut down first: build-ios-app.sh installs
+    # on "booted", which must name one device.
+    - name: Switch to an iPad simulator
+      run: |
+        xcrun simctl shutdown all
+        UDID=$(xcrun simctl list devices available | grep -m1 -E '^ +iPad' | grep -oE '[0-9A-F-]{36}')
+        test -n "$UDID" || { echo "::error::no iPad simulator available"; exit 1; }
+        xcrun simctl list devices available | grep "$UDID"
+        xcrun simctl boot "$UDID"
+        xcrun simctl bootstatus "$UDID"
+
+    - name: GUI app boots Lucifer on iPad
+      run: |
+        ./build-ios-app.sh --gui
+        xcrun simctl terminate booted os.infernode.ios || true
+        ( xcrun simctl launch --console-pty booted os.infernode.ios > /tmp/ipad-gui.log 2>&1 ) &
+        for i in $(seq 1 24); do
+          grep -q 'lucipres: plumb consumer listening' /tmp/ipad-gui.log && break
+          sleep 5
+        done
+        grep -vE '^$' /tmp/ipad-gui.log | tail -40
+        grep -q 'lucipres: plumb consumer listening' /tmp/ipad-gui.log || {
+          echo "::error::Lucifer did not finish booting in the iPad Simulator"; exit 1; }
+        sleep 10
+        mkdir -p /tmp/ipad
+        xcrun simctl io booted screenshot /tmp/ipad/ipad-lucifer.png || true
+        (cd iOS/arm64 && ditto -c -k --keepParent InferNode.app /tmp/ipad/InferNode-iPad-simulator.app.zip)
+
+    - name: Headless app runs a test inside iPadOS
+      run: ./build-ios-app.sh --verify
+
+    - name: Upload the iPad build
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ipados-simulator-build
+        path: /tmp/ipad/
+        if-no-files-found: ignore
 
     # Device slice: compile only. Installing needs signing and hardware.
     - name: Cross-build the device slice

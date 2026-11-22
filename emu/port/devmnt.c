@@ -14,16 +14,26 @@
  */
 
 /*
- * Max 9P RPC / negotiated msize ceiling. Historically 8K.
- * INFR-214: a 64K bump was tried and REVERTED — the mnt negotiation handles it
- * fine, but it BROKE keyring/SSL'd remote mounts (mount -k, e.g. /mnt/llm): the
- * mount attaches but the first real RPC fails, because devssl below the mnt
- * layer can't carry a 64K 9P message (TLS records cap ~16K). Local mcp9p mounts
- * (no SSL) were unaffected. So raising this alone is NOT enough for SSL'd
- * mounts — the devssl path needs addressing too. Kept at 8K. See INFR-214 (the
- * surgical alternative is llmsrv chunk-and-reassemble, which sidesteps msize).
+ * The largest 9P message a mount offers in Tversion; the server
+ * answers with what it takes, and the smaller is used.  64K in all,
+ * not IOHDRSZ+64K: exportfs before 2026-11 gave a Tstat the rest of
+ * the message as its room, msize-9, in Fcall's 16-bit nstat, and
+ * anything above 65544 wrapped (msize 65560 left 15 bytes, and every
+ * stat through it was "stat buffer too small").  Every server already
+ * running is one of those.  INFR-214 put a 64K bump's failure on
+ * devssl; it was this, on plain mounts as on encrypted ones.
  */
-#define MAXRPC (IOHDRSZ+8192)
+#define MAXRPC (64*1024)
+
+/*
+ * The largest a mount over devssl (#D: mount -k, -C, listen's
+ * connections) offers.  devssl before 2026-11 sent a write longer than
+ * its record limit, (1<<15) less the digest and one, as pieces locked
+ * one at a time, and two replies written at once interleaved; every
+ * server already running has it.  Below the limit for any digest, a
+ * reply is one write and cannot be split.
+ */
+#define SSLMAXRPC (32*1024 - 256)
 
 struct Mntrpc
 {
@@ -64,6 +74,9 @@ struct Mntalloc
 	ulong	id;
 	ulong	tagmask[NMASK];
 }mntalloc;
+
+static char Enofit[] = "request does not fit the server's message size";
+static ulong nunexpected;	/* replies to no call; a count for the console's sake, not exact */
 
 void	mattach(Mnt*, Chan*, char*);
 Mnt*	mntchk(Chan*);
@@ -159,6 +172,8 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 		msize = MAXRPC;
 	if(msize > c->iounit && c->iounit != 0)
 		msize = c->iounit;
+	if(devtab[c->type]->dc == 'D' && msize > SSLMAXRPC)
+		msize = SSLMAXRPC;
 	v = version;
 	if(v == nil || v[0] == '\0')
 		v = VERSION9P;
@@ -465,6 +480,9 @@ mntwalk(Chan *c, Chan *nc, char **name, int nname)
 	wq->clone = nc;
 
 	if(waserror()) {
+		/* not answered (flushed, given up on): the server may have made newfid */
+		if(alloc)
+			chanfidretire(nc);
 		mntfree(r);
 		nexterror();
 	}
@@ -602,6 +620,12 @@ mntclunk(Chan *c, int t)
 	m = mntchk(c);
 	r = mntralloc(c, m->msize);
 	if(waserror()){
+		/*
+		 *  not answered: given up on (orphaned) or flushed, and a
+		 *  flushed clunk that the server never answered was never
+		 *  done.  The server may still hold the fid.
+		 */
+		chanfidretire(c);
 		mntfree(r);
 		nexterror();
 	}
@@ -629,6 +653,12 @@ muxclose(Mnt *m)
 		q->orphan = 0;
 		mntfree(q);
 	}
+	for(q = m->held; q != nil; q = r){
+		r = q->list;
+		q->m = nil;
+		mntfree(q);
+	}
+	m->held = nil;
 	m->id = 0;
 	free(m->version);
 	m->version = nil;
@@ -1009,10 +1039,11 @@ mountio(Mnt *m, Mntrpc *r)
 	int n;
 	Mwatch w;
 	volatile int watched;
-	int fired;
+	int armed, fired;
 
 	watched = 0;
 	while(waserror()) {
+		armed = watched;
 		fired = 0;
 		if(watched){
 			fired = w.fired;
@@ -1036,7 +1067,8 @@ mountio(Mnt *m, Mntrpc *r)
 		 * an epoch's workers serving each other). Unanswered in time,
 		 * the call is left on the queue, its tag held, for its reply.
 		 */
-		if(upkilled() && fired){
+		/* A killed call sends at most one flush before abandoning the chain. */
+		if(upkilled() && (armed || fired)){
 			mntorphan(m, r);
 			nexterror();
 		}
@@ -1083,9 +1115,15 @@ mountio(Mnt *m, Mntrpc *r)
 	/* Transmit a file system rpc */
 	if(m->msize == 0)
 		panic("msize");
+	/*
+	 * convS2M gives 0 for a request that does not fit msize, which the
+	 * server chose (256 at least): a walk of long names, a wstat.  The
+	 * test was n < 0, never true: nothing was written, and the caller
+	 * waited for the answer to a request that was never sent.
+	 */
 	n = convS2M(&r->request, r->rpc, m->msize);
-	if(n < 0)
-		panic("bad message type in mountio");
+	if(n <= 0)
+		error(Enofit);
 	if(devtab[m->c->type]->write(m->c, r->rpc, n, 0) != n)
 		error(Emountrpc);
 /*	r->stime = fastticks(nil); */
@@ -1234,10 +1272,40 @@ mntgate(Mnt *m)
 	unlock(&m->l);
 }
 
+/* the held calls whose tag the flush now answered named; m->l held */
+static Mntrpc*
+mntunhold(Mnt *m, int tag)
+{
+	Mntrpc **l, *x, *hl;
+
+	hl = nil;
+	for(l = &m->held; (x = *l) != nil;)
+		if(x->request.tag == tag){
+			*l = x->list;
+			x->m = nil;	/* nothing left to wait for */
+			x->list = hl;
+			hl = x;
+		}else
+			l = &x->list;
+	return hl;
+}
+
+static void
+mntfreelist(Mntrpc *hl)
+{
+	Mntrpc *x;
+
+	for(; hl != nil; hl = x){
+		x = hl->list;
+		mntfree(hl);
+	}
+}
+
 void
 mountmux(Mnt *m, Mntrpc *r)
 {
-	Mntrpc **l, *q;
+	Mntrpc **l, *q, *hl;
+	ulong n;
 
 	lock(&m->l);
 	l = &m->queue;
@@ -1260,26 +1328,43 @@ mountmux(Mnt *m, Mntrpc *r)
 			 * it cannot recycle q while this path is still waking its owner.
 			 */
 			q->done = 1;
+			hl = nil;
+			if(q->request.type == Tflush)
+				hl = mntunhold(m, q->request.oldtag);
 			if(q->orphan){
 				mntorphanreply(m, q);	/* unlocks m->l */
+				mntfreelist(hl);
 				return;
 			}
 			if(q != r)
 				Wakeup(&q->r);
 			unlock(&m->l);
+			mntfreelist(hl);
 			return;
 		}
 		l = &q->list;
 	}
 	unlock(&m->l);
+	/*
+	 * the first few, then one in a thousand: a server sends these as
+	 * fast as it likes, and each was a line on the console.
+	 * An Rerror's string lies in the reply's Block: it is printed
+	 * before the Block is freed (after, it was whatever message
+	 * had the Block next).
+	 */
+	n = ++nunexpected;
+	if(n <= 8 || n%1000 == 0){
+		if(r->reply.type == Rerror)
+			print("unexpected reply tag %ud; type %d (error %q)\n", r->reply.tag, r->reply.type, r->reply.ename);
+		else
+			print("unexpected reply tag %ud; type %d\n", r->reply.tag, r->reply.type);
+		if(n == 8)
+			print("unexpected reply tags: one in a thousand reported from here\n");
+	}
 	if(r->b != nil){
 		freeblist(r->b);
 		r->b = nil;
 	}
-	if(r->reply.type == Rerror)
-		print("unexpected reply tag %ud; type %d (error %q)\n", r->reply.tag, r->reply.type, r->reply.ename);
-	else
-		print("unexpected reply tag %ud; type %d\n", r->reply.tag, r->reply.type);
 }
 
 /*
@@ -1413,6 +1498,7 @@ mntralloc(Chan *c, ulong msize)
 	mntalloc.nrpcused++;
 	unlock(&mntalloc.l);
 	new->c = c;
+	new->m = nil;
 	new->done = 0;
 	new->orphan = 0;
 	new->flushed = nil;
@@ -1423,6 +1509,32 @@ mntralloc(Chan *c, ulong msize)
 void
 mntfree(Mntrpc *r)
 {
+	Mntrpc *x;
+
+	/*
+	 *  A flush still out names this call's tag: the tag is not used
+	 *  again until the flush is answered.  An orphaned call answered
+	 *  before its flush was freed at once, its tag given to the next
+	 *  call, and the server flushed that one when the old flush reached
+	 *  it, and the client took the old flush's answer for it: replies
+	 *  went to the wrong calls (an Rclunk to a Twalk, an Rwalk to a
+	 *  Tclunk), and the mount, which every reader of a feed shares,
+	 *  went out of step.  Held on m->held; mountmux lets it go.
+	 */
+	if(r->m != nil && r->request.type != Tflush){
+		lock(&r->m->l);
+		for(x = r->m->queue; x != nil; x = x->list)
+			if(x->request.type == Tflush && x->request.oldtag == r->request.tag)
+				break;
+		if(x != nil && r->orphan != 1){
+			r->orphan = 0;
+			r->list = r->m->held;
+			r->m->held = r;
+			unlock(&r->m->l);
+			return;
+		}
+		unlock(&r->m->l);
+	}
 	if(r->orphan){
 		lock(&r->m->l);
 		if(r->orphan == 1){

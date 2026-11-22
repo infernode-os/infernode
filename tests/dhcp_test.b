@@ -402,11 +402,18 @@ server(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int, p
 	}
 }
 
+# What the synthetic server does for the tests of the command itself
+# (CommandNak, CommandRetry), and what it tells them of it.
+mode := "";
+notes: chan of string;
+srvname := "dhcptest";
+
 server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 {
 	pending: list of array of byte;
 	readers: list of Rread;
 	phase := 0;
+	cmdphase := 0;
 	mac := macb();
 	for(;;)alt{
 	<-quit =>
@@ -467,7 +474,38 @@ server1(clone, data: ref FileIO, obs: chan of array of byte, quit: chan of int)
 			}else
 				replies = mkreply(xid, mac, Ouraddr, offeropts(), nil, nil) :: nil;
 		Request =>
-			case phase {
+			if(mode == "nakrenew"){
+				# a short lease, and its renewal refused
+				if(cmdphase == 0){
+					replies = mkreply(xid, mac, Ouraddr, ack3opts(), nil, nil) :: nil;
+					cmdphase = 1;
+				}else{
+					replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
+					if(cmdphase == 1)
+						notes <-= "nak";
+					cmdphase = 2;
+				}
+			}else if(mode == "failfirst"){
+				# refused once, then granted; each time, whether
+				# the request carried the host name it was given
+				host := "host=0";
+				if(findopt(buf, 12) != nil)
+					host = "host=1";
+				# (six times: the client asks again by itself after
+				# a refusal, and gives up, for the command to try
+				# again, after a few)
+				if(cmdphase < 6){
+					replies = mkreply(xid, mac, Ouraddr, nakopts(), nil, nil) :: nil;
+					if(cmdphase == 0)
+						notes <-= "refused " + host;
+					cmdphase++;
+				}else{
+					replies = mkreply(xid, mac, Ouraddr, ack2opts(), nil, nil) :: nil;
+					if(cmdphase == 6)
+						notes <-= "granted " + host;
+					cmdphase = 7;
+				}
+			}else case phase {
 			0 or 1 =>
 				# the first exchange: an ACK whose options are
 				# overloaded into the file field
@@ -547,12 +585,12 @@ setupnet(): (ref FileIO, ref FileIO, string)
 	# Names of their own: the srv device is shared by everything in
 	# this emu, and "clone" is not a name to claim in it.
 	#
-	clone := sys->file2chan(Netdir+"/srv", "dhcptestclone");
-	data := sys->file2chan(Netdir+"/srv", "dhcptestdata");
+	clone := sys->file2chan(Netdir+"/srv", srvname+"clone");
+	data := sys->file2chan(Netdir+"/srv", srvname+"data");
 	if(clone == nil || data == nil)
 		return (nil, nil, sys->sprint("file2chan: %r"));
-	if(sys->bind(Netdir+"/srv/dhcptestclone", Netdir+"/udp/clone", Sys->MREPL) < 0 ||
-	   sys->bind(Netdir+"/srv/dhcptestdata", Netdir+"/udp/1/data", Sys->MREPL) < 0)
+	if(sys->bind(Netdir+"/srv/"+srvname+"clone", Netdir+"/udp/clone", Sys->MREPL) < 0 ||
+	   sys->bind(Netdir+"/srv/"+srvname+"data", Netdir+"/udp/1/data", Sys->MREPL) < 0)
 		return (nil, nil, sys->sprint("cannot bind the udp files: %r"));
 	return (clone, data, nil);
 }
@@ -970,6 +1008,148 @@ testOptions(t: ref T)
 }
 
 #
+# A string option is the server's text and is written into net/ndb, a file
+# of lines.  One carrying a control character is no value at all; one with
+# a blank in it is not written as a bare ndb word.
+#
+testStrings(t: ref T)
+{
+	c := Bootconf.new();
+	c.put(Dhcpclient->Ohostname, array of byte "board");
+	t.assertseq(c.gets(Dhcpclient->Ohostname), "board", "a plain name is taken");
+
+	bad := array[] of {
+		"a\nip=10.0.0.9 ipmask=255.0.0.0",
+		"a\r",
+		"a\tb",
+		"\n",
+		"a\u007f",
+		"a\u0001b",
+	};
+	for(i := 0; i < len bad; i++){
+		c.put(Dhcpclient->Ohostname, array of byte bad[i]);
+		t.assertnil(c.gets(Dhcpclient->Ohostname), sys->sprint("a name with a control character is no value (case %d)", i));
+	}
+
+	# a name beyond ASCII is still a name
+	c.put(Dhcpclient->Ohostname, array of byte "caf\u00e9");
+	t.assertseq(c.gets(Dhcpclient->Ohostname), "caf\u00e9", "a name in UTF-8 is taken");
+
+	# and what reaches net/ndb: one entry, whatever sys and dom hold
+	memfs = load MemFS MemFS->PATH;
+	if(memfs == nil){
+		t.fatal("cannot load "+MemFS->PATH);
+		return;
+	}
+	if((e := memfs->init()) != nil){
+		t.fatal("memfs: "+e);
+		return;
+	}
+	fd := memfs->newfs(64*1024);
+	if(fd == nil || sys->mount(fd, nil, Netdir, Sys->MREPL|Sys->MCREATE, nil) < 0){
+		t.fatal(sys->sprint("cannot mount a scratch net on %s: %r", Netdir));
+		return;
+	}
+	ctl := sys->create(Netdir+"/ctl", Sys->ORDWR, 8r666);
+	if(ctl == nil){
+		t.fatal(sys->sprint("cannot create a scratch interface ctl: %r"));
+		return;
+	}
+	c = Bootconf.new();
+	c.ip = "192.168.7.5";
+	c.ipmask = "255.255.255.0";
+	c.sys = "h ip=10.0.0.9";	# a blank: two ndb attributes if written bare
+	c.dom = "lab.example";
+	t.assertnil(dhcpclient->applycfg(Netdir, ctl, c), "the configuration applies");
+	ndb := readall(Netdir+"/ndb");
+	t.assert(ndb != nil, "net/ndb was written");
+	nip := 0;
+	(nil, lines) := sys->tokenize(ndb, "\n");
+	for(; lines != nil; lines = tl lines){
+		l := hd lines;
+		if(len l >= 3 && l[0:3] == "ip=")
+			nip++;
+		t.assert(!contains(l, "10.0.0.9"), "nothing of a name with a blank reaches net/ndb: "+l);
+	}
+	t.asserteq(nip, 1, "net/ndb holds exactly one entry");
+	t.assert(contains(ndb, "dom=lab.example"), "a plain domain is written");
+	t.assert(!contains(ndb, "sys="), "a name that is not one word is left out");
+	ctl = nil;
+	sys->unmount(nil, Netdir);
+}
+
+readall(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[8192] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+#
+# The times a lease is run on.  The server's own when they make sense;
+# otherwise half and seven-eighths; never a renewal sooner than Minrenew,
+# and the renewal always before the rebinding, for every lease there is.
+#
+testTimers(t: ref T)
+{
+	(t1, t2) := dhcpclient->timers(3600, 0, 0);
+	t.asserteq(t1, 1800, "T1 defaults to half the lease");
+	t.asserteq(t2, 3150, "T2 defaults to seven-eighths");
+
+	(t1, t2) = dhcpclient->timers(3600, 600, 1200);
+	t.asserteq(t1, 600, "the server's T1 is kept");
+	t.asserteq(t2, 1200, "the server's T2 is kept");
+
+	(t1, t2) = dhcpclient->timers(3600, 2000, 1000);
+	t.asserteq(t1, 2000, "a T1 inside the lease is kept");
+	t.asserteq(t2, 3150, "a T2 before T1 falls back");
+
+	(t1, t2) = dhcpclient->timers(3600, 7200, 9000);
+	t.asserteq(t1, 1800, "a T1 past the lease falls back");
+	t.asserteq(t2, 3150, "a T2 past the lease falls back");
+
+	# the longest lease a reply can carry: seven-eighths of it does not wrap
+	(t1, t2) = dhcpclient->timers(16r7FFFFFFF, 0, 0);
+	t.assert(t1 > 0 && t2 > t1, sys->sprint("the longest lease: T1 %d before T2 %d", t1, t2));
+
+	# the shortest: not renewed in a loop
+	for(lease := 1; lease <= 64; lease++){
+		(t1, t2) = dhcpclient->timers(lease, 0, 0);
+		if(t1 < Dhcpclient->Minrenew || t2 <= t1){
+			t.error(sys->sprint("lease %d: T1 %d T2 %d", lease, t1, t2));
+			break;
+		}
+		(t1, t2) = dhcpclient->timers(lease, 1, 1);
+		if(t1 < Dhcpclient->Minrenew || t2 <= t1){
+			t.error(sys->sprint("lease %d with T1 = T2 = 1: T1 %d T2 %d", lease, t1, t2));
+			break;
+		}
+	}
+
+	# and across the range
+	for(lease = 100; lease > 0 && lease < 16r7FFFFFFF/3; lease *= 3){
+		(t1, t2) = dhcpclient->timers(lease, 0, 0);
+		if(t1 < Dhcpclient->Minrenew || t2 <= t1 || t2 > lease){
+			t.error(sys->sprint("lease %d: T1 %d T2 %d", lease, t1, t2));
+			break;
+		}
+	}
+}
+
+#
 # The whole exchange, against the synthetic server.
 #
 testExchange(t: ref T)
@@ -1015,6 +1195,118 @@ testExchange(t: ref T)
 		killproc(lpid);
 		return;
 	}
+}
+
+#
+# The command, ip/dhcp, against the synthetic server: in a name space
+# and a process group of its own, its standard output nowhere.  done
+# gets "returned", or "raised ..." if it raised.
+#
+Command: module
+{
+	init:	fn(nil: ref Draw->Context, argv: list of string);
+};
+
+command(argv: list of string, done: chan of string, pidc: chan of int)
+{
+	sys->pctl(Sys->FORKNS|Sys->NEWPGRP|Sys->FORKFD, nil);
+	pidc <-= sys->pctl(0, nil);
+	(clone, data, e) := setupnet();
+	if(e != nil){
+		done <-= "setup: " + e;
+		return;
+	}
+	mkdir(Netdir+"/ifc");
+	mkfile(Netdir+"/ifc/ctl", nil);
+	mkfile(Netdir+"/ifc/status", array of byte "device /n/ether maxtu 1500\n");
+	mkfile(Netdir+"/iproute", nil);
+	spid := chan of int;
+	spawn server(clone, data, chan[256] of array of byte, chan of int, spid);
+	<-spid;
+	null := sys->open("/dev/null", Sys->OWRITE);
+	if(null != nil)
+		sys->dup(null.fd, 1);
+	dhcp := load Command "/dis/ip/dhcp.dis";
+	if(dhcp == nil){
+		done <-= sys->sprint("cannot load ip/dhcp: %r");
+		return;
+	}
+	{
+		dhcp->init(nil, argv);
+		done <-= "returned";
+	} exception x {
+	"*" =>
+		done <-= "raised " + x;
+	}
+	# killgrp finds the group by this process: gone, the server and the
+	# name space's file servers would be left, and emu does not exit
+	# while a process is.
+	<-chan of int;
+}
+
+killgrp(pid: int)
+{
+	fd := sys->open("/prog/"+string pid+"/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+# the next of the server's notes or the command's end, or "nothing"
+await(done: chan of string, ms: int): string
+{
+	late := chan[1] of int;
+	pc := chan of int;
+	spawn deadline(late, pc, ms);
+	lpid := <-pc;
+	s := "nothing";
+	alt{
+	s = <-notes =>
+		;
+	s = <-done =>
+		;
+	<-late =>
+		;
+	}
+	killproc(lpid);
+	return s;
+}
+
+testCommandNak(t: ref T)
+{
+	# dhcp -m -p: a renewal refused is a lease lost, which comes to the
+	# command's monitor with no configuration.  It printed it.
+	mode = "nakrenew";
+	srvname = "dhcpcmdnak";
+	notes = chan[8] of string;
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn command("dhcp" :: "-m" :: "-p" :: "-x" :: Netdir :: Netdir+"/ifc" :: nil, done, pidc);
+	pid := <-pidc;
+	s := await(done, 30*1000);
+	t.assertseq(s, "nak", "a lease of four seconds is renewed, and the renewal refused");
+	if(s == "nak"){
+		s = await(done, 3000);
+		t.assertseq(s, "nothing", "and the command goes on");
+	}
+	killgrp(pid);
+	mode = "";
+}
+
+testCommandRetry(t: ref T)
+{
+	# dhcp -r -h myname: refused, it asks again for what it was told to
+	mode = "failfirst";
+	srvname = "dhcpcmdretry";
+	notes = chan[8] of string;
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn command("dhcp" :: "-r" :: "-h" :: "myname" :: "-x" :: Netdir :: Netdir+"/ifc" :: nil, done, pidc);
+	pid := <-pidc;
+	t.assertseq(await(done, 30*1000), "refused host=1", "the first request carries the host name, and is refused");
+	t.assertseq(await(done, 90*1000), "granted host=1", "the command's next attempt carries it too");
+	t.assertseq(await(done, 30*1000), "returned", "and the command ends");
+	killgrp(pid);
+	mode = "";
 }
 
 #
@@ -1068,7 +1360,11 @@ init(nil: ref Draw->Context, args: list of string)
 	dhcpclient->init();
 
 	run("Options", testOptions);
+	run("Strings", testStrings);
+	run("Timers", testTimers);
 	run("Exchange", testExchange);
+	run("CommandNak", testCommandNak);
+	run("CommandRetry", testCommandRetry);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

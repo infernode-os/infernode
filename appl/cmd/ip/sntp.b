@@ -1,7 +1,27 @@
 implement Sntp;
 
 #
-# rfc1361 (simple network time protocol)
+# rfc1361 (simple network time protocol), a client.
+#
+# A reply is taken only if it answers the request (RFC 4330 section 5).
+# The request carries 64 random bits as its transmit timestamp, and a
+# reply must give them back as its originate timestamp, come in server
+# mode from the address asked (the conversation is dialled, so the
+# kernel gives it no other's), be of a version up to 4, and say a time:
+# not leap indicator 3 (the server's clock is not set), not stratum 0
+# (a kiss-of-death: go away), not a transmit timestamp of zero.  A
+# datagram that is none of these is passed over and the next is read,
+# until the try's time is up.
+#
+# The request used to carry the client's own time as its originate
+# timestamp and nothing to match, and the reply's was never looked at:
+# any datagram with the server's address on it set the clock, to any
+# time from 2005 to 2036.  The header's fields were read from the wrong
+# bits (the version took the leap indicator's with it, so a server
+# saying its clock was unset, or a version 4 server, was "no response";
+# mode 6 was read as mode 2), stratum 0 was warned of and then used,
+# each refused datagram used up a try, and a clock that could not be
+# written was reported as set.
 #
 
 include "sys.m";
@@ -108,52 +128,113 @@ init(nil: ref Draw->Context, args: list of string)
 	replies := chan of ref SNTP;
 	spawn reader(conn.dfd, replies);
 
+	refused := 0;
+	lastwhy := "";
 	for(i:=0; i<Retries; i++){
 		request := SNTP.new(Version, ClientMode);
 		request.poll = 6;
-		request.orgtime = (big time() + Epoch)<<32;
+		request.xmttime = nonce();
 		b := request.pack();
 		if(sys->write(conn.dfd, b, len b) != len b){
 			sys->fprint(stderr, "sntp: UDP write failed: %r\n");
 			continue;
 		}
 		t := Timer.start(Delay);
-		alt{
+	Wait:
+		for(;;) alt{
 		reply := <-replies =>
-			t.stop();
-			if(reply == nil)
+			if(reply == nil){
+				t.stop();
 				quit("read error");
+			}
 			if(debug){
 				sys->fprint(stderr, "LI = %d, version = %d, mode = %d\n", reply.li, reply.vn, reply.mode);
 				if(reply.stratum == 1)
-					sys->fprint(stderr, "stratum = 1 (%s), ", reply.clockid);
+					sys->fprint(stderr, "stratum = 1 (%s), ", printable(reply.clockid));
 				else
 					sys->fprint(stderr, "stratum = %d, ", reply.stratum);
 				sys->fprint(stderr, "poll = %d, prec = %d\n", reply.poll, reply.precision);
 				sys->fprint(stderr, "rootdelay = %d, dispersion = %d\n", reply.rootdelay, reply.dispersion);
 			}
-			if(reply.vn == 0 || reply.vn > 3)
-				continue;	# unsupported version, ignored
-			if(reply.mode >= 6 || reply.mode == ClientMode)
-				continue;
 			now := ((reply.xmttime>>32)&16rFFFFFFFF) - Epoch;
-			if(now <= big 1120000000)
-				continue;
-			if(reply.li == 3 || reply.stratum == 0)	# unsynchronised
-				sys->fprint(stderr, "sntp: time server not synchronised to reference time\n");
+			why := refuse(reply, request, now);
+			if(why != nil){
+				# not an answer: the next datagram may be
+				refused++;
+				lastwhy = why;
+				if(debug)
+					sys->fprint(stderr, "sntp: reply passed over: %s\n", why);
+				continue Wait;
+			}
+			t.stop();
 			if(debug)
 				sys->print("%bd\n", now);
 			if(doset){
-				settime("#r/rtc", now);
-				settime("/dev/time", now*Microsec);
+				e := settime("#r/rtc", now, 0);
+				if(e == nil)
+					e = settime("/dev/time", now*Microsec, 1);
+				if(e != nil){
+					sys->fprint(stderr, "sntp: the clock was not set: %s\n", e);
+					quit("clock not set");
+				}
 			}
 			quit(nil);
 		<-t.timeout =>
-			continue;
+			break Wait;
 		}
 	}
-	sys->fprint(sys->fildes(2), "sntp: no response from server %s\n", server);
+	if(refused > 0){
+		sys->fprint(stderr, "sntp: no acceptable reply from server %s: %d passed over, the last: %s\n", server, refused, lastwhy);
+		quit("no acceptable reply");
+	}
+	sys->fprint(stderr, "sntp: no response from server %s\n", server);
 	quit("timeout");
+}
+
+# why a datagram is not the answer to request, or nil if it is
+refuse(reply, request: ref SNTP, now: big): string
+{
+	# RFC 4330 section 5: the originate timestamp is the request's
+	# transmit timestamp, or the reply answers something else (a
+	# request of another time, or none: a sender who never saw this one)
+	if(reply.orgtime != request.xmttime)
+		return "its originate timestamp is not this request's";
+	if(reply.mode != ServerMode)
+		return sys->sprint("mode %d, not a server's", reply.mode);
+	if(reply.vn == 0 || reply.vn > 4)
+		return sys->sprint("version %d", reply.vn);
+	if(reply.li == 3)
+		return "the server's clock is not set (leap indicator 3)";
+	if(reply.stratum == 0)
+		return "kiss-of-death (stratum 0): " + printable(reply.clockid);
+	if(reply.xmttime == big 0)
+		return "no transmit timestamp";
+	if(now <= big 1120000000)
+		return sys->sprint("a time before 2005 (%bd)", now);
+	return nil;
+}
+
+printable(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++)
+		if(s[i] >= ' ' && s[i] <= '~')
+			r[len r] = s[i];
+		else
+			r[len r] = '?';
+	return r;
+}
+
+# 64 bits nobody else can guess
+nonce(): big
+{
+	fd := sys->open("/dev/random", Sys->OREAD);
+	b := array[8] of byte;
+	if(fd == nil || sys->read(fd, b, len b) != len b){
+		sys->fprint(stderr, "sntp: /dev/random: %r\n");
+		quit("no random numbers");
+	}
+	return get8(b, 0);
 }
 
 reader(fd: ref Sys->FD, replies: chan of ref SNTP)
@@ -189,34 +270,16 @@ quit(s: string)
 	exit;
 }
 
-time(): int
+# Set a clock: nil, or why it was not set.  A clock that is not there
+# is not an error unless it must be (few machines have #r/rtc).
+settime(f: string, t: big, must: int): string
 {
-	n := rdn("#r/rtc");
-	if(n > big 300)	# ie, possibly set
-		return int n;
-	n = rdn("/dev/time");
-	if(n <= big 0)
-		return 0;
-	return int(n/big Microsec);
-}
-
-rdn(f: string): big
-{
-	fd := sys->open(f, Sys->OREAD);
-	if(fd == nil)
-		return big -1;
-	b := array[128] of byte;
-	n := sys->read(fd, b, len b);
-	if(n <= 0)
-		return big 0;
-	return big string b[0:n];
-}
-
-settime(f: string, t: big)
-{
+	if(!must && sys->stat(f).t0 < 0)
+		return nil;
 	fd := sys->open(f, Sys->OWRITE);
-	if(fd != nil)
-		sys->fprint(fd, "%bd", t);
+	if(fd == nil || sys->fprint(fd, "%bd", t) < 0)
+		return sys->sprint("%s: %r", f);
+	return nil;
 }
 
 get8(a: array of byte, i: int): big
@@ -238,8 +301,8 @@ SNTP.unpack(a: array of byte): ref SNTP
 	s := ref SNTP;
 	mode := int a[0];
 	s.li = mode>>6;
-	s.vn = (mode>>3);
-	s.mode = mode & 3;
+	s.vn = (mode>>3) & 7;
+	s.mode = mode & 7;
 	s.stratum = int a[1];
 	s.poll = int a[2];
 	if(s.poll & 16r80)

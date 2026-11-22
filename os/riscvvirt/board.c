@@ -125,7 +125,6 @@ boardharts(ulong *ids, int max)
  * The goldfish RTC: nanoseconds since the epoch, which QEMU takes from
  * the host. Reading the low word latches the high one.
  */
-extern ulong boottime;		/* ../port/devcons.c */
 
 ulong
 rtcseconds(void)
@@ -150,7 +149,6 @@ boardioprobe(void)
 	s = rtcseconds();
 	if(s != 0){
 		todset((vlong)s * 1000000000LL, 0, 0);
-		boottime = s - TK2SEC(MACHP(0)->ticks);
 		print("rtc:  goldfish says %lud seconds since the epoch; time of day set\n", s);
 	}else
 		print("rtc:  reads zero; time of day not set\n");

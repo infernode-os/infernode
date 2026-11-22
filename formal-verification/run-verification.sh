@@ -14,9 +14,18 @@
 #   ./run-verification.sh [small|medium|large]
 #
 # Verification levels:
-#   small  - Quick check (~1 minute)   - 2 processes, 3 pgrps, 3 channels
-#   medium - Standard check (~10 min)  - 3 processes, 4 pgrps, 4 channels
-#   large  - Thorough check (~1 hour+) - 4 processes, 5 pgrps, 5 channels
+#   small  - 2 processes, 2 pgrps, 4 channels, 1 path (exhaustive; see results/)
+#   medium - 3 processes, 4 pgrps, 4 channels, 3 paths (not exhaustible so far)
+#   large  - 4 processes, 5 pgrps, 5 channels, 3 paths (not attempted)
+#
+# Every pgrp costs two channels (slash and dot) in the spec, so a copy
+# (ForkWithForkNS/ForkWithNewNS) is only enabled while at least two channel
+# ids remain.  The small level used to have MaxChannels=3: the first process
+# took two, no copy was ever enabled, and every isolation invariant was
+# vacuous over the whole 19.3M-state run.  Before the main run this script
+# now checks that a copy, and a post-copy mount while parent and child are
+# both live, are reachable under the chosen constants, and refuses to run
+# otherwise.
 
 set -e
 
@@ -46,11 +55,16 @@ LEVEL="${1:-small}"
 case "$LEVEL" in
     small)
         MAX_PROC=2
-        MAX_PGRP=3
-        MAX_CHAN=3
-        MAX_PATH=2
+        MAX_PGRP=2      # one copy per behaviour
+        MAX_CHAN=4      # 2 for the first pgrp, 2 for the copy (5, leaving one to allocate
+                        # after the copy, did not finish on a 16 GB host: 60M+ distinct
+                        # states at depth 12 with the queue still growing)
+        MAX_PATH=1      # 2 paths did not finish either
         MAX_MOUNT=4
-        HEAP="${TLC_HEAP:-4g}"
+        MAX_CHANREF=2   # channel refcount bound; with the old implicit bound of 8
+                        # this configuration passed 250M distinct states (depth 16,
+                        # 21 GB of state) without finishing
+        HEAP="${TLC_HEAP:-8g}"
         ;;
     medium)
         MAX_PROC=3
@@ -58,6 +72,7 @@ case "$LEVEL" in
         MAX_CHAN=4
         MAX_PATH=3
         MAX_MOUNT=6
+        MAX_CHANREF=3
         HEAP="${TLC_HEAP:-16g}"
         ;;
     large)
@@ -66,6 +81,7 @@ case "$LEVEL" in
         MAX_CHAN=5
         MAX_PATH=3
         MAX_MOUNT=8
+        MAX_CHANREF=3
         HEAP="${TLC_HEAP:-32g}"
         ;;
     *)
@@ -85,6 +101,7 @@ echo "  MaxPgrps:     $MAX_PGRP"
 echo "  MaxChannels:  $MAX_CHAN"
 echo "  MaxPaths:     $MAX_PATH"
 echo "  MaxMountId:   $MAX_MOUNT"
+echo "  MaxChanRef:   $MAX_CHANREF"
 echo ""
 
 # Create results directory
@@ -103,6 +120,7 @@ CONSTANT MaxPgrps = $MAX_PGRP
 CONSTANT MaxChannels = $MAX_CHAN
 CONSTANT MaxPaths = $MAX_PATH
 CONSTANT MaxMountId = $MAX_MOUNT
+CONSTANT MaxChanRef = $MAX_CHANREF
 
 \* Safety Invariants
 INVARIANT TypeOK
@@ -125,12 +143,38 @@ ACTION_CONSTRAINT ActionConstraint
 ALIAS Alias
 EOF
 
+cd "$TLA_DIR"
+
+# Vacuity guard.  The isolation invariants are implications whose antecedent
+# needs a copied pgrp (and, for the interesting case, a mount made after the
+# copy while parent and child are both live).  Check that those states are
+# reachable under these constants: TLC must find a violation of each probe
+# in MC_Namespace.tla, quickly, or the main run would prove nothing.
+VACUITY_CFG="$RESULTS_DIR/MC_Namespace_${LEVEL}_vacuity.cfg"
+for probe in CopyNeverHappened LivePostCopyMountNeverHappened; do
+    sed -e '/^INVARIANT/d' -e '/^ALIAS/d' -e '/^ACTION_CONSTRAINT/d' "$CONFIG_FILE" > "$VACUITY_CFG"
+    echo "INVARIANT $probe" >> "$VACUITY_CFG"
+    echo "Vacuity check: $probe must be violated under these constants..."
+    set +e
+    java -Xmx2g -jar "$SCRIPT_DIR/tla2tools.jar" -config "$VACUITY_CFG" -workers auto \
+        -checkpoint 0 MC_Namespace.tla > "$RESULTS_DIR/tlc_vacuity_${LEVEL}_${probe}.txt" 2>&1
+    set -e
+    if ! grep -q "Invariant $probe is violated" "$RESULTS_DIR/tlc_vacuity_${LEVEL}_${probe}.txt"; then
+        echo "ERROR: $probe was never violated: the constants make the isolation"
+        echo "       invariants vacuous (no copy, or no post-copy mount, is reachable)."
+        echo "       See $RESULTS_DIR/tlc_vacuity_${LEVEL}_${probe}.txt"
+        exit 1
+    fi
+    echo "  reachable (probe violated, as required)"
+done
+rm -f "$VACUITY_CFG"
+echo ""
+
 echo "Running TLC model checker..."
 echo "This may take a while depending on the verification level."
 echo ""
 
 # Run TLC with unbuffered output to avoid losing progress data
-cd "$TLA_DIR"
 set +e
 OUTPUT_FILE="$RESULTS_DIR/tlc_output_$LEVEL.txt"
 
@@ -162,13 +206,8 @@ echo "Results saved to: $RESULTS_DIR/tlc_output_$LEVEL.txt"
 if [[ $TLC_EXIT -eq 0 ]]; then
     echo "STATUS: ALL PROPERTIES VERIFIED"
     echo ""
-    echo "The following properties were verified:"
-    echo "  - TypeOK: Type invariant holds"
-    echo "  - SafetyInvariant: Combined safety properties hold"
-    echo "  - RefCountNonNegative: Reference counts never go negative"
-    echo "  - NoUseAfterFree: Freed objects are not used"
-    echo "  - MountTableBounded: Mount tables contain valid references"
-    echo "  - NamespaceIsolation: Namespaces are properly isolated"
+    echo "The 11 invariants in $CONFIG_FILE held in every reachable state"
+    echo "of the TLA+ model (not of the C code; see METHODOLOGY.md section 10)."
 else
     echo "STATUS: VERIFICATION FAILED OR INCOMPLETE"
     echo "Check the output file for details."

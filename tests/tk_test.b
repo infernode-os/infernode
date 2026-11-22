@@ -125,6 +125,9 @@ testDoubleClick(t: ref T)
 	click(top, 20, 20, 5000);
 	click(top, 80, 60, 5100);
 	t.assertseq(heard(c), "up up ", "far apart: no double");
+	click(top, 20, 20, 7000);
+	click(top, 44, 38, 7200);
+	t.assertseq(heard(c), "up double up ", "a finger's second tap, 24 pixels off: a double");
 	click(top, 20, 20, 0);
 	click(top, 20, 20, 0);
 	t.assertseq(heard(c), "up up ", "no time stamps: no double");

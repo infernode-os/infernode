@@ -139,30 +139,16 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("indexpack: " + xerr);
 
 	# Rename pack using its SHA-1 checksum
-	git->renamepak(gitdir, packpath, packname);
+	check(git->renamepak(gitdir, packpath, packname));
 
 	if(verbose)
 		sys->fprint(stderr, "writing refs...\n");
 
-	# Write refs
-	for(rl = refs; rl != nil; rl = tl rl) {
-		r := hd rl;
-		name := r.name;
-
-		# Skip HEAD (handle separately)
-		if(name == "HEAD")
-			continue;
-
-		# Write remote tracking ref
-		if(len name > 11 && name[:11] == "refs/heads/") {
-			branchname := name[11:];
-			git->writeref(gitdir, "refs/remotes/origin/" + branchname, r.hash);
-		}
-
-		# Write tags
-		if(len name > 10 && name[:10] == "refs/tags/")
-			git->writeref(gitdir, name, r.hash);
-	}
+	# Write refs: the remote's branches as origin's, its tags as tags.
+	# (A loop here wrote each under the name the remote gave it.)
+	uerr := git->updaterefs(gitdir, "origin", refs, 0);
+	if(uerr != nil)
+		sys->fprint(stderr, "git/clone: warning: %s\n", uerr);
 
 	# Determine default branch and write local HEAD + branch ref
 	defaultbranch := "main";
@@ -190,7 +176,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Write local branch ref
 	if(!headhash.isnil())
-		git->writeref(gitdir, "refs/heads/" + defaultbranch, headhash);
+		check(git->writeref(gitdir, "refs/heads/" + defaultbranch, headhash));
 
 	# Write HEAD
 	headfd := sys->create(gitdir + "/HEAD", Sys->OWRITE, 8r644);
@@ -268,4 +254,11 @@ fail(msg: string)
 {
 	sys->fprint(stderr, "git/clone: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+# a ref or pack that was not written is not passed over
+check(err: string)
+{
+	if(err != nil)
+		fail(err);
 }

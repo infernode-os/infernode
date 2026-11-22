@@ -22,6 +22,7 @@ cons \- console device
 .B /dev/pointer
 .B /dev/random
 .B /dev/scancode
+.B /dev/strictlink
 .B /dev/sysctl
 .B /dev/sysname
 .B /dev/time
@@ -294,6 +295,17 @@ being destroyed,
 writing
 .B broken
 ensures that they are left in this state to allow debugging (the default).
+On a native kernel,
+.B "cnsamode on"
+makes every authentication from then on CNSA 2.0 strict (ML-KEM-1024),
+as the host's
+.B CNSAMODE
+does for the emulator: one way, for the whole machine, and refused once
+an authentication has run without it.
+.IR osinit (8)
+writes it at boot when the card has a
+.B cnsamode
+file.
 Only the privileged user is allowed to write to this file.
 .PP
 The
@@ -338,6 +350,22 @@ device are all single numbers:
 .B jit
 non-zero if `just in time' compilation is configured (can be written to change the state). Writing 0 turns off JIT compilation, 1 turns it on and larger values give increasingly
 detailed traces of the compilation for debugging purposes.
+.TP
+.B strictlink
+1 if modules are linked only by their type digests, 0 if a module with
+none is still linked by its 32-bit signatures (see
+.IR dis (6)).
+The host owner may write
+.B 1
+to make the system strict; nothing but that is accepted, so it stays strict
+until the system restarts.
+.I Emu
+starts strict when given
+.BR \-L ;
+the native kernel's
+.I init
+writes the file when the boot card has a file
+.BR strictlink .
 .TP
 .B msec
 the value of a millisecond counter

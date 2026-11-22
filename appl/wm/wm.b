@@ -38,10 +38,17 @@ Background: con int 16r777777FF;
 screen: ref Screen;
 display: ref Display;
 ptrfocus: ref Client;
+# each client's last "cursor" request (wmlib's, as Tk's cursor command
+# sends it: a link's hand in Charon), shown while the pointer is over
+# its window, as Lucifer does; "cursor" alone, the arrow, is kept as none
+cursors: list of (ref Client, string);
+shown := "cursor";	# the cursor the screen has
+lastxy: Point;	# where the pointer was last
 kbdfocus: ref Client;
 docked: ref Client;	# a keyboard on the screen ("dock"), above every other window
 controller: ref Client;
 allowcontrol := 1;
+forcec: chan of ref Client;		# a Delete the client did not take
 fakekbd: chan of string;
 fakekbdin: chan of string;
 buttons := 0;
@@ -143,6 +150,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	wmsize := startwmsize();
 	fakekbd = chan of string;
 	exitc := chan of int;
+	forcec = chan of ref Client;
 
 	# The windows, as a file (/chan/wmwindows, and /mnt/wm/wmwindows).
 	wmwindows := sys->file2chan("/chan", "wmwindows");
@@ -181,11 +189,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		retheme();
 	<-exitc =>
 		wmclient->win.wmctl("exit");
+	c := <-forcec =>
+		dropwindows(c);
 	c := <-wmctxt.kbd or
 	c = int <-fakekbd =>
 		if(kbdfocus != nil)
 			kbdfocus.kbd <-= c;
 	p := <-wmctxt.ptr =>
+		lastxy = p.xy;
 		if(wmclient->win.pointer(*p))
 			break;
 		if(held){
@@ -194,6 +205,18 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			if(p.buttons == 0)
 				held = 0;
 			break;
+		}
+		# the cursor of the window the pointer is over, or of the one a
+		# press went to while it is held; a frame's is the arrow
+		{
+			over := ptrfocus;
+			if(buttons == 0 || over == nil){
+				over = nil;
+				(fc, nil) := framehit(p.xy);
+				if(fc == nil)
+					over = wmsrv->find(p.xy);
+			}
+			setcursor(cursorof(over));
 		}
 		if(p.buttons && (ptrfocus == nil || buttons == 0)){
 			presspt = p.xy;
@@ -262,22 +285,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	(c, data, rc) := <-req =>
 		# if client leaving
 		if(rc == nil){
-			c.remove();
-			forgethidden(c);
-			setclientlabel(c, nil);
-			if(c == ptrfocus)
-				ptrfocus = nil;
-			if(c == kbdfocus)
-				kbdfocus = nil;
-			if(c == controller)
-				controller = nil;
-			if(c == docked)
-				docked = nil;
+			forgetclient(c);
 			controlevent("delclient " + string c.id);
-			for(z := wmsrv->top(); z != nil; z = z.znext)
-				if(z.flags & Kbdstarted)
-					break;
-			setkbdfocus(z);
 			c.stop <-= 1;
 			break;
 		}
@@ -402,6 +411,17 @@ handlerequest(win: ref Wmclient->Window, wmctxt: ref Wmcontext, c: ref Client, r
 		c.setimage(hd tl args, nil);
 		if(c.wins == nil && c == kbdfocus)
 			setkbdfocus(nil);
+	"cursor" =>
+		# cursor [hotx hoty w h bits]: the window's cursor from now on
+		ncs: list of (ref Client, string);
+		for(l := cursors; l != nil; l = tl l)
+			if((hd l).t0 != c)
+				ncs = hd l :: ncs;
+		cursors = ncs;
+		if(req != "cursor")
+			cursors = (c, req) :: cursors;
+		if(c == ptrfocus || c == wmsrv->find(lastxy))
+			setcursor(req);
 	"raise" =>
 		totop(c);
 	"lower" =>
@@ -1019,6 +1039,7 @@ wmwindowsproc(f: ref Sys->FileIO)
 # pointer, New, as rio's does: it only changes the cursor, and any button
 # but 3 cancels.  Returns whether the button is still down.
 
+Exitgrace: con 2000;	# ms for a client to take a Delete's exit
 Rnew, Rresize, Rmove, Rdelete, Rhide: con iota;
 menu3 := array[] of {"New", "Resize", "Move", "Delete", "Hide"};
 
@@ -1148,9 +1169,62 @@ retheme()
 		spawn tellctl((hd hl).ctl, "retheme");
 }
 
+# A client takes its exit in its own loop; wm cannot kill it, not knowing
+# its process.  One that has not taken it in Exitgrace is stuck (a read
+# that never ends, say) and its window goes from the screen, or Delete
+# would do nothing; it keeps the exit, and leaves if it ever wakes.  One
+# that took it and stays is asking its user something, and stays.
 tellexit(c: ref Client)
 {
 	c.ctl <-= "exit";
+	sys->sleep(Exitgrace);
+	if(c.ctlwaiting > 0)
+		forcec <-= c;
+}
+
+dropwindows(c: ref Client)
+{
+	for(z := wmsrv->top(); z != nil && z != c; z = z.znext)
+		;
+	if(z == nil)
+		return;	# it left, or was hidden and is on the menu
+	off := screen.image.r.max.add((10000, 10000));
+	for(wl := c.wins; wl != nil; wl = tl wl){
+		w := hd wl;
+		if(w.img != nil)
+			w.img.origin(w.img.r.min, off);
+	}
+	forgetclient(c);
+	c.znext = nil;		# top() relinks it: remove() leaves it set
+}
+
+forgetclient(c: ref Client)
+{
+	c.remove();
+	forgethidden(c);
+	setclientlabel(c, nil);
+	if(c == ptrfocus)
+		ptrfocus = nil;
+	if(c == kbdfocus)
+		kbdfocus = nil;
+	ncs: list of (ref Client, string);
+	for(l := cursors; l != nil; l = tl l)
+		if((hd l).t0 != c)
+			ncs = hd l :: ncs;
+	cursors = ncs;
+	if(c == controller)
+		controller = nil;
+	if(c == docked)
+		docked = nil;
+	for(z := wmsrv->top(); z != nil; z = z.znext)
+		if(z.flags & Kbdstarted)
+			break;
+	setkbdfocus(z);
+	# A window leaves the screen when its image is freed.  tellexit
+	# holds c through Exitgrace, so the images go now, not then.
+	for(wl := c.wins; wl != nil; wl = tl wl)
+		(hd wl).img = nil;
+	c.wins = nil;
 }
 
 # exitwhenempty: tell the main loop to exit once every window has gone
@@ -1192,6 +1266,9 @@ hide(c: ref Client)
 	hidden = c :: hidden;
 	if(kbdfocus == c)
 		setkbdfocus(wmsrv->top());
+	# what it draws is off the screen: an app that costs something while
+	# it is seen (a camera, an animation) can stop
+	spawn sendctl(c.ctl, "visible 0");
 }
 
 unhide(c: ref Client)
@@ -1223,6 +1300,7 @@ unhide(c: ref Client)
 	}
 	totop(c);
 	setkbdfocus(c);
+	spawn sendctl(c.ctl, "visible 1");
 }
 
 # Window labels (rio's /dev/label), from the clients' "label" requests.
@@ -1272,6 +1350,18 @@ setcursor(c: string)
 {
 	if(c == nil)
 		c = "cursor";
+	if(c == shown)
+		return;
+	shown = c;
 	if(wmwin != nil)
 		wmclient->wmwin.wmctl(c);
+}
+
+cursorof(c: ref Client): string
+{
+	if(c != nil)
+		for(l := cursors; l != nil; l = tl l)
+			if((hd l).t0 == c)
+				return (hd l).t1;
+	return "cursor";
 }

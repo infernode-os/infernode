@@ -5,7 +5,7 @@
 # Usage:
 #     tools/piromcheck.py [--firmware DIR] BOARD IMAGE
 #
-#     BOARD      rpi3bplus or rpi4b
+#     BOARD      rpi3bplus, rpizero2w, rpi4b or rpi5
 #     IMAGE      a whole-card image (MBR and all), as tools/mkpiimage.sh
 #                makes and as it would be written to a card
 #     --firmware DIR
@@ -52,17 +52,23 @@ BOOT = {
     # After a tryboot reset start.elf reads tryboot.txt instead of
     # config.txt: the firmware cards are made with ignores [tryboot].
     "rpi3bplus": (["bootcode.bin", "start.elf", "fixup.dat"], ["config.txt", "tryboot.txt"]),
+    # The Zero 2 W boots as the 3B+ does: the same ROM, the same files.
+    "rpizero2w": (["bootcode.bin", "start.elf", "fixup.dat"], ["config.txt", "tryboot.txt"]),
     # A Pi 4 boots from its EEPROM, which reads start4.elf, fixup4.dat,
     # config.txt and, after a tryboot reset, tryboot.txt instead.
     "rpi4b": (["start4.elf", "fixup4.dat"], ["config.txt", "tryboot.txt"]),
+    # A Pi 5's firmware is all in its EEPROM: the card has only config.
+    "rpi5": ([], ["config.txt", "tryboot.txt"]),
 }
 
 # What the firmware (start.elf, start4.elf) reads by long name: not 8.3,
 # so it has only an alias for a short name, and need not have more.
 LONG = {
     "rpi3bplus": [],
+    "rpizero2w": [],
     # the kernel reads no device tree, but start4.elf will not go on without it
     "rpi4b": ["bcm2711-rpi-4-b.dtb"],
+    "rpi5": ["bcm2712-rpi-5-b.dtb", "bcm2712d0-rpi-5-b.dtb"],
 }
 
 problems = []
@@ -106,7 +112,7 @@ def main():
     if len(args) >= 2 and args[0] == "--firmware":
         fwdir, args = args[1], args[2:]
     if len(args) != 2 or args[0] not in BOOT:
-        sys.stderr.write("usage: piromcheck.py [--firmware DIR] rpi3bplus|rpi4b IMAGE\n")
+        sys.stderr.write("usage: piromcheck.py [--firmware DIR] rpi3bplus|rpizero2w|rpi4b|rpi5 IMAGE\n")
         sys.exit(2)
     board, path = args
     img = open(path, "rb").read()
@@ -230,6 +236,8 @@ def main():
             bad("%s: max_framebuffers is %s, not 2: no second display"
                 % (name, s.get("max_framebuffers", "absent")))
         fq, fqmin = s.get("core_freq"), s.get("core_freq_min")
+        if board == "rpi5":	# its console is RP1's, on RP1's clock
+            fq = fqmin = "pinned"
         if fq is None or fq != fqmin:
             bad("%s: the core clock is not pinned (core_freq %s, core_freq_min %s): "
                 "the mini-UART console's baud would move with it" % (name, fq or "absent", fqmin or "absent"))

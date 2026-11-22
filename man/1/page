@@ -4,6 +4,9 @@ page \- show documents
 .SH SYNOPSIS
 .B wm/page
 [
+.B -s
+]
+[
 .B -r
 .I quarters
 ]
@@ -34,6 +37,24 @@ goes to the next file's first, and back.  Only the file shown is held
 open.  With no file named,
 .I page
 reads the document from its standard input.
+.PP
+With
+.BR -s ,
+standard input is a stream of documents, each ended by a line holding
+only a form feed: each is shown as it ends, in the last one's place,
+its kind found from its first bytes as for a file
+.RI ( docreg (2)).
+So a program writing a document each time something changes is drawn
+as it changes:
+.IP
+.EX
+{while {} {ns; echo; sleep 1}} | ns2mmd | wm/page -s
+.EE
+.PP
+draws the machines a name space reaches
+.RI ( ns2mmd (1)).
+.B -s
+takes no file names.
 .PP
 .B -r
 turns the pages

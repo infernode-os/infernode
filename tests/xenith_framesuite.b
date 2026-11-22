@@ -431,6 +431,7 @@ newframe(): ref Frame
 	f.tick = newimg("tick", tr, TICKPIX).img;
 	f.tickback = newimg("tickback", tr, OUTSIDE).img;
 	framem->frinit(f, entire, fakefont, screen.img, cols);
+	f.wrapword = wordwrap;
 	return f;
 }
 
@@ -444,11 +445,17 @@ Lay: adt {
 	y:	array of int;
 	w:	array of int;	# width drawn: W, a tab's width, or the rest of the line
 	wrapped:	array of int;	# 1 if a wrap (not a newline) put it on its line
+	hang:	array of int;	# 1: a blank past the line's end, filled, not drawn
 };
+
+# the frames made are laid out by word (frame.wrapword) and so is the model
+wordwrap := 0;
 
 layout(s: string): ref Lay
 {
-	l := ref Lay(0, array[len s] of int, array[len s] of int, array[len s] of int, array[len s] of int);
+	if(wordwrap)
+		return wordlay(s);
+	l := ref Lay(0, array[len s] of int, array[len s] of int, array[len s] of int, array[len s] of int, array[len s] of {* => 0});
 	minx := FR.min.x;
 	maxx := FR.max.x;
 	maxy := FR.max.y;
@@ -488,6 +495,94 @@ layout(s: string): ref Lay
 		}else
 			x += w;
 		l.n = i+1;
+	}
+	return l;
+}
+
+# The word-wrap rules: a word that does not fit where it is starts the
+# next line, unless it is wider than a line, when it fills the rest of
+# this one and goes on in the next; a blank that does not fit stays at
+# the line's end, as wide as the room left (none, after the first), so
+# no line starts with a blank a wrap put there. Tabs and newlines as
+# in layout.
+wordlay(s: string): ref Lay
+{
+	l := ref Lay(0, array[len s] of int, array[len s] of int, array[len s] of int, array[len s] of int, array[len s] of {* => 0});
+	minx := FR.min.x;
+	maxx := FR.max.x;
+	maxy := FR.max.y;
+	maxtab := 8*W;
+	x := minx;
+	y := FR.min.y;
+	for(i := 0; i < len s; ){
+		c := s[i];
+		if(c == ' '){
+			if(y >= maxy)
+				break;
+			w := W;
+			if(x+W > maxx){
+				w = maxx-x;
+				l.hang[i] = 1;
+			}
+			l.x[i] = x;
+			l.y[i] = y;
+			l.w[i] = w;
+			x += w;
+			l.n = ++i;
+			continue;
+		}
+		if(c == '\n' || c == '\t'){
+			wrap := 0;
+			if(c == '\t' && W > maxx-x){
+				x = minx;
+				y += H;
+				wrap = 1;
+			}
+			if(y >= maxy)
+				break;
+			w := maxx-x;
+			if(c == '\t'){
+				t := x + maxtab;
+				t -= (t-minx)%maxtab;
+				if(t-x < W || t > maxx)
+					t = x+W;
+				w = t-x;
+			}
+			l.x[i] = x;
+			l.y[i] = y;
+			l.w[i] = w;
+			l.wrapped[i] = wrap;
+			if(c == '\n'){
+				x = minx;
+				y += H;
+			}else
+				x += w;
+			l.n = ++i;
+			continue;
+		}
+		e := i;
+		while(e < len s && s[e] != ' ' && s[e] != '\n' && s[e] != '\t')
+			e++;
+		long := (e-i)*W > maxx-minx;
+		if(!long && x+(e-i)*W > maxx){
+			x = minx;
+			y += H;
+			l.wrapped[i] = 1;
+		}
+		for(; i < e; i++){
+			if(x+W > maxx){
+				x = minx;
+				y += H;
+				l.wrapped[i] = 1;
+			}
+			if(y >= maxy)
+				return l;
+			l.x[i] = x;
+			l.y[i] = y;
+			l.w[i] = W;
+			x += W;
+			l.n = i+1;
+		}
 	}
 	return l;
 }
@@ -570,7 +665,7 @@ screencheck(f: ref Frame, want: string): string
 			return sprint("frptofchar(%d) = %s, want (%d,%d)\n%s",
 				p, ps(pt), l.x[p], l.y[p], picture(screen, ROWS));
 		}
-		if(want[p] != '\n' && want[p] != '\t'){
+		if(want[p] != '\n' && want[p] != '\t' && l.w[p] > 0){
 			q := framem->frcharofpt(f, (pt.x+W/2, pt.y+H/2));
 			if(q != p){
 				return sprint("frcharofpt(frptofchar(%d)) = %d", p, q);
@@ -622,7 +717,7 @@ screencheck(f: ref Frame, want: string): string
 		for(y = l.y[p]; y < l.y[p]+H; y++)
 			for(x := l.x[p]; x < l.x[p]+l.w[p]; x++){
 				i := pix(exp, x, y);
-				if(want[p] == '\n' || want[p] == '\t')
+				if(want[p] == '\n' || want[p] == '\t' || l.hang[p])
 					exp.fill[i] = bg;
 				else{
 					exp.glyph[i] = want[p];
@@ -718,6 +813,9 @@ del(t: ref T, f: ref Frame, p0, p1: int): int
 	if(p1 > len model)
 		p1 = len model;
 	model = model[0:p0] + model[p1:];
+	# by word, a delete can take more lines: two words joined into
+	# one that no longer fits where the first began moves down
+	model = model[0:fits(model)];
 	return check(t, f, sprint("delete %d,%d", p0, p1));
 }
 
@@ -926,6 +1024,139 @@ testRandomEdits(t: ref T)
 	}
 }
 
+#
+# Word wrap (Wrap word): the frame of ten columns breaks between words
+#
+
+testWordBreak(t: ref T)
+{
+	f := fresh(t, "the quick brown fox");	# the quick / brown fox
+	if(f == nil)
+		return;
+	t.asserteq(f.nlines, 2, "nlines");
+	t.asserteq(framem->frptofchar(f, 10).x, FR.min.x, "brown starts a line");
+	ins(t, f, 4, "very ");		# the very / quick / brown fox
+	t.asserteq(f.nlines, 3, "nlines after");
+	del(t, f, 4, 9);		# and back up
+	ins(t, f, len model, " jumps over the lazy dog");
+	ins(t, f, 0, "\n");
+}
+
+testWordLong(t: ref T)
+{
+	# wider than a line: it fills the rest of this one and goes on
+	f := fresh(t, "ab 0123456789abcdef gh");
+	if(f == nil)
+		return;
+	ins(t, f, 3, "x");
+	del(t, f, 0, 3);		# now it starts the frame
+	ins(t, f, 0, "0123456789");	# exactly a line, then more
+}
+
+testWordHang(t: ref T)
+{
+	# blanks past the edge stay on the line: none starts the next
+	f := fresh(t, "0123456789   next");
+	if(f == nil)
+		return;
+	t.asserteq(framem->frptofchar(f, 13).x, FR.min.x, "next at the line's start");
+	ins(t, f, 11, " ");
+	del(t, f, 10, 13);
+	f = fresh(t, "abcdefgh  ij kl");	# the second blank hangs
+	if(f == nil)
+		return;
+	sel(t, f, 6, 12);		# a selection over the hanging blank
+	ins(t, f, 9, "z");
+}
+
+testWordJoin(t: ref T)
+{
+	# typing into a word at a line's start can pull it back up, or push
+	# the word before it down; a word made of boxes of several inserts
+	f := fresh(t, "aaaa bbbb cccccc dd");	# aaaa bbbb / cccccc dd
+	if(f == nil)
+		return;
+	del(t, f, 10, 14);		# cc fits after bbbb
+	ins(t, f, 11, "xyzw");		# and goes down again, in pieces
+	ins(t, f, 9, "q");
+	ins(t, f, 4, "");
+	del(t, f, 4, 5);		# aaaabbbbq: ten, one word
+}
+
+testWordDeleteGrows(t: ref T)
+{
+	# aaaaaa bb / cccc dddd / 1 / 2 / 3: the blank between bb and cccc
+	# deleted, bbcccc no longer fits after aaaaaa and moves down,
+	# dddd after it, and 3 goes off the bottom: a delete gaining a line
+	f := fresh(t, "aaaaaa bb cccc dddd\n1\n2\n3");
+	if(f == nil)
+		return;
+	startop();
+	n := framem->frdelete(f, 9, 10);
+	model = model[0:9] + model[10:];
+	model = model[0:fits(model)];
+	check(t, f, "delete 9,10");
+	t.asserteq(n, 0, "lines lost: none (it was full, and is)");
+	t.assertseq(model, "aaaaaa bbcccc dddd\n1\n2\n", "3 is gone");
+	t.asserteq(framem->frptofchar(f, 7).x, FR.min.x, "bbcccc starts a line");
+}
+
+testWordTabs(t: ref T)
+{
+	f := fresh(t, "ab\tcd ef gh\tij");
+	if(f == nil)
+		return;
+	ins(t, f, 0, "xxxxxxx ");
+	del(t, f, 0, 4);
+}
+
+testWordOverflow(t: ref T)
+{
+	f := fresh(t, "one two three four five six seven eight nine ten eleven");
+	if(f == nil)
+		return;
+	t.asserteq(f.lastlinefull, 1, "lastlinefull");
+	t.asserteq(f.nlines, ROWS, "nlines");
+	ins(t, f, 0, "zero ");
+	del(t, f, 0, 9);
+}
+
+# Random edits by word: words of every length to past a line, runs of
+# blanks, tabs and newlines
+testWordRandom(t: ref T)
+{
+	alphabet := "abcdefghijklmnop       \t\n";
+	for(seed := 1; seed <= 40; seed++){
+		rng = seed;
+		f := fresh(t, nil);
+		if(f == nil)
+			return;
+		for(step := 0; step < 80; step++){
+			ok: int;
+			case rand(5) {
+			0 or 1 or 2 =>
+				n := 1 + rand(14);
+				s := "";
+				for(i := 0; i < n; i++)
+					s[i] = alphabet[rand(len alphabet)];
+				ok = ins(t, f, rand(len model + 1), s);
+			3 =>
+				if(len model == 0)
+					continue;
+				p0 := rand(len model);
+				ok = del(t, f, p0, p0 + 1 + rand(len model - p0));
+			4 =>
+				p0 := rand(len model + 1);
+				ok = sel(t, f, p0, p0 + rand(len model - p0 + 1));
+			}
+			if(!ok){
+				t.log(sprint("seed %d, step %d", seed, step));
+				return;
+			}
+		}
+	}
+}
+
 run(name: string, testfn: ref fn(t: ref T))
 {
 	t := testing->newTsrc(name, SRCFILE);
@@ -975,6 +1206,27 @@ runsuite()
 	run("Selection", testSelection);
 	run("EditInsideSelection", testEditInsideSelection);
 	run("RandomEdits", testRandomEdits);
+
+	wordwrap = 1;
+	run("WordBreak", testWordBreak);
+	run("WordLong", testWordLong);
+	run("WordHang", testWordHang);
+	run("WordJoin", testWordJoin);
+	run("WordDeleteGrows", testWordDeleteGrows);
+	run("WordTabs", testWordTabs);
+	run("WordOverflow", testWordOverflow);
+	# the tests above, by word: what they check holds either way
+	run("WordInsertPlain", testInsertPlain);
+	run("WordInsertNewlines", testInsertNewlines);
+	run("WordInsertTabs", testInsertTabs);
+	run("WordWrapExact", testWrapExact);
+	run("WordOverflowLines", testOverflow);
+	run("WordDeletePartialAndFirst", testDeletePartialAndFirst);
+	run("WordDeleteAcrossWrap", testDeleteAcrossWrap);
+	run("WordSelection", testSelection);
+	run("WordEditInsideSelection", testEditInsideSelection);
+	run("WordRandomEdits", testWordRandom);
+	wordwrap = 0;
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

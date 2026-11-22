@@ -456,6 +456,18 @@ loop:
 	 */
 	if(p == 0 || p->mach) {
 		unlock(&runq[0].l);
+		/*
+		 * Not straight back round. A proc still marked with a core
+		 * is here until that core gets the lock to finish with it,
+		 * and this loop at splhi takes and frees that lock faster
+		 * than a core spinning in ready() can win it: on a Pi 5 the
+		 * lock read as held 20 million times in a row, with every
+		 * holder having released it, until lock() called it a loop
+		 * and panicked. Whether it did depended on where runq landed.
+		 * Let go for a moment, with interrupts on.
+		 */
+		spllo();
+		microdelay(1);
 		goto loop;
 	}
 	if(p->rnext == nil)
@@ -666,7 +678,13 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 	 * if killed or condition happened, never mind; or interrupted
 	 * while it was not asleep (intpend: swiproc)
 	 */
-	if(up->killed || up->intpend || f(arg)){
+	/*
+	 * A device layer may translate the first Eintr before a released Prog
+	 * returns to the VM.  Revocation is durable, so it may not sleep again
+	 * in that original call.  Exit cleanup uses bounded device-specific
+	 * waits under up->killing and is deliberately exempt here.
+	 */
+	if(up->killed || up->intpend || (up->killing == 0 && upkilled()) || f(arg)){
 		unlock(&r->l);
 	}else{
 
@@ -693,7 +711,7 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 		up->r = nil;
 	}
 
-	if(up->killed || up->swipend || up->intpend) {
+	if(up->killed || up->swipend || up->intpend || (up->killing == 0 && upkilled())) {
 		up->killed = 0;
 		up->swipend = 0;
 		up->intpend = 0;
@@ -803,9 +821,11 @@ wakeup(Rendez *r)
 		r->p = nil;
 		if(p->state != Wakeme)
 			panic("wakeup: state");
-		ready(p);
 	}
 	unlock(&r->l);
+	/* The awakened process can run now: hands off r before ready(). */
+	if(p)
+		ready(p);
 	splx(s);
 	return p != nil;
 }
@@ -829,7 +849,12 @@ swiproc(Proc *p, int interp)
 		if(r->p == p){
 			p->swipend = 1;
 			r->p = nil;
+			unlock(&r->l);
+			unlock(&p->rlock);
+			/* The interrupted process can run now: hands off r and p. */
 			ready(p);
+			splx(s);
+			return;
 		}
 		unlock(&r->l);
 	}else if(interp && p->iprog != nil){
@@ -846,6 +871,42 @@ swiproc(Proc *p, int interp)
 	}
 	unlock(&p->rlock);
 	splx(s);
+}
+
+/* Interrupt p only while it still carries this exact released Prog. */
+int
+swiprogproc(Proc *p, void *iprog)
+{
+	ulong s;
+	Rendez *r;
+
+	if(p == nil)
+		return 0;
+	s = splhi();
+	lock(&p->rlock);
+	if(p->iprog != iprog){
+		unlock(&p->rlock);
+		splx(s);
+		return 0;
+	}
+	p->intpend = 1;
+	r = p->r;
+	if(r != nil){
+		lock(&r->l);
+		if(r->p == p){
+			p->swipend = 1;
+			r->p = nil;
+			unlock(&r->l);
+			unlock(&p->rlock);
+			ready(p);
+			splx(s);
+			return 1;
+		}
+		unlock(&r->l);
+	}
+	unlock(&p->rlock);
+	splx(s);
+	return 1;
 }
 
 void
@@ -936,6 +997,36 @@ procstacks(void)
 			print(" prog %d", iprogpid(p->iprog));
 		print("\n");
 		labelstack(p);
+	}
+}
+
+/*
+ * For vmdump (dis.c, the debug key 'v'): every process that runs v's
+ * interpreter -- type Interp, or one that has taken it to run a Prog
+ * -- and what it is doing. The one that has it now is the Interp
+ * process with no saved Prog that is not queueing for it.
+ */
+void
+vmprocdump(struct Vm *v)
+{
+	int i;
+	Proc *p;
+	char *how;
+
+	for(i=0; i<conf.nproc; i++) {
+		p = &procalloc.arena[i];
+		if(p->state == Dead || p->vm != v)
+			continue;
+		if(p->type == Interp && p->iprog == nil && p->state != Queueing)
+			how = "HOLDS THE VM";
+		else if(p->state == Queueing)
+			how = "queued";
+		else if(p->type == Interp)
+			how = "released";
+		else
+			how = "";
+		print("  proc %lud %s %s pc %.8lux qpc %.8lux %s\n",
+			p->pid, p->text, statename[p->state], p->pc, p->qpc, how);
 	}
 }
 

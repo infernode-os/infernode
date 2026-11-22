@@ -83,12 +83,10 @@ _string(Image *dst, Point pt, Image *src, Point sp, Font *f, char *s, Rune *r, i
 			max = len;
 		n = cachechars(f, sptr, rptr, cbuf, max, &wid, &subfontname);
 		if(n > 0){
-			_setdrawop(dst->display, op);
-
 			m = 47+2*n;
 			if(bg)
 				m += 4+2*4;
-			b = bufimage(dst->display, m);
+			b = _bufimageop(dst->display, m, op);
 			if(b == 0){
 				_drawprint(2, "string: %r\n");
 				break;

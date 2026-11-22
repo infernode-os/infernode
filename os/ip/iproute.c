@@ -35,6 +35,11 @@ Route*	v6freelist;
 RWlock	routelock;
 ulong	v4routegeneration, v6routegeneration;
 
+enum {
+	Maxroutenodes	= 1<<16,	/* of each family: 64 short prefixes, or as many host routes */
+};
+static int v4nodes, v6nodes;	/* in use, under routelock */
+
 static void
 freeroute(Route *r)
 {
@@ -42,12 +47,58 @@ freeroute(Route *r)
 
 	r->left = nil;
 	r->right = nil;
-	if(r->type & Rv4)
+	if(r->type & Rv4){
 		l = &v4freelist;
-	else
+		v4nodes--;
+	} else {
 		l = &v6freelist;
+		v6nodes--;
+	}
 	r->mid = *l;
 	*l = r;
+}
+
+/*
+ * Room for n more nodes of a family?  A route is a node in every hash
+ * bucket its range crosses, 1024 of them for any short prefix, and
+ * routes are added by whoever is on the link (a router advertisement's
+ * prefixes): with no limit the table grew until malloc failed, and
+ * allocroute's answer to that is a panic.  A route there is no room
+ * for is refused, and said so once.
+ */
+static int
+routeroom(int nodes, int n)
+{
+	return n >= 0 && n <= Maxroutenodes && nodes <= Maxroutenodes - n;
+}
+
+/*
+ * A mask is ones and then zeros.  Any other gives a range that is not
+ * a prefix, which the tree's comparisons take for contained in ranges
+ * it only overlaps: the node goes where lookups do not reach.
+ */
+static int
+routemaskok(uchar *mask, int n)
+{
+	int i, seenzero;
+	uchar m;
+
+	seenzero = 0;
+	for(i = 0; i < n; i++){
+		m = mask[i];
+		if(seenzero){
+			if(m != 0)
+				return 0;
+			continue;
+		}
+		if(m == 0xff)
+			continue;
+		seenzero = 1;
+		/* a byte of ones then zeros: its complement plus one is a power of two */
+		if(((uchar)~m & (uchar)(~m + 1)) != 0)
+			return 0;
+	}
+	return 1;
 }
 
 static Route*
@@ -73,6 +124,10 @@ allocroute(int type)
 		if(r == nil)
 			panic("out of routing nodes");
 	}
+	if(type & Rv4)
+		v4nodes++;
+	else
+		v6nodes++;
 	memset(r, 0, n);
 	r->type = type;
 	r->ifc = nil;
@@ -305,6 +360,21 @@ addnode(Fs *f, Route **cur, Route *new)
 
 #define	V4H(a)	((a&0x07ffffff)>>(32-Lroot-5))
 
+/* said once for each family: a table filled from the link fills again */
+static void
+routefull(char *family)
+{
+	static int said[2];
+	int i;
+
+	i = family[1] == '6';
+	if(!said[i]){
+		said[i] = 1;
+		print("iproute: %s route table is full (%d nodes); further routes are refused\n",
+			family, Maxroutenodes);
+	}
+}
+
 void
 v4addroute(Fs *f, char *tag, uchar *a, uchar *mask, uchar *gate, int type)
 {
@@ -318,7 +388,24 @@ v4addroute(Fs *f, char *tag, uchar *a, uchar *mask, uchar *gate, int type)
 	sa = nhgetl(a) & m;
 	ea = sa | ~m;
 
+	if(!routemaskok(mask, IPv4addrlen))
+		return;
+
+	/*
+	 * One hold of the lock for the whole route.  The nodes come from a
+	 * free list the lock guards, so taking one outside it let two adds
+	 * take the same node and link it into two trees; a route across
+	 * several buckets was in some and not others between holds; and
+	 * the generation, which is what tells a conversation its cached
+	 * route may be gone, was counted after the lock was let go.
+	 */
 	eh = V4H(ea);
+	wlock(&routelock);
+	if(!routeroom(v4nodes, eh - V4H(sa) + 1)){
+		wunlock(&routelock);
+		routefull("v4");
+		return;
+	}
 	for(h=V4H(sa); h<=eh; h++) {
 		p = allocroute(Rv4 | type);
 		p->v4.address = sa;
@@ -326,16 +413,15 @@ v4addroute(Fs *f, char *tag, uchar *a, uchar *mask, uchar *gate, int type)
 		memmove(p->v4.gate, gate, sizeof(p->v4.gate));
 		memmove(p->tag, tag, sizeof(p->tag));
 
-		wlock(&routelock);
 		addnode(f, &f->v4root[h], p);
 		while(p = f->queue) {
 			f->queue = p->mid;
 			walkadd(f, &f->v4root[h], p->left);
 			freeroute(p);
 		}
-		wunlock(&routelock);
 	}
 	v4routegeneration++;
+	wunlock(&routelock);
 
 	ipifcaddroute(f, Rv4, a, mask, gate, type);
 }
@@ -364,7 +450,17 @@ v6addroute(Fs *f, char *tag, uchar *a, uchar *mask, uchar *gate, int type)
 		ea[h] = x | ~y;
 	}
 
+	if(!routemaskok(mask, IPaddrlen))
+		return;
+
+	/* one hold of the lock for the whole route: see v4addroute */
 	eh = V6H(ea);
+	wlock(&routelock);
+	if(!routeroom(v6nodes, eh - V6H(sa) + 1)){
+		wunlock(&routelock);
+		routefull("v6");
+		return;
+	}
 	for(h = V6H(sa); h <= eh; h++) {
 		p = allocroute(type);
 		memmove(p->v6.address, sa, IPaddrlen);
@@ -372,16 +468,15 @@ v6addroute(Fs *f, char *tag, uchar *a, uchar *mask, uchar *gate, int type)
 		memmove(p->v6.gate, gate, IPaddrlen);
 		memmove(p->tag, tag, sizeof(p->tag));
 
-		wlock(&routelock);
 		addnode(f, &f->v6root[h], p);
 		while(p = f->queue) {
 			f->queue = p->mid;
 			walkadd(f, &f->v6root[h], p->left);
 			freeroute(p);
 		}
-		wunlock(&routelock);
 	}
 	v6routegeneration++;
+	wunlock(&routelock);
 
 	ipifcaddroute(f, 0, a, mask, gate, type);
 }
@@ -428,9 +523,9 @@ v4delroute(Fs *f, uchar *a, uchar *mask, int dolock)
 	rt.type = Rv4;
 
 	eh = V4H(rt.v4.endaddress);
+	if(dolock)
+		wlock(&routelock);
 	for(h=V4H(rt.v4.address); h<=eh; h++) {
-		if(dolock)
-			wlock(&routelock);
 		r = looknode(&f->v4root[h], &rt);
 		if(r) {
 			p = *r;
@@ -447,10 +542,11 @@ v4delroute(Fs *f, uchar *a, uchar *mask, int dolock)
 				}
 			}
 		}
-		if(dolock)
-			wunlock(&routelock);
 	}
+	/* before the lock is let go: a lookup holding it must not find the old count and a freed route */
 	v4routegeneration++;
+	if(dolock)
+		wunlock(&routelock);
 
 	ipifcremroute(f, Rv4, a, mask);
 }
@@ -472,9 +568,9 @@ v6delroute(Fs *f, uchar *a, uchar *mask, int dolock)
 	rt.type = 0;
 
 	eh = V6H(rt.v6.endaddress);
+	if(dolock)
+		wlock(&routelock);
 	for(h=V6H(rt.v6.address); h<=eh; h++) {
-		if(dolock)
-			wlock(&routelock);
 		r = looknode(&f->v6root[h], &rt);
 		if(r) {
 			p = *r;
@@ -491,10 +587,10 @@ v6delroute(Fs *f, uchar *a, uchar *mask, int dolock)
 				}
 			}
 		}
-		if(dolock)
-			wunlock(&routelock);
 	}
 	v6routegeneration++;
+	if(dolock)
+		wunlock(&routelock);
 
 	ipifcremroute(f, 0, a, mask);
 }
@@ -507,11 +603,20 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 	uchar gate[IPaddrlen];
 	Ipifc *ifc;
 
-	if(c != nil && c->r != nil && c->r->ifc != nil && c->rgen == v4routegeneration)
-		return c->r;
-
 	la = nhgetl(a);
 	q = nil;
+	rlock(&routelock);
+	/*
+	 * The cache is one route for the conversation, of whichever family
+	 * it last sent to, and the two generations are counted apart: a
+	 * route of the other family whose count happens to be the same is
+	 * not this family's route (a v6 node read as v4 is a gateway of
+	 * address bytes; a v4 node read as v6 is read past its end).
+	 */
+	if(c != nil && c->r != nil && (c->r->type & Rv4) != 0 && c->rgen == v4routegeneration){
+		q = c->r;
+		goto resolve;
+	}
 	for(p=f->v4root[V4H(la)]; p;)
 		if(la >= p->v4.address) {
 			if(la <= p->v4.endaddress) {
@@ -522,7 +627,17 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 		} else
 			p = p->left;
 
-	if(q && (q->ifc == nil || q->ifcid != q->ifc->ifcid)){
+
+resolve:
+	if(q != nil){
+		ifc = q->ifc;
+		if(ifc != nil && canrlock(&ifc->rwl)){
+			if(ifc->ifcid == q->ifcid){
+				runlock(&ifc->rwl);
+				goto resolved;
+			}
+			runlock(&ifc->rwl);
+		}
 		if(q->type & Rifc) {
 			hnputl(gate+IPv4off, q->v4.address);
 			memmove(gate, v4prefix, IPv4off);
@@ -530,16 +645,21 @@ v4lookup(Fs *f, uchar *a, Conv *c)
 			v4tov6(gate, q->v4.gate);
 		ifc = findipifc(f, gate, q->type);
 		if(ifc == nil)
-			return nil;
-		q->ifc = ifc;
-		q->ifcid = ifc->ifcid;
+			q = nil;
+		else {
+			q->ifc = ifc;
+			q->ifcid = ifc->ifcid;
+			runlock(&ifc->rwl);
+		}
 	}
 
+resolved:
 	if(c != nil){
 		c->r = q;
 		c->rgen = v4routegeneration;
 	}
 
+	runlock(&routelock);
 	return q;
 }
 
@@ -559,13 +679,15 @@ v6lookup(Fs *f, uchar *a, Conv *c)
 			return q;
 	}
 
-	if(c != nil && c->r != nil && c->r->ifc != nil && c->rgen == v6routegeneration)
-		return c->r;
-
 	for(h = 0; h < IPllen; h++)
 		la[h] = nhgetl(a+4*h);
 
 	q = 0;
+	rlock(&routelock);
+	if(c != nil && c->r != nil && (c->r->type & Rv4) == 0 && c->rgen == v6routegeneration){
+		q = c->r;
+		goto resolve;
+	}
 	for(p=f->v6root[V6H(la)]; p;){
 		for(h = 0; h < IPllen; h++){
 			x = la[h];
@@ -594,7 +716,17 @@ v6lookup(Fs *f, uchar *a, Conv *c)
 next:		;
 	}
 
-	if(q && (q->ifc == nil || q->ifcid != q->ifc->ifcid)){
+
+resolve:
+	if(q != nil){
+		ifc = q->ifc;
+		if(ifc != nil && canrlock(&ifc->rwl)){
+			if(ifc->ifcid == q->ifcid){
+				runlock(&ifc->rwl);
+				goto resolved;
+			}
+			runlock(&ifc->rwl);
+		}
 		if(q->type & Rifc) {
 			for(h = 0; h < IPllen; h++)
 				hnputl(gate+4*h, q->v6.address[h]);
@@ -602,15 +734,20 @@ next:		;
 		} else
 			ifc = findipifc(f, q->v6.gate, q->type);
 		if(ifc == nil)
-			return nil;
-		q->ifc = ifc;
-		q->ifcid = ifc->ifcid;
+			q = nil;
+		else {
+			q->ifc = ifc;
+			q->ifcid = ifc->ifcid;
+			runlock(&ifc->rwl);
+		}
 	}
+
+resolved:
 	if(c != nil){
 		c->r = q;
 		c->rgen = v6routegeneration;
 	}
-	
+	runlock(&routelock);
 	return q;
 }
 
@@ -816,6 +953,9 @@ routewrite(Fs *f, Chan *c, char *p, int n)
 		nexterror();
 	}
 
+	if(cb->nf < 1)
+		error(Ebadarg);		/* an empty write has no f[0] to compare */
+
 	if(strcmp(cb->f[0], "flush") == 0){
 		tag = cb->f[1];
 		for(h = 0; h < nelem(f->v4root); h++)
@@ -845,6 +985,8 @@ routewrite(Fs *f, Chan *c, char *p, int n)
 		parseip(addr, cb->f[1]);
 		parseipmask(mask, cb->f[2]);
 		parseip(gate, cb->f[3]);
+		if(!routemaskok(mask, IPaddrlen))
+			error(Ebadarg);
 		tag = "none";
 		if(c != nil){
 			a = c->aux;
@@ -855,7 +997,7 @@ routewrite(Fs *f, Chan *c, char *p, int n)
 		else
 			v6addroute(f, tag, addr, mask, gate, 0);
 	} else if(strcmp(cb->f[0], "tag") == 0) {
-		if(cb->nf < 2)
+		if(cb->nf < 2 || c == nil)
 			error(Ebadarg);
 
 		a = c->aux;

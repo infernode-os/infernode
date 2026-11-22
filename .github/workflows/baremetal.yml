@@ -80,6 +80,7 @@ on:
       - 'tools/piromcheck.py'
       - 'tools/pi-firmware.sh'
       - 'tools/pi-*manifest.txt'
+      - 'tools/pi-*manifest-*.txt'
       - 'tests/host/piimage_boot_test.sh'
       - 'tests/host/qemu/**'
       - '.github/workflows/baremetal.yml'
@@ -95,6 +96,7 @@ on:
       - 'tools/piromcheck.py'
       - 'tools/pi-firmware.sh'
       - 'tools/pi-*manifest.txt'
+      - 'tools/pi-*manifest-*.txt'
       - 'tests/host/piimage_boot_test.sh'
       - '.github/workflows/baremetal.yml'
   workflow_dispatch:
@@ -139,6 +141,12 @@ jobs:
             least: 38
             last: 'PASS: bcm2711: Lucifer draws the desktop on the firmware framebuffer'
             qemu: 9.2.4
+          # The Raspberry Pi 5. No QEMU models one, so this only builds:
+          # the board is the test (os/bcm2712/README.md).
+          - platform: bcm2712
+            timeout: 20
+            least: 2
+            last: 'PASS: bcm2712: kernel cross-builds for aarch64-elf'
     env:
       ROOT: ${{ github.workspace }}
       PLATFORM: ${{ matrix.platform }}

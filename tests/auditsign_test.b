@@ -122,11 +122,13 @@ testRoundtripSignVerify(t: ref T)
 	# sign with the reconstructed key, verify with the matching public key
 	pk := kr->sktopk(sk);
 	content := array of byte "audit-checkpoint deadbeef 42";
-	state := kr->sha256(content, len content, nil, nil);
-	cert := kr->sign(sk2, 0, state, "sha256");
+	# The production audit signer pairs ML-DSA-87 with SHA-384.  Exercising
+	# SHA-256 here missed failures in the actual certificate path.
+	state := kr->sha384(content, len content, nil, nil);
+	cert := kr->sign(sk2, 0, state, "sha384");
 	if(cert == nil)
 		t.fatal("sign with reconstructed key failed");
-	vstate := kr->sha256(content, len content, nil, nil);
+	vstate := kr->sha384(content, len content, nil, nil);
 	t.assertne(kr->verify(pk, cert, vstate), 0, "cert verifies under the public key");
 }
 

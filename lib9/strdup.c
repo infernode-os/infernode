@@ -4,9 +4,12 @@ char*
 strdup(const char *s) 
 {  
 	char *os;
+	size_t n;
 
-	os = malloc(strlen(s) + 1);
+	n = strlen(s) + 1;
+	os = malloc(n);
 	if(os == 0)
 		return 0;
-	return strcpy(os, s);
+	memmove(os, s, n);
+	return os;
 }

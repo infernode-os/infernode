@@ -34,6 +34,7 @@ Wmsrv: module{
 		ctl:		chan of string;
 		stop:		chan of int;
 		flags:	int;			# general purpose.
+		ctlwaiting:	int;		# it has ctl messages not yet taken
 		cursor:	string;		# hack.
 		wins:	list of ref Window;
 		znext:	cyclic ref Client;

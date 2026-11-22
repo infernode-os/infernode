@@ -18,6 +18,8 @@ Att: module
 
 	Cid:		con 4;		# the fixed L2CAP channel
 	Defmtu:		con 23;
+	Maxchars:	con 256;	# the most characteristics kept of one service,
+	Maxdescs:	con 64;		# and descriptors of one characteristic
 
 	# opcodes, 3.4.8
 	Oerror:		con 16r01;

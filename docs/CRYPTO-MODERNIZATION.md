@@ -84,8 +84,8 @@ After these changes:
 - **Signatures:** Ed25519 provides 128-bit security with deterministic signatures
 - **Certificates:** SHA-256 hash prevents collision attacks
 - **Key exchange:** 2048-bit DH provides ~112-bit security
-- **Login EKE:** ChaCha20-Poly1305 AEAD with 256-bit key (replaces RC4-40)
-- **SSL3 negotiation:** Weak ciphers rejected during handshake (no downgrade)
+- **Login EKE:** login(6) version 2: nothing a guessed password can be tested against (see "Login: version 2")
+- **TLS:** 1.3 and 1.2 with AEAD suites only (the SSL 3.0 client and its suites are gone)
 - **Revocation:** CRL-based certificate revocation checking
 - **Transport:** WireGuard + Rosenpass handles (external to Inferno)
 
@@ -106,6 +106,11 @@ The login EKE protocol's temporary encryption of the DH exchange now uses ChaCha
 
 **Breaking change:** Clients and servers must both be updated. Old clients cannot authenticate with new servers and vice versa.
 
+**Superseded by login version 2** (below, "Login: version 2"). Sealing the
+signer's Diffie-Hellman value with an AEAD gave anybody who asked for it a
+tag to test passwords against; the value now goes under the cipher's
+keystream with no tag.
+
 ### 6. SSL3 Weak Cipher Suite Rejection (Phase 5)
 
 Weak cipher suites are now rejected during SSL3 negotiation before selection, rather than failing late during cipher activation.
@@ -121,27 +126,70 @@ Weak cipher suites are now rejected during SSL3 negotiation before selection, ra
 **Remaining allowed suites:** 3DES-EDE-CBC and IDEA-CBC with RSA/DH/DHE key exchange and SHA-1 MAC.
 
 **Files modified:**
-- `appl/lib/crypt/ssl3.b` - Added `is_weak_suite()` filter in `find_cipher_suite()`
+- `appl/lib/crypt/ssl3.b` - Added `is_weak_suite()` filter in `find_cipher_suite()` (the module has since been removed: nothing in the tree speaks SSL 3.0; POP3 and webget's https use `tls(2)`)
 
 ### 7. Certificate Revocation Lists (Phase 5)
 
-X.509 certificate verification now checks CRLs loaded from `/lib/crls/*.der`.
+X.509 path validation (`X509->verify_certchain`, `verify_certchain_roots`) checks CRLs.
 
 | Aspect | Before | After |
 |--------|--------|-------|
 | Revocation checking | None | **CRL-based** |
-| CRL store | N/A | **`/lib/crls/*.der`** (DER-encoded CRLs) |
-| Check point | N/A | **During `verify_certpath()`** |
+| CRL store | N/A | **`/lib/crls/*.der`** (DER-encoded CRLs), read again whenever a file there changes |
+| A caller's CRLs | N/A | **`verify_certchain_roots(cs, roots, crls, now, usage)`**: each CRL signed by a root, or by a CA of the chain with the key the path verified (and cRLSign, if the CA has a keyUsage) |
+| Check point | N/A | **As each certificate's issuer is found on the path**; an intermediate given as a trust anchor is checked against the roots' CRLs too |
 
-**Files modified:**
-- `appl/lib/crypt/x509.b` - CRL store loading and revocation checking in cert path validation
-- `lib/crls/` - New directory for CRL DER files
+A CRL past its `nextUpdate` is still applied (and said so on standard error when the store
+is read): a stale list still names what it revoked. A CRL that cannot be used (not DER, a
+critical extension that is not processed, a signature that is not its issuer's, an issuer
+that is neither a root nor in the chain) fails every verification rather than being left
+out. The store's own CRLs are not signature-checked: the directory is the administrator's.
+Nothing fetches CRLs, and there is no OCSP.
+
+**Files:**
+- `appl/lib/crypt/x509.b` - `check_revoked`, `load_crl_store`
+- `lib/crls/` - directory for CRL DER files (ships empty)
+
+### 8. X.509 and TLS, as they stand (tranche-6 review)
+
+The certificate code was reviewed against RFC 5280 and the TLS code against RFC 8446 and
+RFC 5246; what follows replaces the earlier descriptions of both.
+
+- **One reading of a certificate.** `asn1.b` decodes DER and nothing else (it took BER),
+  and no longer encodes. A certificate's two signature algorithms are compared
+  (RFC 5280 4.1.1.2); validity times are the two forms of 4.1.2.5; an EC key is a point of
+  the curve its certificate names (P-256 or P-384, uncompressed); an ECDSA signature is DER;
+  string types are decoded as what they are and a name has no NUL.
+- **Keys and signatures taken.** RSA PKCS #1 v1.5 with a modulus of 2048 to 8192 bits and
+  an odd exponent of 3 or more, and ECDSA P-256 and P-384, each with SHA-256, SHA-384 or
+  SHA-512. Nothing else: no MD5 or SHA-1, no DSA, no RSA-PSS in certificates (TLS 1.3's
+  CertificateVerify takes RSA-PSS), no post-quantum signature in a certificate.
+- **Path validation.** Signatures, validity (the anchor's too), basicConstraints,
+  pathLenConstraint, keyUsage, name constraints, critical extensions processed or refused,
+  and a usage: every certificate below the anchor with an extendedKeyUsage must allow
+  server (or client) authentication, CAs as well as the leaf.
+- **What was removed.** `ssl3.b` and `sslsession.b`; from `pkcs.b` everything but the OID
+  table, `RSAKey`, `decode_rsapubkey` and `rsa_encrypt` (PKCS #1 decryption and signing,
+  DSS, PKCS #3 Diffie-Hellman, PKCS #5 password-based DES); from `x509.b` every encoder,
+  `Signed.sign`, `verify_certpath` and the extension classes the path reads for itself;
+  `asn1->encode`.
+- **TLS after the handshake.** `Conn.read` is data, 0 for the peer's close_notify, or -1
+  with the reason in the error string; record sizes are held to RFC 8446 5.1 and 5.2;
+  KeyUpdate is handled both ways and sent before AES-GCM's limit of records under a key
+  (5.5); renegotiation is refused. A TLS 1.2 client asked for a certificate sends an
+  empty one (it has none to give under TLS 1.2).
+- **The node-to-node exchange.** After `Keyring->auth`, the client's choice of ssl
+  algorithm is confirmed by both ends with the shared secret and made part of ssl's keys
+  (`appl/lib/auth.b`, version 2 of the exchange): it used to be one unauthenticated
+  message. Both ends of a connection must be of this version.
+
+See [`compliance/X509-mTLS.md`](compliance/X509-mTLS.md) for the evidence, test by test.
 
 ## What's Not Changed
 
-### HMAC-SHA1 in SSL3
+### HMAC-SHA1
 
-SHA-1 usage in HMAC contexts remains (HMAC-SHA1 is still considered secure; the attacks on SHA-1 are collision attacks, not applicable to HMAC).
+HMAC-SHA1 remains where a protocol still names it (HMAC-SHA1 is still considered secure; the attacks on SHA-1 are collision attacks, not applicable to HMAC). The SSL 3.0 client that used it is gone.
 
 ## Migration Guide
 
@@ -151,26 +199,47 @@ SHA-1 usage in HMAC contexts remains (HMAC-SHA1 is still considered secure; the 
    ```sh
    # Generate new signer key with Ed25519
    auth/createsignerkey -a ed25519 signer_name
+   # or, in CNSA mode (ML-DSA-87, SHA-384, a 3072-bit group; -a and -b
+   # naming anything else are refused in the mode)
+   auth/createsignerkey -c signer_name
 
    # Recreate user accounts
    auth/changelogin username
    ```
+   A signer key made with `-c` before the mode was a rule has a 2048-bit
+   Diffie-Hellman group and is refused by `logind` in CNSA mode: make it
+   again. `createsignerkey -b` takes 2048 to 4096 bits (it took 32).
 
 2. **Update client certificates:**
    - Old certificates will fail verification (SHA-1 vs SHA-256)
    - Clients must re-authenticate to get new certificates
 
 3. **Update all clients and servers together:**
-   - Login protocol now uses ChaCha20-Poly1305 AEAD (incompatible with RC4 version)
+   - Login is version 2 of `login(6)` (incompatible with every exchange before it)
    - Both `login.b` (client) and `logind.b` (server) must be updated simultaneously
+
+   What needs no action, because the programs do it:
+   - `keyfs` converts a key file in the old format (AES-CBC under one SHA-1)
+     to the current one (PBKDF2-HMAC-SHA-384, AES-256-GCM) when it starts,
+     and says so; a backup made before is still in the old format.
+   - A secstore account's verifier is moved to version 4 (made at the file
+     key's cost) by its next login; the old verifier is removed after the
+     first version 4 login (secstored(8)).
+
+   What does need action:
+   - A secstore file still in one of the two formats before SGCM2 is no
+     longer read by a login: move it once with `auth/secstore m factotum`.
+   - `svc/auth` no longer starts `auth/signer` and `auth/countersigner`
+     (signer(8) says how to start them on purpose).
+   - `p9any` needs `authdom=dom auth=server` in ndb for each domain.
 
 4. **Install CRLs (optional):**
    - Place DER-encoded CRL files in `/lib/crls/` for revocation checking
-   - CRLs are matched by issuer name against certificate issuers
+   - CRLs are matched by issuer name against certificate issuers; a file there that is not a usable CRL fails every verification until it is put right or removed
 
 ### For New Deployments
 
-No action needed - Ed25519, SHA-256, and AEAD login are the defaults.
+No action needed - Ed25519, SHA-256, and login version 2 are the defaults.
 
 ## Testing
 
@@ -275,14 +344,14 @@ OpenSSL.
 - `appl/lib/crypt/tls.b` — Hybrid key exchange in TLS 1.3 handshake
 - `module/tls.m` — `X25519MLKEM768` constant
 
-#### X.509 Certificate Support
+#### Certificates
 
-ML-DSA OIDs added for certificate signing:
-- `id-ML-DSA-65`: 2.16.840.1.101.3.4.3.18
-- `id-ML-DSA-87`: 2.16.840.1.101.3.4.3.19
+ML-DSA signs the native (Keyring) certificates that the node-to-node exchange uses. It is
+not an X.509 signature algorithm here: the X.509 verifier takes RSA and ECDSA only, and the
+ML-DSA OID constants that `pkcs.m` once carried were looked up by nothing and have been
+removed.
 
 **Files modified:**
-- `module/pkcs.m`, `appl/lib/crypt/pkcs.b` — ML-DSA OIDs
 - `appl/cmd/auth/createsignerkey.b` — `mldsa65`/`mldsa87` algorithm options
 
 #### Migration
@@ -334,9 +403,10 @@ Conservative backup for ML-DSA — no lattice assumptions, purely hash-based (WO
 
 **Keyring API:** Registered as SigAlgVec (`genSK("slhdsa192s", ...)`, standard sign/verify). Uses slots 7-8 of the 8-slot `algs[]` array (all slots now filled).
 
-**X.509 OIDs:**
-- `id-SLH-DSA-SHAKE-192s`: 2.16.840.1.101.3.4.3.22
-- `id-SLH-DSA-SHAKE-256s`: 2.16.840.1.101.3.4.3.26
+**X.509:** none. The parameter sets' OIDs (id-slh-dsa-shake-192s is 2.16.840.1.101.3.4.3.28
+and id-slh-dsa-shake-256s 2.16.840.1.101.3.4.3.30; this page once gave .22 and .26, which
+are other sets) were constants in `pkcs.m` that nothing used, and are gone: the X.509
+verifier takes no post-quantum signature.
 
 **Files modified:**
 - `include/libsec.h` — SLH-DSA declarations
@@ -345,7 +415,6 @@ Conservative backup for ML-DSA — no lattice assumptions, purely hash-based (WO
 - `libkeyring/mkfile` — Add slhdsaalg.o
 - `libinterp/keyring.c` — Register SLH-DSA algs + SHA-3 builtins
 - `module/keyring.m` — SHA3-256/512 digest functions
-- `module/pkcs.m`, `appl/lib/crypt/pkcs.b` — SLH-DSA OIDs
 - `appl/cmd/auth/createsignerkey.b` — SLH-DSA algorithm options
 
 #### SHA-3 Keyring Builtins
@@ -407,8 +476,8 @@ code), it uses a **mutual ML-KEM-768 exchange**:
 
    where the two KEM secrets and `ek`s are ordered canonically by comparing
    the public keys, so both peers derive the identical 64-byte secret. That
-   secret feeds the `ssl` device unchanged (64 bytes supplies a full key +
-   IV for any cipher).
+   secret feeds the `ssl` device (since 0.10.1 split into a secret for each
+   direction for AES-256-GCM; see section 11).
 
 The result is safe unless **both** the Diffie-Hellman and the ML-KEM problem
 are broken — directly addressing the harvest-now-decrypt-later threat on the
@@ -436,7 +505,11 @@ peer is in CNSA mode (ML-KEM-1024), this node is not; set CNSAMODE alike`).
 The policy is the environment of the process that started the emulator, so
 set it where every way of starting one sees it: on macOS, both launchd
 (`launchctl setenv`, which a LaunchAgent makes last) for the Dock and Finder,
-and the shell's profile for a terminal. Certificates follow the
+and the shell's profile for a terminal. A bare-metal board has no host
+environment: a file `cnsamode` on its card turns the mode on at boot
+([BAREMETAL.md](BAREMETAL.md) section 5), through a kernel switch that
+only turns on, and only before anything has authenticated, so no process
+can make its own connections weaker than the machine's policy. Certificates follow the
 signing key's strength (#304): `createsignerkey` and the other signer sites
 choose SHA-384 for ML-DSA and SLH-DSA keys and SHA-256 for classical keys, and
 record the choice in the certificate's `ha` field, which verifiers re-hash
@@ -476,6 +549,115 @@ keeps the web, over X25519MLKEM768 where the server has it.
 ./emu/Linux/o.emu -r. /tests/pqauth_test.dis -v
 ```
 
+### 11. The line encryption: `ssl(3)` is AES-256-GCM (0.10.1)
+
+The 64-byte secret from section 10 no longer feeds a choice of ciphers.
+`ssl(3)` offers two algorithms and refuses the rest:
+
+| Algorithm | What it is |
+|-----------|------------|
+| `aes_256_gcm` (default) | Each record sealed, its header authenticated; key and nonce from HKDF-SHA-384, record n's nonce n exclusive-ored in, so a record changed, cut, replayed, reordered or reflected is refused |
+| `hmac_sha384` | Integrity alone |
+
+`sha256` (SSL 2's hash, not an HMAC), `aes_128_cbc`, `aes_256_cbc` and the
+padded record are gone. Each direction must have its own secret of at least
+32 bytes, and the same secret both ways is refused; `ssl(2)`'s `secrets`
+makes one shared secret into one for each way, which auth(2), login(2),
+logind, secstore and secstored use. Every connection InferNode encrypts
+(mount, listen, styxlisten, cpu, login, secstore, the grid registries, the
+bare-metal cpu listener) takes it.
+
+**Breaking change:** both ends must run 0.10.1 or later. `9cpu`, `import` and
+`9export`, which speak to Plan 9 (p9sk1, a 56-bit key), refuse encryption
+and run in the clear without `-e`. `crypt(1)` uses AES-256-GCM with
+PBKDF2-HMAC-SHA-384 and a salt per file.
+
+Under it:
+
+- **GHASH in constant time.** It indexed a table by nibbles of the running
+  hash; it is now PMULL where the processor has it and table-free integer
+  multiplication otherwise (after BearSSL). AES and SHA-256 use the ARMv8
+  instructions where `ID_AA64ISAR0_EL1` says the core has them, in the
+  emulator and the native kernels.
+- **AES in constant time without the instructions.** Where the processor
+  has no AES instructions (amd64 as the emulator is built, the Pi 3 and 4,
+  RISC-V) `libsec/aes.c` was four tables indexed by the key exclusive-ored
+  with the data, which a cache shared with an attacker shows. It is
+  bitsliced now: eight 64-bit words hold one bit each of up to four
+  blocks, SubBytes is Boyar and Peralta's 113-gate circuit, and nothing
+  is indexed or branched on. It costs speed: AES-256-GCM about half what
+  it was on amd64 (55 MB/s against 109), CBC decryption the same, CBC
+  encryption a seventh (25 against 172), since a chained block cannot
+  share the words with three others. `tests/host/armcrypto_test.sh`
+  holds it to FIPS 197, SP 800-38A, OpenSSL's GCM answers and a plain
+  reference, and runs it under valgrind with key and data secret.
+- **Private keys and nonces away from the clock.** RSA's private
+  operation is `libmp`'s `mpexpcrt`: both powers and Garner's
+  recombination in Montgomery arithmetic at the primes' length, no
+  division, on an input blinded with a fresh random number
+  (`libsec/rsadecrypt.c`). A DSA, ElGamal or ECDSA nonce is RFC 6979's
+  with 32 random bytes beside the key and the digest (its section 3.6),
+  so a generator that repeats does not repeat a nonce; DSA inverts it as
+  a power and makes s with `mpmuladdmod`; ElGamal, whose modulus p-1 is
+  even, inverts it blinded and says in `libsec/egsign.c` what remains
+  general arithmetic. `tests/host/rsa_edge_test.sh`,
+  `tests/host/sign_nonce_test.sh` and `tests/host/ecc_test.sh` hold them
+  to known answers (RFC 6979's own for P-256 and P-384) and to valgrind.
+- **One generator, NIST's.** Every random number, in the emulator
+  (`libsec/genrandom.c`) and the native kernels (`os/port/random.c`), comes
+  from HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1, `libsec/hmacdrbg.c`),
+  checked against NIST's CAVP vectors before its first output. ChaCha20,
+  which it replaced, is on no NIST or CNSA list. See
+  [TLS-ENTROPY.md](TLS-ENTROPY.md).
+- **Login in CNSA mode** hides its Diffie-Hellman value under AES-256-GCM's
+  keystream with HKDF-SHA-384 rather than ChaCha20's with HKDF-SHA-256, in a
+  group of 3072 bits or more; a signer in CNSA mode refuses the latter and
+  says why. (See "Login: version 2".)
+
+Tests: `tests/ssl_record_test.b`, `tests/ssl_transport_test.b`,
+`tests/libsec_kat_test.b`, `tests/login_test.b`,
+`tests/host/armcrypto_test.sh`, `tests/host/kernrandom_test.sh`,
+`tests/host/emurandom_test.sh`.
+
+## Login: version 2
+
+`login(6)` is Bellovin and Merritt's encrypted key exchange with the signer's
+Diffie-Hellman value alone encrypted. A review found that three of that
+protocol's properties had been lost and one had never been there:
+
+| What was wrong | What a peer could do | Now |
+|----------------|----------------------|-----|
+| The signer's value was sealed by an AEAD under the password's key, and sent to anybody who gave a name | Try passwords offline against one reply: the right one's tag verifies | The value is sent under the AEAD's keystream with no tag, with a random sign, in a group whose prime begins with 64 one bits: every password unmasks it to a number a signer could have sent |
+| The key and nonce of that message came from the client's ivec alone | Have the signer encrypt new values under one keystream | The signer's own 32 random bytes are in the key derivation |
+| The signer spoke next, under the session's keys, to a client that had proved nothing | Choose r1 and try passwords against that message | The client sends a proof made from the secret, the password and everything said; the signer checks it before it sends anything made from the secret, then proves itself |
+| Neither end checked the other's Diffie-Hellman value | Send 0, 1 or p-1 and be issued a certificate for any account with no password | Both refuse a value outside 2..p-2 (SP 800-56A 5.6.2.3.1), and the exponents carry the cofactor 2 |
+| The client took alpha and p from whoever answered, with no floor | A relay sent p = 2 and was taken for the signer | The groups are RFC 3526's 14, 15 and 16, held by both ends and named by number; 2048 bits at least, 3072 in CNSA mode |
+| A name was used as a path and as the throttle's key as it came | `carol/.` logged in as carol with a count of its own; `../../tmp/x` took its password from a file | One rule for an account name (`Login->okname`), applied before a name is acknowledged, counted, looked up or signed |
+
+The signer's key file still carries an `alpha` and `p`; they are not used by
+the login exchange and reach the client under the session's keys, for
+`auth(2)`.
+
+**Breaking change:** both ends must speak version 2. Nothing is negotiated:
+an old client is told `signer speaks login version 2`, and a new client
+given the old signer's answer says the signer speaks the old exchange.
+Password entries (`keyfs`) and certificates already issued are unchanged.
+
+`auth/passwd` and `keysrv(4)` now speak one protocol, which they did not
+(passwd proved the old secret one way and keysrv checked it another, so no
+change ever worked). The server proves it is the signer: it runs with the
+signer's key, whose name `logind` and `signer` certify for nobody else, and
+passwd asks for nothing until it has seen that. The old password is proved
+by answering a challenge of the server's, fresh for every write; the new one
+is sent as its SHA-256, which is what `keyfs` holds, sealed under a key from
+the old; wrong proofs are counted in `logind`'s throttle.
+
+`signer(8)`, `countersigner`, `keysrv(4)` and `changelogin(8)` take a name by
+the same rule as `logind`.
+
+Tests: `tests/login_test.b`, `tests/host/login_test.sh`,
+`tests/signer_test.b`, `tests/passwd_test.b`.
+
 ## Security Properties (Updated)
 
 After all changes, the complete SigAlgVec registry:
@@ -497,4 +679,4 @@ Optional improvements not yet implemented:
 
 1. **OCSP stapling** - Online certificate status checking (alternative to CRL)
 2. **CRL auto-fetch** - Fetch CRLs from CRL Distribution Point URLs in certificates
-3. **TLS 1.3 for SSL3 path** - Migrate remaining SSL3 users to TLS 1.3 (already available in tls.b)
+3. **Client certificates under TLS 1.2** - the TLS 1.3 client and server have them; a TLS 1.2 client sends none

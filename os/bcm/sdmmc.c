@@ -74,6 +74,7 @@ enum
 
 	Blocksize	= 512,
 	Sdclk		= 25000000,	/* after identification */
+	Sdhsclk		= 50000000,	/* High Speed, if the card agrees */
 
 	/*
 	 * How long to wait and why it is bounded: this runs during boot,
@@ -331,6 +332,27 @@ mmcinit(void)
 	return 0;
 }
 
+#ifdef SDCARD_HISPEED
+/*
+ * High Speed: CMD6, mode 1, access mode group to function 1, others
+ * unchanged. The card answers with 64 bytes saying what it now does,
+ * and a card that says otherwise stays at Sdclk, slower and correct.
+ */
+static void
+highspeed(void)
+{
+	u32int st[16], resp[4];
+
+	io->iosetup(0, sizeof st, 1);
+	if(io->cmd(Mmcswitch, 0x80FFFFF1, R48 | Dread, resp) == 0 &&
+	   io->io(0, st, sizeof st) == 0 && (((uchar*)st)[16] & 0xF) == 1){
+		io->bus(0, Sdhsclk);
+		uartputstr("sd: High Speed, 50MHz\n");
+	}
+	io->iosetup(0, Blocksize, 1);
+}
+#endif
+
 /*
  * Bring the controller and the card up. Returns 0 if there is a card.
  */
@@ -469,6 +491,9 @@ emmcinit(void)
 		io->bus(4, 0);
 	else
 		uartputstr("sd: card kept a 1-bit bus\n");
+#ifdef SDCARD_HISPEED
+	highspeed();
+#endif
 
 	card.valid = 1;
 	announce();

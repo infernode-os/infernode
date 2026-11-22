@@ -34,7 +34,8 @@ Sleep(Rendez *r, int (*f)(void*), void *arg)
 	/*
 	 * if interrupted or condition happened, never mind
 	 */
-	if(up->killed || up->intpend || f(arg)) {
+	/* A revoked released Prog may not sleep again before returning to its VM. */
+	if(up->killed || up->intpend || (up->killing == 0 && upkilled()) || f(arg)) {
 		unlock(&r->l);
 	}else{
 		if(r->p != nil)
@@ -52,7 +53,7 @@ Sleep(Rendez *r, int (*f)(void*), void *arg)
 		up->r = nil;
 	}
 
-	if(up->killed || up->swipend || up->intpend) {
+	if(up->killed || up->swipend || up->intpend || (up->killing == 0 && upkilled())) {
 		up->killed = 0;
 		up->swipend = 0;
 		up->intpend = 0;
@@ -129,6 +130,46 @@ swiproc(Proc *p, int interp)
 	unlock(&p->sysio);
 }
 
+/* Interrupt p only while it still carries this exact released Prog. */
+int
+swiprogproc(Proc *p, void *iprog)
+{
+	Rendez *r;
+
+	if(p == nil)
+		return 0;
+	lock(&p->rlock);
+	if(p->iprog != iprog){
+		unlock(&p->rlock);
+		return 0;
+	}
+	p->intpend = 1;
+	r = p->r;
+	if(r != nil){
+		lock(&r->l);
+		if(r->p == p){
+			p->swipend = 1;
+			r->p = nil;
+			osready(p);
+		}
+		unlock(&r->l);
+		unlock(&p->rlock);
+		return 1;
+	}
+	unlock(&p->rlock);
+
+	lock(&p->sysio);
+	if(p->syscall && p->intwait == 0){
+		p->swipend = 1;
+		p->intwait = 1;
+		unlock(&p->sysio);
+		oshostintr(p);
+		return 1;
+	}
+	unlock(&p->sysio);
+	return 1;
+}
+
 void
 notkilled(void)
 {
@@ -159,8 +200,34 @@ osenter(void)
 		osleave();	/* raises Eintr */
 }
 
+static int	leave(int);
+
 void
 osleave(void)
+{
+	if(leave(0))
+		error(Eintr);
+}
+
+/*
+ * osleave for a host call that did its work: an interrupt that came while
+ * it ran is not raised, where it would throw away what the call had done
+ * -- bytes read from a socket, gone from the host's buffer, so that a
+ * devssl stream lost part of a record ("bad digest") and the connection,
+ * and every mount over it, was hung up.  It is dropped: the call is over.
+ * A killed Prog is still found killed at its next sleep and on its way
+ * back to the VM (upkilled); an exportfs worker's interrupt was for the
+ * request whose call has now finished, and kept, it interrupted the
+ * worker's next request ("clone failed: interrupted").
+ */
+void
+osleavekeep(void)
+{
+	leave(1);
+}
+
+static int
+leave(int keep)
 {
 	int r;
 
@@ -168,7 +235,7 @@ osleave(void)
 	r = up->swipend;
 	up->swipend = 0;
 	if(r)
-		up->intpend = 0;	/* the one interrupt, raised below */
+		up->intpend = 0;	/* the one interrupt: raised by the caller, or dropped */
 	unlock(&up->rlock);
 
 	lock(&up->sysio);
@@ -191,8 +258,7 @@ osleave(void)
 		up->intwait = 0;
 	}
 
-	if(r != 0)
-		error(Eintr);
+	return r != 0 && !keep;
 }
 
 void

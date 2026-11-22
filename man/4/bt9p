@@ -476,6 +476,27 @@ lists whom the machine is paired with, keys elided.
 See
 .B docs/BLUETOOTH.md
 for the whole tree and the order it arrives in.
+.PP
+The keys file holds at most 256 keys.
+A key made when it is full reaches
+.IR factotum (4)
+and is good until
+.B bt9p
+is restarted, but is not written; forgetting a peer makes room.
+.SH LIMITS
+What a radio in range can make
+.B bt9p
+keep is bounded.
+A scan lists at most 512 devices, and the table of LE address types
+holds the 512 heard most recently: an address costs a device nothing
+to change.
+A device's name goes into a scan's line with its control characters
+replaced by
+.LR ? ,
+so that a name cannot begin a line of its own.
+.B "bt9p -S"
+checks these with no radio and prints
+.LR "selftest OK" .
 .SH BTMOCK
 .I Btmock
 is a fake controller as a file, served through

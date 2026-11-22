@@ -22,6 +22,9 @@ include "draw.m";
 include "string.m";
 	str: String;
 
+include "publicnet.m";
+	publicnet: Publicnet;
+
 include "webclient.m";
 	webclient: Webclient;
 	Response, Header: import webclient;
@@ -44,10 +47,14 @@ ToolBrowse: module {
 
 XENITH_ROOT: con "/chan";
 
-htmlfmt: Formatter;
+REQUEST_TIMEOUT: con 30000;	# 30 seconds, redirects and body included
+# The most of a page that is read.  It is shown to a person in a window,
+# not handed to a model, so it is more than the other fetch tools read;
+# a page of text longer than this is not one anybody reads in a window.
+MAX_BODY: con 2 * 1024 * 1024;
 
-# Windows created by this tool
-owned: list of string;
+htmlfmt: Formatter;
+inited := 0;
 
 init(): string
 {
@@ -63,6 +70,10 @@ init(): string
 	err := webclient->init();
 	if(err != nil)
 		return "Webclient init: " + err;
+	publicnet = load Publicnet Publicnet->PATH;
+	if(publicnet == nil)
+		return "cannot load Publicnet";
+	publicnet->init();
 	html = load HTML HTML->PATH;
 	if(html == nil)
 		return "cannot load HTML";
@@ -70,7 +81,7 @@ init(): string
 	if(htmlfmt == nil)
 		return "cannot load htmlfmt";
 	htmlfmt->init();
-	owned = nil;
+	inited = 1;
 	return nil;
 }
 
@@ -92,7 +103,9 @@ doc(): string
 		"the HTML content as readable text (headings, paragraphs, lists,\n" +
 		"code blocks, links, tables), creates a Xenith window, and writes\n" +
 		"the formatted text to it.\n\n" +
-		"Returns: <window-id> <page-title>\n\n" +
+		"Only public addresses are fetched. A fetch is given 30 seconds,\n" +
+		"and only the first 2MB of a page are read.\n\n" +
+		"Returns: <window-id> <page-title> [<address the page came from>]\n\n" +
 		"Examples:\n" +
 		"  browse https://example.com\n" +
 		"  browse https://www.ietf.org/rfc/rfc2616.txt\n";
@@ -115,8 +128,8 @@ schema(): string
 
 exec(args: string): string
 {
-	if(sys == nil)
-		init();
+	if(!inited && (ierr := init()) != nil)
+		return "error: browse: " + ierr;
 
 	url := strip(args);
 	if(url == "")
@@ -133,12 +146,26 @@ exec(args: string): string
 	if(!hasprefix(lurl, "http://") && !hasprefix(lurl, "https://"))
 		return "error: URL must start with http:// or https://";
 
-	# Fetch URL
+	# SSRF protection, as the other fetch tools have it.  (There was
+	# none here; the dial refuses such an address all the same, with an
+	# error that reads as the network's.)
+	if(publicnet->hostblocked(publicnet->urlhost(url)))
+		return "error: requests to internal/private network addresses are not allowed";
+
+	# Fetch URL.  The request keeps its own time (there was no deadline
+	# here: a server that said nothing held the agent's turn) and reads
+	# no more than MAX_BODY.
 	hdrs: list of Header;
 	hdrs = Header("User-Agent", "Veltro/1.0 (Infernode)") :: hdrs;
-	(resp, err) := webclient->requestpublic("GET", url, hdrs, nil);
+	(resp, err) := webclient->requestbounded("GET", url, hdrs, nil, 1, REQUEST_TIMEOUT, MAX_BODY);
+	if(err == "request timed out")
+		return "error: request timed out (30s)";
 	if(err != nil)
 		return "error: fetch failed: " + err;
+	# where the page came from, which a redirect may have made another
+	# place than the one asked for: it is what the window and the
+	# result say
+	url = resp.url;
 
 	if(resp.statuscode >= 400)
 		return sys->sprint("error: HTTP %d %s", resp.statuscode, resp.status);
@@ -178,12 +205,16 @@ exec(args: string): string
 	if(hasprefix(winid, "error:"))
 		return winid;
 
+	if(resp.truncated)
+		formatted += "\n[the page is longer: only its first 2MB were read]\n";
+
 	# Write formatted content to body
 	werr := writebody(winid, formatted);
 	if(werr != nil)
 		return sys->sprint("error: %s (window %s created)", werr, winid);
 
-	return winid + " " + title;
+	# (the title is the page's: one line of it, of bounded length)
+	return winid + " " + ctlfield(title) + " [" + url + "]";
 }
 
 # Check if content appears to be HTML
@@ -287,9 +318,6 @@ createwindow(name: string): string
 		return "error: failed to create window";
 
 	(winid, nil) := splitfirst(string buf[0:n]);
-
-	# Track ownership
-	owned = winid :: owned;
 
 	# Set window name
 	if(name != "") {

@@ -36,7 +36,7 @@ mpdigdiv(mpdigit *dividend, mpdigit divisor, mpdigit *quotient)
 			hi--;
 		lo -= y;
 		hi -= x;
-		q |= 1<<i;
+		q |= (mpdigit)1<<i;	// (an int's 1<<31 is not defined)
 	}
 	q += lo/divisor;
 	*quotient = q;

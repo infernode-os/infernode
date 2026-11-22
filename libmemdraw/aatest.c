@@ -28,7 +28,7 @@ void	_assert(char *s) { sysfatal("assert failed: %s", s); }
 int	_tas(int *p) { int v = *p; *p = 1; return v; }
 /* libdraw/path.c is built in to test its encoding; nothing is sent */
 uchar*	bufimage(Display *d, int n) { USED(d); USED(n); return nil; }
-void	_setdrawop(Display *d, Drawop op) { USED(d); USED(op); }
+uchar*	_bufimageop(Display *d, int n, Drawop op) { USED(op); return bufimage(d, n); }
 int	_drawprint(int fd, char *fmt, ...) { USED(fd); USED(fmt); return 0; }
 
 #define	RND()	(seed = seed*1103515245 + 12345, (seed >> 8) & 0xFFFF)

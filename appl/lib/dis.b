@@ -409,6 +409,23 @@ loadobj(disfile: string): (ref Mod, string)
 
 	m.srcpath = gets();
 
+	# the digests of the links' and imports' types, in their order
+	if(m.rt & Dis->HASSIGS){
+		nd := len m.links;
+		for(i = 0; i < len m.imports; i++)
+			nd += len m.imports[i];
+		n := operand();
+		if(n != nd || disptr > len disobj || n > (len disobj - disptr)/SIGDLEN){
+			disobj = nil;
+			return (nil, "bad type digests");
+		}
+		for(i = 0; i < len m.links; i++)
+			m.links[i].dig = getdig();
+		for(i = 0; i < len m.imports; i++)
+			for(j := 0; j < len m.imports[i]; j++)
+				m.imports[i][j].dig = getdig();
+	}
+
 	disobj = nil;
 	return (m, nil);
 }
@@ -448,6 +465,14 @@ operand(): int
 		return b;
 	}
 	return 0;
+}
+
+getdig(): array of byte
+{
+	d := array[SIGDLEN] of byte;
+	d[0:] = disobj[disptr:disptr+SIGDLEN];
+	disptr += SIGDLEN;
+	return d;
 }
 
 get4(a: array of byte, i: int): int
@@ -690,11 +715,28 @@ writeobj(m: ref Mod): array of byte
 		obytes(o, m.sign);
 	}
 	oop(o, XMAGIC);
-	rt := m.rt & ~(HASLDT|HASEXCEPT);
+	rt := m.rt & ~(HASLDT|HASEXCEPT|HASSIGS);
 	if(m.imports != nil)
 		rt |= HASLDT;
 	if(m.handlers != nil)
 		rt |= HASEXCEPT;
+	# the digests are written when every link and import has one
+	nd := 0;
+	sigs := 1;
+	for(i := 0; i < len m.links; i++){
+		nd++;
+		if(len m.links[i].dig != SIGDLEN)
+			sigs = 0;
+	}
+	for(i = 0; i < len m.imports; i++) {
+		for(j := 0; j < len m.imports[i]; j++) {
+			nd++;
+			if(len m.imports[i][j].dig != SIGDLEN)
+				sigs = 0;
+		}
+	}
+	if(sigs)
+		rt |= HASSIGS;
 	oop(o, rt);
 	oop(o, m.ssize);
 	oop(o, len m.inst);
@@ -703,7 +745,7 @@ writeobj(m: ref Mod): array of byte
 	oop(o, len m.links);
 	oop(o, m.entry);
 	oop(o, m.entryt);
-	for(i := 0; i < len m.inst; i++) {
+	for(i = 0; i < len m.inst; i++) {
 		in := m.inst[i];
 		obyte(o, in.op);
 		obyte(o, in.addr);
@@ -797,5 +839,14 @@ writeobj(m: ref Mod): array of byte
 		obyte(o, 0);
 	}
 	ostr(o, m.srcpath);
+	if(sigs) {
+		oop(o, nd);
+		for(i = 0; i < len m.links; i++)
+			obytes(o, m.links[i].dig);
+		for(i = 0; i < len m.imports; i++) {
+			for(j := 0; j < len m.imports[i]; j++)
+				obytes(o, m.imports[i][j].dig);
+		}
+	}
 	return o.b[0:o.n];
 }

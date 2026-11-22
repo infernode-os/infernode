@@ -32,6 +32,8 @@ until opened, when its mark is
 and what it holds is listed under it.
 Clicking button 1 on the mark, or double-clicking the name, opens or
 closes a folder; double-clicking a file, or button 2, opens it.
+The mark's target takes in the first letters of the name, wide enough
+for a finger on a touch screen, where a finger held still is button 3.
 A file opens through the
 .IR plumber (8),
 so in Lucifer it lands in the presentation view, an editor for text and

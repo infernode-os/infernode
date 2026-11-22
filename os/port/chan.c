@@ -99,20 +99,19 @@ kstrcpy(char *s, char *t, int ns)
 	if(s == nil || t == nil || ns <= 0)
 		return;
 	nt = strlen(t);
-	if(nt+1 <= ns){
-		memmove(s, t, nt+1);
+	if(nt < ns){
+		memmove(s, t, nt);
+		s[nt] = 0;
 		return;
 	}
-	/* too long */
-	if(ns < 4){
-		/* but very short! */
-		strncpy(s, t, ns);
+	/* too long: truncate, always leaving a terminator */
+	nt = ns-1;
+	memmove(s, t, nt);
+	s[nt] = 0;
+	if(ns < 4)
 		return;
-	}
 	/* truncate with ... at character boundary (very rare case) */
-	memmove(s, t, ns-4);
 	ns -= 4;
-	s[ns] = '\0';
 	/* look for first byte of UTF-8 sequence by skipping continuation bytes */
 	while(ns>0 && (s[--ns]&0xC0)==0x80)
 		;
@@ -182,6 +181,22 @@ chandevshutdown(void)
 		;
 	for(i--; i >= 0; i--)
 		devtab[i]->shutdown();
+}
+
+/*
+ *  c's fid stays with a server that has not answered its clunk: a dying
+ *  Prog's clunk or remove left orphaned by devmnt (mountio), the fid
+ *  given up on and the call on the queue for its reply.  c goes back on
+ *  the free list, and its next user would walk to that fid again while
+ *  the server may still hold it ("fid in use", the mount's next walks
+ *  failing).  c takes a fid not used before.
+ */
+void
+chanfidretire(Chan *c)
+{
+	lock(&chanalloc.l);
+	c->fid = ++chanalloc.fid;
+	unlock(&chanalloc.l);
 }
 
 Chan*
@@ -546,13 +561,29 @@ newmhead(Chan *from)
 	return mh;
 }
 
+/* whether m has more than one mount */
+static int
+ismultiunion(Mhead *m)
+{
+	int multi;
+
+	if(m == nil)
+		return 0;
+	rlock(&m->lock);
+	multi = m->mount != nil && m->mount->next != nil;
+	runlock(&m->lock);
+	return multi;
+}
+
 int
 cmount(Chan *new, Chan *old, int flag, char *spec)
 {
 	Pgrp *pg;
-	int order, flg;
+	int order, flg, isunion;
 	Mhead *m, **l, *mh;
 	Mount *nm, *f, *um, **h, *om;
+	Mount *volatile snap;
+	Mount *volatile made;
 	int mid;
 
 	if(QTDIR & (old->qid.type^new->qid.type))
@@ -584,9 +615,71 @@ if(old->umh)
 	 * This is far more complicated than it should be, but I don't
 	 * see an easier way at the moment.		-rsc
 	 */
-	if((flag&MCREATE) && mh && mh->mount
-	&& (mh->mount->next || !(mh->mount->mflag&MCREATE)))
-		error(Emount);
+	/*
+	 * The mounts of the directory being bound are read here, under
+	 * its lock, and what is copied below is this copy. They were read
+	 * with no lock of theirs held, here and where the union is copied:
+	 * an unmount of that directory by another process of the name
+	 * space, between the two, left a nil to follow or a mount that had
+	 * been freed. The lock is let go before the target's is taken:
+	 * the two may be one (bind /a /a).
+	 */
+	snap = nil;
+	isunion = 0;
+	if(mh != nil){
+		rlock(&mh->lock);
+		if(waserror()){
+			runlock(&mh->lock);
+			mountfree(snap);
+			nexterror();
+		}
+		if(mh->mount != nil){
+			if((flag&MCREATE)
+			&& (mh->mount->next || !(mh->mount->mflag&MCREATE)))
+				error(Emount);
+			isunion = 1;
+			h = (Mount**)&snap;
+			for(um = mh->mount->next; um != nil; um = um->next){
+				f = newmount(nil, um->to, um->mflag, um->spec);
+				*h = f;
+				h = &f->next;
+			}
+		}
+		poperror();
+		runlock(&mh->lock);
+	}
+	made = nil;
+	if(waserror()){
+		mountfree(snap);
+		mountfree(made);
+		nexterror();
+	}
+
+	/*
+	 * The new mounts are made here, before the name space is locked
+	 * and before a head for them is in its table: newmount raises
+	 * when there is no memory.  They were made after, under the
+	 * head's lock: a head just made for an MREPL bind was then left
+	 * in the table with no mount, which the next walk to that
+	 * directory followed, nil.
+	 */
+	nm = newmount(nil, new, flag, spec);
+	made = nm;
+	if(isunion) {
+		/*
+		 *  copy a union when binding it onto a directory
+		 */
+		flg = order | (flag&MREADONLY);
+		if(order == MREPL)
+			flg = MAFTER | (flag&MREADONLY);
+		h = &nm->next;
+		for(um = snap; um; um = um->next) {
+			f = newmount(nil, um->to,
+				flg | (um->mflag&MREADONLY), um->spec);
+			*h = f;
+			h = &f->next;
+		}
+	}
 
 	pg = up->env->pgrp;
 	wlock(&pg->ns);
@@ -602,41 +695,42 @@ if(old->umh)
 		/*
 		 *  nothing mounted here yet.  create a mount
 		 *  head and add to the hash table.
+		 *
+		 *  The head goes into the table whole or not at all,
+		 *  and the name space is unlocked if it cannot be
+		 *  made: making it, and the old node's mount, can
+		 *  raise, and did with the name space's lock held and
+		 *  no handler to let it go.  Every look-up in that
+		 *  name space then waited for ever.
 		 */
+		if(waserror()){
+			wunlock(&pg->ns);
+			nexterror();
+		}
 		m = newmhead(old);
-		*l = m;
 
 		/*
 		 *  if this is a union mount, add the old
 		 *  node to the mount chain.
 		 */
-		if(order != MREPL)
+		if(order != MREPL){
+			if(waserror()){
+				putmhead(m);
+				nexterror();
+			}
 			m->mount = newmount(m, old, 0, 0);
+			poperror();
+		}
+		poperror();
+		*l = m;
 	}
 	wlock(&m->lock);
-	if(waserror()){
-		wunlock(&m->lock);
-		nexterror();
-	}
 	wunlock(&pg->ns);
 
-	nm = newmount(m, new, flag, spec);
-	if(mh != nil && mh->mount != nil) {
-		/*
-		 *  copy a union when binding it onto a directory
-		 */
-		flg = order | (flag&MREADONLY);
-		if(order == MREPL)
-			flg = MAFTER | (flag&MREADONLY);
-		h = &nm->next;
-		um = mh->mount;
-		for(um = um->next; um; um = um->next) {
-			f = newmount(m, um->to,
-				flg | (um->mflag&MREADONLY), um->spec);
-			*h = f;
-			h = &f->next;
-		}
-	}
+	/* nothing below raises */
+	for(f = nm; f != nil; f = f->next)
+		f->head = m;
+	made = nil;
 
 	/*
 	 * What MREPL replaces is freed once m->lock is let go, not under
@@ -671,6 +765,7 @@ if(old->umh)
 	mid = nm->mountid;
 	wunlock(&m->lock);
 	poperror();
+	mountfree(snap);
 	if(om != nil)
 		mountfree(om);
 	return mid;
@@ -688,9 +783,9 @@ cunmount(Chan *mnt, Chan *mounted)
 
 	/*
 	 * It _can_ happen that mounted->umh is non-nil, 
-	 * because mounted is the result of namec(Aopen)
+	 * because mounted is the result of namec(Aunmount)
 	 * (see sysfile.c:/^sysunmount).
-	 * If we open a union directory, it will have a umh.
+	 * A union directory preserves its walked Qid and its union head.
 	 * Although surprising, this is okay, since the
 	 * cclose will take care of freeing the umh.
 	 */
@@ -711,8 +806,13 @@ cunmount(Chan *mnt, Chan *mounted)
 	}
 
 	/*
-	 * As in cmount, what is taken off is freed, and the mount point
-	 * closed, with the locks let go: either can wait on a 9P server.
+	 * As in cmount, what is taken off is freed with the locks let go:
+	 * it can wait on a 9P server. The mount point (m->from) is the
+	 * head's for as long as there is a head, and is closed with it
+	 * (putmhead): closed here, it was closed under whoever had found
+	 * the head a moment before and went on to put it in a path (a
+	 * walk crossing the mount point), which then held, and later
+	 * closed again, a channel that had been freed.
 	 */
 	wlock(&m->lock);
 	if(mounted == 0) {
@@ -722,7 +822,6 @@ cunmount(Chan *mnt, Chan *mounted)
 		m->mount = nil;
 		wunlock(&m->lock);
 		mountfree(f);
-		cclose(m->from);
 		putmhead(m);
 		return;
 	}
@@ -739,7 +838,6 @@ cunmount(Chan *mnt, Chan *mounted)
 				wunlock(&m->lock);
 				wunlock(&pg->ns);
 				mountfree(f);
-				cclose(m->from);
 				putmhead(m);
 				return;
 			}
@@ -795,7 +893,8 @@ int
 findmount(Chan **cp, Mhead **mp, int type, int dev, Qid qid)
 {
 	Pgrp *pg;
-	Mhead *m;
+	Mhead *m, *omh;
+	Chan *oc;
 
 	pg = up->env->pgrp;
 	rlock(&pg->ns);
@@ -807,18 +906,30 @@ if(m->from == nil){
 	continue;
 }
 		if(eqchantdqid(m->from, type, dev, qid, 1)) {
+			if(m->mount == nil){
+				/* not to be: a head in the table has a mount */
+				runlock(&m->lock);
+				continue;
+			}
 			runlock(&pg->ns);
+			/*
+			 * What these replace is let go once this head's lock
+			 * is: letting go of a head can now close its mount
+			 * point, and closing a channel can wait on a server.
+			 */
+			omh = nil;
 			if(mp != nil){
 				incref(&m->r);
-				if(*mp != nil)
-					putmhead(*mp);
+				omh = *mp;
 				*mp = m;
 			}
-			if(*cp != nil)
-				cclose(*cp);
+			oc = *cp;
 			incref(&m->mount->to->r);
 			*cp = m->mount->to;
 			runlock(&m->lock);
+			if(oc != nil)
+				cclose(oc);
+			putmhead(omh);
 			return 1;
 		}
 		runlock(&m->lock);
@@ -912,15 +1023,55 @@ undomount(Chan *c, Cname *name)
 }
 
 /*
+ * cunique() and a device's walk for walk(), which fails and does not
+ * raise: nil if they raised, the reason in the error string.  A copy
+ * that cannot be made leaves c the caller's to close (cunique raises
+ * before it closes what it was given).
+ */
+static Chan*
+cuniquenoerr(Chan *c)
+{
+	Chan *nc;
+
+	if(waserror())
+		return nil;
+	nc = cunique(c);
+	poperror();
+	return nc;
+}
+
+static Walkqid*
+devwalknoerr(Chan *c, char **names, int nnames)
+{
+	Walkqid *wq;
+
+	if(waserror())
+		return nil;
+	wq = devtab[c->type]->walk(c, nil, names, nnames);
+	poperror();
+	return wq;
+}
+
+/*
  * Either walks all the way or not at all.  No partial results in *cp.
  * *nerror is the number of names to display in an error message.
+ *
+ * It does not raise, and namec depends on that.  It did: the copy of a
+ * channel taken where a mount point is crossed, and of the one walked
+ * to, is a walk of no names, which raises when a 9P server refuses it,
+ * when its connection has hung up and when the caller is interrupted.
+ * Nothing here caught it, and what the walk held went with it: the
+ * channel walked to so far, the name, the mount heads and the mounted
+ * channel, for every look-up of a name below a mount whose server had
+ * gone.  A device's own walk raises too, if it must wait for memory and
+ * is interrupted: in a union that was with the head's lock held.
  */
 static char Edoesnotexist[] = "does not exist";
 int
 walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 {
 	int dev, didmount, dotdot, i, mflag, n, nhave, ntry, type;
-	Chan *c, *nc;
+	Chan *c, *nc, *uc;
 	Cname *cname;
 	Mount *f;
 	Mhead *mh, *nmh;
@@ -972,7 +1123,7 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				*nerror = nhave;
 			cnameclose(cname);
 			cclose(c);
-			strcpy(up->env->errstr, Enotdir);
+			kstrcpy(up->env->errstr, Enotdir, ERRMAX);
 			if(mh != nil)
 				putmhead(mh);
 			return -1;
@@ -1000,15 +1151,20 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 		type = c->type;
 		dev = c->dev;
 
-		if((wq = devtab[type]->walk(c, nil, names+nhave, ntry)) == nil){
+		if((wq = devwalknoerr(c, names+nhave, ntry)) == nil){
 			/* try a union mount, if any */
 			if(mh && !nomount){
 				/*
 				 * mh->mount == c, so start at mh->mount->next
 				 */
+				/*
+				 * unless it was unmounted while that walk waited
+				 * for its answer: then there is no mount, and
+				 * following it was a nil dereference
+				 */
 				rlock(&mh->lock);
-				for(f = mh->mount->next; f; f = f->next)
-					if((wq = devtab[f->to->type]->walk(f->to, nil, names+nhave, ntry)) != nil)
+				for(f = mh->mount != nil? mh->mount->next: nil; f; f = f->next)
+					if((wq = devwalknoerr(f->to, names+nhave, ntry)) != nil)
 						break;
 				if(f != nil){
 					type = f->to->type;
@@ -1058,11 +1214,11 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 					if(wq->nqid==0 || (wq->qid[wq->nqid-1].type&QTDIR)){
 						if(nerror)
 							*nerror = nhave+wq->nqid+1;
-						strcpy(up->env->errstr, Edoesnotexist);
+						kstrcpy(up->env->errstr, Edoesnotexist, ERRMAX);
 					}else{
 						if(nerror)
 							*nerror = nhave+wq->nqid;
-						strcpy(up->env->errstr, Enotdir);
+						kstrcpy(up->env->errstr, Enotdir, ERRMAX);
 					}
 					free(wq);
 					if(mh != nil)
@@ -1073,7 +1229,22 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				nc = wq->clone;
 			}else{		/* stopped early, at a mount point */
 				didmount = 1;
-				nc = cunique(nc);
+				uc = cuniquenoerr(nc);
+				if(uc == nil){
+					/* the mounted channel cannot be copied */
+					cclose(nc);
+					putmhead(nmh);
+					if(wq->clone != nil)
+						cclose(wq->clone);
+					free(wq);
+					cclose(c);
+					cnameclose(cname);
+					putmhead(mh);
+					if(nerror)
+						*nerror = nhave+i+1;
+					return -1;
+				}
+				nc = uc;
 				nc->mflag = mheadflag(nmh);
 				if(wq->clone != nil){
 					cclose(wq->clone);
@@ -1107,7 +1278,15 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 
 	putmhead(mh);
 
-	c = cunique(c);
+	uc = cuniquenoerr(c);
+	if(uc == nil){
+		cclose(c);
+		cnameclose(cname);
+		if(nerror)
+			*nerror = nnames;
+		return -1;
+	}
+	c = uc;
 
 	cnameclose(c->name);
 	c->name = cname;
@@ -1297,14 +1476,43 @@ memrchr(void *va, int c, long n)
  * the same means as walkc below.
  */
 static int
-domountc(Chan *volatile *cp, Mhead **mp, Cname **name)
+domountc(Chan *volatile *cp, Mhead *volatile *mp, Cname *volatile *name)
 {
 	Chan *t;
+	Mhead *m;
+	Cname *n;
 	int r;
 
 	t = *cp;
-	r = domount(&t, mp, name);
+	m = *mp;
+	if(name == nil)
+		r = domount(&t, &m, nil);
+	else{
+		n = *name;
+		r = domount(&t, &m, &n);
+		*name = n;
+	}
 	*cp = t;
+	*mp = m;
+	return r;
+}
+
+/*
+ * findmount() for namec's create, whose channel and mount head are
+ * volatile, by the same means as walkc.
+ */
+static int
+findmountc(Chan *volatile *cp, Mhead *volatile *mp, int type, int dev, Qid qid)
+{
+	Chan *t;
+	Mhead *m;
+	int r;
+
+	t = *cp;
+	m = *mp;
+	r = findmount(&t, &m, type, dev, qid);
+	*cp = t;
+	*mp = m;
 	return r;
 }
 
@@ -1361,8 +1569,20 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 * namec is simply the one that was missed.
 	 */
 	Chan * volatile c;
-	Chan *cnew;
-	Cname *cname;
+	/*
+	 * volatile, both, for the reason c is.  The create below sets them
+	 * after its waserror() and its handler gives them back.  Not
+	 * volatile, clang took them for the nil they were at waserror():
+	 * the handler closed nothing, and every create a device refused
+	 * kept a channel (384 bytes of the main pool each, measured; and
+	 * a fid on a 9P server, never clunked).
+	 */
+	Chan *volatile cnew;
+	/*
+	 * volatile: set after namec's waserror(), and given back by the
+	 * handler round the copy made for an open.
+	 */
+	Cname *volatile cname;
 	/*
 	 * volatile for the same reason as c above, and found the same way.
 	 * e.name, e.elems and e.off are nil at waserror() and allocated by
@@ -1376,9 +1596,9 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 */
 	volatile Elemlist e;
 	Rune r;
-	Mhead *m;
+	Mhead *volatile m;
 	Pgrp *pg;
-	char *createerr, tmperrbuf[ERRMAX];
+	char tmperrbuf[ERRMAX];
 	char *name;
 
 	name = aname;
@@ -1480,7 +1700,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 			print("namec %s walk error npath=%d\n", aname, npath);
 			nexterror();
 		}
-		strcpy(tmperrbuf, up->env->errstr);
+		kstrcpy(tmperrbuf, up->env->errstr, sizeof tmperrbuf);
 	NameError:
 		len = prefix+e.off[npath];
 		if(len < ERRMAX/3 || (name=memrchr(aname, '/', len))==nil || name==aname)
@@ -1517,6 +1737,16 @@ namec(char *aname, int amode, int omode, ulong perm)
 		putmhead(m);
 		break;
 
+	case Aunmount:
+		/*
+		 * A directory bind records the Qid returned by walk.  Opening it
+		 * here could substitute a server-specific Qid and make cunmount
+		 * miss the mount.  Non-directories still need open semantics for
+		 * indirections such as /srv/cs and /fd/0.
+		 */
+		if(!(c->qid.type & QTDIR))
+			goto Open;
+		/* fall through */
 	case Abind:
 		m = nil;
 		if(!nomount && domountc(&c, &m, nil))
@@ -1540,8 +1770,14 @@ namec(char *aname, int amode, int omode, ulong perm)
 		if(!nomount)
 			domountc(&c, &m, &cname);
 
-		/* our own copy to open or remove */
+		/*
+		 * our own copy to open or remove.  If it cannot be made
+		 * the name saved above is given back too: it was kept,
+		 * with the channels in it, for every open of a mount
+		 * point whose server refused the copy or had gone.
+		 */
 		if(waserror()){
+			cnameclose(cname);
 			putmhead(m);
 			nexterror();
 		}
@@ -1565,12 +1801,17 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 		case Aopen:
 		case Acreate:
+		case Aunmount:
 			if((c->mflag & MREADONLY) && mutatingmode(omode)){
 				putmhead(m);
 				error(Eperm);
 			}
-			/* only save the mount head if it's a multiple element union */
-			if(m && m->mount && m->mount->next)
+			/*
+			 * only save the mount head if it's a multiple element
+			 * union: asked under its lock, as an unmount frees the
+			 * mounts once it has let the lock go
+			 */
+			if(ismultiunion(m))
 				c->umh = m;
 			else
 				putmhead(m);
@@ -1665,7 +1906,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		m = nil;
 		cnew = nil;	/* is this assignment necessary? */
 		if(!waserror()){	/* try create */
-			if(!nomount && findmount(&cnew, &m, c->type, c->dev, c->qid))
+			if(!nomount && findmountc(&cnew, &m, c->type, c->dev, c->qid))
 				cnew = createdir(cnew, m);
 			else{
 				cnew = c;
@@ -1705,15 +1946,20 @@ namec(char *aname, int amode, int omode, ulong perm)
 			putmhead(m);
 		if(omode & OEXCL)
 			nexterror();
-		/* save error */
-		createerr = up->env->errstr;
-		up->env->errstr = tmperrbuf;
-		/* note: we depend that walk does not error */
-		if(walkc(&c, e.elems+e.nelems-1, 1, nomount, nil) < 0){
-			up->env->errstr = createerr;
-			error(createerr);	/* report true error */
-		}
-		up->env->errstr = createerr;
+		/*
+		 * Save the create's error, for the walk may write its
+		 * own.  It is copied out; the Prog's error string stays
+		 * where it is.  It was pointed at tmperrbuf for the
+		 * walk and pointed back after, and a walk that raised
+		 * (its clone refused by a 9P server, or interrupted)
+		 * left it there: the Prog's error string was this
+		 * frame, dead, for the rest of its life, read back by
+		 * %r and written by every later error over whatever
+		 * call was then running on this stack.
+		 */
+		kstrcpy(tmperrbuf, up->env->errstr, sizeof tmperrbuf);
+		if(walkc(&c, e.elems+e.nelems-1, 1, nomount, nil) < 0)
+			error(tmperrbuf);	/* report true error */
 		omode |= OTRUNC;
 		goto Open;
 
@@ -1826,6 +2072,8 @@ putmhead(Mhead *m)
 {
 	if(m && decref(&m->r) == 0){
 		m->mount = (Mount*)0xCafeBeef;
+		cclose(m->from);
+		m->from = nil;
 		free(m);
 	}
 }

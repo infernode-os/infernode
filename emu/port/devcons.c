@@ -6,7 +6,10 @@
 #include	"libsec.h"
 #include	"keyboard.h"
 
+extern char*	heapaudittext(void);	/* libinterp/heapaudit.c */
+
 extern int cflag;
+extern int strictlink;	/* libinterp/link.c */
 int	exdebug;
 extern int keepbroken;
 
@@ -17,6 +20,7 @@ enum
 	Qconsctl,
 	Qdrivers,
 	Qhostopen,
+	Qheaptypes,
 	Qhostowner,
 	Qhoststdin,
 	Qhoststdout,
@@ -35,7 +39,8 @@ enum
 	Qsysctl,
 	Qsysname,
 	Qtime,
-	Quser
+	Quser,
+	Qstrictlink
 };
 
 Dirtab contab[] =
@@ -44,6 +49,7 @@ Dirtab contab[] =
 	"cons",		{Qcons},	0,	0666,
 	"consctl",	{Qconsctl},	0,	0222,
 	"drivers",	{Qdrivers},	0,	0444,
+	"heaptypes",	{Qheaptypes},	0,	0444,
 	"hostopen",	{Qhostopen},	0,	0444,
 	"hostowner",	{Qhostowner},	0,	0644,
 	"hoststdin",	{Qhoststdin},	0,	0444,
@@ -60,6 +66,7 @@ Dirtab contab[] =
 	"null",		{Qnull},	0,	0666,
 	"random",	{Qrandom},	0,	0444,
 	"scancode",	{Qscancode},	0,	0444,
+	"strictlink",	{Qstrictlink},	0,	0644,
 	"sysctl",	{Qsysctl},	0,	0644,
 	"sysname",	{Qsysname},	0,	0644,
 	"time",		{Qtime},	0,	0644,
@@ -479,6 +486,8 @@ consopen(Chan *c, int omode)
 	return c;
 }
 
+static QLock heaptypesl;	/* one reader of heaptypes at a time: its text is on the channel */
+
 static void
 consclose(Chan *c)
 {
@@ -507,6 +516,13 @@ consclose(Chan *c)
 		kprintq.q = nil;
 		wunlock(&kprintq.l);
 		break;
+
+	case Qheaptypes:
+		qlock(&heaptypesl);
+		free(c->aux);
+		c->aux = nil;
+		qunlock(&heaptypesl);
+		break;
 	}
 }
 
@@ -518,6 +534,15 @@ consread(Chan *c, void *va, long n, vlong offset)
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, va, n, contab, nelem(contab), devgen);
+
+	/*
+	 * as the native kernel has it. A read of no bytes went on to the
+	 * files' own code, and the pool listing's (/dev/memory) formats
+	 * into what room it is given: with none, snprint answers -1, the
+	 * next line was written one byte before the buffer.
+	 */
+	if(n <= 0)
+		return 0;
 
 	switch((ulong)c->qid.path) {
 	default:
@@ -536,18 +561,14 @@ consread(Chan *c, void *va, long n, vlong offset)
 
 	case Qnotquiterandom:
 		/*
-		 * Host OS CSPRNG (libsec prng(): arc4random_buf/getrandom/
-		 * BCryptGenRandom).  Historically this was libsec genrandom()
-		 * — a never-reseeded X9.17 3DES DRBG — which is well below
-		 * what emu/port/random.c and the wallet documented for this
-		 * device.  Under emu the host CSPRNG is always available.
+		 * libsec's genrandom: HMAC_DRBG (SP 800-90A) over the host's
+		 * generator, the one keys come from here, as the native
+		 * kernels' #c/notquiterandom is theirs.  It read the host's
+		 * generator itself.  genrandomtry, not genrandom: this device
+		 * serves every hosted process, so a host with no generator
+		 * fails this read, it does not abort the emulator.
 		 */
-		/*
-		 * prngtry(), not prng(): this device serves every hosted
-		 * process, so a missing entropy source must fail this read,
-		 * not abort() the whole emulator.
-		 */
-		if(prngtry(va, n) < 0)
+		if(genrandomtry(va, n) < 0)
 			error("no secure random source");
 		return n;
 
@@ -564,6 +585,10 @@ consread(Chan *c, void *va, long n, vlong offset)
 		snprint(buf, sizeof(buf), "%d", cflag);
 		return readstr(offset, va, n, buf);
 
+	case Qstrictlink:
+		snprint(buf, sizeof(buf), "%d", strictlink);
+		return readstr(offset, va, n, buf);
+
 	case Qtime:
 		snprint(buf, sizeof(buf), "%.lld", timeoffset + osusectime());
 		return readstr(offset, va, n, buf);
@@ -573,6 +598,34 @@ consread(Chan *c, void *va, long n, vlong offset)
 
 	case Qmemory:
 		return poolread(va, n, offset);
+
+	/*
+	 * The heap's live objects by type and module (libinterp/heapaudit.c):
+	 * made at offset 0, the rest of the reads take the same text.
+	 */
+	case Qheaptypes:
+		/*
+		 * One reader at a time. The text is kept on the channel
+		 * and made again at offset 0, and reads of one channel are
+		 * not otherwise kept apart: two at once both freed the old
+		 * text, or one freed what the other was copying from.
+		 */
+		qlock(&heaptypesl);
+		if(waserror()){
+			qunlock(&heaptypesl);
+			nexterror();
+		}
+		if(offset == 0 || c->aux == nil){
+			free(c->aux);
+			c->aux = nil;
+			c->aux = heapaudittext();
+			if(c->aux == nil)
+				error(Enomem);
+		}
+		n = readstr(offset, va, n, c->aux);
+		poperror();
+		qunlock(&heaptypesl);
+		return n;
 
 	case Qnull:
 		return 0;
@@ -889,6 +942,24 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		if(x < 0 || x > 9)
 			error(Ebadarg);
 		cflag = x;
+		break;
+
+	case Qstrictlink:
+		/*
+		 * Modules are linked by their type digests alone from now on
+		 * (libinterp/link.c).  One way: a boot script sets it once it
+		 * has loaded whatever old module it needs, and nothing that
+		 * runs later can take it back.
+		 */
+		if(!iseve())
+			error(Eperm);
+		if(n >= sizeof(buf))
+			n = sizeof(buf)-1;
+		strncpy(buf, va, n);
+		buf[n] = '\0';
+		if(buf[0] != '1' || (buf[1] != '\0' && buf[1] != '\n'))
+			error("strictlink: only 1; it stays set until the system restarts");
+		strictlink = 1;
 		break;
 
 	case Qsysname:

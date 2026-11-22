@@ -3,10 +3,10 @@ Xenith workspace: list open windows first to understand user context.
 Commands:
     xenith list              — list windows (do this first)
     xenith read <id> body    — read window content
-    xenith create name       — create window (save the returned ID)
+    xenith create label      — create window /+label (save the returned ID)
     xenith write <id> body text — write to window (single line)
     xenith append <id> text  — append to window body
-    xenith ctl <id> name new — rename a window
+    xenith ctl <id> growmax  — layout: grow, growmax, show, clean
     xenith status <id> ok    — set status: ok/warn/error/info
 
 CRITICAL: Multi-line content REQUIRES heredoc:

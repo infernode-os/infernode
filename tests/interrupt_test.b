@@ -113,7 +113,7 @@ abortingServer(ac: Sys->Connection, ready: chan of int)
 
 clientAuthProc(dfd: ref Sys->FD, ai: ref Keyring->Authinfo, rc: chan of string)
 {
-	(wrapped, err) := auth->client("aes_256_cbc sha256", ai, dfd);
+	(wrapped, err) := auth->client("aes_256_gcm", ai, dfd);
 	if(wrapped == nil)
 		rc <-= "err:" + err;	# clean failure (expected)
 	else
@@ -165,7 +165,7 @@ drainingServer(ac: Sys->Connection, ai: ref Keyring->Authinfo, rc: chan of int)
 	if(lok < 0){ rc <-= -1; return; }
 	dfd := sys->open(nc.dir + "/data", Sys->ORDWR);
 	if(dfd == nil){ rc <-= -1; return; }
-	(wrapped, nil) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, dfd, 0);
+	(wrapped, nil) := auth->server("aes_256_gcm" :: nil, ai, dfd, 0);
 	if(wrapped == nil){ rc <-= -1; return; }
 
 	buf := array[65536] of byte;
@@ -198,7 +198,7 @@ testDropMidTransfer(t: ref T)
 		return;
 	}
 
-	(wrapped, cerr) := auth->client("aes_256_cbc sha256", cli, dc.dfd);
+	(wrapped, cerr) := auth->client("aes_256_gcm", cli, dc.dfd);
 	if(wrapped == nil)
 		t.fatal("client auth failed: " + cerr);
 

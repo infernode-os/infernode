@@ -109,6 +109,10 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 	dev = hd args;
+	if(dev == "-t"){
+		selftest();
+		return;
+	}
 
 	ctlfd = sys->open("/usb/usb/" + dev + "/ctl", Sys->ORDWR);
 	if(ctlfd == nil){
@@ -160,8 +164,12 @@ init(nil: ref Draw->Context, args: list of string)
 		epnum = int hd args;
 		maxpkt = int hd tl args;
 		ival = int hd tl tl args;
-	} else
+		args = tl tl tl args;
+	} else {
 		(epnum, maxpkt, ival) = intrendpoint();
+		args = nil;	# what was given is not the walk's three numbers and what follows them
+	}
+	(epnum, maxpkt, ival) = sane(epnum, maxpkt, ival);
 	if(epnum < 0){
 		sys->print("kbdusb: %s has no interrupt endpoint\n", dev);
 		return;
@@ -175,7 +183,6 @@ init(nil: ref Draw->Context, args: list of string)
 	#
 	vidpid := "";
 	sub := 1;
-	args = tl tl tl args;
 	if(args != nil){
 		iface = int hd args;
 		if(tl args != nil){
@@ -260,7 +267,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(keys == nil){
 		sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d\n",
 			dev, epnum, maxpkt, ival);
-		poll(fd, kbd, ival);
+		poll(fd, kbd, ival, maxpkt);
 	}else{
 		ids := "";
 		for(l := keys; l != nil; l = tl l)
@@ -315,6 +322,8 @@ readkeys(): list of ref Keys
 		sys->print("kbdusb: %s report descriptor unreadable (%r)\n", dev);
 		return nil;
 	}
+	if(n == len buf)
+		sys->print("kbdusb: %s report descriptor fills %d bytes: longer ones are cut short\n", dev, n);
 	keys := hid->keyboard(buf[0:n]);
 	if(keys == nil)
 		sys->print("kbdusb: %s report descriptor (%d bytes) describes no keyboard report\n", dev, n);
@@ -382,25 +391,145 @@ intrendpoint(): (int, int, int)
 	cfg := array[total] of byte;
 	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
 		return (-1, 0, 0);
+	return findintr(cfg);
+}
 
+#
+# The keyboard's interrupt IN endpoint in a configuration: the first
+# under an interface that says it is a keyboard (HID, protocol 1);
+# failing that the first under any HID interface; failing that the
+# first there is, which is what a device with no interface descriptor
+# worth the name leaves. A composite device's mouse comes before its
+# keyboard as often as after. An endpoint descriptor is seven bytes,
+# and one that says it is shorter has no fields to read: they would
+# be the next descriptor's.
+#
+findintr(cfg: array of byte): (int, int, int)
+{
+	total := len cfg;
+	best := -1;		# 2 a keyboard's, 1 a HID interface's, 0 any
+	ep := -1;
+	mp := 0;
+	iv := 0;
+	rank := 0;
 	for(i := 0; i + 2 <= total; ){
 		dlen := int cfg[i];
-		if(dlen < 2)
+		if(dlen < 2 || dlen > total - i)
 			break;
-		# 5 is an endpoint descriptor; attributes 3 is interrupt
-		if(int cfg[i+1] == 5 && i + 6 < total && (int cfg[i+3] & 3) == 3){
-			addr := int cfg[i+2];
-			if(addr & 16r80){	# IN
-				mp := int cfg[i+4] | (int cfg[i+5] << 8);
-				ival := 10;
-				if(i + 6 < total && int cfg[i+6] > 0)
-					ival = int cfg[i+6];
-				return (addr & 16rF, mp, ival);
+		case int cfg[i+1] {
+		4 =>	# interface: class, subclass, protocol
+			rank = 0;
+			if(dlen >= 9 && int cfg[i+5] == 3){
+				rank = 1;
+				if(int cfg[i+7] == 1)
+					rank = 2;
+			}
+		5 =>	# endpoint: attributes 3 is interrupt
+			if(dlen >= 7 && (int cfg[i+3] & 3) == 3 && (int cfg[i+2] & 16r80) && rank > best){
+				best = rank;
+				ep = int cfg[i+2] & 16rF;
+				mp = int cfg[i+4] | (int cfg[i+5] << 8);
+				iv = int cfg[i+6];
 			}
 		}
 		i += dlen;
 	}
-	return (-1, 0, 0);
+	return (ep, mp, iv);
+}
+
+#
+# The three numbers an endpoint is made with, whoever gave them: the
+# walk passes on what the device's descriptor said. An interval of 0
+# would poll an idle keyboard without a pause, and the packet size is
+# what is read at a time.
+#
+sane(epnum, maxpkt, ival: int): (int, int, int)
+{
+	if(epnum < 1 || epnum > 15)
+		return (-1, 0, 0);
+	if(maxpkt < Reportlen)
+		maxpkt = Reportlen;
+	if(maxpkt > Maxreport)
+		maxpkt = Maxreport;
+	if(ival <= 0)
+		ival = 10;
+	if(ival > 255)
+		ival = 255;
+	return (epnum, maxpkt, ival);
+}
+
+selftest()
+{
+	ok := 1;
+	# a mouse's interface, then a keyboard's
+	composite := array[] of {
+		byte 9, byte 2, byte 59, byte 0, byte 2, byte 1, byte 0, byte 16rA0, byte 50,
+		byte 9, byte 4, byte 0, byte 0, byte 1, byte 3, byte 1, byte 2, byte 0,
+		byte 9, byte 16r21, byte 16r11, byte 1, byte 0, byte 1, byte 16r22, byte 52, byte 0,
+		byte 7, byte 5, byte 16r81, byte 3, byte 4, byte 0, byte 7,
+		byte 9, byte 4, byte 1, byte 0, byte 1, byte 3, byte 1, byte 1, byte 0,
+		byte 9, byte 16r21, byte 16r11, byte 1, byte 0, byte 1, byte 16r22, byte 63, byte 0,
+		byte 7, byte 5, byte 16r82, byte 3, byte 8, byte 0, byte 10,
+	};
+	(ep, mp, iv) := findintr(composite);
+	if(ep != 2 || mp != 8 || iv != 10){
+		sys->print("kbdusb: selftest: composite: endpoint %d maxpkt %d ival %d, want the keyboard's 2 8 10\n", ep, mp, iv);
+		ok = 0;
+	}
+	# an endpoint descriptor too short to have its fields: the bytes
+	# after it are not its attributes
+	short := array[] of {
+		byte 9, byte 4, byte 0, byte 0, byte 1, byte 3, byte 1, byte 1, byte 0,
+		byte 3, byte 5, byte 16r81,
+		byte 7, byte 5, byte 16r83, byte 3, byte 8, byte 0, byte 4,
+	};
+	(ep, mp, iv) = findintr(short);
+	if(ep != 3 || mp != 8 || iv != 4){
+		sys->print("kbdusb: selftest: short endpoint descriptor: endpoint %d maxpkt %d ival %d, want 3 8 4\n", ep, mp, iv);
+		ok = 0;
+	}
+	# a descriptor that says it runs past the end
+	over := array[] of { byte 9, byte 4, byte 0, byte 0, byte 1, byte 3, byte 1, byte 1, byte 0, byte 200, byte 5, byte 16r81, byte 3 };
+	(ep, nil, nil) = findintr(over);
+	if(ep != -1){
+		sys->print("kbdusb: selftest: an endpoint descriptor running past the end gave endpoint %d\n", ep);
+		ok = 0;
+	}
+	(ep, nil, nil) = findintr(array[0] of byte);
+	if(ep != -1){
+		sys->print("kbdusb: selftest: an empty configuration gave endpoint %d\n", ep);
+		ok = 0;
+	}
+	# the numbers as given
+	(ep, mp, iv) = sane(1, 8, 0);
+	if(ep != 1 || mp != 8 || iv != 10){
+		sys->print("kbdusb: selftest: interval 0 became %d\n", iv);
+		ok = 0;
+	}
+	(ep, mp, iv) = sane(1, 0, -5);
+	if(mp != Reportlen || iv != 10){
+		sys->print("kbdusb: selftest: maxpkt 0 ival -5 became %d %d\n", mp, iv);
+		ok = 0;
+	}
+	(ep, mp, iv) = sane(2, 65535, 100000);
+	if(mp != Maxreport || iv != 255){
+		sys->print("kbdusb: selftest: maxpkt 65535 ival 100000 became %d %d\n", mp, iv);
+		ok = 0;
+	}
+	(ep, nil, nil) = sane(0, 8, 10);
+	if(ep != -1){
+		sys->print("kbdusb: selftest: endpoint 0 taken for an interrupt endpoint\n");
+		ok = 0;
+	}
+	(ep, nil, nil) = sane(16, 8, 10);
+	if(ep != -1){
+		sys->print("kbdusb: selftest: endpoint 16 taken\n");
+		ok = 0;
+	}
+	if(ok)
+		sys->print("kbdusb: selftest OK\n");
+	else
+		sys->print("kbdusb: selftest FAILED\n");
 }
 
 openintr(epnum, maxpkt, ival: int): ref Sys->FD
@@ -450,7 +579,7 @@ openintr(epnum, maxpkt, ival: int): ref Sys->FD
 # not been released -- typing it again on every poll is what turns a
 # keyboard into a stuck key.
 #
-poll(fd, kbd: ref Sys->FD, ival: int)
+poll(fd, kbd: ref Sys->FD, ival, maxpkt: int)
 {
 	#
 	# One report per read, not a bufferful.
@@ -465,7 +594,12 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 	# Asking for exactly one report is what makes a keystroke a
 	# keystroke.
 	#
-	buf := array[Reportlen] of byte;
+	# One packet is the endpoint's packet size, which a keyboard may
+	# make larger than its report: the report is the packet's first
+	# Reportlen bytes.
+	if(maxpkt < Reportlen || maxpkt > Maxreport)
+		maxpkt = Reportlen;
+	buf := array[maxpkt] of byte;
 	i: int;
 
 	spawn repeater(kbd);
@@ -575,9 +709,12 @@ press(kbd: ref Sys->FD, mod: int, down: list of int)
 		c := decode(k, mod);
 		if(c > 0){
 			emit(kbd, c);
+			# the time first: the repeater reads these with no lock,
+			# and a new time with the old key repeats nothing, where
+			# a new key with the old time repeats it at once
+			heldat = sys->millisec();
 			heldk = k;
 			heldc = c;
-			heldat = sys->millisec();
 		}
 	}
 	#

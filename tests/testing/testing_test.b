@@ -59,7 +59,7 @@ testAssertFalse(t: ref T)
 {
 	# This test verifies that a failed assertion marks the test as failed
 	# We'll use a nested T to verify this behavior without affecting our test
-	inner := ref T("inner", "", 0, 0, nil, 0);
+	inner := ref T("inner", "", 0, 0, nil, 0, nil);
 	inner.assert(0, "expected failure");
 
 	t.assert(inner.failed, "inner test should be marked as failed");
@@ -73,7 +73,7 @@ testFailOutranksSkip(t: ref T)
 	# t.skip() to stop. If skip won, done() reported SKIP and summary()
 	# counted it as a non-failure, so the suite exited 0 with a real
 	# regression recorded and discarded.
-	inner := ref T("inner", "", 0, 0, nil, 0);
+	inner := ref T("inner", "", 0, 0, nil, 0, nil);
 	inner.error("something is genuinely broken");
 
 	# skip() raises, so catch it the way a test runner would
@@ -90,10 +90,43 @@ testFailOutranksSkip(t: ref T)
 	t.assert(!inner.skipped, "skip must not mask an already-recorded failure");
 }
 
+testRefusedIsNotAFailure(t: ref T)
+{
+	# A refusal by the far end stops the test as skip does, is counted
+	# with the skips by a run() helper, and is never a failure.
+	inner := testing->newT("inner-refused");
+	{
+		inner.refused("server answered 403");
+	} exception {
+	"fail:skip" =>
+		;
+	}
+	t.assert(inner.skipped, "a refusal is tallied with the skips");
+	t.assert(!inner.failed, "a refusal is not a failure");
+	t.assertseq(inner.refusal, "server answered 403", "the refusal keeps its reason");
+	t.asserteq(testing->done(inner), 0, "done() does not count a refusal as a pass");
+}
+
+testFailOutranksRefusal(t: ref T)
+{
+	# A failure already recorded cannot be retracted by calling it a refusal.
+	inner := testing->newT("inner-fail-refused");
+	inner.error("our code broke");
+	{
+		inner.refused("and then the server said no");
+	} exception {
+	"fail:skip" =>
+		;
+	}
+	t.assert(inner.failed, "a failure survives a later refusal");
+	t.assert(!inner.skipped, "a refusal must not mask a recorded failure");
+	t.assert(inner.refusal == nil, "no refusal is recorded over a failure");
+}
+
 testSkipAloneStillSkips(t: ref T)
 {
 	# The converse: a skip with no prior failure is still a skip.
-	inner := ref T("inner", "", 0, 0, nil, 0);
+	inner := ref T("inner", "", 0, 0, nil, 0, nil);
 	{
 		inner.skip("genuinely unavailable");
 	} exception {
@@ -112,27 +145,27 @@ testAssertHelpersFailOnMismatch(t: ref T)
 	# The assertion helpers were only ever tested in the passing
 	# direction, so if all of them were no-ops this file still passed --
 	# and with it every suite that rests on them.
-	inner := ref T("inner", "", 0, 0, nil, 0);
+	inner := ref T("inner", "", 0, 0, nil, 0, nil);
 	inner.asserteq(1, 2, "mismatch");
 	t.assert(inner.failed, "asserteq must fail on mismatch");
 
-	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner = ref T("inner", "", 0, 0, nil, 0, nil);
 	inner.assertne(3, 3, "equal");
 	t.assert(inner.failed, "assertne must fail when equal");
 
-	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner = ref T("inner", "", 0, 0, nil, 0, nil);
 	inner.assertseq("a", "b", "mismatch");
 	t.assert(inner.failed, "assertseq must fail on mismatch");
 
-	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner = ref T("inner", "", 0, 0, nil, 0, nil);
 	inner.assertsne("a", "a", "equal");
 	t.assert(inner.failed, "assertsne must fail when equal");
 
-	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner = ref T("inner", "", 0, 0, nil, 0, nil);
 	inner.assertnil("not empty", "should be nil");
 	t.assert(inner.failed, "assertnil must fail on a non-empty string");
 
-	inner = ref T("inner", "", 0, 0, nil, 0);
+	inner = ref T("inner", "", 0, 0, nil, 0, nil);
 	inner.assertnotnil("", "should be non-nil");
 	t.assert(inner.failed, "assertnotnil must fail on an empty string");
 }
@@ -185,7 +218,7 @@ testLog(t: ref T)
 testSkip(t: ref T)
 {
 	# Test that skip works by creating an inner test
-	inner := ref T("inner-skip", "", 0, 0, nil, 0);
+	inner := ref T("inner-skip", "", 0, 0, nil, 0, nil);
 
 	# Simulate skip
 	{
@@ -202,7 +235,7 @@ testSkip(t: ref T)
 testFatal(t: ref T)
 {
 	# Test that fatal works by creating an inner test
-	inner := ref T("inner-fatal", "", 0, 0, nil, 0);
+	inner := ref T("inner-fatal", "", 0, 0, nil, 0, nil);
 
 	# Simulate fatal
 	{
@@ -247,6 +280,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AssertFalse", testAssertFalse);
 	run("FailOutranksSkip", testFailOutranksSkip);
 	run("SkipAloneStillSkips", testSkipAloneStillSkips);
+	run("RefusedIsNotAFailure", testRefusedIsNotAFailure);
+	run("FailOutranksRefusal", testFailOutranksRefusal);
 	run("AssertHelpersFailOnMismatch", testAssertHelpersFailOnMismatch);
 	run("AssertEq", testAssertEq);
 	run("AssertNe", testAssertNe);

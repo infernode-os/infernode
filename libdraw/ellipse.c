@@ -7,9 +7,7 @@ doellipse(int cmd, Image *dst, Point *c, int xr, int yr, int thick, Image *src, 
 {
 	uchar *a;
 
-	_setdrawop(dst->display, op);
-
-	a = bufimage(dst->display, 1+4+4+2*4+4+4+4+2*4+2*4);
+	a = _bufimageop(dst->display, 1+4+4+2*4+4+4+4+2*4+2*4, op);
 	if(a == 0){
 		_drawprint(2, "image ellipse: %r\n");
 		return;

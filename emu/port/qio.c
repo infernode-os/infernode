@@ -69,12 +69,15 @@ freeb(Block *b)
 	 * pool of uncached buffers and provide their own free routine.
 	 */
 	if(b->free) {
+		b->next = nil;
+		b->list = nil;
 		b->free(b);
 		return;
 	}
 
 	/* poison the block in case someone is still holding onto it */
 	b->next = (void*)0xdeadbabe;
+	b->list = (void*)0xdeadbabe;
 	b->rp = (void*)0xdeadbabe;
 	b->wp = (void*)0xdeadbabe;
 	b->lim = (void*)0xdeadbabe;
@@ -281,6 +284,10 @@ trimblock(Block *bp, int offset, int len)
 	ulong l;
 	Block *nb, *startb;
 
+	if(offset < 0 || len < 0){
+		freeblist(bp);
+		return nil;
+	}
 	if(blocklen(bp) < offset+len) {
 		freeblist(bp);
 		return nil;
@@ -539,6 +546,9 @@ qconsume(Queue *q, void *vp, int len)
 		if(b == 0){
 			q->state |= Qstarve;
 			unlock(&q->l);
+			/* (the empty blocks passed on the way here were dropped unfreed) */
+			if(tofree != nil)
+				freeblist(tofree);
 			return -1;
 		}
 		QDEBUG checkb(b, "qconsume 1");
@@ -974,10 +984,17 @@ Block*
 mem2bl(uchar *p, int len)
 {
 	int n;
-	Block *b, *first, **l;
+	Block *b, *last;
+	/*
+	 * volatile: the list grows after waserror() and the handler frees
+	 * it.  It was reached through a pointer to a plain local, which
+	 * clang took for the nil it was at waserror(): when allocb raised
+	 * part way through a long write, the blocks already made were kept.
+	 */
+	Block *volatile first;
 
 	first = nil;
-	l = &first;
+	last = nil;
 	if(waserror()){
 		freeblist(first);
 		nexterror();
@@ -987,13 +1004,17 @@ mem2bl(uchar *p, int len)
 		if(n > Maxatomic)
 			n = Maxatomic;
 
-		*l = b = allocb(n);
+		b = allocb(n);
+		if(last == nil)
+			first = b;
+		else
+			last->next = b;
+		last = b;
 		setmalloctag(b, (up->text[0]<<24)|(up->text[1]<<16)|(up->text[2]<<8)|up->text[3]);
 		memmove(b->wp, p, n);
 		b->wp += n;
 		p += n;
 		len -= n;
-		l = &b->next;
 	} while(len > 0);
 	poperror();
 
@@ -1078,7 +1099,21 @@ qbread(Queue *q, int len)
 	if(n > len){
 		if((q->state&Qmsg) == 0){
 			n -= len;
+			/*
+			 * allocb raises when there is no memory, and the
+			 * queue's lock is held here: the reader's handler
+			 * lets go of rlock alone, so the queue stayed locked
+			 * for good and the block taken off it was lost. A
+			 * program can run the pool short. The block goes
+			 * back whole and the lock is let go first.
+			 */
+			if(waserror()){
+				qputback(q, nb);
+				unlock(&q->l);
+				nexterror();
+			}
 			b = allocb(n);
+			poperror();
 			memmove(b->wp, nb->rp+len, n);
 			b->wp += n;
 			qputback(q, b);
@@ -1193,13 +1228,14 @@ qnotfull(void *a)
 long
 qbwrite(Queue *q, Block *b)
 {
+	void (*bypass)(void*, Block*);
 	int n, dowakeup;
 	volatile struct {Block *b;} cb;
 
 	dowakeup = 0;
 	n = BLEN(b);
-	if(q->bypass){
-		(*q->bypass)(q->arg, b);
+	if((bypass = q->bypass) != nil){
+		(*bypass)(q->arg, b);
 		return n;
 	}
 	cb.b = b;
@@ -1326,6 +1362,7 @@ qwrite(Queue *q, void *vp, int len)
 int
 qiwrite(Queue *q, void *vp, int len)
 {
+	void (*bypass)(void*, Block*);
 	int n, sofar, dowakeup;
 	Block *b;
 	uchar *p = vp;
@@ -1345,6 +1382,12 @@ qiwrite(Queue *q, void *vp, int len)
 		}
 		memmove(b->wp, p+sofar, n);
 		b->wp += n;
+
+		if((bypass = q->bypass) != nil){
+			sofar += n;
+			(*bypass)(q->arg, b);
+			continue;
+		}
 
 		lock(&q->l);
 
@@ -1403,7 +1446,7 @@ qclose(Queue *q)
 	lock(&q->l);
 	q->state |= Qclosed;
 	q->state &= ~(Qflow|Qstarve);
-	strcpy(q->err, Ehungup);
+	kstrcpy(q->err, Ehungup, sizeof q->err);
 	bfirst = q->bfirst;
 	q->bfirst = 0;
 	q->len = 0;
@@ -1430,7 +1473,7 @@ qhangup(Queue *q, char *msg)
 	lock(&q->l);
 	q->state |= Qclosed;
 	if(msg == 0 || *msg == 0)
-		strcpy(q->err, Ehungup);
+		kstrcpy(q->err, Ehungup, sizeof q->err);
 	else
 		kstrcpy(q->err, msg, sizeof q->err);
 	unlock(&q->l);

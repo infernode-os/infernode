@@ -24,7 +24,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->init(args);
 	arg->setusage("auth/rsagen [-b bits] [-t 'attr=value attr=value ...']");
 	tag: string;
-	nbits := 1024;
+	nbits := 4096;
 	while((o := arg->opt()) != 0)
 		case o {
 		'b' =>

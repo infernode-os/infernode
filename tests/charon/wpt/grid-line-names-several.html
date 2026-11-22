@@ -1,0 +1,5 @@
+<!doctype html><title>a grid line with several names is found by each of them</title>
+<style>body{margin:0} .r{position:absolute;left:50px;top:0;width:100px;height:100px;background:red}
+.g{display:grid;width:200px;grid-template-columns:[a b] 50px [c d] 100px [e f] 50px [h];grid-template-rows:100px;position:relative}
+.i{grid-column:d / f;background:green}</style>
+<div class=r></div><div class=g><div class=i></div></div>

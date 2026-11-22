@@ -1,0 +1,13 @@
+en-us.pat and en-us.hyp: Hyphenation patterns for American English
+(hyph-en-us, ushyphmax), from the hyph-utf8 package of the TeX
+hyphenation project, unchanged (see SOURCE).
+
+Copyright (C) 1990, 2004, 2005 Gerard D.C. Kuiken
+
+Copying and distribution of this file, with or without modification,
+are permitted in any medium without royalty provided the copyright
+notice and this notice are preserved.
+
+The patterns are Knuth's and Liang's for TeX with Kuiken's additions;
+Android's hyph-en-us.pat.txt, which Chromium hyphenates with, is this
+file.

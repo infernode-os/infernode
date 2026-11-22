@@ -34,6 +34,12 @@ enum{
 	Qtemp,
 	Qmaxtemp,
 	Qthrottled,
+#ifdef FWRTC
+	Qfan,
+	Qfanrpm,
+	Qled,
+	Qbutton,
+#endif
 
 	Taggettemp	= 0x00030006,
 	Taggetmaxtemp	= 0x0003000a,
@@ -45,6 +51,12 @@ static Dirtab archtab[]={
 	"cputemp",	{Qtemp},		0,	0444,
 	"maxtemp",	{Qmaxtemp},		0,	0444,
 	"throttled",	{Qthrottled},		0,	0444,
+#ifdef FWRTC
+	"fan",		{Qfan},			0,	0664,	/* 0-255, or auto */
+	"fanrpm",	{Qfanrpm},		0,	0444,
+	"led",		{Qled},			0,	0222,	/* ACT: 0 or 1 */
+	"button",	{Qbutton},		0,	0444,	/* 1 while pressed */
+#endif
 };
 
 static char *throttlebits[] = {
@@ -143,6 +155,17 @@ archread(Chan *c, void *a, long n, vlong off)
 		return readstr(off, a, n, buf);
 	case Qthrottled:
 		return throttledread(a, n, off);
+#ifdef FWRTC
+	case Qfan:
+		snprint(buf, sizeof buf, "%d\n", fanget());
+		return readstr(off, a, n, buf);
+	case Qfanrpm:
+		snprint(buf, sizeof buf, "%d\n", fanrpm());
+		return readstr(off, a, n, buf);
+	case Qbutton:
+		snprint(buf, sizeof buf, "%d\n", buttonget());
+		return readstr(off, a, n, buf);
+#endif
 	}
 	error(Egreg);
 	return 0;
@@ -151,6 +174,27 @@ archread(Chan *c, void *a, long n, vlong off)
 static long
 archwrite(Chan *c, void *a, long n, vlong off)
 {
+#ifdef FWRTC
+	char buf[32];
+
+	if(n >= sizeof buf)
+		error(Etoobig);
+	memmove(buf, a, n);
+	buf[n] = 0;
+	switch((ulong)c->qid.path){
+	case Qfan:
+		if(strncmp(buf, "auto", 4) == 0){
+			fanauto(1);
+			return n;
+		}
+		fanauto(0);
+		fanset(strtol(buf, nil, 0));
+		return n;
+	case Qled:
+		ledset(buf[0] == '1');
+		return n;
+	}
+#endif
 	USED(c); USED(a); USED(n); USED(off);
 	error(Eperm);
 	return 0;
@@ -161,7 +205,11 @@ Dev archdevtab = {
 	"arch",
 
 	devreset,
+#ifdef FWRTC
+	fanstart,
+#else
 	devinit,
+#endif
 	devshutdown,
 	archattach,
 	archwalk,

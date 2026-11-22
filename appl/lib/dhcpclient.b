@@ -244,7 +244,39 @@ Bootconf.gets(c: self ref Bootconf, n: int): string
 	e := len v;
 	while(e > 0 && v[e-1] == byte 0)	# servers pad names with NUL
 		e--;
+	#
+	# A string option is the server's text, and it goes into net/ndb, a
+	# file of lines: a control character in it -- a newline above all --
+	# would be a line of the server's own.  Such a string is no value.
+	#
+	for(i := 0; i < e; i++)
+		if(v[i] < byte ' ' || v[i] == byte 16r7F)
+			return nil;
 	return string v[0:e];
+}
+
+# An ndb value written bare is one word: no blanks, no quote.
+ndbword(s: string): int
+{
+	if(s == nil)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7F || s[i] == '\'')
+			return 0;
+	return 1;
+}
+
+timers(lease, t1, t2: int): (int, int)
+{
+	if(t1 <= 0 || t1 >= lease)
+		t1 = lease / 2;
+	if(t1 < Minrenew)
+		t1 = Minrenew;	# a lease of a second is not renewed in a loop
+	if(t2 <= t1 || t2 >= lease)
+		t2 = lease/8*7 + (lease%8)*7/8;	# seven-eighths, without lease*7 wrapping
+	if(t2 <= t1)
+		t2 = t1 + 1;
+	return (t1, t2);
 }
 
 Bootconf.put(c: self ref Bootconf, n: int, a: array of byte)
@@ -1061,7 +1093,7 @@ discover(s: ref Session): (ref Bootconf, string)
 			continue;
 		}
 		srvid := oc.get(Oserverid);
-		if(srvid == nil || len srvid < 4){
+		if(srvid == nil || len srvid != 4){	# an address: four bytes, not more
 			last = "DHCPOFFER without a server identifier";
 			continue;
 		}
@@ -1095,6 +1127,15 @@ discover(s: ref Session): (ref Bootconf, string)
 		}
 		if(c.ip == nil){
 			last = "DHCPACK without an address";
+			continue;
+		}
+		# the acknowledgement of what was asked: that address, from that server
+		if(c.ip != dotted(yiaddr, 0)){
+			last = "DHCPACK for another address";
+			continue;
+		}
+		if(c.serverid != nil && c.serverid != dotted(srvid, 0)){
+			last = "DHCPACK from another server";
 			continue;
 		}
 		return (c, nil);
@@ -1273,9 +1314,9 @@ writendb(net: string, conf: ref Bootconf)
 	if(conf.ipgw != nil)
 		s += sys->sprint(" ipgw=%s", conf.ipgw);
 	s += "\n";
-	if(conf.sys != nil)
+	if(ndbword(conf.sys))
 		s += sys->sprint("\tsys=%s\n", conf.sys);
-	if(conf.dom != nil)
+	if(ndbword(conf.dom))
 		s += sys->sprint("\tdom=%s\n", conf.dom);
 	for(l := conf.getips(Odnsserver); l != nil; l = tl l)
 		s += sys->sprint("\tdns=%s\n", hd l);
@@ -1531,6 +1572,8 @@ renew(s: ref Session, dst: string, tries: int): string
 		}
 		if(c.ip == nil)
 			c.ip = s.conf.ip;	# a renewal need not repeat it
+		if(c.lease == 0)
+			c.lease = s.conf.lease;	# nor, from some servers, the lease: it runs as it did
 		changed := c.ip != s.conf.ip || c.ipmask != s.conf.ipmask ||
 			c.ipgw != s.conf.ipgw;
 		if(changed && s.ctlifc != nil){
@@ -1568,12 +1611,7 @@ watchdog(s: ref Session, pc: chan of int)
 		# Nonsense values -- zero, out of order, past the lease --
 		# fall back rather than being obeyed.
 		#
-		t1 := s.conf.getint(Orenewaltime);
-		t2 := s.conf.getint(Orebindingtime);
-		if(t1 <= 0 || t1 >= lease)
-			t1 = lease / 2;
-		if(t2 <= t1 || t2 >= lease)
-			t2 = (lease * 7) / 8;
+		(t1, t2) := timers(lease, s.conf.getint(Orenewaltime), s.conf.getint(Orebindingtime));
 		closesession(s);		# the port is free while the lease runs
 		if(napsecs(s, t1))
 			break;

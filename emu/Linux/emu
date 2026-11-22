@@ -24,6 +24,7 @@ dev
 	audio	audio-oss
 	mem
 	tfa	fido2bridge
+	location	locationbridge-stub
 
 lib
 	interp
@@ -50,7 +51,8 @@ mod
 	srv	srv
 	keyring
 	i420
-#	gpu
+	tensor
+	bayer
 #	loader
 #	freetype
 

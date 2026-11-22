@@ -2,6 +2,8 @@
 #include <libsec.h>
 
 extern void _sha256block(SHA256state*, uchar*);
+extern int sha256arm64ok(void);
+extern void sha256arm64blocks(u32int*, const uchar*, ulong);
 extern void _sha512block(SHA512state*, uchar*);
 
 u32int sha224h0[] = {
@@ -99,6 +101,14 @@ _sha256(uchar *p, ulong len, SHA256state *s)
 		memset(s->buf, 0, SHA256bsize);
 	}
 	/* whole blocks */
+	if(len >= SHA256bsize && sha256arm64ok()) {
+		ulong n = len / SHA256bsize;
+		sha256arm64blocks(s->h32, p, n);
+		n *= SHA256bsize;
+		s->len += n;
+		p += n;
+		len -= n;
+	}
 	while(len >= SHA256bsize) {
 		_sha256block(s, p);
 		s->len += SHA256bsize;
@@ -117,8 +127,13 @@ sha256finish(SHA256state *s, uchar *digest, int smaller)
 {
 	int i;
 	uchar end[SHA256bsize+8];
-	u32int nzero, nb, nd;
+	u32int nzero, nd;
+	u64int nb;
 
+	/*
+	 * the length is 64 bits of bits (FIPS 180-4 5.1.1): kept in 32,
+	 * the digest of 2^29 bytes or more was another message's
+	 */
 	nzero = (2*SHA256bsize - s->blen - 1 - 8) % SHA256bsize;
 	end[0] = 0x80;
 	memset(end+1, 0, nzero);
@@ -136,7 +151,13 @@ sha256finish(SHA256state *s, uchar *digest, int smaller)
 static SHA256state*
 sha256x(uchar *p, ulong len, uchar *digest, SHA256state *s, int smaller)
 {
-	if(s == nil) {
+	DigestState own;
+
+	/* see sha1.c: the one-call form allocates nothing */
+	if(s == nil && digest != nil){
+		s = &own;
+		memset(s, 0, sizeof(*s));
+	}else if(s == nil) {
 		s = sha256init();
 		if(s == nil)
 			return nil;
@@ -153,8 +174,11 @@ sha256x(uchar *p, ulong len, uchar *digest, SHA256state *s, int smaller)
 		return s;
 
 	sha256finish(s, digest, smaller);
-	if(s->malloced == 1)
+	if(s->malloced == 1){
+		secureZero(s, sizeof(*s));
 		free(s);
+	}else if(s == &own)
+		secureZero(s, sizeof(*s));
 	return nil;
 }
 
@@ -246,7 +270,13 @@ sha512finish(SHA512state *s, uchar *digest, int smaller)
 static SHA512state*
 sha512x(uchar *p, ulong len, uchar *digest, SHA512state *s, int smaller)
 {
-	if(s == nil) {
+	DigestState own;
+
+	/* see sha1.c: the one-call form allocates nothing */
+	if(s == nil && digest != nil){
+		s = &own;
+		memset(s, 0, sizeof(*s));
+	}else if(s == nil) {
 		s = sha512init();
 		if(s == nil)
 			return nil;
@@ -263,8 +293,11 @@ sha512x(uchar *p, ulong len, uchar *digest, SHA512state *s, int smaller)
 		return s;
 
 	sha512finish(s, digest, smaller);
-	if(s->malloced == 1)
+	if(s->malloced == 1){
+		secureZero(s, sizeof(*s));
 		free(s);
+	}else if(s == &own)
+		secureZero(s, sizeof(*s));
 	return nil;
 }
 

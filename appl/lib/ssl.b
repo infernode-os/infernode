@@ -4,6 +4,7 @@ include "sys.m";
 	sys: Sys;
 
 include "keyring.m";
+	kr: Keyring;
 include "security.m";
 
 sslclone(): (ref Sys->Connection, string)
@@ -65,6 +66,28 @@ secret(c: ref Sys->Connection, secretin, secretout: array of byte): string
 			return sys->sprint("cannot open %s: %r", c.dir + "/secretout");
 	}
 	return nil;
+}
+
+#
+# ssl(3) refuses the same secret both ways (under aes_256_gcm it would
+# give both directions one key and one run of nonces), so a secret the
+# two ends share is made into one for each way: HMAC-SHA-384 keyed by
+# it, of a label naming the way.  The client sends under the first and
+# the server under the second.
+#
+secrets(shared: array of byte, client: int): (array of byte, array of byte)
+{
+	if(kr == nil)
+		kr = load Keyring Keyring->PATH;
+	c2s := array[Keyring->SHA384dlen] of byte;
+	s2c := array[Keyring->SHA384dlen] of byte;
+	l := array of byte "infernode ssl client to server";
+	kr->hmac_sha384(l, len l, shared, c2s, nil);
+	l = array of byte "infernode ssl server to client";
+	kr->hmac_sha384(l, len l, shared, s2c, nil);
+	if(client)
+		return (s2c, c2s);
+	return (c2s, s2c);
 }
 
 algs(): (list of string, list of string)

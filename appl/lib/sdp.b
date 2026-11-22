@@ -149,7 +149,17 @@ Elem.pack(e: self ref Elem): array of byte
 # bytes do not describe one
 unpack(a: array of byte, i: int): (ref Elem, int)
 {
-	if(i >= len a)
+	return unpack1(a, i, 0);
+}
+
+# Records nest three or four deep.  A sequence costs its sender two bytes
+# a level, so without a limit a request is a tree thirty thousand deep.
+Maxdepth: con 32;
+Maxpattern: con 12;
+
+unpack1(a: array of byte, i: int, depth: int): (ref Elem, int)
+{
+	if(depth > Maxdepth || i < 0 || i >= len a)
 		return (nil, i);
 	t := int a[i] >> 3;
 	sz := int a[i] & 7;
@@ -173,7 +183,9 @@ unpack(a: array of byte, i: int): (ref Elem, int)
 	}
 	if(t == Tnil)
 		n = 0;
-	if(i + n > len a)
+	# a 32-bit length is the peer's and signed here: against the room
+	# left, not added to i, where a negative or a huge one wraps past it
+	if(n < 0 || n > len a - i)
 		return (nil, i);
 	body := a[i:i+n];
 	end := i + n;
@@ -181,10 +193,10 @@ unpack(a: array of byte, i: int): (ref Elem, int)
 	Tnil =>
 		return (ref Elem.Nil, end);
 	Tuint =>
-		if(n > 8) return (nil, i);
+		if(n != 1 && n != 2 && n != 4 && n != 8) return (nil, i);	# the sizes pack can write back
 		return (ref Elem.Uint(getbig(body, 0, n), n), end);
 	Tint =>
-		if(n > 8) return (nil, i);
+		if(n != 1 && n != 2 && n != 4 && n != 8) return (nil, i);
 		v := getbig(body, 0, n);
 		if(n < 8 && (v & (big 1 << (8*n - 1))) != big 0)
 			v -= big 1 << (8*n);		# sign-extend
@@ -202,7 +214,7 @@ unpack(a: array of byte, i: int): (ref Elem, int)
 	Tseq or Talt =>
 		l: list of ref Elem;
 		for(j := 0; j < n;){
-			(e, nj) := unpack(body, j);
+			(e, nj) := unpack1(body, j, depth+1);
 			if(e == nil)
 				return (nil, i);
 			l = e :: l;
@@ -512,6 +524,8 @@ pattern(e: ref Elem): list of array of byte
 	* =>
 		return nil;
 	}
+	if(len l > Maxpattern)
+		return nil;	# a search pattern is at most twelve UUIDs
 	return l;
 }
 
@@ -606,8 +620,10 @@ Server.request(s: self ref Server, p: array of byte, mtu: int): array of byte
 	case id {
 	Psearchreq =>
 		(pe, ni) := unpack(p, i);
+		if(pe == nil || ni + 2 > len p)
+			return errpdu(tid, Ebadsyntax);
 		pat := pattern(pe);
-		if(pe == nil || pat == nil || ni + 2 > len p)
+		if(pat == nil)
 			return errpdu(tid, Ebadsyntax);
 		maxrecs := get2(p, ni);
 		(off, nil) := contstate(p, ni + 2);
@@ -639,8 +655,10 @@ Server.request(s: self ref Server, p: array of byte, mtu: int): array of byte
 		handle := get4(p, i);
 		maxbytes := get2(p, i + 4);
 		(ae, ni) := unpack(p, i + 6);
+		if(ae == nil)
+			return errpdu(tid, Ebadsyntax);
 		ranges := idranges(ae);
-		if(ae == nil || ranges == nil)
+		if(ranges == nil)
 			return errpdu(tid, Ebadsyntax);
 		(off, nil) := contstate(p, ni);
 		if(off < 0)
@@ -658,13 +676,17 @@ Server.request(s: self ref Server, p: array of byte, mtu: int): array of byte
 		return pdu(Pattrrsp, tid, cat(cat(r, part), cont));
 	Psearchattrreq =>
 		(pe, ni) := unpack(p, i);
+		if(pe == nil || ni + 2 > len p)
+			return errpdu(tid, Ebadsyntax);
 		pat := pattern(pe);
-		if(pe == nil || pat == nil || ni + 2 > len p)
+		if(pat == nil)
 			return errpdu(tid, Ebadsyntax);
 		maxbytes := get2(p, ni);
 		(ae, nj) := unpack(p, ni + 2);
+		if(ae == nil)
+			return errpdu(tid, Ebadsyntax);
 		ranges := idranges(ae);
-		if(ae == nil || ranges == nil)
+		if(ranges == nil)
 			return errpdu(tid, Ebadsyntax);
 		(off, nil) := contstate(p, nj);
 		if(off < 0)

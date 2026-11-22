@@ -140,7 +140,7 @@ xdtoa(Fmt *fmt, char *s2, double f)
 	if(chr == 'f')
 		c2 += e;
 	if(c2 >= NSIGNIF-2) {
-		strcpy(s2, s1);
+		memmove(s2, s1, NSIGNIF+1);	/* the digits and their terminator, written just above */
 		d = e;
 		s1[NSIGNIF-2] = '0';
 		s1[NSIGNIF-1] = '0';
@@ -155,7 +155,7 @@ xdtoa(Fmt *fmt, char *s2, double f)
 		g = strtod(s1, nil);
 		if(g == f)
 			goto found;
-		strcpy(s1, s2);
+		memmove(s1, s2, NSIGNIF+1);
 		e = d;
 	}
 

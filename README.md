@@ -33,6 +33,7 @@ Every tagged release ships signed binaries for macOS, Linux, and Windows on the 
   ```bash
   docker run -it ghcr.io/infernode-os/infernode:latest
   ```
+- **Raspberry Pi (bare metal)** — `infernode-*-rpi3bplus.img.xz`, `infernode-*-rpi4b.img.xz` and `infernode-*-rpi5.img.xz` are SD-card images of InferNode as the operating system, with nothing underneath. All three are in Raspberry Pi Imager's format (the release attaches `os_list_infernode.json`). See [docs/BAREMETAL.md](docs/BAREMETAL.md#4-putting-it-on-a-raspberry-pi-3b).
 
 ```bash
 tar xzf infernode-*-linux-*-gui.tar.gz
@@ -90,12 +91,13 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 
 - **Lightweight** — 15–30 MB RAM, 2-second startup, ~10 MB on disk.
 - **JIT compiled** — native code generation on AMD64, ARM64 and RISC-V; interpreter fallback everywhere.
-- **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 44 tool modules, LLM integration via 9P, and formally verified containment.
+- **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 44 tool modules, LLM integration via 9P, and model-checked namespace copy semantics.
 - **GUI (optional)** — three-zone tiling UI (Lucia) and an AI-native text environment ([Xenith](docs/XENITH.md)), rendered via SDL3 (Metal / Vulkan / D3D).
 - **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucia) or by agents through `/mnt/matrix/ctl`.
 - **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending with a trusted approval queue. Signing is cross-validated against go-ethereum; see the [security model](docs/WALLET-AND-PAYMENTS.md#status-and-security-model).
-- **Formally verified** — namespace isolation proven in TLA+ (3.17B states), SPIN, and CBMC.
-- **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205).
+- **Formal methods** — the namespace copy (`pgrpcpy`) is specified in TLA+ and model-checked exhaustively at small scale, its deep-copy structure is bounded-checked in CBMC on the C, and three fixed name-space races are confirmed in SPIN. These are checks of a model and of one function, not a proof of isolation; see [formal-verification/README.md](formal-verification/README.md#what-this-does-and-does-not-establish).
+- **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205); node-to-node authentication is hybrid Diffie-Hellman + ML-KEM, and every encrypted 9P connection is AES-256-GCM. A CNSA 2.0 mode (`CNSAMODE`) holds login and node authentication to what CNSA admits (ML-KEM-1024, ML-DSA-87, AES-256-GCM); `CNSATLS` does the same for TLS. See [docs/CRYPTO-MODERNIZATION.md](docs/CRYPTO-MODERNIZATION.md).
+- **Sensors as files** — cameras (`camsrv`), object detection (`vision(4)` at `/mnt/vision`, on the CPU or a Jetson's GPU and DLAs), drawn overlays composed by the name space (`layerfs`), GPS (`gpsfs` at `/mnt/gps`) and software-defined radio (`sdrfs`), each a 9P service an agent can be granted or denied like any other.
 - **Complete** — 1,100+ Limbo source files, a full shell, TCP/IP, 9P, and over 1,000 compiled Dis modules.
 
 ## Platforms
@@ -127,7 +129,8 @@ serial console, with the full namespace and the network up.
 |-------|-------|
 | **Raspberry Pi 3B+** (`os/bcm2837`) | Runs on the real board, and on QEMU's `raspi3b`. Ethernet (LAN7515 over USB), Wi-Fi (CYW43455), Bluetooth, SD card, HDMI/DSI, USB keyboard and mouse, touch, GPIO, audio, A/B kernel update, boot watchdog. |
 | **QEMU `virt`** (`os/virt`) | GICv2 and virtio (net, blk, keyboard, tablet, ramfb) — the kernel anywhere QEMU runs, which is what CI boots. |
-| **Raspberry Pi 4B** (`os/bcm2711`) | Boots to the desktop under QEMU's `raspi4b`; has never run on a board. [os/bcm2711/README.md](os/bcm2711/README.md) says what that does and does not establish. |
+| **Raspberry Pi 4B** (`os/bcm2711`) | Runs on the real board (a 4B rev 1.5, since 2026-10-15) and on QEMU's `raspi4b`: SD card, gigabit Ethernet, Wi-Fi and Bluetooth, USB, the 7" panel and touch, the camera, the headphone jack, all four cores. [os/bcm2711/README.md](os/bcm2711/README.md) says what was proved on the board. |
+| **Raspberry Pi 5** (`os/bcm2712`) | Runs on one board (a Pi 5 8GB rev 1.0, since 2026-10-31) and on nothing else, as no emulator models a Pi 5: all four cores, gigabit Ethernet, USB through RP1, Wi-Fi, Bluetooth, GPIO, I2C, SPI, PWM, the real-time clock, NVMe, the desktop on either HDMI port. Not yet: two screens at once, DSI and CSI. [os/bcm2712/README.md](os/bcm2712/README.md); [INVENTORY.md](os/bcm2712/INVENTORY.md) says what is proved, feature by feature. |
 | **QEMU RISC-V `virt`** (`os/riscvvirt`) | RV64GC under OpenSBI with the RISC-V Dis JIT: 4 harts, PLIC, virtio (net, blk, keyboard, tablet), ramfb to the graphical logon, and U-Boot `booti`/`boot.scr`. [os/riscv64/README.md](os/riscv64/README.md). |
 | **PolarFire SoC: BeagleV-Fire, Icicle Kit** (`os/mpfs`) | Boots under QEMU's `microchip-icicle-kit`: SD card (Cadence SD4HC), Gigabit Ethernet (Cadence GEM, PHY over MDIO), the system controller's TRNG service, `/reserved-memory`. It has never run on a board. |
 
@@ -140,7 +143,8 @@ BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
 ```
 
 CI builds, boots and tests QEMU `virt`, the Pi 3B+ and Pi 4B models, and both
-RISC-V machines on every pull request that touches the kernel. Full manual —
+RISC-V machines on every pull request that touches the kernel; it builds the
+Pi 5 kernel but cannot boot it. Full manual —
 running it, the card image, the QEMU flags that fail silently, what controls it: [docs/BAREMETAL.md](docs/BAREMETAL.md).
 
 ## Documentation
@@ -148,7 +152,7 @@ running it, the card image, the QEMU flags that fail silently, what controls it:
 - [QUICKSTART.md](QUICKSTART.md) — running in under a minute
 - [docs/USER-MANUAL.md](docs/USER-MANUAL.md) — namespaces, devices, host integration
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
-- [docs/BAREMETAL.md](docs/BAREMETAL.md) — running InferNode as the operating system, on Raspberry Pi and QEMU
+- [docs/BAREMETAL.md](docs/BAREMETAL.md) — running InferNode as the operating system, on Raspberry Pi 3B+, 4B and 5, and QEMU
 - [docs/XENITH.md](docs/XENITH.md) — AI-native text environment
 - [docs/matrix-architecture.md](docs/matrix-architecture.md) — Matrix compositional module runtime
 - [docs/WALLET-AND-PAYMENTS.md](docs/WALLET-AND-PAYMENTS.md) — wallet, x402, secstore, key management
@@ -168,7 +172,7 @@ InferNode is MIT-licensed and free to use. [Sponsorship](https://github.com/spon
 
 ## About
 
-InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64, ARM64 and RISC-V, the Veltro AI agent system with formally verified namespace isolation, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
+InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64, ARM64 and RISC-V, the Veltro AI agent system with model-checked namespace isolation primitives, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
 
 ## Acknowledgements
 
@@ -176,7 +180,7 @@ InferNode is a late arrival in a long lineage.
 
 - **Dr Charles Forsyth and Vita Nuova** — the Limbo compiler, the Dis VM, and the JIT back ends are Forsyth's; some 800 commits in this history are his, and `libinterp/comp-arm64.c` is written against the shape he set in `comp-arm.c`. Vita Nuova carried Inferno for two decades, gave it work like Roger Peppé's shell ([doc/sh.ms](doc/sh.ms)), and relicensed it under MIT — without which InferNode could not exist. Through the long years when the industry had no use for any of it, they kept Inferno a living system rather than a paper about one. InferNode exists because that torch never went out.
 - **Inferno's originators at Bell Labs** — Sean Dorward, Rob Pike, David Presotto, Dennis Ritchie, Howard Trickey, and Phil Winterbottom, for Inferno, Limbo, Dis, and Styx/9P. Their papers ship in this tree ([doc/bltj.ms](doc/bltj.ms), [doc/dis.ms](doc/dis.ms), [doc/limbo/limbo.ms](doc/limbo/limbo.ms)).
-- **Caerwyn Jones** — [Acme SAC](https://github.com/caerwynj/acme-sac), Acme carried out of Plan 9 as a self-contained Inferno system rather than an app hosted on someone else's desktop. That framing is the major influence on [Xenith](docs/XENITH.md).
+- **Caerwyn Jones** — [Acme SAC](https://github.com/caerwynj/acme-sac), Acme carried out of Plan 9 as a self-contained Inferno system rather than an app hosted on someone else's desktop. That framing is the major influence on [Xenith](docs/XENITH.md).  [Inferno64](https://github.com/caerwynj/inferno64) served as a valuable reference for some of the ARM64 work.
 - **The Hellaphone crew** — John Floren, Joel Armstrong, and colleagues at Sandia National Laboratories, who ran Inferno on Android in place of the Java runtime and made a cellular radio a directory of text files. `emu/port/devphone.c` mirrors their `/phone` interface deliberately, their RIL bridge is still the reference for `emu/Android/phonebridge.c`, and the mobile target carries their name ([docs/HELLAPHONE.md](docs/HELLAPHONE.md), [Plan9-Archive/hellaphone](https://github.com/Plan9-Archive/hellaphone)).
 - **The bare-metal Pi lineage** — **Richard Miller**, whose Plan 9 Raspberry Pi kernels nearly all Pi work in this world starts from (and, here, the Inferno RISC-V toolchain); **LynxLine Labs** of Kyiv, who did the [original native Inferno port to the Pi](https://lynxline.com/posts/labs-portintg-inferno-os-to-raspberry-pi/) in 2014 and documented it lab by lab ([github.com/yshurik](https://github.com/yshurik/inferno-rpi)); and **David Boddie**, who carries the native ports forward today ([Inferno Ports](https://dboddie.github.io/inferno-ports/)). And **the 9front project**, whose MIT-licensed `bcm` kernel this port reads from directly: `os/bcm/uartmini.c` is 9front's mini-UART, the console the machine boots on; `os/bcm/uartpl011.c` takes its structure from 9front's PL011, which is how the port speaks H4 to the Bluetooth radio; `os/bcm/sdhost.c` has its register semantics cross-checked against 9front's; and 9front's `egpset()` is the model for the firmware GPIO expander in `os/bcm/devgpio.c`.
 

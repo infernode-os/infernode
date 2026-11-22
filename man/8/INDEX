@@ -31,10 +31,14 @@ plumber plumber
 rdbgsrv rdbgsrv
 register register
 rip rip
+dsagen rsagen
+rsagen rsagen
 rstyxd rstyxd
 styxd rstyxd
 shutdown shutdown
 countersigner signer
+secstored secstored
+secstore-setup secstored
 signer signer
 verify signer
 styxchat styxchat
@@ -47,3 +51,4 @@ styx svc
 svc svc
 virgild virgild
 wpa wpa
+timesync timesync

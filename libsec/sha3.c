@@ -31,68 +31,127 @@ static const u64int RC[24] = {
 };
 
 /*
- * Rotation offsets for rho step
+ * The lanes are read and written as bytes where they lie: a
+ * little-endian host, as every one this is built for is.
  */
-static const int Rotc[24] = {
-	 1,  3,  6, 10, 15, 21, 28, 36,
-	45, 55,  2, 14, 27, 41, 56,  8,
-	25, 43, 62, 18, 39, 61, 20, 44,
-};
-
-/*
- * Lane index permutation for pi step
- */
-static const int Piln[24] = {
-	10,  7, 11, 17, 18,  3,  5, 16,
-	 8, 21, 24,  4, 15, 23, 19, 13,
-	12,  2, 20, 14, 22,  9,  6,  1,
-};
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#error "sha3.c: the Keccak state is read as bytes in little-endian order"
+#endif
 
 #define ROTL64(x, n) (((x) << (n)) | ((x) >> (64-(n))))
 
 /*
+ * theta for column x: each of its lanes takes the parity of the column
+ * before and, turned one bit, of the column after
+ */
+#define THETA(x, before, after) \
+	t = before ^ ROTL64(after, 1); \
+	st[x] ^= t; st[x+5] ^= t; st[x+10] ^= t; st[x+15] ^= t; st[x+20] ^= t
+
+/*
+ * rho and pi move every lane but the first to another place, turned by
+ * its own amount; the places make one cycle of 24, taken a step at a
+ * time: lane j takes what the lane before it in the cycle held
+ */
+#define RHOPI(j, n) \
+	u = st[j]; st[j] = ROTL64(t, n); t = u
+
+/* chi for the row of five lanes at j */
+#define CHI(j) \
+	t = st[j]; u = st[j+1]; \
+	st[j] ^= ~u & st[j+2]; \
+	st[j+1] ^= ~st[j+2] & st[j+3]; \
+	st[j+2] ^= ~st[j+3] & st[j+4]; \
+	st[j+3] ^= ~st[j+4] & t; \
+	st[j+4] ^= ~t & u
+
+/*
  * Keccak-f[1600] permutation: 24 rounds of theta/rho/pi/chi/iota.
  * Operates on 5x5 array of 64-bit lanes (200 bytes = 1600 bits).
- * Constant-time by construction (no data-dependent branches).
+ * Constant-time by construction: exclusive-ors, ands, complements and
+ * rotations by fixed amounts, with no branch or index made from the
+ * state.
+ *
+ * Each round is written out lane by lane.  It was loops over the
+ * columns and rows with the lane's index taken mod 5 and the rotation
+ * and the place read from tables, which a compiler asked for little
+ * (the emulator's -O) left as written: two microseconds a permutation,
+ * and an SLH-DSA signature, three million of them, 9 s.  Written out it
+ * is four times as fast at the same flags.  The state is worked on
+ * where it is, with seven lanes of temporaries, so that no second copy
+ * of it is left on the stack.
  */
 static void
 keccakf(u64int st[25])
 {
-	u64int t, bc[5];
-	int i, j, r;
+	u64int t, u, c0, c1, c2, c3, c4;
+	int r;
 
 	for(r = 0; r < 24; r++){
-		/* theta: column parity */
-		for(i = 0; i < 5; i++)
-			bc[i] = st[i] ^ st[i+5] ^ st[i+10] ^ st[i+15] ^ st[i+20];
-
-		for(i = 0; i < 5; i++){
-			t = bc[(i+4) % 5] ^ ROTL64(bc[(i+1) % 5], 1);
-			for(j = 0; j < 25; j += 5)
-				st[j+i] ^= t;
-		}
+		/* theta */
+		c0 = st[0] ^ st[5] ^ st[10] ^ st[15] ^ st[20];
+		c1 = st[1] ^ st[6] ^ st[11] ^ st[16] ^ st[21];
+		c2 = st[2] ^ st[7] ^ st[12] ^ st[17] ^ st[22];
+		c3 = st[3] ^ st[8] ^ st[13] ^ st[18] ^ st[23];
+		c4 = st[4] ^ st[9] ^ st[14] ^ st[19] ^ st[24];
+		THETA(0, c4, c1);
+		THETA(1, c0, c2);
+		THETA(2, c1, c3);
+		THETA(3, c2, c4);
+		THETA(4, c3, c0);
 
 		/* rho and pi */
 		t = st[1];
-		for(i = 0; i < 24; i++){
-			j = Piln[i];
-			bc[0] = st[j];
-			st[j] = ROTL64(t, Rotc[i]);
-			t = bc[0];
-		}
+		RHOPI(10, 1);
+		RHOPI(7, 3);
+		RHOPI(11, 6);
+		RHOPI(17, 10);
+		RHOPI(18, 15);
+		RHOPI(3, 21);
+		RHOPI(5, 28);
+		RHOPI(16, 36);
+		RHOPI(8, 45);
+		RHOPI(21, 55);
+		RHOPI(24, 2);
+		RHOPI(4, 14);
+		RHOPI(15, 27);
+		RHOPI(23, 41);
+		RHOPI(19, 56);
+		RHOPI(13, 8);
+		RHOPI(12, 25);
+		RHOPI(2, 43);
+		RHOPI(20, 62);
+		RHOPI(14, 18);
+		RHOPI(22, 39);
+		RHOPI(9, 61);
+		RHOPI(6, 20);
+		RHOPI(1, 44);
 
-		/* chi: nonlinear step */
-		for(j = 0; j < 25; j += 5){
-			for(i = 0; i < 5; i++)
-				bc[i] = st[j+i];
-			for(i = 0; i < 5; i++)
-				st[j+i] ^= (~bc[(i+1) % 5]) & bc[(i+2) % 5];
-		}
+		/* chi */
+		CHI(0);
+		CHI(5);
+		CHI(10);
+		CHI(15);
+		CHI(20);
 
-		/* iota: round constant */
+		/* iota */
 		st[0] ^= RC[r];
 	}
 }
+
+/*
+ * A sponge absorbs, is finalized (padded) once, and is then squeezed.
+ * The phase is kept so that a call out of turn does something that can
+ * be stated: a squeeze before the padding pads first, and bytes given
+ * to absorb after the padding are not taken (they were exclusive-ored
+ * into the state at whatever place squeezing had reached, and a squeeze
+ * with no padding gave the state of the unpadded input).
+ */
+enum
+{
+	Absorbing,
+	Squeezing,
+};
 
 /*
  * Initialize SHA3/SHAKE state with given rate (in bytes).
@@ -108,27 +167,56 @@ sha3_init(SHA3state *s, int rate, int mdlen)
 	memset(s, 0, sizeof(*s));
 	s->rate = rate;
 	s->mdlen = mdlen;
+	s->phase = Absorbing;
 }
 
 /*
- * Absorb data into sponge state.
+ * Absorb data into sponge state: what fits in the block at a time.
  */
 static void
 sha3_update(SHA3state *s, const uchar *in, ulong inlen)
 {
 	uchar *sb;
-	ulong j;
+	ulong j, n, i;
 
+	if(s->phase != Absorbing)
+		return;
 	sb = (uchar*)s->a;
 	j = s->pt;
-	for(; inlen > 0; inlen--){
-		sb[j++] ^= *in++;
+	while(inlen > 0){
+		n = (ulong)s->rate - j;
+		if(n > inlen)
+			n = inlen;
+		for(i = 0; i < n; i++)
+			sb[j+i] ^= in[i];
+		in += n;
+		inlen -= n;
+		j += n;
 		if(j >= (ulong)s->rate){
 			keccakf(s->a);
 			j = 0;
 		}
 	}
 	s->pt = j;
+}
+
+/*
+ * Pad (FIPS 202 section 5.1, with the function's suffix: 0x06 for
+ * SHA-3, 0x1F for SHAKE) and permute: the first block of output.
+ */
+static void
+sha3_pad(SHA3state *s, int suffix)
+{
+	uchar *sb;
+
+	if(s->phase != Absorbing)
+		return;
+	sb = (uchar*)s->a;
+	sb[s->pt] ^= suffix;
+	sb[s->rate - 1] ^= 0x80;
+	keccakf(s->a);
+	s->pt = 0;
+	s->phase = Squeezing;
 }
 
 /*
@@ -140,11 +228,8 @@ sha3_final(uchar *out, SHA3state *s)
 	uchar *sb;
 	int i;
 
+	sha3_pad(s, 0x06);
 	sb = (uchar*)s->a;
-	sb[s->pt] ^= 0x06;		/* SHA3 domain separator */
-	sb[s->rate - 1] ^= 0x80;	/* padding */
-	keccakf(s->a);
-
 	for(i = 0; i < s->mdlen; i++)
 		out[i] = sb[i];
 }
@@ -156,13 +241,7 @@ sha3_final(uchar *out, SHA3state *s)
 static void
 shake_finalize(SHA3state *s)
 {
-	uchar *sb;
-
-	sb = (uchar*)s->a;
-	sb[s->pt] ^= 0x1F;		/* SHAKE domain separator */
-	sb[s->rate - 1] ^= 0x80;	/* padding */
-	keccakf(s->a);
-	s->pt = 0;
+	sha3_pad(s, 0x1F);
 }
 
 /*
@@ -173,16 +252,24 @@ static void
 sha3_squeeze_internal(SHA3state *s, uchar *out, ulong outlen)
 {
 	uchar *sb;
-	ulong j;
+	ulong j, n;
 
+	if(s->phase != Squeezing)
+		shake_finalize(s);
 	sb = (uchar*)s->a;
 	j = s->pt;
-	for(; outlen > 0; outlen--){
+	while(outlen > 0){
 		if(j >= (ulong)s->rate){
 			keccakf(s->a);
 			j = 0;
 		}
-		*out++ = sb[j++];
+		n = (ulong)s->rate - j;
+		if(n > outlen)
+			n = outlen;
+		memmove(out, sb+j, n);
+		out += n;
+		outlen -= n;
+		j += n;
 	}
 	s->pt = j;
 }
@@ -198,6 +285,8 @@ sha3_256(const uchar *in, ulong inlen, uchar out[32])
 	sha3_init(&s, 136, 32);
 	sha3_update(&s, in, inlen);
 	sha3_final(out, &s);
+	/* Keccak-f can be run backwards: the state of a short input is the input */
+	secureZero(&s, sizeof s);
 }
 
 /*
@@ -211,6 +300,7 @@ sha3_512(const uchar *in, ulong inlen, uchar out[64])
 	sha3_init(&s, 72, 64);
 	sha3_update(&s, in, inlen);
 	sha3_final(out, &s);
+	secureZero(&s, sizeof s);
 }
 
 /*
@@ -279,6 +369,7 @@ shake128(const uchar *in, ulong inlen, uchar *out, ulong outlen)
 	shake128_absorb(&s, in, inlen);
 	shake128_finalize(&s);
 	shake128_squeeze(&s, out, outlen);
+	secureZero(&s, sizeof s);	/* see sha3_256 */
 }
 
 /*
@@ -293,4 +384,5 @@ shake256(const uchar *in, ulong inlen, uchar *out, ulong outlen)
 	shake256_absorb(&s, in, inlen);
 	shake256_finalize(&s);
 	shake256_squeeze(&s, out, outlen);
+	secureZero(&s, sizeof s);	/* see sha3_256 */
 }

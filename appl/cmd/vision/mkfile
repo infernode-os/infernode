@@ -1,0 +1,21 @@
+<$ROOT/mkconfig
+
+TARG=\
+	crop.dis\
+	detect.dis\
+	draw.dis\
+
+SYSMODULES=\
+	arg.m\
+	bufio.m\
+	draw.m\
+	string.m\
+	sys.m\
+
+MODULES=\
+	$ROOT/module/visnet.m\
+	$ROOT/module/visrec.m\
+
+DISBIN=$ROOT/dis/vision
+
+<$ROOT/mkfiles/mkdis

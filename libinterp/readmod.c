@@ -3,6 +3,9 @@
 #include "interp.h"
 #include "kernel.h"
 
+/* the kernel's (discall.c): parsemod under an error label */
+extern	Module*	libparsemod(char*, uchar*, ulong, Dir*);
+
 Module*
 readmod(char *path, Module *m, int sync)
 {
@@ -65,7 +68,8 @@ done1:
 	if(m != nil && ans == nil)
 		unload(m);
 	if(code != nil) {
-		ans = parsemod(path, code, length, d);
+		/* (if it raises, code and d are freed there) */
+		ans = libparsemod(path, code, length, d);
 		free(code);
 	}
 	free(d);

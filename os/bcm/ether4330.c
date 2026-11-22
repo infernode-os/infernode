@@ -51,9 +51,12 @@
  *
  * The first two are where Miller's driver looks (Plan 9 keeps its
  * firmware in /sys/lib/firmware and its boot partition at /boot); the
- * third is this system's card. For the 43455 the names are
- * brcmfmac43455-sdio.bin, brcmfmac43455-sdio.txt (the NVRAM) and
- * brcmfmac43455-sdio.clm_blob (the regulatory table). None of them is
+ * third is this system's card. The writer of the firmware verb names
+ * them (os/init/osinit.b's radiosetup, by the chip ifstats reports):
+ * for the 43455 brcmfmac43455-sdio.bin, brcmfmac43455-sdio.txt (the
+ * NVRAM) and brcmfmac43455-sdio.clm_blob (the regulatory table); a
+ * chip with no regulatory table (the Zero 2 W's 43436s) names two.
+ * None of them is
  * in this tree and none may be: they are Cypress binaries, licensed for
  * use with Cypress parts. The release's Pi card images carry them;
  * otherwise tools/pi-firmware.sh fetches them at a pinned revision,
@@ -237,6 +240,7 @@ struct WKey
 {
 	ushort	len;
 	char	dat[WKeyLen];
+	int	algo;		/* a WPA key's cipher, as wpaparsekey read it: 2 TKIP, 4 AES; 0 not said */
 };
 
 typedef struct Ctlr Ctlr;
@@ -252,6 +256,8 @@ struct Ctlr
 	Rendez	joinr;
 	QLock	joinlock;	/* one join at a time: joinr has room for one sleeper */
 	int	joinstatus;	/* 1 + the firmware's E_SET_SSID status */
+	long	assocfail;	/* the 802.11 status of the last refused association (E_ASSOC); 0 after a join */
+	Lock	rsplock;	/* rsp, handed from rproc to wlcmd */
 	Block	*rsp;		/* the response rproc caught for wlcmd */
 	Block	*scanb;		/* the scan being assembled, one line per network */
 	int	scansecs;	/* rescan this often, or 0 for not at all */
@@ -292,7 +298,7 @@ struct Ctlr
 	int	socramrev;
 	u32int	socramsize;
 	u32int	rambase;
-	short	reqid;
+	ushort	reqid;		/* as it is on the wire: a short went negative after 32767 commands and matched nothing */
 	uchar	fcmask;
 	uchar	txwindow;
 	uchar	txseq;
@@ -352,7 +358,7 @@ static Cmdtab cmds[] =
 	{CMcrypt,	"crypt",	2},
 	{CMdebug,	"debug",	2},
 	{CMessid,	"essid",	0},	/* the rest of the line: an SSID may contain spaces */
-	{CMfirmware,	"firmware",	4},
+	{CMfirmware,	"firmware",	0},	/* bin nvram [clm]: not every chip has a regulatory table */
 	{CMjoin,	"join",		4},
 	{CMkey1,	"key1",		2},
 	{CMkey2,	"key2",		2},
@@ -655,11 +661,13 @@ sdioinit(void)
 	u32int ocr, rca;
 	int i, silent;
 
+#ifndef SOCRADIO
 	for(i = 34; i <= 39; i++){
 		gpiofunc(i, Gpioalt3);
 		gpiopull(i, i == 34? Pullnone : Pullup);
 		gpioclaim(i, "ether4330");
 	}
+#endif
 	/*
 	 * And the radio's power enable, which is #G/gpio/129: claimed so
 	 * that it can be READ from the shell -- is the radio powered? --
@@ -667,7 +675,9 @@ sdioinit(void)
 	 * (see the WL_REG_ON reset below). The same rule as the six pins
 	 * above, and the same one bt9p relies on for 128 being its own.
 	 */
+#ifndef SOCRADIO
 	gpioclaim(Wlregon, "ether4330");
+#endif
 	if(sdio->init() < 0){
 		bootsay("controller will not reset", 0, -1);
 		return -1;
@@ -1300,6 +1310,35 @@ condense(uchar *buf, int n)
 }
 
 /*
+ * Whether n bytes at offset off lie inside the dongle's RAM.  The file
+ * being uploaded is whatever the ctl message named; its length is not
+ * the driver's to assume.
+ */
+static int
+fwfits(u32int ramsize, long off, long n)
+{
+	if(off < 0 || n < 0)
+		return 0;
+	return (uvlong)off + (uvlong)n <= ramsize;
+}
+
+/*
+ * Where the Cmd header of a control response is, or -1.  The SDPCM header
+ * gives the offset in one byte, the device's word; it is believed only
+ * past the header itself, and only if the Cmd and need bytes of answer
+ * after it were received.
+ */
+static int
+rspcmdoff(long blen, int doffset, long need)
+{
+	if(doffset < (int)sizeof(Sdpcm) || need < 0)
+		return -1;
+	if(blen < (long)doffset + (long)sizeof(Cmd) + need)
+		return -1;
+	return doffset;
+}
+
+/*
  * Upload one file into the dongle's RAM: the firmware from the base
  * up, the condensed config at the top with its length word to
  * follow. Then, with Firmwarecmp, read the whole of it back and
@@ -1310,8 +1349,9 @@ condense(uchar *buf, int n)
 static int
 upload(Ctlr *ctl, Chan *c, int isconfig)
 {
-	uchar *buf;
-	uchar *cbuf;
+	/* volatile: nil at waserror(), allocated after it, freed by its handler */
+	uchar *volatile buf;
+	uchar *volatile cbuf;
 	int off, n, total;
 
 	buf = cbuf = nil;
@@ -1320,11 +1360,11 @@ upload(Ctlr *ctl, Chan *c, int isconfig)
 		free(cbuf);
 		nexterror();
 	}
-	buf = malloc(isconfig? Cfgmax : Uploadsz);
+	buf = malloc(isconfig? Cfgmax+8 : Uploadsz);	/* condense adds two terminators and pads to four */
 	if(buf == nil)
 		error(Enomem);
 	if(Firmwarecmp){
-		cbuf = malloc(isconfig? Cfgmax : Uploadsz);
+		cbuf = malloc(isconfig? Cfgmax+8 : Uploadsz);
 		if(cbuf == nil)
 			error(Enomem);
 	}
@@ -1353,11 +1393,15 @@ upload(Ctlr *ctl, Chan *c, int isconfig)
 			if(n <= 0)
 				error("ether4330: NVRAM file is empty");
 			n = condense(buf, n);
+			if((u32int)n + 4 > ctl->socramsize)
+				error("ether4330: NVRAM larger than the dongle's RAM");
 			off = ctl->socramsize - n - 4;
 		}else{
 			n = devtab[c->type]->read(c, buf, Uploadsz, off);
 			if(n <= 0)
 				break;
+			if(!fwfits(ctl->socramsize, off, (n+3) & ~3))
+				error("ether4330: firmware larger than the dongle's RAM");
 		}
 		if(!isconfig && off == 0)
 			memmove(ctl->resetvec.c, buf, sizeof(ctl->resetvec.c));
@@ -1381,6 +1425,8 @@ upload(Ctlr *ctl, Chan *c, int isconfig)
 				n = devtab[c->type]->read(c, buf, Uploadsz, off);
 				if(n <= 0)
 					break;
+				if(!fwfits(ctl->socramsize, off, (n+3) & ~3))
+					error("ether4330: firmware larger than the dongle's RAM");
 				while(n&3)
 					buf[n++] = 0;
 			}
@@ -1414,7 +1460,7 @@ static void wlsetvar(Ctlr*, char*, void*, int);
 static void
 reguload(Ctlr *ctl, Chan *c)
 {
-	uchar *buf;
+	uchar *volatile buf;	/* as upload's */
 	int off, n, flag;
 	enum {
 		Reguhdr = 2+2+4+4,
@@ -1591,7 +1637,7 @@ wlreadpkt(Ctlr *ctl)
 {
 	Block *b;
 	Sdpcm *p;
-	int len, lenck;
+	int len, lenck, i;
 
 	b = allocb(2048);
 	p = (Sdpcm*)b->wp;
@@ -1615,10 +1661,15 @@ wlreadpkt(Ctlr *ctl)
 		   len < (int)sizeof(*p) || len > 2048){
 			print("ether4330: wlreadpkt error len %.4x lenck %.4x\n", len, lenck);
 			cfgw(Framectl, Rfhalt);
-			while(cfgr(Rfrmcnt+1) > 0)
-				;
-			while(cfgr(Rfrmcnt) > 0)
-				;
+			/* bounded, as every other wait on the dongle is: it may never drain */
+			for(i = 0; i < Sbpolls && cfgr(Rfrmcnt+1) > 0; i++)
+				microdelay(10);
+			if(i == Sbpolls)
+				error(Eio);
+			for(i = 0; i < Sbpolls && cfgr(Rfrmcnt) > 0; i++)
+				microdelay(10);
+			if(i == Sbpolls)
+				error(Eio);
 			continue;
 		}
 		if(len > (int)sizeof(*p))
@@ -1786,7 +1837,7 @@ rproc(void *a)
 {
 	Ether *edev;
 	Ctlr *ctl;
-	Block *b;
+	Block *b, *ob;
 	Sdpcm *p;
 	Cmd *q;
 	int bdc, flowstart;
@@ -1838,12 +1889,18 @@ rproc(void *a)
 		switch(p->chanflg & 0xF){
 		case 0:
 			if(iodebug) dump("rsp", b->rp, BLEN(b));
-			if(BLEN(b) < (long)(sizeof(Sdpcm) + sizeof(Cmd)))
+			if(rspcmdoff(BLEN(b), p->doffset, 0) < 0)
 				break;
-			q = (Cmd*)(b->rp + sizeof(*p));
+			q = (Cmd*)(b->rp + p->doffset);
 			if((q->id[0] | q->id[1]<<8) != ctl->reqid)
 				break;
+			/* a second answer to one command replaces the first; the first is not lost */
+			lock(&ctl->rsplock);
+			ob = ctl->rsp;
 			ctl->rsp = b;
+			unlock(&ctl->rsplock);
+			if(ob != nil)
+				freeb(ob);
 			wakeup(&ctl->cmdr);
 			continue;
 		case 1:
@@ -2033,6 +2090,8 @@ bcmevent(Ctlr *ctl, uchar *p, int len)
 			break;
 		/* fall through */
 	case 0:		/* E_SET_SSID: the answer to a join */
+		if(status == 0)
+			ctl->assocfail = 0;
 		ctl->joinstatus = 1 + status;
 		wakeup(&ctl->joinr);
 		break;
@@ -2052,6 +2111,14 @@ bcmevent(Ctlr *ctl, uchar *p, int len)
 			wlscanresult(ctl->edev, p + 48, len - 48);
 		break;
 	default:
+		/*
+		 * E_ASSOC refused: its reason is the access point's 802.11
+		 * status code (41 an invalid group cipher, 42 pairwise, 43
+		 * the authentication suite), which says what a supplicant
+		 * offered that it will not take. Kept for ifstats.
+		 */
+		if(event == 7 && status != 0)
+			ctl->assocfail = reason;
 		if(status){
 			if(!EVENTDEBUG)
 				print("ether4330: [%s] error status %ld flags %#x reason %ld\n",
@@ -2090,7 +2157,8 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 	volatile struct { Block *b; } v;
 	Sdpcm *p;
 	Cmd *q;
-	int len, tlen;
+	Block *ob;
+	int len, tlen, id;
 
 	if(write)
 		tlen = dlen + rlen;
@@ -2106,6 +2174,16 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 		nexterror();
 	}
 	memset(v.b->wp, 0, len);
+	/*
+	 * An answer that came after its command gave up is still parked
+	 * here, and would be taken for this command's: it goes first.
+	 */
+	lock(&ctl->rsplock);
+	ob = ctl->rsp;
+	ctl->rsp = nil;
+	unlock(&ctl->rsplock);
+	if(ob != nil)
+		freeb(ob);
 	qlock(&ctl->pktlock);
 	p = (Sdpcm*)v.b->wp;
 	put2(p->len, len);
@@ -2118,7 +2196,8 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 	put4(q->cmd, op);
 	put4(q->len, tlen);
 	put2(q->flags, write? 2 : 0);
-	put2(q->id, ++ctl->reqid);
+	id = ++ctl->reqid;
+	put2(q->id, id);
 	put4(q->status, 0);
 	v.b->wp += sizeof(*q);
 
@@ -2138,14 +2217,27 @@ wlcmd(Ctlr *ctl, int write, int op, void *data, int dlen, void *res, int rlen)
 	freeb(v.b);
 	v.b = nil;
 	tsleep(&ctl->cmdr, cmddone, ctl, Cmdtimeout);
+	lock(&ctl->rsplock);
 	v.b = ctl->rsp;
 	ctl->rsp = nil;
+	unlock(&ctl->rsplock);
 	if(v.b == nil){
 		print("ether4330: no answer to cmd %d\n", op);
 		error("ether4330: firmware does not answer");
 	}
+	/*
+	 * The answer is the device's: its Cmd is where its own header says
+	 * only if that, and the bytes this command asked for, were received,
+	 * and it is this command's only if it carries this command's id.
+	 */
 	p = (Sdpcm*)v.b->rp;
+	if(rspcmdoff(BLEN(v.b), p->doffset, write? 0 : rlen) < 0){
+		print("ether4330: cmd %d: short answer, %ld bytes, offset %d\n", op, BLEN(v.b), p->doffset);
+		error("ether4330: short answer from the firmware");
+	}
 	q = (Cmd*)(v.b->rp + p->doffset);
+	if((q->id[0] | q->id[1]<<8) != id)
+		error("ether4330: answer to another command");
 	if(q->status[0] | q->status[1] | q->status[2] | q->status[3]){
 		print("ether4330: cmd %d error status %ud\n", op, get4(q->status));
 		dump("ether4330: cmd error", v.b->rp, BLEN(v.b));
@@ -2290,7 +2382,17 @@ wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
 	p = put4(p, ctl->keys[0].len);
 	memmove((char*)p, ctl->keys[0].dat, ctl->keys[0].len);
 	p += 32 + 18*4;		/* keydata, pad */
-	if(ctl->cryptotype == Wpa)
+	/*
+	 * The cipher the supplicant named for this key. A WPA2 network
+	 * in mixed mode has a TKIP group key beside an AES pairwise one,
+	 * so the connection's type alone cannot say. A TKIP key is given
+	 * as the access point sent it (temporal key, then its transmit
+	 * and receive Michael keys): the firmware takes that order, which
+	 * is why Linux's brcmfmac undoes wpa_supplicant's swap.
+	 */
+	if(ctl->keys[0].algo != 0)
+		p = put4(p, ctl->keys[0].algo);
+	else if(ctl->cryptotype == Wpa)
 		p = put4(p, 2);		/* algo = TKIP */
 	else
 		p = put4(p, 4);		/* algo = AES_CCM */
@@ -2926,10 +3028,13 @@ wpaparsekey(WKey *key, uvlong *ivp, char *a)
 	int len;
 	char *e;
 
-	if(cistrncmp(a, "tkip:", 5) == 0 || cistrncmp(a, "ccmp:", 5) == 0)
-		a += 5;
+	if(cistrncmp(a, "tkip:", 5) == 0)
+		key->algo = 2;
+	else if(cistrncmp(a, "ccmp:", 5) == 0)
+		key->algo = 4;
 	else
 		return -1;
+	a += 5;
 	len = parsehex(key->dat, sizeof key->dat, a);
 	if(len <= 0)
 		return -1;
@@ -2988,7 +3093,15 @@ setauth(Ctlr *ctlr, uchar *wpaie, int i)
 	}else{
 		wlsetint(ctlr, "wpa_auth", 0x80|0x40);	/* psk | unspecified */
 		wlsetint(ctlr, "auth", 0);
-		wlsetint(ctlr, "wsec", 4);		/* aes */
+		/*
+		 * aes, and tkip as well when the element's group cipher
+		 * (00-0F-AC-02, at bytes 4-7) is TKIP: a network in WPA/WPA2
+		 * mixed mode keys its group traffic with it.
+		 */
+		if(i >= 8 && wpaie[4] == 0x00 && wpaie[5] == 0x0F && wpaie[6] == 0xAC && wpaie[7] == 2)
+			wlsetint(ctlr, "wsec", 4|2);
+		else
+			wlsetint(ctlr, "wsec", 4);
 		wlsetint(ctlr, "wpa_auth", 0x80);	/* psk */
 	}
 }
@@ -3099,6 +3212,7 @@ etherbcmctl(Ether *edev, void *a, long n)
 		nexterror();
 	}
 	ct = lookupcmd(cb, cmds, nelem(cmds));
+	memset(&kbuf, 0, sizeof kbuf);
 	switch(ct->index){
 	case CMfirmware:
 		if(!ctl->present)
@@ -3109,9 +3223,11 @@ etherbcmctl(Ether *edev, void *a, long n)
 			qunlock(&ctl->alock);
 			nexterror();
 		}
+		if(cb->nf != 3 && cb->nf != 4)
+			error("usage: firmware bin nvram [clm]");
 		if(ctl->running)
 			error("ether4330: firmware already running");
-		for(i = 0; i < 3; i++)
+		for(i = 0; i < cb->nf-1; i++)
 			ctl->fwchan[i] = namec(cb->f[1+i], Aopen, OREAD, 0);
 		bringup(edev);
 		closefw(ctl);
@@ -3281,6 +3397,10 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	p = malloc(512);
 	if(p == nil)
 		error(Enomem);
+	if(waserror()){
+		free(p);
+		nexterror();
+	}
 	l = 0;
 	l += snprint(p+l, 512-l, "radio: %s\n", ctl->present? "present" : "absent");
 	if(ctl->present)
@@ -3290,6 +3410,8 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 		l += snprint(p+l, 512-l, "firmware bytes: %d\n", ctl->fwbytes);
 	l += snprint(p+l, 512-l, "channel: %d\n", ctl->chanid);
 	l += snprint(p+l, 512-l, "essid: %s\n", ctl->essid);
+	if(ctl->assocfail != 0)
+		l += snprint(p+l, 512-l, "assocfail: %ld\n", ctl->assocfail);
 	l += snprint(p+l, 512-l, "bssid: %E\n", ctl->bssid);
 	l += snprint(p+l, 512-l, "crypt: %s\n", cryptoname[ctl->cryptotype]);
 	l += snprint(p+l, 512-l, "scan: %d\n", ctl->scansecs);
@@ -3300,6 +3422,7 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	USED(l);
 	n = readstr(offset, a, n, p);
 	free(p);
+	poperror();
 	return n;
 }
 
@@ -3409,11 +3532,18 @@ ether4330probe(void)
 	 * afterwards is the regulator's own settling time, which was
 	 * already here and is what the first CMD5 waits on.
 	 */
+#ifdef SOCRADIO
+	radiopins();
+	radiopower(0);
+	microdelay(20000);
+	radiopower(1);
+#else
 	if(mboxsetgpio(Wlregon, 0) < 0)
 		uartputstr("ether4330: WL_REG_ON low: mailbox refused; trying anyway\n");
 	microdelay(20000);
 	if(mboxsetgpio(Wlregon, 1) < 0)
 		uartputstr("ether4330: WL_REG_ON: mailbox refused; trying anyway\n");
+#endif
 	microdelay(150000);
 	booting = 1;
 	if(sdioinit() < 0 || sbinit(ctl) < 0){

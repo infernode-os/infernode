@@ -365,29 +365,49 @@ parseether(uchar *to, char *from)
  * A record can be consumed WITHOUT yielding a frame (an error bit, a
  * control message); that is not a malformed stream.
  */
+static ulong	rnisget4(uchar*);
+
+/*
+ * The three numbers are the device's, 32 bits each and unsigned. They
+ * were put together in an int, so one with its top bit set came out
+ * negative: a DataOffset of fffff000 passed "offset + length <= n" and
+ * the frame was taken from 4088 bytes before the buffer, and 80000000
+ * from two gigabytes before it. Any USB device that says it is an
+ * RNDIS Ethernet could: what was read went up as a received frame, or
+ * was not there to read. The frame is now inside its own message, after
+ * the header, and no longer than a frame; max is all the buffer holds,
+ * so a message that could never arrive whole is not waited for.
+ */
 static long
-rndisunwrap(uchar *p, long n, uchar **fp, long *lp)
+rndisunwrap(uchar *p, long n, long max, uchar **fp, long *lp)
 {
-	long msglen, dataoff, datalen;
+	ulong msglen, dataoff, datalen;
 
 	*fp = nil;
 	if(n < Rnishdr)
 		return 0;
-	if((p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24)) != Rnisdata)
+	if(rnisget4(p) != Rnisdata)
 		return -1;
-	msglen = p[4] | (p[5]<<8) | (p[6]<<16) | (p[7]<<24);
-	if(msglen < Rnishdr)
+	msglen = rnisget4(p+4);
+	if(msglen < Rnishdr || msglen > (ulong)max)
 		return -1;
-	if(msglen > n)
+	if(msglen > (ulong)n)
 		return 0;
 	/* DataOffset counts from byte 8 of the message, not its start */
-	dataoff = 8 + (p[8] | (p[9]<<8) | (p[10]<<16) | (p[11]<<24));
-	datalen = p[12] | (p[13]<<8) | (p[14]<<16) | (p[15]<<24);
-	if(datalen < 14 || dataoff + datalen > n)
+	dataoff = rnisget4(p+8);
+	datalen = rnisget4(p+12);
+	if(dataoff < Rnishdr-8 || dataoff > msglen-8
+	|| datalen < 14 || datalen > Maxframe || datalen > msglen-8 - dataoff)
 		return msglen;		/* consumed; no frame in it */
-	*fp = p + dataoff;
+	*fp = p + 8 + dataoff;
 	*lp = datalen;
 	return msglen;
+}
+
+static ulong
+rnisget4(uchar *p)
+{
+	return p[0] | (p[1]<<8) | (p[2]<<16) | ((ulong)p[3]<<24);
 }
 
 /*
@@ -731,8 +751,28 @@ etherunbind(Ether *e)
 	e->bound = 0;
 	e->nif.link = 0;
 	qhangup(e->oq, "unbound");
+	/*
+	 * and emptied: a hung-up queue still gives what it holds, so the
+	 * writer went on sending a full queue's frames to a device being
+	 * reset, unplugged or reconfigured by whoever unbound it
+	 */
+	qflush(e->oq);
 	qunlock(&e->bindlk);
 	print("%s: kernel data path unbound\n", e->nif.name);
+}
+
+/*
+ * A data-path process is gone, its channel closed. A bind waits for
+ * both: it frees the buffers they use and opens the endpoints they
+ * held, so a new data path started beside an old writer still inside
+ * a transfer sent freed memory to the device.
+ */
+static void
+etherprocgone(Ether *e)
+{
+	qlock(&e->bindlk);
+	e->nproc--;
+	qunlock(&e->bindlk);
 }
 
 static void
@@ -750,6 +790,7 @@ etherrxproc(void *a)
 		print("%s: reader exits: %s\n", e->nif.name, up->env->errstr);
 		etherunbind(e);
 		cclose(in);
+		etherprocgone(e);
 		pexit("hangup", 1);
 	}
 	for(;;){
@@ -842,7 +883,7 @@ etherrxproc(void *a)
 			fp = nil;
 			switch(e->family){
 			case Frndis:
-				used = rndisunwrap(e->rxbuf+off, e->nacc-off, &fp, &flen);
+				used = rndisunwrap(e->rxbuf+off, e->nacc-off, e->nrxbuf, &fp, &flen);
 				break;
 			case Fecm:
 				used = ecmunwrap(e->rxbuf+off, e->nacc-off, &fp, &flen);
@@ -915,6 +956,7 @@ ethertxproc(void *a)
 		etherunbind(e);
 		if(out != in)
 			cclose(out);
+		etherprocgone(e);
 		pexit("hangup", 1);
 	}
 	for(;;){
@@ -1072,13 +1114,16 @@ etherbindctl(Ether *e, char *args)
 	if(txmax > 0xFFFF)
 		txmax = 0xFFFF;
 
+	/* the last data path's processes: a few seconds to finish */
+	for(i = 0; i < 100 && !e->bound && e->nproc > 0; i++)
+		tsleep(&up->sleep, return0, nil, 50);
 	qlock(&e->bindlk);
 	if(waserror()){
 		qunlock(&e->bindlk);
 		nexterror();
 	}
-	if(e->bound || e->transmit != nil)
-		error(Einuse);	/* bound already, or a link driver's */
+	if(e->bound || e->transmit != nil || e->nproc > 0)
+		error(Einuse);	/* bound already, a link driver's, or not yet let go */
 
 	if(parsemac(e->nif.addr, f[2]) < 0)
 		error(Ebadarg);
@@ -1136,6 +1181,7 @@ etherbindctl(Ether *e, char *args)
 	qnoblock(e->oq, 1);	/* qreopen cleared it; see etherreset */
 	e->nif.link = 1;
 	e->bound = 1;
+	e->nproc = 2;
 
 	snprint(pname, sizeof pname, "%srx", e->nif.name);
 	kproc(pname, etherrxproc, e, 0);

@@ -22,17 +22,28 @@ dupgen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 	if(s == 0)
 		return 0;
 	s--;
-	if(s/2 > fgrp->maxfd)
+	/*
+	 * under the group's lock, as fdtochan reads it: the table is
+	 * replaced and the old one freed when it grows, and a channel
+	 * goes when its descriptor is closed, by another process of
+	 * the group at any time
+	 */
+	lock(&fgrp->l);
+	if(s/2 > fgrp->maxfd){
+		unlock(&fgrp->l);
 		return -1;
-	if((f=fgrp->fd[s/2]) == nil)
+	}
+	if((f=fgrp->fd[s/2]) == nil){
+		unlock(&fgrp->l);
 		return 0;
+	}
+	p = perm[f->mode&3];
+	unlock(&fgrp->l);
 	if(s & 1){
 		p = 0400;
 		sprint(up->genbuf, "%dctl", s/2);
-	}else{
-		p = perm[f->mode&3];
+	}else
 		sprint(up->genbuf, "%d", s/2);
-	}
 	mkqid(&q, s+1, 0, QTFILE);
 	devdir(c, q, up->genbuf, 0, eve, p, dp);
 	return 1;

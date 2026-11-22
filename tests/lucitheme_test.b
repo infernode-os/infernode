@@ -305,11 +305,14 @@ fixture(): int
 
 testThemes(t: ref T)
 {
+	writefile(FIXTURE + "/event", "");	# as themefs serves it
 	l := lucitheme->themes();
 	s := "";
 	for(; l != nil; l = tl l)
 		s += " " + hd l;
-	t.assertseq(s, " darkone lightone", "installed themes, sorted, current excluded");
+	t.assertseq(s, " darkone lightone", "installed themes, sorted, current and event excluded");
+	t.assert(lucitheme->loadtheme("event") == nil, "event is not a theme");
+	sys->remove(FIXTURE + "/event");
 }
 
 testCurrent(t: ref T)

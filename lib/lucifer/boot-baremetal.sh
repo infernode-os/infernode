@@ -116,20 +116,20 @@ if {~ $narrowed 0} {
 # in /usr/<user>/keyring/default (the user is /dev/user's; $user is not
 # set in this shell), signed by the signer the callers'
 # certificates come from, and without one it does not start at all. And
-# every session is encrypted AND integrity-protected: -a aes_256_cbc
-# -a sha256, and with both in the policy a caller must ask for both.
-# AES-CBC alone hides the bytes but lets anyone on the path flip or cut
-# them undetected (a red-team pass found exactly that, 2026-09-29); the
-# SHA-256 MAC is what makes tampering an error. Cleartext, cipher-only
-# and MAC-only callers are all refused during the handshake.
+# every session is encrypted AND integrity-protected: -a aes_256_gcm,
+# AES-256 in Galois/Counter Mode, which seals each record and makes a
+# record flipped, cut, replayed or reordered an error (AES-CBC alone,
+# as it was, let them through undetected: a red-team pass found exactly
+# that, 2026-09-29). Cleartext and MAC-only (hmac_sha384) callers are
+# refused during the handshake.
 #
 if {ftest -f /n/dos/cpulisten} {
 	cpuaddr=`{cat /n/dos/cpulisten}
 	if {~ $#cpuaddr 0} {cpuaddr='tcp!*!rstyx'}
 	cpukey=/usr/^`{cat /dev/user}^/keyring/default
 	if {ftest -f $cpukey} {
-		listen -a aes_256_cbc -a sha256 $cpuaddr auxi/rstyxd &
-		echo 'boot: cpu listener on' $cpuaddr '(AES-256 + SHA-256, certificate' $cpukey^')'
+		listen -a aes_256_gcm $cpuaddr auxi/rstyxd &
+		echo 'boot: cpu listener on' $cpuaddr '(AES-256-GCM, certificate' $cpukey^')'
 	} {
 		echo 'boot: /n/dos/cpulisten is set but' $cpukey 'is missing; NOT starting the cpu listener'
 	}

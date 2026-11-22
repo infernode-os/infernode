@@ -60,7 +60,6 @@ iacme.exe
 
 o.emu
 o.*
-services/httpd/httpd.log
 **/Dockerfile
 !/Dockerfile
 !.clusterfuzzlite/Dockerfile
@@ -370,6 +369,10 @@ brcmfmac43455-sdio.*
 cyfmac43455-sdio*
 # and its Bluetooth patch, the same way (tools/pi-btfw-manifest.txt)
 BCM4345C0.hcd
+# the Zero 2 W's radio, Synaptics's, the same way (tools/pi-*-manifest-zero2w.txt)
+brcmfmac43436-sdio.*
+brcmfmac43436s-sdio.*
+SYN43430*.hcd
 
 # The Pi's boot firmware: Broadcom's licence, never committed either.
 # tools/mkpiimage.sh puts it in the card images it builds;

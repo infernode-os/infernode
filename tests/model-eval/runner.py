@@ -68,7 +68,7 @@ DEFAULT_PEERS = [
 ]
 
 DIRECTED_TOOLS = ["present", "launch", "shell", "editor", "charon",
-                  "fractal", "gpu", "wallet", "xenith"]
+                  "fractal", "wallet", "xenith"]
 
 
 def summarize_doc(path: Path) -> str:

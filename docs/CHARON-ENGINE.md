@@ -154,6 +154,19 @@ with the existing pre-rendered DejaVu subfonts as the fallback when a face
 is missing. Glyphs are cached per (face, size) as masks, so a page draws
 each distinct glyph once. Web fonts (`@font-face`) come after.
 
+Pages are written for Arial, Helvetica and Times, which are also the
+browsers' defaults for `sans-serif`, `serif` and a page that names no
+family. Those, and the system-interface stacks (Segoe UI, Roboto, San
+Francisco, all within a few per cent of Arial), are drawn in TeX Gyre
+Heros and Termes (`fonts/texgyre`, which the PDF engine ships), whose
+advances are exactly Arial's and Times New Roman's; their line-height
+`normal` is Arial's and Times's ascent, descent and line gap, each
+rounded, as Chromium has it. DejaVu Sans is 14% wider than Arial and
+DejaVu Serif 25% wider than Times, so lines broke where no browser
+breaks them. Verdana, Tahoma and DejaVu itself keep DejaVu Sans; other
+serif families DejaVu Serif; what TeX Gyre lacks (it has Latin and
+Greek) is DejaVu's.
+
 ## Widgets: Tk
 
 Chrome (location bar, back/forward/reload, status, find) is a Tk window,

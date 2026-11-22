@@ -21,4 +21,12 @@ Audit: module
 	# into the namespace or the write fails. The caller decides whether
 	# absence is fatal (fail-closed for high-value events) or ignorable.
 	log:		fn(source, event, msg: string): int;
+
+	# value writes text the emitter did not choose (a user name a peer
+	# claimed, a device's name) as the value of a key=value field of
+	# msg: one word, with no blank, control character or key= of its
+	# own (they are written %XX, a rune past U+00FF %uXXXX). A name
+	# such as "eve status=ok" put into msg as it came read back as two
+	# fields. Auditchain->unvalue reads a value back.
+	value:		fn(s: string): string;
 };

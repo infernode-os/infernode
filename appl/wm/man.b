@@ -330,7 +330,7 @@ handlekey(k: int)
 	}
 	case k {
 	'q' - 16r60 =>	# Ctrl-Q
-		exit;
+		tkclient->wmctl(top, "exit");
 	'f' - 16r60 =>	# Ctrl-F
 		startfind();
 	'g' - 16r60 =>	# Ctrl-G
@@ -451,7 +451,7 @@ handleaction(a: string)
 	"find" =>     startfind();
 	"top" =>      tk->cmd(top, ".top.t yview moveto 0.0");
 	"bottom" =>   tk->cmd(top, ".top.t yview moveto 1.0");
-	"quit" =>     exit;
+	"quit" =>     tkclient->wmctl(top, "exit");
 	}
 }
 

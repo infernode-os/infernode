@@ -8,19 +8,23 @@ implement Wallet9p;
 #
 # Filesystem layout:
 #   /mnt/wallet/
-#       ctl          rw: global config ("limit <amount>", "default <name>")
+#       ctl          rw: the trusted controller's commands: "default <name>",
+#                        "network <name>", "rpc <url>", "approve <id>", "deny <id>"
 #       accounts     r:  newline-separated account names
 #       default      r:  default account name
 #       new          rw: write "eth base myaccount" → read account name
-#       pending      r:  payments awaiting approval
+#       pending      r:  payments awaiting approval, one a line:
+#                        id kind account token amount payee network agent
+#       network      r:  the active network (name, chainid, caip2, usdc)
 #       event        r:  "pending" whenever that list changes (blocking)
 #       {name}/          per-account directory
 #           address  r:  public address
 #           balance  r:  balance (queries chain/API)
-#           chain    rw: chain name
-#           sign     rw: write hex hash → read hex signature
-#           pay      rw: write "amount recipient" → read txhash
-#           ctl      rw: per-account config
+#           chain    r:  chain name the account was made with
+#           pay      rw: write "amount recipient" → read "pending:<id>", then
+#                        the outcome (txhash, "denied", "expired", "error:...")
+#           authorize rw: write an x402 request → read the same way
+#           ctl      rw: per-account budgets
 #           history  r:  recent transactions (JSON lines)
 #
 # Usage:
@@ -105,6 +109,9 @@ NACCTFILES: con 7;	# files per account dir
 MAXHISTORY: con 200;	# history entries kept per account
 PENDTTL:    con 900;	# seconds before an unapproved payment expires
 MAXPENDING: con 100;	# total pending-payment records kept
+MAXACCTPENDING: con 16;	# of them, one account's awaiting approval
+MAXACCTS:   con 64;	# accounts
+MAXACCTNAME: con 64;	# characters in an account's name
 
 # A reader of event: what it has not read yet, and its read if it waits.
 EvFid: adt {
@@ -333,6 +340,10 @@ readresult(srv: ref Styxserver, m: ref Tmsg.Read, fr: ref FidResult)
 	r := resolvefidresult(fr.result);
 	if(ispending(r)) {
 		if(fr.told && m.offset == big 0) {
+			# one read waits per fid: a second used to take the
+			# first's place and leave it unanswered for good
+			if(fr.wait != nil)
+				srv.reply(ref Rmsg.Error(fr.wait.tag, "superseded by a later read"));
 			fr.wait = m;
 			return;
 		}
@@ -346,8 +357,11 @@ ispending(r: string): int
 	return len r > 8 && r[0:8] == "pending:";
 }
 
-# A pending payment's outcome is known: the reads waiting for it are
-# answered.
+# A pending payment's outcome is known: every fid that asked for it
+# keeps the outcome itself, and the reads waiting for it are answered.
+# A fid used to keep only "pending:<id>" and look the record up at each
+# read; records are recycled once a hundred newer ones exist, and an
+# approved request then read "expired".
 wakeresults()
 {
 	for(l := paystates; l != nil; l = tl l)
@@ -358,10 +372,11 @@ wakeresults()
 
 wakeresult(fr: ref FidResult)
 {
-	if(fr.wait == nil)
-		return;
 	r := resolvefidresult(fr.result);
 	if(ispending(r))
+		return;
+	fr.result = r;
+	if(fr.wait == nil)
 		return;
 	m := fr.wait;
 	fr.wait = nil;
@@ -394,7 +409,7 @@ resolvefidresult(s: string): string
 		return "error:bad pending id";
 	pp := findpending(id);
 	if(pp == nil)
-		return "expired";
+		return "error:unknown pending id";
 	checkpendingexpiry(pp);
 	if(pp.result == nil)
 		return s;	# still pending
@@ -909,6 +924,10 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, "invalid account name"));
 				return;
 			}
+			if(findacct(hd tl toks) == nil) {
+				srv.reply(ref Rmsg.Error(m.tag, "no such account: " + hd tl toks));
+				return;
+			}
 			defaultacct = hd tl toks;
 			globalctl = "default " + defaultacct + "\n";
 		} else if(cmd == "rpc" && ntoks == 2) {
@@ -921,7 +940,11 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 					nname += " ";
 				nname += hd nt;
 			}
-			setnetwork(nname);
+			nerr := setnetwork(nname);
+			if(nerr != nil) {
+				srv.reply(ref Rmsg.Error(m.tag, nerr));
+				return;
+			}
 		} else if(cmd == "approve") {
 			(pid, perr) := pendingid(toks, "approve");
 			if(perr != nil) {
@@ -978,6 +1001,10 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, "account exists: " + name));
 				return;
 			}
+			if(naccts() >= MAXACCTS) {
+				srv.reply(ref Rmsg.Error(m.tag, "too many accounts"));
+				return;
+			}
 			hexkey := hd toks;
 			privkey := ethcrypto->hexdecode(hexkey);
 			if(privkey == nil) {
@@ -1012,6 +1039,10 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 				srv.reply(ref Rmsg.Error(m.tag, "account exists: " + name));
 				return;
 			}
+			if(naccts() >= MAXACCTS) {
+				srv.reply(ref Rmsg.Error(m.tag, "too many accounts"));
+				return;
+			}
 			(acct, err) := wallet->createaccount(name, accttype, chain);
 			if(err != nil) {
 				srv.reply(ref Rmsg.Error(m.tag, err));
@@ -1025,20 +1056,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			srv.reply(ref Rmsg.Error(m.tag, "usage: type chain name | import type chain name hexkey"));
 			return;
 		}
-		srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
-	Qchain =>
-		as := findacctbyid(aid);
-		if(as == nil) {
-			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
-			return;
-		}
-		nc := str->take(data, "^\n\r \t");
-		if(!safechain(nc)) {
-			srv.reply(ref Rmsg.Error(m.tag, "invalid chain name"));
-			return;
-		}
-		as.acct.chain = nc;
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qpay =>
@@ -1080,12 +1097,6 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			paytoken = "usd-cents";
 		}
 
-		payerr := validatepay(as, paytoken, payamt, payrecip);
-		if(payerr != nil) {
-			srv.reply(ref Rmsg.Error(m.tag, payerr));
-			return;
-		}
-
 		# Validate before queueing or executing: a payment that can
 		# never execute should be rejected at submission time.
 		verr := validatepay(as, paytoken, payamt, payrecip);
@@ -1093,6 +1104,12 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			srv.reply(ref Rmsg.Error(m.tag, "pay: " + verr));
 			return;
 		}
+
+		# What the approver is shown is the address that will be paid, in
+		# its one form (EIP-55), made from the bytes: the string as the
+		# requester wrote it was kept, shown and parsed again at approval.
+		if(as.acct.accttype == Wallet->ACCT_ETH)
+			payrecip = ethcrypto->addrtostr(ethcrypto->strtoaddr(payrecip));
 
 		(pp, qerr) := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
 		if(qerr != nil) {
@@ -1123,12 +1140,18 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + aerr));
 			return;
 		}
+		# the payee and the asset in their one form, as for pay
+		areq.payto = ethcrypto->addrtostr(ethcrypto->strtoaddr(areq.payto));
+		areq.asset = ethcrypto->addrtostr(ethcrypto->strtoaddr(areq.asset));
 		(pp, qerr) := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
 		if(qerr != nil) {
 			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + qerr));
 			return;
 		}
-		pp.network = areq.network;
+		# the network as this server writes it: eip155:011155111 names
+		# the active chain too, was kept as written, and the approval
+		# then refused it as a change of network
+		pp.network = "eip155:" + string getnetwork().chainid;
 		pp.tokenname = areq.tokenname;
 		pp.tokenver = areq.tokenver;
 		pp.timeout = areq.timeout;
@@ -1201,9 +1224,25 @@ pendingid(toks: list of string, verb: string): (int, string)
 	return (id, nil);
 }
 
+# An account is a directory of the root, beside the wallet's own files.
+# One named after such a file (pending, ctl, ...) could be made: the
+# walk then found the file, never the account, and the allowlist an
+# agent's view is built from (the names in accounts, each taken for a
+# directory) had the trusted controller's file in it.
+rootfile(s: string): int
+{
+	case s {
+	"ctl" or "accounts" or "default" or "new" or "pending" or
+	"network" or "event" =>
+		return 1;
+	}
+	return 0;
+}
+
 validacctname(s: string): int
 {
-	if(s == nil || s == "" || s == "." || s == "..")
+	if(s == nil || s == "" || s == "." || s == ".." ||
+	   len s > MAXACCTNAME || rootfile(s))
 		return 0;
 	for(i := 0; i < len s; i++) {
 		c := s[i];
@@ -1243,6 +1282,11 @@ addaccount(acct: ref Wallet->Account)
 # records are recycled first, and expiry is applied on the way in so a
 # stale queue drains itself instead of wedging the account.
 #
+# One account may hold MAXACCTPENDING of them. The bound was the whole
+# queue's alone: one agent proposing a hundred payments from one account
+# stopped every other account's proposals until they expired, and buried
+# them in the approver's list.
+#
 newpending(kind, acct, amount, recipient, token: string): (ref PendingPay, string)
 {
 	t := now();
@@ -1251,15 +1295,24 @@ newpending(kind, acct, amount, recipient, token: string): (ref PendingPay, strin
 
 	# expire stale records, then drop resolved ones beyond the cap
 	live := 0;
+	mine := 0;
 	keep: list of ref PendingPay;
 	for(pl := pendingpays; pl != nil; pl = tl pl) {
 		pp := hd pl;
 		checkpendingexpiry(pp);
-		if(pp.result == nil)
+		if(pp.result == nil) {
 			live++;
+			if(pp.acct == acct)
+				mine++;
+		}
 	}
+	if(mine >= MAXACCTPENDING)
+		return (nil, sys->sprint("%d payments of account %s await approval: approve or deny before submitting more", mine, acct));
 	if(live >= MAXPENDING)
 		return (nil, sys->sprint("pending queue full (%d awaiting approval): approve or deny before submitting more", live));
+
+	# whoever asked for a record keeps its outcome before it can go
+	wakeresults();
 
 	kept := 0;
 	for(pl = pendingpays; pl != nil; pl = tl pl) {
@@ -1289,14 +1342,6 @@ inlist(s: string, l: list of string): int
 	return 0;
 }
 
-# Chain names must satisfy the SAME rule the wallet library applies on
-# persistence (Wallet->validname): a name accepted here but rejected
-# there would silently revert to a default on the next restart.
-safechain(s: string): int
-{
-	return wallet->validname(s);
-}
-
 # Strict non-negative big parse
 strbig(s: string): (big, int)
 {
@@ -1312,9 +1357,12 @@ strbig(s: string): (big, int)
 	return (v, 1);
 }
 
+# An amount is a positive decimal integer written one way: no leading
+# zero. The string goes to the approver as written, and sixty zeros
+# before the digits pushed the payee off the end of what was shown.
 validamount(s: string): int
 {
-	if(s == nil || s == "")
+	if(s == nil || s == "" || s[0] == '0')
 		return 0;
 	nonzero := 0;
 	for(i := 0; i < len s; i++) {
@@ -1511,6 +1559,12 @@ restoreaccounts()
 		# Skip if already loaded
 		if(findacct(acct.name) != nil)
 			continue;
+		# an account kept from before such names were refused
+		if(!validacctname(acct.name) || naccts() >= MAXACCTS) {
+			sys->fprint(stderr, "wallet9p: skipping account %s: its name is the wallet's own, or there are too many\n",
+				acct.name);
+			continue;
+		}
 		# Load full account info (derives address from factotum key)
 		(fullacct, err) := wallet->loadaccount(acct.name);
 		if(err != nil || fullacct == nil) {
@@ -1565,7 +1619,9 @@ getnetwork(): ref NetworkConfig
 	return networks[0];
 }
 
-setnetwork(name: string)
+# The writer is told when the name is no network: the write used to
+# succeed and leave the network as it was.
+setnetwork(name: string): string
 {
 	for(i := 0; i < len networks; i++) {
 		if(networks[i].name == name) {
@@ -1573,10 +1629,10 @@ setnetwork(name: string)
 			ethrpc->setrpc(networks[i].rpcurl);
 			sys->fprint(stderr, "wallet9p: network: %s (%s)\n",
 				networks[i].name, networks[i].rpcurl);
-			return;
+			return nil;
 		}
 	}
-	sys->fprint(stderr, "wallet9p: unknown network: %s\n", name);
+	return "unknown network: " + name;
 }
 
 # --- Balance query ---
@@ -1760,7 +1816,7 @@ executepayment(as: ref AcctState, amount: string, recipient: string): (string, s
 		return (nil, "invalid amount (must be integer wei): " + amount);
 
 	dstaddr := ethcrypto->strtoaddr(recipient);
-	if(dstaddr == nil)
+	if(dstaddr == nil || len dstaddr != 20)
 		return (nil, "invalid recipient address: " + recipient);
 
 	# Budget is enforced on every execution path, including approvals
@@ -1860,8 +1916,10 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 
 	net := getnetwork();
 
+	# 20 bytes or no transfer: the calldata below has a word for the
+	# address, and one of 19 bytes was written into it with a zero after
 	recipaddr := ethcrypto->strtoaddr(recipient);
-	if(recipaddr == nil)
+	if(recipaddr == nil || len recipaddr != 20)
 		return (nil, "invalid recipient: " + recipient);
 
 	# Amount is in token base units (USDC = 6 decimals, so 1 USDC = 1000000)
@@ -1915,7 +1973,7 @@ executeerc20(as: ref AcctState, amount: string, recipient: string): (string, str
 
 	# Transaction goes TO the token contract, with 0 ETH value
 	tokenaddr := ethcrypto->strtoaddr(net.usdc);
-	if(tokenaddr == nil)
+	if(tokenaddr == nil || len tokenaddr != 20)
 		return (nil, "invalid token contract address");
 
 	tx := ref Ethcrypto->EthTx(
@@ -2051,8 +2109,8 @@ validateauth(as: ref AcctState, req: ref AuthReq): string
 	if(ethcrypto->strtoaddr(req.payto) == nil)
 		return "invalid payto address";
 	amt := ethcrypto->dectobe(req.amount);
-	if(amt == nil)
-		return "invalid amount (must be integer base units)";
+	if(amt == nil || (len req.amount > 1 && req.amount[0] == '0'))
+		return "invalid amount (must be integer base units, no leading zero)";
 	if(req.tokenname == "" || len req.tokenname > 64 || len req.tokenver > 16)
 		return "invalid token name/version";
 
@@ -2126,21 +2184,31 @@ executex402(as: ref AcctState, req: ref AuthReq): (string, string)
 
 # --- Stripe fiat backend ---
 
+# One Stripe module, holding one key: the key is the account's whose
+# payment or balance this is. It was read once, for the first Stripe
+# account touched, and every other Stripe account then paid with it.
+stripeacct: string;
+
 initstripe(acctname: string): string
 {
-	if(stripemod != nil)
-		return nil;	# already initialized
+	if(stripemod != nil && stripeacct == acctname)
+		return nil;	# already holds this account's key
+	stripeacct = nil;
 
 	svc := "wallet-stripe-" + acctname;
 	(nil, apikey) := factotum->getuserpasswd("proto=pass service=" + svc);
 	if(apikey == nil || apikey == "")
 		return "no Stripe API key in factotum for " + acctname;
 
-	stripemod = load Stripe Stripe->PATH;
+	if(stripemod == nil)
+		stripemod = load Stripe Stripe->PATH;
 	if(stripemod == nil)
 		return sys->sprint("cannot load Stripe: %r");
 
-	return stripemod->init(apikey);
+	err := stripemod->init(apikey);
+	if(err == nil)
+		stripeacct = acctname;
+	return err;
 }
 
 querystripebalance(as: ref AcctState): string
@@ -2353,8 +2421,10 @@ dirgen(p: big): (ref Sys->Dir, string)
 	Qbalance =>
 		name = "balance";
 	Qchain =>
+		# what the account was made with. It could be written, by an
+		# agent too: the new name was shown to the human beside the
+		# account, was not kept, and signing never used it.
 		name = "chain";
-		perm = 8r666;
 	Qpay =>
 		name = "pay";
 		perm = 8r666;

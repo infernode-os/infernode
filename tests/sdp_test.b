@@ -179,6 +179,85 @@ testErrors(t: ref T)
 	t.asserteq(int rsp[8], 0, "and none once the record is removed");
 }
 
+# a PDU: id, transaction 1, and params with their length
+mkpdu(id: int, params: array of byte): array of byte
+{
+	p := array[5 + len params] of byte;
+	p[0] = byte id; p[1] = byte 0; p[2] = byte 1;
+	p[3] = byte (len params >> 8); p[4] = byte len params;
+	p[5:] = params;
+	return p;
+}
+
+#
+# What any peer can send the SDP server before pairing: lengths that are
+# negative or wrap, elements that are not there, trees deeper than any
+# record, patterns longer than a search may carry.  Each is answered as a
+# syntax error; none raises.
+#
+testHostile(t: ref T)
+{
+	srv := Server.new();
+	srv.add(sdp->spprecord(0, 3, "Console"));
+
+	# a sequence whose 32-bit length has its top bit set
+	rsp := srv.request(mkpdu(Sdp->Psearchreq, array[] of {byte 16r37, byte 16r80, byte 0, byte 0, byte 0}), 672);
+	t.asserteq(sdp->errorrsp(rsp), Sdp->Ebadsyntax, "a negative 32-bit length is a syntax error");
+	# and one that wraps when added to where it starts
+	rsp = srv.request(mkpdu(Sdp->Psearchreq, array[] of {byte 16r37, byte 16r7f, byte 16rff, byte 16rff, byte 16rfe}), 672);
+	t.asserteq(sdp->errorrsp(rsp), Sdp->Ebadsyntax, "a 32-bit length that wraps is a syntax error");
+	(e, nil) := sdp->unpack(array[] of {byte 16r37, byte 16r80, byte 0, byte 0, byte 0}, 0);
+	t.assert(e == nil, "unpack gives nil for it");
+	(e, nil) = sdp->unpack(array[] of {byte 0, byte 0, byte 0, byte 0, byte 0, byte 16r37, byte 16r7f, byte 16rff, byte 16rff, byte 16rff}, 5);
+	t.assert(e == nil, "and for one that wraps from an index past zero");
+
+	# nothing where an element should be
+	rsp = srv.request(mkpdu(Sdp->Psearchreq, array[0] of byte), 672);
+	t.asserteq(sdp->errorrsp(rsp), Sdp->Ebadsyntax, "a search with no pattern at all is a syntax error");
+	rsp = srv.request(mkpdu(Sdp->Pattrreq, array[] of {byte 0, byte 1, byte 0, byte 0, byte 0, byte 16r10}), 672);
+	t.asserteq(sdp->errorrsp(rsp), Sdp->Ebadsyntax, "an attribute request with no id list is a syntax error");
+	rsp = srv.request(mkpdu(Sdp->Psearchreq, array[] of {byte 16r35, byte 5}), 672);
+	t.asserteq(sdp->errorrsp(rsp), Sdp->Ebadsyntax, "a sequence shorter than it says is a syntax error");
+	rsp = srv.request(mkpdu(Sdp->Psearchattrreq, array[] of {byte 16r35, byte 3, byte 16r19, byte 16r11, byte 16r01, byte 0, byte 16r40}), 672);
+	t.asserteq(sdp->errorrsp(rsp), Sdp->Ebadsyntax, "a search-attribute request with no id list is a syntax error");
+
+	# forty sequences inside one another
+	deep := array[2*40 + 3] of byte;
+	for(i := 0; i < 40; i++){
+		deep[2*i] = byte 16r35;
+		deep[2*i+1] = byte (len deep - 2*i - 2);
+	}
+	deep[80] = byte 16r19; deep[81] = byte 16r11; deep[82] = byte 16r01;
+	(e, nil) = sdp->unpack(deep, 0);
+	t.assert(e == nil, "a tree deeper than any record is refused");
+	# and four, which a record is
+	four := array[] of {byte 16r35, byte 9, byte 16r35, byte 7, byte 16r35, byte 5, byte 16r35, byte 3, byte 16r19, byte 16r11, byte 16r01};
+	(e, nil) = sdp->unpack(four, 0);
+	t.assert(e != nil, "four deep is taken");
+
+	# a search pattern is at most twelve UUIDs
+	for(n := 12; n <= 13; n++){
+		pat := array[2 + 3*n + 2 + 1] of byte;
+		pat[0] = byte 16r35; pat[1] = byte (3*n);
+		for(i = 0; i < n; i++){
+			pat[2+3*i] = byte 16r19; pat[3+3*i] = byte 16r11; pat[4+3*i] = byte 16r01;
+		}
+		pat[2+3*n] = byte 0; pat[3+3*n] = byte 10; pat[4+3*n] = byte 0;
+		rsp = srv.request(mkpdu(Sdp->Psearchreq, pat), 672);
+		(id, nil, nil) := sdp->pduhdr(rsp);
+		if(n == 12)
+			t.asserteq(id, Sdp->Psearchrsp, "a pattern of twelve UUIDs is answered");
+		else
+			t.asserteq(sdp->errorrsp(rsp), Sdp->Ebadsyntax, "one of thirteen is a syntax error");
+	}
+
+	# an integer of a size that cannot be written back
+	(e, nil) = sdp->unpack(array[] of {byte 16r15, byte 3, byte 1, byte 2, byte 3}, 0);
+	t.assert(e == nil, "a three-byte integer is no element");
+	(e, nil) = sdp->unpack(array[] of {byte 16r0d, byte 0}, 0);
+	t.assert(e == nil, "nor an unsigned one of no bytes");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -197,6 +276,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Search", testSearch);
 	run("Continuation", testContinuation);
 	run("Errors", testErrors);
+	run("Hostile", testHostile);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

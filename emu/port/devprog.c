@@ -179,7 +179,7 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 {
 	Qid qid;
 	Prog *p;
-	char *e;
+	char *e, *user;
 	Osenv *o;
 	ulong pid, path, perm, len;
 
@@ -219,7 +219,15 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 			return -1;
 		}
 		mkqid(&qid, pid<<QSHIFT, pid, QTDIR);
-		devdir(c, qid, up->genbuf, 0, o->user, DMDIR|0555, dp);
+		/*
+		 * devdir keeps the pointers it is given and the caller packs
+		 * the entry after the VM is let go here, when the Prog can
+		 * have gone and its owner's name been freed: the name is
+		 * copied to this process's buffer, after the pid.
+		 */
+		user = up->genbuf+strlen(up->genbuf)+1;	/* Flawfinder: ignore — genbuf holds the pid sprint just wrote, at most 20 digits of 128 bytes */
+		snprint(user, sizeof(up->genbuf)-(user-up->genbuf), "%s", o->user);
+		devdir(c, qid, up->genbuf, 0, user, DMDIR|0555, dp);
 		release();
 		return 1;
 	}
@@ -244,7 +252,8 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 
 	len = tab->length;
 	mkqid(&qid, path|tab->qid.path, c->qid.vers, QTFILE);
-	devdir(c, qid, tab->name, len, o->user, perm, dp);
+	snprint(up->genbuf, sizeof(up->genbuf), "%s", o->user);	/* as above */
+	devdir(c, qid, tab->name, len, up->genbuf, perm, dp);
 	release();
 	return 1;
 }
@@ -569,7 +578,9 @@ fdsnap(Fgrp *f, Fdsnap *s)
 	Chan *c;
 
 	s->n = 0;
+	lock(&f->l);
 	m = f->maxfd+1;
+	unlock(&f->l);
 	if(m < 1)
 		m = 1;
 	s->c = malloc(m*sizeof(Chan*));
@@ -581,6 +592,13 @@ fdsnap(Fgrp *f, Fdsnap *s)
 		s->fd = nil;
 		error(Enomem);
 	}
+	/*
+	 * under the table's lock, as the native kernel's copy is: the
+	 * Prog listed is in the kernel for its opens and closes, the VM
+	 * let go, and a close takes a channel out of the table to free it,
+	 * and an open replaces the table with a longer one, beside this.
+	 */
+	lock(&f->l);
 	for(i = 0; i <= f->maxfd && s->n < m; i++) {
 		c = f->fd[i];
 		if(c == nil)
@@ -589,6 +607,7 @@ fdsnap(Fgrp *f, Fdsnap *s)
 		s->c[s->n] = c;
 		s->fd[s->n++] = i;
 	}
+	unlock(&f->l);
 }
 
 static void
@@ -849,8 +868,11 @@ progheap(Heapqry *hq, char *va, int count, ulong offset)
 			if(addr & 3)
 				return -1;
 			ml = *(Modlink**)addr;
-			fmt = ml == H ? "nil\n" : "%lux\n";
-			n += psnprint(va+n, count-n, fmt, ml->MP);
+			/* (ml->MP was read to print "nil" too: a fault at H) */
+			if(ml == H)
+				n += psnprint(va+n, count-n, "nil\n");
+			else
+				n += psnprint(va+n, count-n, "%lux\n", ml->MP);
 			s = sizeof(WORD);
 			break;
 		case 'c':
@@ -1126,7 +1148,13 @@ progread(Chan *c, void *va, long n, vlong offset)
 		if(p->exstr == nil)
 			up->genbuf[0] = 0;
 		else
-			snprint(up->genbuf, sizeof(up->genbuf), p->exstr);
+			/*
+			 * as text, not as a format: it is what the program
+			 * raised ("%lux%lux" read the kernel's stack back
+			 * to it; "%s" and "%n" followed and wrote through
+			 * whatever was there)
+			 */
+			snprint(up->genbuf, sizeof(up->genbuf), "%s", p->exstr);
 		release();
 		return readstr(offset, va, n, up->genbuf);
 	}
@@ -1324,7 +1352,8 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 		hq->addr = strtoul(buf, &b, 0);
 		if(*b == '+')
 			hq->module = strtoul(b, &b, 0);
-		if(*b++ != '.')
+		/* a query ending at the '.' took its count from past the terminator */
+		if(*b++ != '.' || *b == '\0')
 			error(Ebadctl);
 		hq->fmt = *b++;
 		hq->count = strtoul(b, nil, 0);
@@ -1644,8 +1673,15 @@ save:
 
 	p->reg = R;
 
+	/*
+	 * The reference taken above is on ctl, and ctl is what gives it
+	 * back: the debugger can have gone while this Prog was blocked
+	 * (the reference was then never dropped) or another taken its
+	 * place (the other's was dropped, and its Progctl freed under it).
+	 */
 	if(env->debug == nil) {
 		poperror();
+		closedbgctl(ctl, p);
 		return;
 	}
 
@@ -1654,7 +1690,7 @@ save:
 
 	telldbg(env->debug, buf);
 	poperror();
-	closedbgctl(env->debug, p);
+	closedbgctl(ctl, p);
 }
 
 Dev progdevtab = {

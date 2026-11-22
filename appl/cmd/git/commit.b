@@ -109,7 +109,7 @@ init(nil: ref Draw->Context, args: list of string)
 		fail("write commit: " + werr);
 
 	# Update branch ref
-	git->writeref(gitdir, headref, commithash);
+	check(git->writeref(gitdir, headref, commithash));
 
 	# Clear index
 	git->clearindex(gitdir);
@@ -301,4 +301,11 @@ fail(msg: string)
 {
 	sys->fprint(stderr, "git/commit: %s\n", msg);
 	raise "fail:" + msg;
+}
+
+# a ref or pack that was not written is not passed over
+check(err: string)
+{
+	if(err != nil)
+		fail(err);
 }

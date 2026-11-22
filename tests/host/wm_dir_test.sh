@@ -30,7 +30,7 @@ printf 'readme\n' > "$D/tree/README"
 printf '# notes\n' > "$D/tree/notes.md"
 printf 'implement Inner;\n' > "$D/tree/sub/inner.b"
 cd "$ROOT"
-SDL_VIDEODRIVER=dummy with_timeout 150 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
+SDL_VIDEODRIVER=dummy with_timeout 150 "$EMU" -c1 -pheap=512m -pimage=512m -g1400x900 -r"$ROOT" \
 	/dis/sh.dis -c "wm/wm sh /tests/dir/drive.sh /$T" </dev/null >"$LOG" 2>&1 || true
 
 failed=0
@@ -91,6 +91,13 @@ fi
 [ "$(nwin edit)" = 2 ] && ok "README with no plumber: a wm/edit window" \
 	|| bad "README with no plumber: $(nwin edit) windows (windows: $(windows edit))"
 
+# ids, every fifth word: wm/dir's is 0, and the rest stay
+ids() { windows "$1" | tr ' ' '\n' | awk 'NR % 5 == 1'; }
+if ids plumbed | grep -qx 0 && ! ids dir-deleted | grep -qx 0 && [ -n "$(ids dir-deleted)" ]; then
+	echo "PASS: a wm/dir deleted while what it started is open: its window goes"
+else
+	echo "FAIL: delete: $(windows plumbed) -> $(windows dir-deleted)"; failed=1
+fi
 if grep -q "/$T/tree/notes.md" "$D/plumbed" 2>/dev/null; then
 	ok "notes.md with a plumber: plumbed by its full name"
 else

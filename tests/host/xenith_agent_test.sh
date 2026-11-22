@@ -66,13 +66,16 @@ cat > "$DRIVER" <<'EOF'
 #!/dis/sh.dis
 load std
 echo start > /tmp/xenith-agent-test.trace
-/xenith/dis/Agent.dis -p /usr/agentloop -t read,list -x SCENARIO:single_read >[2] /tmp/xenith-agent-test.agent &
+# The tool server this Agent starts is the one the later Agents use
+# (-t is read only when there is none), so it offers what they call:
+# a call to a tool it does not offer is refused, not asked about.
+/xenith/dis/Agent.dis -p /usr/agentloop -t read,list,write -x SCENARIO:single_read >[2] /tmp/xenith-agent-test.agent &
 id=
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
 	if {~ $#id 0} {
-		for w in `{ls /chan} {
+		for w in `{ls -d /chan/[0-9]*} {
 			if {ftest -f $w/tag} {
-				if {grep -s '^/[+]Agent' $w/tag} {
+				if {grep -s '^[^ ]*/[+]Agent' $w/tag} {
 					id=$w
 				}
 			}
@@ -91,7 +94,7 @@ echo reply >> /tmp/xenith-agent-test.trace
 md=
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
 	if {~ $#md 0} {
-		for w in `{ls /chan} {
+		for w in `{ls -d /chan/[0-9]*} {
 			if {ftest -f $w/body} {
 				if {grep -s 'SCENARIO:markdown_reply' $w/body} {
 					md=$w
@@ -111,7 +114,7 @@ echo markdown $md >> /tmp/xenith-agent-test.trace
 ap=
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
 	if {~ $#ap 0} {
-		for w in `{ls /chan} {
+		for w in `{ls -d /chan/[0-9]*} {
 			if {ftest -f $w/body} {
 				if {grep -s 'approve[?]' $w/body} {
 					ap=$w

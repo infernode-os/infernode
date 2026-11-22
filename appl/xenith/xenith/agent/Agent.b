@@ -19,7 +19,12 @@ implement Agent;
 #
 #	Agent [-v] [-p path,...] [-t tool,...] [-x message]
 #
-# Tag: Send Stop Reset Render Allow Deny (and Del)
+# Tag: Send Stop Reset Render Allow Deny Apply Discard (and Del)
+#
+# What the agent writes to the user's files is staged until the user
+# says: when a turn has left changes, they are listed, and Apply writes
+# them to the files, Discard drops them.  (They were staged and never
+# applied: the agent said a file was fixed, and it was not.)
 #
 # -x sends a message at once, as if typed and Sent (for scripts and
 # tests).
@@ -45,6 +50,14 @@ include "string.m";
 
 Agent: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
+};
+
+# What the agent writes is staged (cowfs) until the user applies it.
+Cowfs: module {
+	PATH: con "/dis/veltro/cowfs.dis";
+	diff:	fn(overlaydir: string): list of string;
+	promote:	fn(basepath, overlaydir: string): (int, string);
+	revert:	fn(overlaydir: string): string;
 };
 
 # Any command module, for the servers Agent starts itself.
@@ -145,7 +158,9 @@ startservers(paths, tools: string): string
 		if(tools == "")
 			tools = DEFAULT_TOOLS;
 		(nil, tlist) := sys->tokenize(tools, ",");
-		spawn runcmd(TOOLS9P, "tools9p" :: tlist, started);
+		# An activity of its own, so its staged changes are this
+		# window's alone.
+		spawn runcmd(TOOLS9P, "tools9p" :: "-a" :: string pctl(0, nil) :: tlist, started);
 		if(<-started < 0)
 			return "cannot start tools9p";
 		# runcmd waits for its init, which returns mounted
@@ -199,8 +214,17 @@ init(nil: ref Draw->Context, args: list of string)
 		usage();
 
 	w := Win.wnew();
-	w.wname("/+Agent");
-	w.wtagwrite(" Send Stop Reset Render Allow Deny");
+	# Named in the directory it works in, as acme's win is, so that a
+	# file named in the conversation (src/x.b:32) is looked up there; as
+	# /+Agent its directory was /, and button 3 on one found nothing.
+	wdir := "";
+	if((dfd := sys->open(".", OREAD)) != nil)
+		wdir = sys->fd2path(dfd);
+	dfd = nil;
+	if(wdir == "/")
+		wdir = "";
+	w.wname(wdir + "/+Agent");
+	w.wtagwrite(" Send Stop Reset Render Allow Deny Apply Discard");
 	w.openbody(OWRITE);
 
 	err: string;
@@ -228,9 +252,33 @@ init(nil: ref Draw->Context, args: list of string)
 		mainwin(w, 0, "");
 		return;
 	}
+	# Where the user is: the agent was told the paths it holds, not
+	# that the first is the directory the user works in, so a relative
+	# name (src/x.b) was guessed at and replies spelt out whole paths.
+	writefile(sess + "/ctl", "brief " + briefing(paths));
 	w.wwritebody("");
 	w.ctlwrite("clean");
 	mainwin(w, 1, first);
+}
+
+briefing(paths: string): string
+{
+	b := "You are talking with the user in an Agent window in Xenith, " +
+		"an editor like acme. Your replies are shown there as Markdown.";
+	if(paths != "") {
+		(nil, l) := sys->tokenize(paths, ",");
+		if(l != nil) {
+			dir := hd l;
+			if(len dir > 3 && (dir[len dir - 3:] == ":ro" || dir[len dir - 3:] == ":rw"))
+				dir = dir[0:len dir - 3];
+			b += " The user's working directory is " + dir + ": a relative " +
+				"path the user names is relative to it, and in replies name " +
+				"files relative to it. Name a place in a file as path:line " +
+				"(src/x.b:32), with no quotes or backticks around it: the user " +
+				"opens it by clicking it.";
+		}
+	}
+	return b;
 }
 
 # Follow the session's text from offset until the turn is over.
@@ -304,12 +352,8 @@ mainwin(w: ref Win, live: int, first: string)
 				ackc <-= 0;
 			}
 			followers--;
-			if(followers == 0) {
-				busy = 0;
-				w.ctlwrite("clean");
-				if(typeset)
-					settype(w, turn, hostpt);
-			}
+			if(followers == 0)
+				hostpt = turnover(w, turn, hostpt);
 			break;
 		}
 		textoff += big len array of byte t;
@@ -317,12 +361,8 @@ mainwin(w: ref Win, live: int, first: string)
 	a := <-approvec =>
 		if(a == nil) {
 			followers--;
-			if(followers == 0) {
-				busy = 0;
-				w.ctlwrite("clean");
-				if(typeset)
-					settype(w, turn, hostpt);
-			}
+			if(followers == 0)
+				hostpt = turnover(w, turn, hostpt);
 			break;
 		}
 		(callid, rest) := str->splitl(a, " ");
@@ -394,6 +434,12 @@ mainwin(w: ref Win, live: int, first: string)
 						typeset = 1;
 						docctl(w, "render markdown");
 					}
+				"Apply" or "Discard" =>
+					if(!live || busy)
+						break;
+					docctl(w, "text");
+					hostpt = append(w, hostpt, blocks(applychanges(cmd == "Apply")));
+					w.ctlwrite("clean");
 				"Allow" or "Deny" =>
 					if(pending != "") {
 						writefile(sess + "/approve", str->tolower(cmd) + " " + pending);
@@ -416,6 +462,112 @@ mainwin(w: ref Win, live: int, first: string)
 			}
 		}
 	}
+}
+
+# A turn over: the changes it left listed, the conversation set
+turnover(w: ref Win, turn, hostpt: int): int
+{
+	busy = 0;
+	c := changes();
+	if(c != "")
+		hostpt = append(w, hostpt, blocks("== note changes\n" + c +
+			"Not in your files yet: Apply writes them there, Discard drops them.\n"));
+	w.ctlwrite("clean");
+	if(typeset)
+		settype(w, turn, hostpt);
+	return hostpt;
+}
+
+# This window's overlays: /tmp/veltro/cow/<activity>-<key>
+overlays(): list of string
+{
+	aid := trim(readfile("/tool/meta/actid"));
+	if(aid == "")
+		return nil;
+	fd := sys->open("/tmp/veltro/cow", OREAD);
+	if(fd == nil)
+		return nil;
+	pre := aid + "-";
+	l: list of string;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++)
+			if(len d[i].name > len pre && d[i].name[0:len pre] == pre)
+				l = "/tmp/veltro/cow/" + d[i].name :: l;
+	}
+	return l;
+}
+
+# The folder an overlay stages changes to
+basepath(overlay: string): string
+{
+	(nil, l) := sys->tokenize(readfile(overlay + "/.cowmeta"), "\n");
+	for(; l != nil; l = tl l) {
+		v := trim(hd l);
+		if(len v > 9 && v[0:9] == "basepath=")
+			return v[9:];
+	}
+	return nil;
+}
+
+# The staged changes, a line each ("M path"), relative to the directory
+# the window works in where they are in it
+changes(): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return "";
+	cwd := "";
+	if((fd := sys->open(".", OREAD)) != nil)
+		cwd = sys->fd2path(fd);
+	out := "";
+	for(ovs := overlays(); ovs != nil; ovs = tl ovs) {
+		base := basepath(hd ovs);
+		for(d := cowfs->diff(hd ovs); d != nil; d = tl d) {
+			l := hd d;
+			if(base != nil && len l > 2 && l[1] == ' ') {
+				path := base + "/" + l[2:];
+				if(cwd != "" && len path > len cwd + 1 && path[0:len cwd + 1] == cwd + "/")
+					path = path[len cwd + 1:];
+				l = l[0:2] + path;
+			}
+			out += "\t" + l + "\n";
+		}
+	}
+	return out;
+}
+
+applychanges(apply: int): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return sprint("== note\n(cannot load cowfs: %r)\n");
+	ovs := overlays();
+	if(ovs == nil || changes() == "")
+		return "== note\nNo changes are staged.\n";
+	if(!apply) {
+		for(; ovs != nil; ovs = tl ovs)
+			if((err := cowfs->revert(hd ovs)) != nil)
+				return "== note\nDiscard: " + err + "\n";
+		return "== note\nThe changes were discarded.\n";
+	}
+	total := 0;
+	msg := "";
+	for(; ovs != nil; ovs = tl ovs) {
+		base := basepath(hd ovs);
+		if(base == nil)
+			continue;
+		(n, err) := cowfs->promote(base, hd ovs);
+		total += n;
+		if(err != nil)
+			msg += err + "\n";
+	}
+	r := sprint("== note\n%d file(s) written.\n", total);
+	if(msg != "")
+		r += msg;
+	return r;
 }
 
 # The window's document (docview(2)): its doc/ctl

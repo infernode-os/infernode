@@ -61,6 +61,7 @@ char *Ebadarp = "bad arp";
 #define haship(s) ((s)[IPaddrlen-1]%NHASH)
 
 extern int 	ReTransTimer = RETRANS_TIMER;
+static void	arpdropq(Arp*, Block*);
 static void 	rxmitproc(void *v);
 
 void
@@ -109,14 +110,7 @@ newarp6(Arp *arp, uchar *ip, Ipifc *ifc, int addrxt)
 	}
 	else {	// queue icmp unreachable for rxmitproc later on, w/o arp lock
 		if(xp){
-			if(arp->dropl == nil) 
-				arp->dropf = xp;
-			else
-				arp->dropl->list = xp;
-
-			for(next = xp->list; next; next = next->list)
-				xp = next;
-			arp->dropl = xp;
+			arpdropq(arp, xp);
 			wakeup(&arp->rxmtq);
 		}
 	}
@@ -307,7 +301,7 @@ arpresolve(Arp *arp, Arpent *a, Medium *type, uchar *mac)
 }
 
 void
-arpenter(Fs *fs, int version, uchar *ip, uchar *mac, int n, int refresh)
+arpenter(Fs *fs, int version, uchar *ip, uchar *mac, int n, int refresh, Ipifc *rifc)
 {
 	Arp *arp;
 	Route *r;
@@ -344,7 +338,22 @@ arpenter(Fs *fs, int version, uchar *ip, uchar *mac, int n, int refresh)
 	}
 
 	ifc = r->ifc;
+	if(ifc == nil)
+		return;
+	/*
+	 * What an interface heard is about that interface.  The entry's
+	 * interface is the route's, so without this a station on one
+	 * segment could name the hardware address for any address routed
+	 * by another of the same medium, and what was held for that
+	 * address went out there to the address it chose.  (rifc is nil
+	 * for entries this node makes for itself.)
+	 */
+	if(rifc != nil && ifc != rifc)
+		return;
 	type = ifc->m;
+	/* the caller's n bytes are what is copied, type->maclen of them */
+	if(type == nil || type->maclen > n || type->maclen > sizeof(a->mac))
+		return;
 
 	qlock(&arp->ql);
 	for(a = arp->hash[haship(ip)]; a; a = a->hash){
@@ -468,7 +477,7 @@ arpwrite(Fs *fs, char *s, int len)
 				r = v4lookup(fs, ip+IPv4off, nil);
 			else
 				r = v6lookup(fs, ip, nil);
-			if(r == nil)
+			if(r == nil || r->ifc == nil || r->ifc->m == nil)
 				error("Destination unreachable");
 			m = r->ifc->m;
 			n = parsemac(mac, f[2], m->maclen);
@@ -485,7 +494,7 @@ arpwrite(Fs *fs, char *s, int len)
 		if(m->ares == nil)
 			error(Ebadarp);
 
-		m->ares(fs, V6, ip, mac, n, 0);
+		m->ares(fs, V6, ip, mac, n, 0, nil);	/* entered by hand: heard on no interface */
 	} else if(strcmp(f[0], "del") == 0){
 		if(n != 2)
 			error(Ebadarg);
@@ -528,11 +537,40 @@ convmac(char *p, uchar *mac, int n)
 		p += sprint(p, "%2.2ux", *mac++);
 }
 
+/* called with arp qlocked */
+static void
+arpdropq(Arp *arp, Block *bp)
+{
+	Block *tail;
+
+	if(bp == nil)
+		return;
+	if(arp->dropl == nil)
+		arp->dropf = bp;
+	else
+		arp->dropl->list = bp;
+	for(tail = bp; tail->list != nil; tail = tail->list)
+		;
+	arp->dropl = tail;
+}
+
+static int
+arpifclock(Arpent *a, Ipifc *ifc)
+{
+	if(a->rxtsrem <= 0 || !canrlock(&ifc->rwl))
+		return 0;
+	if(a->ifcid == ifc->ifcid)
+		return 1;
+	runlock(&ifc->rwl);
+	return 0;
+}
+
 int
 arpread(Arp *arp, char *p, ulong offset, int len)
 {
 	Arpent *a;
 	int n;
+	char line[Alinelen+1];
 	char mac[2*MAClen+1];
 
 	if(offset % Alinelen)
@@ -542,6 +580,7 @@ arpread(Arp *arp, char *p, ulong offset, int len)
 	len = len/Alinelen;
 
 	n = 0;
+	qlock(&arp->ql);
 	for(a = arp->cache; len > 0 && a < &arp->cache[NCACHE]; a++){
 		if(a->state == 0)
 			continue;
@@ -550,13 +589,22 @@ arpread(Arp *arp, char *p, ulong offset, int len)
 			continue;
 		}
 		len--;
-		qlock(&arp->ql);
 		convmac(mac, a->mac, a->type->maclen);
-		n += sprint(p+n, aformat, a->type->name, arpstate[a->state], a->ip, mac);
-		qunlock(&arp->ql);
+		snprint(line, sizeof line, aformat, a->type->name,
+			arpstate[a->state], a->ip, mac);
+		memmove(p+n, line, Alinelen);
+		n += Alinelen;
 	}
+	qunlock(&arp->ql);
 
 	return n;
+}
+
+/* is an entry that was being solicited still one to solicit, on the same interface? */
+static int
+rxmtstill(int state, int v4, int sameifc)
+{
+	return state == AWAIT && !v4 && sameifc;
 }
 
 extern int
@@ -585,16 +633,10 @@ rxmitsols(Arp *arp)
 	for(; a; a = a->nextrxt){
 		ifc = a->ifc;
 		assert(ifc != nil);
-		if((a->rxtsrem <= 0) || !(canrlock(&ifc->rwl)) || (a->ifcid != ifc->ifcid)){
+		if(!arpifclock(a, ifc)){
 			xp = a->hold;
 			a->hold = nil;
-
-			if(xp){
-				if(arp->dropl == nil) 
-					arp->dropf = xp;
-				else
-					arp->dropl->list = xp;
-			}
+			arpdropq(arp, xp);
 
 			cleanarpent(arp, a);
 		}
@@ -612,22 +654,32 @@ rxmitsols(Arp *arp)
 	runlock(&ifc->rwl);
 	qlock(&arp->ql);	
 
-	/* put to the end of re-transmit chain */
-	l = &arp->rxmt;
-	for(b = *l; b; b = b->nextrxt){
-		if(b == a){
-			*l = a->nextrxt;
-			break;
+	/*
+	 * The lock was out while the solicitation was sent, and the entry
+	 * may not be what it was: answered (and off the chain, resolved),
+	 * deleted or flushed (off the chain, with no interface), or taken
+	 * for another address.  Put back unasked it was solicited again
+	 * until it was destroyed, resolved or not, or met the assert above
+	 * with no interface.  Only an entry still waiting, for the same
+	 * interface, goes to the end of the chain.
+	 */
+	if(rxmtstill(a->state, isv4(a->ip), a->ifc == ifc)){
+		l = &arp->rxmt;
+		for(b = *l; b; b = b->nextrxt){
+			if(b == a){
+				*l = a->nextrxt;
+				break;
+			}
+			l = &b->nextrxt;
 		}
-		l = &b->nextrxt;
+		for(b = *l; b; b = b->nextrxt){
+			l = &b->nextrxt;
+		}
+		*l = a;
+		a->rxtsrem--;
+		a->nextrxt = nil;
+		a->rtime = NOW + ReTransTimer;
 	}
-	for(b = *l; b; b = b->nextrxt){
-		l = &b->nextrxt;
-	}
-	*l = a;
-	a->rxtsrem--;
-	a->nextrxt = nil;
-	a->rtime = NOW + ReTransTimer;
 
 	a = arp->rxmt;
 	if(a==nil)
@@ -681,4 +733,3 @@ rxmitproc(void *v)
 			tsleep(&arp->rxmtq, return0, 0, wakeupat); 
 	}
 }
-

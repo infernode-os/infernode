@@ -366,6 +366,36 @@ incoming(void* arg)
 	return conv->incall != nil;
 }
 
+/*
+ * Does this open mode ask to change the file?  OWRITE is 1 and ORDWR is
+ * 2: a test of the OWRITE bit says no to an open for reading and
+ * writing, which then wrote all the same.
+ */
+static int
+wantswrite(int omode)
+{
+	return (omode&3) == OWRITE || (omode&3) == ORDWR || (omode & OTRUNC) != 0;
+}
+
+/*
+ * A port, or a byte-sized setting, as a ctl message writes it: -1 if
+ * it is not a number from 0 to max.  atoi into a ushort took 70000 for
+ * 4464 and -1 for 65535, a port nobody asked for.
+ */
+static int
+ctlnum(char *s, int max)
+{
+	char *e;
+	long v;
+
+	if(s == nil || *s == 0)
+		return -1;
+	v = strtol(s, &e, 10);
+	if(e == s || v < 0 || v > max)
+		return -1;
+	return v;
+}
+
 /* OEXEC too: without it, omode&3 == 3 read past the table (emu's devip) */
 static int m2p[] = {
 	[OREAD]		4,
@@ -390,9 +420,10 @@ ipopen(Chan* c, int omode)
 	default:
 		break;
 	case Qndb:
-		if(omode & (OWRITE|OTRUNC) && !iseve())
+		/* the network database names the resolvers: changing it is eve's */
+		if(wantswrite(omode) && !iseve())
 			error(Eperm);
-		if((omode & (OWRITE|OTRUNC)) == (OWRITE|OTRUNC))
+		if(wantswrite(omode) && (omode & OTRUNC))
 			f->ndb[0] = 0;
 		break;
 	case Qlog:
@@ -677,6 +708,10 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		return readstr(offset, p, n, up->genbuf);
 	case Qremote:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		if(x->remote == nil) {
@@ -684,11 +719,13 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		} else {
 			(*x->remote)(c, buf, Statelen-2);
 		}
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qlocal:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		if(x->local == nil) {
@@ -696,17 +733,17 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		} else {
 			(*x->local)(c, buf, Statelen-2);
 		}
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qstatus:
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		x = f->p[PROTO(ch->qid)];
 		c = x->conv[CONV(ch->qid)];
 		(*x->state)(c, buf, Statelen-2);
-		rv = readstr(offset, p, n, buf);
-		free(buf);
-		return rv;
+		goto Readstr;
 	case Qdata:
 		c = f->p[PROTO(ch->qid)]->conv[CONV(ch->qid)];
 		return qread(c->rq, a, n);
@@ -721,9 +758,15 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		if(x->stats == nil)
 			error("stats not implemented");
 		buf = smalloc(Statelen);
+		if(waserror()){
+			free(buf);
+			nexterror();
+		}
 		(*x->stats)(x, buf, Statelen);
+	Readstr:
 		rv = readstr(offset, p, n, buf);
 		free(buf);
+		poperror();
 		return rv;
 	}
 }
@@ -845,7 +888,7 @@ setladdrport(Conv* c, char* str, int announcing)
 {
 	char *p;
 	char *rv;
-	ushort lport;
+	int lport;
 	uchar addr[IPaddrlen];
 
 	rv = nil;
@@ -887,12 +930,49 @@ setladdrport(Conv* c, char* str, int announcing)
 		return setluniqueport(c, 0);
 	}
 
-	lport = atoi(p);
-	if(lport <= 0)
+	/*
+	 * What is not a number asks for any port, as it always has ("*"
+	 * where no announcement is being made, or nothing at all); what
+	 * is one is the port, and must be one.
+	 */
+	lport = 0;
+	if((*p >= '0' && *p <= '9') || *p == '-'){
+		lport = ctlnum(p, 65535);
+		if(lport < 0)
+			return "bad port";
+	}
+	if(lport == 0)
 		setlport(c);
 	else
 		rv = setluniqueport(c, lport);
 	return rv;
+}
+
+/*
+ * Is s written as an address parseip can read: hex digits, dots and
+ * colons only, and a dot or a colon in it unless it is all decimal
+ * digits (an IPv4 address as one number). So "fe80::1", "::1" and
+ * "10.0.2.2" are, and "localhost" is not, nor a name that happens
+ * to be hex, such as "cafe".
+ */
+static int
+isipaddr(char *s)
+{
+	char *p;
+	int sep, hex;
+
+	if(*s == 0)
+		return 0;
+	sep = hex = 0;
+	for(p = s; *p; p++){
+		if(*p == '.' || *p == ':')
+			sep = 1;
+		else if((*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F'))
+			hex = 1;
+		else if(!(*p >= '0' && *p <= '9'))
+			return 0;
+	}
+	return sep || !hex;
 }
 
 static char*
@@ -904,8 +984,26 @@ setraddrport(Conv* c, char* str)
 	if(p == nil)
 		return "malformed address";
 	*p++ = 0;
+	/*
+	 * parseip takes anything: a name it cannot read ("localhost",
+	 * with no connection server to translate it) comes back as
+	 * 0.0.0.0, and a TCP connect then sent its SYN there and waited
+	 * in Syn_sent for ever, where it should have failed at once.
+	 * So the address must be one, and not the unspecified address,
+	 * which names no destination: the hosted emulator's devip
+	 * refuses both with this message, and now this one does too.
+	 */
+	if(!isipaddr(str))
+		return "invalid IP address";
 	parseip(c->raddr, str);
-	c->rport = atoi(p);
+	if(ipcmp(c->raddr, IPnoaddr) == 0 || ipcmp(c->raddr, v4prefix) == 0)
+		return "invalid IP address";
+	c->rport = 0;
+	if((*p >= '0' && *p <= '9') || *p == '-'){
+		if(ctlnum(p, 65535) < 0)
+			return "bad port";
+		c->rport = ctlnum(p, 65535);
+	}
 	p = strchr(p, '!');
 	if(p){
 		if(strstr(p, "!r") != nil)
@@ -965,13 +1063,15 @@ connectctlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 
 	if(c->state != 0)
 		error(Econinuse);
-	c->state = Connecting;
-	c->cerr[0] = '\0';
 	if(x->connect == nil)
 		error("connect not supported");
+	c->cerr[0] = '\0';
+	c->state = Connecting;
 	p = x->connect(c, cb->f, cb->nf);
-	if(p != nil)
+	if(p != nil){
+		c->state = Idle;
 		error(p);
+	}
 
 	qunlock(&c->ql);
 	if(waserror()){
@@ -1017,13 +1117,15 @@ announcectlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 
 	if(c->state != 0)
 		error(Econinuse);
-	c->state = Announcing;
-	c->cerr[0] = '\0';
 	if(x->announce == nil)
 		error("announce not supported");
+	c->cerr[0] = '\0';
+	c->state = Announcing;
 	p = x->announce(c, cb->f, cb->nf);
-	if(p != nil)
+	if(p != nil){
+		c->state = Idle;
 		error(p);
+	}
 
 	qunlock(&c->ql);
 	if(waserror()){
@@ -1070,8 +1172,11 @@ tosctlmsg(Conv *c, Cmdbuf *cb)
 {
 	if(cb->nf < 2)
 		c->tos = 0;
-	else
-		c->tos = atoi(cb->f[1]);
+	else{
+		if(ctlnum(cb->f[1], 255) < 0)
+			error(Ebadarg);
+		c->tos = ctlnum(cb->f[1], 255);
+	}
 }
 
 static void
@@ -1079,8 +1184,12 @@ ttlctlmsg(Conv *c, Cmdbuf *cb)
 {
 	if(cb->nf < 2)
 		c->ttl = MAXTTL;
-	else
-		c->ttl = atoi(cb->f[1]);
+	else{
+		/* a byte in the header, and 0 is a packet that goes nowhere */
+		if(ctlnum(cb->f[1], 255) < 1)
+			error(Ebadarg);
+		c->ttl = ctlnum(cb->f[1], 255);
+	}
 }
 
 static long

@@ -13,6 +13,11 @@
  *	+0x20	RNG_FIFO_DATA	a 32-bit word of output
  *	+0x24	RNG_FIFO_COUNT	low 8 bits: words waiting
  *
+ * Clearing RNG_CTRL's enable does not stop the FIFO answering, on a Pi 5
+ * at least (a Pi 4 is not yet checked): words go on coming. So nothing
+ * here treats "disabled" as "gives nothing"; the off-and-on is only part
+ * of Linux's restart sequence, below.
+ *
  * The generator runs its own NIST health tests and says in
  * RNG_INT_STATUS when one has failed. Linux reads that before each
  * word and, when it is set, resets the block rather than hand out what

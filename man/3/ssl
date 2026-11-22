@@ -17,6 +17,8 @@ ssl \- secure sockets layer device
 .BI #D/ n /encalgs
 .br
 .BI #D/ n /hashalgs
+.br
+.BI #D/ n /lower
 .SH DESCRIPTION
 The
 .I ssl
@@ -66,64 +68,52 @@ device.
 .B alg clear
 Allow data to pass in the clear with only message delimiters added. The device starts in this mode.
 .TP
-.B alg sha
-Append a SHA digest to each buffer written to
-.BR data .
-The digest covers the outgoing secret (written to
+.B alg aes_256_gcm
+Seal each record with AES-256 in Galois/Counter Mode (NIST SP 800-38D):
+its data encrypted, followed by a 16-byte tag that authenticates the data
+and the record's two-byte header.
+Each direction's key and nonce are made from its secret by HKDF (RFC 5869)
+with SHA-384:
+.EX
+	PRK = HMAC-SHA-384(48 zero bytes, secret)
+	OKM = HMAC-SHA-384(PRK, "infernode ssl aes_256_gcm" || 0x01)
+	key = OKM[0:32]    nonce = OKM[32:44]
+.EE
+Record
+.IR n 's
+nonce is that nonce with
+.IR n ,
+eight bytes most significant first, exclusive-ored into its last eight bytes,
+as TLS 1.3's.
+A record changed, cut, sent again, out of order, or sent back to the end that
+sent it fails the read, and the connection is hung up.
+.TP
+.B alg hmac_sha384
+Send the data in the clear, each record preceded by HMAC-SHA-384 (FIPS 198-1)
+keyed by the outgoing secret (written to
 .BR secretout ),
-the message, and a message number which starts at 0 and increments by one for each message.
-Messages read have their appended digests compared to a digest computed using the incoming secret (written to
-.BR secretin ).
-If the comparison fails, so will the read.
-.TP
-.B alg md4
-Like
-.B sha
-but using the MD4 message digest algorithm.
-.TP
-.B alg md5
-Like
-.B sha
-but using the MD5 message digest algorithm.
-.TP
-.B alg rc4
-.PD0
-.TP
-.B alg rc4_40
-.TP
-.B alg rc4_128
-.TP
-.B alg rc4_256
-RC4 encrypt each message written to
-.B data
-with the key written to
-.BR secretout ,
-using the key length as indicated (40-bit keys by default).
-.PD
-.TP
-.B alg des_56_cbc
-Encrypt the stream using DES and Cipher Block Chaining (CBC)
-.TP
-.B alg des_56_ecb
-Encrypt the stream using DES and Electronic Code Book (ECB)
-.TP
-.B alg ideacbc
-Encrypt the stream using IDEA and CBC
-.TP
-.B alg ideaecb
-Encrypt the stream using IDEA and ECB
-.TP
-.BI alg " digest" / crypt
-Combine the use of the given
-.I digest
-algorithm and the stream encryption algorithm
-.IR crypt
+of the record and its number (starting at 0, one more for each record) as four
+bytes, most significant first.
+Records read are checked against the same made with the incoming secret (written to
+.BR secretin );
+if the comparison fails, so does the read.
 .PP
-Files
-.B secretin
+Those are the only two, and each is named alone; both are among CNSA's.
+.B Secretin
 and
 .B secretout
-must be written before digesting or encryption is turned on. If only one is written, they are both assumed to be the same.
+must both be written before either is turned on, each at least 32 bytes, and
+they must differ: the same secret both ways would give both directions one key
+and one run of nonces, and let a record be sent back to its sender and taken.
+Where the two ends share a single secret,
+.B secrets
+in
+.IR security-ssl (2)
+makes one for each way.
+A connection's records number at most
+.if t 2\u\s-232\s0\d\-1
+.if n 2^32-1
+each way; past that, reads and writes fail.
 .PP
 The mode may be changed at any time during a connection.
 .PP
@@ -137,9 +127,20 @@ and
 (hashing algorithms for digests).
 Each contains a space-separated list of algorithm names.
 .PP
+The read-only file
+.B lower
+gives the name of the channel the conversation was pushed onto by its
+.B fd
+control message, as
+.B /net/tcp/3/data ,
+or nothing before one is.
+A mount over an encrypted connection names
+.BI #D/ n /data
+as its source in a name space
+.RI ( ns (1));
+.B lower
+is how a reader of the name space finds the connection, and so the
+machine, under it
+.RI ( ns2mmd (1)).
 .SH "SEE ALSO"
 .IR security-ssl (2)
-.br
-B. Schneier,
-.IR "Applied Cryptography ,
-1996, J. Wiley & Sons, Inc.

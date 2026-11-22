@@ -68,6 +68,10 @@ include "dialnorm.m";
 
 include "lucitheme.m";
 
+include "plumbmsg.m";
+	plumbmsg: Plumbmsg;
+	Msg: import plumbmsg;
+
 Settings: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
@@ -125,6 +129,7 @@ top: ref Toplevel;
 wmctl: chan of string;
 actch: chan of string;
 display_g: ref Display;
+ctxt_g: ref Draw->Context;	# for an editor window of our own (openineditor)
 category: int;		# current category index
 mobile := 0;		# /env/infmobile=1 (kept for parity; Tk sizes itself)
 TAPMIN: con 132;
@@ -257,6 +262,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		ctxt = tkclient->makedrawcontext();
 	(top, wmctl) = tkclient->toplevel(ctxt, "-width 560 -height 440", "Settings", Tkclient->Appl);
 	display_g = top.display;
+	ctxt_g = ctxt;
 
 	loadcolors();
 
@@ -929,21 +935,15 @@ doauditdisable()
 
 doauditck()
 {
-	fd := sys->open("/mnt/audit/ctl", Sys->OWRITE);
-	if(fd == nil) {
-		setpanellbl("audres", sys->sprint("cannot open audit ctl: %r"));
-		return;
-	}
-	b := array of byte "checkpoint";
-	if(sys->write(fd, b, len b) < 0)
-		setpanellbl("audres", sys->sprint("checkpoint failed: %r"));
+	if((e := twrite("/mnt/audit/ctl", "checkpoint", Waitslow)) != nil)
+		setpanellbl("audres", "checkpoint failed: " + e);
 	else
 		setpanellbl("audres", "checkpoint signed");
 }
 
 doauditverify()
 {
-	setpanellbl("audres", "verify: " + strip(readfile1("/mnt/audit/verify")));
+	setpanellbl("audres", "verify: " + strip(tread("/mnt/audit/verify", Waitslow)));
 }
 
 dosnapenable()
@@ -990,19 +990,109 @@ dosnapnow()
 
 fileexists(p: string): int
 {
-	return sys->stat(p).t0 >= 0;
+	return texists(p);
 }
 
 readfile1(p: string): string
 {
-	fd := sys->open(p, Sys->OREAD);
-	if(fd == nil)
-		return "";
-	buf := array[2048] of byte;
+	return tread(p, Waitfile);
+}
+
+# ── Files that are services ────────────────────────────────────
+#
+# What Settings shows comes from file servers (llmsrv, factotum, msg9p,
+# audit, tools9p), and its panels are built in its one loop: a server
+# that does not answer must not stop the window.  Each read, write and
+# stat is made by a proc of its own and waited for so long; one that
+# never returns is left behind, to go with the process group.
+
+Waitfile: con 2000;
+Waitctl: con 5000;
+Waitslow: con 60000;	# audit's verify and checkpoint do real work
+Waitllmctl: con 90000;	# llmctl starts a stack (a minute, cold)
+
+reader(path: string, c: chan of (string, string))
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil) {
+		c <-= (nil, sys->sprint("%r"));
+		return;
+	}
+	buf := array[8192] of byte;
 	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return "";
-	return string buf[:n];
+	if(n < 0)
+		c <-= (nil, sys->sprint("%r"));
+	else
+		c <-= (string buf[:n], nil);
+}
+
+writer(path, data: string, c: chan of (string, string))
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil) {
+		c <-= (nil, sys->sprint("%r"));
+		return;
+	}
+	b := array of byte data;
+	if(sys->write(fd, b, len b) != len b)
+		c <-= (nil, sys->sprint("%r"));
+	else
+		c <-= (nil, nil);
+}
+
+statter(path: string, c: chan of (string, string))
+{
+	if(sys->stat(path).t0 < 0)
+		c <-= (nil, "no");
+	else
+		c <-= (nil, nil);
+}
+
+after(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# the answer on c, or an error if there is none in time
+twait(c: chan of (string, string), path: string, ms: int): (string, string)
+{
+	t := chan[1] of int;
+	spawn after(t, ms);
+	alt {
+	r := <-c =>
+		return r;
+	<-t =>
+		e := "no answer from " + path;
+		flashstatus(e);
+		sys->fprint(stderr, "settings: %s\n", e);
+		return (nil, e);
+	}
+}
+
+tread(path: string, ms: int): string
+{
+	c := chan[1] of (string, string);
+	spawn reader(path, c);
+	(s, nil) := twait(c, path, ms);
+	return s;
+}
+
+# nil, or why not
+twrite(path, data: string, ms: int): string
+{
+	c := chan[1] of (string, string);
+	spawn writer(path, data, c);
+	(nil, e) := twait(c, path, ms);
+	return e;
+}
+
+texists(path: string): int
+{
+	c := chan[1] of (string, string);
+	spawn statter(path, c);
+	(nil, e) := twait(c, path, Waitfile);
+	return e == nil;
 }
 
 eget2(p: string): string
@@ -1054,7 +1144,7 @@ handleaction(a: string)
 	"themeedit" =>
 		lt := load Lucitheme Lucitheme->PATH;
 		if(lt != nil)
-			openineditor("/lib/lucifer/theme/" + lt->current());
+			openineditor("/lib/lucifer/theme/" + lt->current(), 0);
 	"llmmode" =>
 		llm_is_remote = tkv("llmmode") == "remote";
 		buildpanel(CatLLM);
@@ -1086,12 +1176,12 @@ handleaction(a: string)
 	"prompt" =>
 		if(arg >= 0 && arg < len prompt_files){
 			(path, nil) := prompt_files[arg];
-			openineditor(path);
+			openineditor(path, 0);
 		}
 	"profile" =>
-		openineditor("/lib/sh/profile");
+		openineditor("/lib/sh/profile", 0);
 		flashstatus("restart required for profile changes");
-	"msgedit" =>	openineditor("/lib/veltro/sources/email.conf");
+	"msgedit" =>	openineditor("/lib/veltro/sources/email.conf", 1);
 	"msgregister" =>	doregisteremail();
 	"auditenable" =>	doauditenable();
 	"auditdisable" =>	doauditdisable();
@@ -1570,25 +1660,16 @@ readllmconfig(): (string, string, string, string, string, int)
 	}
 
 	# Check for API key in factotum
-	fd := sys->open("/mnt/factotum/ctl", Sys->OREAD);
-	if(fd != nil) {
-		buf := array[4096] of byte;
-		n := sys->read(fd, buf, len buf);
-		if(n > 0) {
-			content := string buf[0:n];
-			if(hassubstr(content, "anthropic") || hassubstr(content, "llm"))
-				haskey = 1;
-		}
-	}
+	content := tread("/mnt/factotum/ctl", Waitfile);
+	if(hassubstr(content, "anthropic") || hassubstr(content, "llm"))
+		haskey = 1;
 
 	return (mode, backend, url, model, dial, haskey);
 }
 
 # The connected backend's model catalogue, read from /mnt/llm/models
 # (served by llmsrv). nil when the file is absent/empty — no llmsrv
-# mounted, the backend is unreachable, or it lists nothing. The read is
-# fast in the common cases (a local GET, or an immediate dial-refused),
-# so calling it from layout is fine.
+# mounted, the backend is unreachable or slow, or it lists nothing.
 readllmmodels(): array of string
 {
 	return readlines("/mnt/llm/models");
@@ -1714,20 +1795,12 @@ islinekey(line, key: string): int
 
 synthfs_present(): int
 {
-	(ok, nil) := sys->stat("/llm/ctl");
-	return ok >= 0;
+	return texists("/llm/ctl");
 }
 
 readllmstatus_raw(): string
 {
-	fd := sys->open("/llm/status", Sys->OREAD);
-	if(fd == nil)
-		return "";
-	buf := array[4096] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return "";
-	return string buf[0:n];
+	return tread("/llm/status", Waitfile);
 }
 
 # Single-line status summary for the panel label. Reduces the daemon's
@@ -1799,13 +1872,8 @@ llm_stack_index_from_status(): int
 # cold sglang start (flashinfer JIT compile).
 writellmctl(verb: string): string
 {
-	fd := sys->open("/llm/ctl", Sys->OWRITE);
-	if(fd == nil)
-		return sys->sprint("open /llm/ctl: %r");
-	b := array of byte verb;
-	n := sys->write(fd, b, len b);
-	if(n != len b)
-		return sys->sprint("write /llm/ctl: %r");
+	if((e := twrite("/llm/ctl", verb, Waitllmctl)) != nil)
+		return "/llm/ctl: " + e;
 	return "";
 }
 
@@ -1831,14 +1899,12 @@ hassubstr(s, sub: string): int
 # Read the live source registry from /mnt/msg/status (best-effort display).
 readmsgstatus(): string
 {
-	fd := sys->open("/mnt/msg/status", Sys->OREAD);
-	if(fd == nil)
+	if(!texists("/mnt/msg/status"))
 		return "(msg9p not mounted at /mnt/msg)";
-	buf := array[8192] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	s := tread("/mnt/msg/status", Waitfile);
+	if(s == nil)
 		return "(no sources registered)";
-	return string buf[:n];
+	return s;
 }
 
 # Register the email source live from /lib/veltro/sources/email.conf — the same
@@ -1862,14 +1928,8 @@ doregisteremail()
 		conf = conf[:len conf-1];
 
 	cmd := "register email /dis/veltro/sources/email.dis " + conf;
-	wfd := sys->open("/mnt/msg/ctl", Sys->OWRITE);
-	if(wfd == nil) {
-		flashstatus("cannot open /mnt/msg/ctl");
-		return;
-	}
-	b := array of byte cmd;
-	if(sys->write(wfd, b, len b) != len b)
-		flashstatus(sys->sprint("register failed: %r"));
+	if((e := twrite("/mnt/msg/ctl", cmd, Waitctl)) != nil)
+		flashstatus("register failed: " + e);
 	else
 		flashstatus("email source registered");
 
@@ -1878,55 +1938,100 @@ doregisteremail()
 		buildpanel(CatMessaging);
 }
 
-openineditor(path: string)
+# Open a text file for the user to edit: every button of Settings that
+# opens a file comes here.  The file is plumbed, and the plumbing rules
+# say where it goes: on the Desktop (lib/wm/plumbing) a Xenith window
+# under wm/wm, in Lucifer (lib/lucifer/plumbing) the presentation zone,
+# whose plumb handler (lucipres) gives text to its editor.  Settings has
+# no say in which editor, and does not know which interface it is in.
+# With no plumber it starts an editor itself: in Lucifer's zone when
+# there is one (an app there cannot open a window of its own), else in a
+# window.  A file that may not exist yet (a configuration Settings asks
+# the user to write) is made, empty, when create is set.
+openineditor(path: string, create: int)
 {
-	# Check if the file is accessible first
 	(ok, nil) := sys->stat(path);
+	if(ok < 0 && create)
+		ok = mkfile(path);
 	if(ok < 0) {
 		flashstatus(path + " not accessible — check namespace paths");
 		sys->fprint(stderr, "settings: stat %s failed: %r\n", path);
 		return;
 	}
 
-	# Write to presentation ctl to launch editor with the file.
-	# /tool/activity exists only in agent namespaces; from a GUI app
-	# launched by lucifer we read /mnt/ui/activity/current instead.
-	actid := readfile("/mnt/ui/activity/current");
-	if(actid == nil) {
-		flashstatus("cannot reach presentation zone — is luciuisrv running?");
-		sys->fprint(stderr, "settings: cannot read /mnt/ui/activity/current\n");
-		return;
-	}
-	aid := strip(actid);
-	pctl := sys->sprint("/mnt/ui/activity/%s/presentation/ctl", aid);
-	sys->fprint(stderr, "settings: openineditor %s → pctl=%s\n", path, pctl);
-
-	# A running editor is asked to open the file, through its posted
-	# server (#seditor/fs, post9p(2)); it was killed and started again,
-	# losing what it had not saved.  Else one is started on the file.
-	done := chan of int;
-	spawn editoropen(path, done);
-	if(!<-done) {
-		cmd := sys->sprint("create id=editor type=app dis=/dis/wm/editor.dis label=editor data=%s", path);
-		if(writectl(pctl, cmd) < 0)
-			return;
-	}
-	writectl(pctl, "center id=editor");
-
-	flashstatus("opened " + path + " in editor");
+	if(plumbfile(path) || presentationopen(path) || windowopen(path))
+		flashstatus("opened " + path);
+	else
+		flashstatus("cannot open an editor for " + path);
 }
 
-editoropen(path: string, done: chan of int)
+# Make path, empty, and the directories it needs; 0 if it is there after.
+mkfile(path: string): int
 {
-	sys->pctl(Sys->FORKNS, nil);
-	fd := sys->open("#seditor/fs", Sys->ORDWR);
-	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
-		done <-= 0;
-		return;
+	for(i := 1; i < len path; i++)
+		if(path[i] == '/' && sys->stat(path[0:i]).t0 < 0)
+			sys->create(path[0:i], Sys->OREAD, Sys->DMDIR|8r755);
+	fd := sys->create(path, Sys->OWRITE|Sys->OEXCL, 8r644);
+	if(fd == nil && sys->stat(path).t0 < 0)
+		return -1;
+	return 0;
+}
+
+# Send the file's name to the plumber; 0 if there is none or nothing
+# takes it.  The plumber is looked for each time: it may have started
+# after Settings did.
+plumbfile(path: string): int
+{
+	if(plumbmsg == nil) {
+		plumbmsg = load Plumbmsg Plumbmsg->PATH;
+		if(plumbmsg == nil)
+			return 0;
 	}
-	b := array of byte ("open " + path);
-	ctl := sys->open("/mnt/editor/ctl", Sys->OWRITE);
-	done <-= ctl != nil && sys->write(ctl, b, len b) == len b;
+	if(plumbmsg->init(1, nil, 0) < 0)
+		return 0;
+	msg := ref Msg("Settings", "", "/", "text", "", array of byte path);
+	return msg.send() >= 0;
+}
+
+# Lucifer with no plumber: an editor of the file's own in the
+# presentation zone.  Which editor a file goes to is the plumb handler's
+# policy (lucipres), not repeated here.
+editseq := 0;
+
+presentationopen(path: string): int
+{
+	actid := readfile("/mnt/ui/activity/current");
+	if(actid == nil)
+		return 0;
+	pctl := sys->sprint("/mnt/ui/activity/%s/presentation/ctl", strip(actid));
+	id := sys->sprint("settings-edit-%d", ++editseq);
+	cmd := sys->sprint("create id=%s type=app dis=/dis/wm/editor.dis label=editor data=%s", id, path);
+	if(writectl(pctl, cmd) < 0)
+		return 0;
+	writectl(pctl, "center id=" + id);
+	return 1;
+}
+
+# No plumber and no Lucifer: wm/editor in a window of its own, on our
+# draw context (wm/wm's, under the Desktop).
+windowopen(path: string): int
+{
+	if(ctxt_g == nil)
+		return 0;
+	ed := load Runnable "/dis/wm/editor.dis";
+	if(ed == nil) {
+		sys->fprint(stderr, "settings: cannot load /dis/wm/editor.dis: %r\n");
+		return 0;
+	}
+	spawn runeditor(ed, path);
+	return 1;
+}
+
+runeditor(ed: Runnable, path: string)
+{
+	# a group of its own: Settings' Exit must not take the editor with it
+	sys->pctl(Sys->NEWPGRP|Sys->FORKNS, nil);
+	ed->init(ctxt_g, "editor" :: path :: nil);
 }
 
 # ── Theme listener ─────────────────────────────────────────────
@@ -1986,30 +2091,16 @@ reloadcolors()
 
 writectl(path, cmd: string): int
 {
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil) {
-		flashstatus(sys->sprint("error: %r"));
+	if((e := twrite(path, cmd, Waitctl)) != nil) {
+		flashstatus("error: " + e);
 		return -1;
 	}
-	b := array of byte cmd;
-	n := sys->write(fd, b, len b);
-	if(n != len b) {
-		flashstatus(sys->sprint("error: %r"));
-		return -1;
-	}
-	return n;
+	return len cmd;
 }
 
 readfile(path: string): string
 {
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	buf := array[4096] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return nil;
-	return string buf[0:n];
+	return tread(path, Waitfile);
 }
 
 strip(s: string): string

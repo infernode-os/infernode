@@ -333,6 +333,8 @@ main(ctxt: ref Draw->Context, argv: list of string)
 	c := <-wm.ctl or
 	c = <-t.wreq or
 	c = <-titlectl =>
+		if(c == "exit")
+			killthemegrp();	# not wmctl's group: it would be left, holding this module
 		tkclient->wmctl(t, c);
 	<-themech =>
 		loadcolors();
@@ -620,10 +622,15 @@ setcols(t: ref Tk->Toplevel)
 # /dev/cons.  The theme's watchers go with it.
 gone()
 {
+	killthemegrp();
+	exit;
+}
+
+killthemegrp()
+{
 	fd := sys->open("/prog/"+string themepgrp+"/ctl", Sys->OWRITE);
 	if(fd != nil)
 		sys->fprint(fd, "killgrp");
-	exit;
 }
 
 themelistener(c: chan of int, pid: chan of int)

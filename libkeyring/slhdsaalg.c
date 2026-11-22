@@ -123,7 +123,8 @@ slhdsasigfree(SLHDSAsig *s)
 	if(s == nil)
 		return;
 	if(s->sig != nil){
-		memset(s->sig, 0, s->siglen);
+		/* a signing that failed leaves nothing; nor does this */
+		secureZero(s->sig, s->siglen);
 		free(s->sig);
 	}
 	free(s);
@@ -493,17 +494,16 @@ slhdsa256s_genfrompk(void *vpub)
 }
 
 /*
- * Sign a message hash
- * Inferno's SigAlgVec passes an mpint (the hash). We convert it
- * to bytes and sign those bytes directly with SLH-DSA.
+ * Sign bytes: Keyring's digest, at its length, as the message of the
+ * pure SLH-DSA signature with an empty context string (FIPS 205
+ * Algorithm 22).
  */
 static void*
-slhdsa_sign_hash(mpint *mp, void *key)
+slhdsa_signb(uchar *m, int n, void *key)
 {
 	SLHDSApriv *sk = (SLHDSApriv*)key;
 	SLHDSAsig *sig;
-	uchar hash[SHA512dlen];
-	int n, rv, sklen, pklen, siglen;
+	int rv, sklen, pklen, siglen;
 
 	slhdsa_sizes(sk->level, &sklen, &pklen, &siglen);
 
@@ -511,22 +511,19 @@ slhdsa_sign_hash(mpint *mp, void *key)
 	if(sig == nil)
 		return nil;
 
-	/* Convert mpint to bytes (the hash to sign) */
-	n = mptobe(mp, hash, sizeof(hash), nil);
-	if(n < 0){
-		slhdsasigfree(sig);
-		return nil;
-	}
-
 	sig->level = sk->level;
 
 	if(sk->level == 256)
-		rv = slhdsa256s_sign(sig->sig, hash, n, sk->sk);
+		rv = slhdsa256s_sign(sig->sig, m, n, sk->sk);
 	else
-		rv = slhdsa192s_sign(sig->sig, hash, n, sk->sk);
+		rv = slhdsa192s_sign(sig->sig, m, n, sk->sk);
 
-	secureZero(hash, sizeof(hash));
-
+	/*
+	 * -1: there was no memory for some part of the signature, and the
+	 * buffer has been cleared.  No signature is returned (it used to be
+	 * one, with success, from a signer that had gone on without the
+	 * part it could not make).
+	 */
 	if(rv != 0){
 		slhdsasigfree(sig);
 		return nil;
@@ -535,27 +532,46 @@ slhdsa_sign_hash(mpint *mp, void *key)
 	return sig;
 }
 
-/*
- * Verify a signature
- */
 static int
-slhdsa_verify_hash(mpint *mp, void *vsig, void *vkey)
+slhdsa_verifyb(uchar *m, int n, void *vsig, void *vkey)
 {
 	SLHDSApub *pk = (SLHDSApub*)vkey;
 	SLHDSAsig *sig = (SLHDSAsig*)vsig;
+
+	if(pk->level == 256)
+		return slhdsa256s_verify(sig->sig, sig->siglen, m, n, pk->key);
+	return slhdsa192s_verify(sig->sig, sig->siglen, m, n, pk->key);
+}
+
+/*
+ * Sign a number (Keyring's signm): its bytes, most significant first,
+ * with no leading zero.
+ */
+static void*
+slhdsa_sign_hash(mpint *mp, void *key)
+{
+	uchar hash[SHA512dlen];
+	void *sig;
+	int n;
+
+	n = mptobe(mp, hash, sizeof(hash), nil);
+	if(n < 0)
+		return nil;
+	sig = slhdsa_signb(hash, n, key);
+	secureZero(hash, sizeof(hash));
+	return sig;
+}
+
+static int
+slhdsa_verify_hash(mpint *mp, void *vsig, void *vkey)
+{
 	uchar hash[SHA512dlen];
 	int n, ok;
 
-	/* Convert mpint to bytes */
 	n = mptobe(mp, hash, sizeof(hash), nil);
 	if(n < 0)
 		return 0;
-
-	if(pk->level == 256)
-		ok = slhdsa256s_verify(sig->sig, sig->siglen, hash, n, pk->key);
-	else
-		ok = slhdsa192s_verify(sig->sig, sig->siglen, hash, n, pk->key);
-
+	ok = slhdsa_verifyb(hash, n, vsig, vkey);
 	secureZero(hash, sizeof(hash));
 	return ok;
 }
@@ -613,6 +629,8 @@ slhdsa192sinit(void)
 	vec->genskfrompk = slhdsa192s_genfrompk;
 	vec->sign = slhdsa_sign_hash;
 	vec->verify = slhdsa_verify_hash;
+	vec->signb = slhdsa_signb;
+	vec->verifyb = slhdsa_verifyb;
 
 	vec->skfree = slhdsa_freepriv;
 	vec->pkfree = slhdsa_freepub;
@@ -653,6 +671,8 @@ slhdsa256sinit(void)
 	vec->genskfrompk = slhdsa256s_genfrompk;
 	vec->sign = slhdsa_sign_hash;
 	vec->verify = slhdsa_verify_hash;
+	vec->signb = slhdsa_signb;
+	vec->verifyb = slhdsa_verifyb;
 
 	vec->skfree = slhdsa_freepriv;
 	vec->pkfree = slhdsa_freepub;

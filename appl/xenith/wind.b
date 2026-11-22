@@ -128,6 +128,10 @@ Window.init(w : self ref Window, clone : ref Window, r : Rect)
 		rf = Reffont.get(FALSE, FALSE, FALSE, nil);
 	f = f.addtext(w.body);
 	w.body.what = Body;
+	# before init, which fills the frame
+	w.body.frame.wrapword = dat->globalwrapword;
+	if(clone != nil)
+		w.body.frame.wrapword = clone.body.frame.wrapword;
 	w.body.init(f, r1, rf, textcols);
 	r1.min.y -= 1;
 	r1.max.y = r1.min.y+1;
@@ -170,6 +174,19 @@ taglines(w: ref Window, r: Rect): int
 	if(n == 0)
 		n = 1;
 	return n;
+}
+
+# Wrap the body's lines by word (Wrap word) or anywhere (Wrap char),
+# and lay it out again. Only the display changes: lines are still
+# what newlines end, to addresses and to the files.
+Window.setwrap(w : self ref Window, word : int)
+{
+	word = word != 0;
+	if(w.body.frame.wrapword == word)
+		return;
+	w.body.frame.wrapword = word;
+	if(w.body.frame.b != nil && w.col != nil)
+		w.reshape(w.r, FALSE, TRUE);
 }
 
 Window.reshape(w : self ref Window, r : Rect, safe : int, keepextra: int) : int
@@ -626,9 +643,14 @@ Window.ctlprint(w : self ref Window, fonts : int) : string
 {
 	s := sprint("%11d %11d %11d %11d %11d ", w.id, w.tag.file.buf.nc,
 			w.body.file.buf.nc, w.isdir, w.dirty);
-	if(fonts)
-		return sprint("%s%11d %q %11d ", s, w.body.frame.r.dx(), w.body.reffont.f.name,
-			w.body.frame.maxtab);
+	if(fonts){
+		# Acme's eight fields, then how the body wraps (Wrap)
+		wrap := "char";
+		if(w.body.frame.wrapword)
+			wrap = "word";
+		return sprint("%s%11d %q %11d %s ", s, w.body.frame.r.dx(), w.body.reffont.f.name,
+			w.body.frame.maxtab, wrap);
+	}
 	return s;
 }
 

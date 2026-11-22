@@ -191,6 +191,9 @@ init(env: ref Draw->Context, argv: list of string)
 	if(plumbmsg != nil && plumbmsg->init(1, nil, 0) >= 0)
 		plumbed = 1;
 
+	# a group of its own: an exit is a killgrp, and the one it was
+	# started in may be wm's
+	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
 	dialog->init();
 
@@ -198,7 +201,9 @@ init(env: ref Draw->Context, argv: list of string)
 	sysnam = sysname()+":";
 
 	(t, wmctl) := tkclient->toplevel(ctxt, "-width 480 -height 360", "", Tkclient->Appl);
-	if(icon != nil)
+	if(icon == nil)
+		glypherr(sys->sprint("cannot load %s: %r", Icon->PATH));
+	else
 		icon->init(t.display);
 	glyphcolour();
 
@@ -239,8 +244,6 @@ f:	for(;;) alt {
 	s := <-t.ctxt.ctl or
 	s = <-t.wreq or
 	s = <-wmctl =>
-		if (s == "exit")
-			exit;
 		tkclient->wmctl(t, s);
 		if(s == "retheme"){
 			glyphcolour();
@@ -437,7 +440,9 @@ button1(t: ref Toplevel, item: ref Dir)
 
 applinit(mod: Wm, ctxt: ref Draw->Context, args: list of string)
 {
-	sys->pctl(sys->NEWPGRP|sys->FORKFD, nil);
+	# not a copy of this window's connection to wm: it would keep the
+	# window up after this program had gone
+	sys->pctl(sys->NEWPGRP|sys->NEWFD, 0 :: 1 :: 2 :: nil);
 	spawn mod->init(ctxt, args);
 }
 
@@ -496,10 +501,23 @@ glyphimage(t: ref Toplevel, glyph: string, size: int): string
 			return tkname;
 	if(icon == nil)
 		return nil;
-	if(icon->tkimage(t, tkname, glyph, size, glyphcol) != nil)
+	if((e := icon->tkimage(t, tkname, glyph, size, glyphcol)) != nil){
+		glypherr(e);
 		return nil;
+	}
 	glyphs = tkname + " " + glyph + " " + string size :: glyphs;
 	return tkname;
+}
+
+# Why the glyphs are not drawn, said once: a view of blank cells says
+# nothing, and the cause is usually the machine's (no /icons/ui, as on
+# a card whose icons/ predates icon(2)), not the program's.
+glyphsaid := 0;
+glypherr(e: string)
+{
+	if(glyphsaid++)
+		return;
+	sys->fprint(sys->fildes(2), "wm/dir: no icons: %s\n", e);
 }
 
 # A theme switch: every glyph painted again in the new colour, where it

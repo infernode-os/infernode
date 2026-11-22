@@ -449,10 +449,27 @@ listlocalvoices(): string
 
 # Async wrapper for TTS — runs in spawned thread so serveloop stays responsive.
 # Sends result on completion channel instead of writing to shared state directly.
+# The channel holds one result, so the proc ends whether or not the status
+# is ever read: the say tool never reads it, and each utterance left a proc
+# waiting to send for good.
 asyncsay(donech: chan of array of byte, text: string)
 {
 	result := dosay(text);
+	nsaying--;
 	donech <-= array of byte result;
+}
+
+MAXSAY: con 4;		# utterances in progress at once (each a host process or a connection)
+nsaying := 0;
+apierr: string;		# why the last API request failed
+tmpseq := 0;
+
+# A name of its own for a recording on the host, made unreadable to other
+# users and removed once transcribed. It was /tmp/speech_stt.wav for every
+# recording, left behind for anyone on the host to read.
+sttfile(): string
+{
+	return sys->sprint("/tmp/speech_stt.%d.%d.wav", sys->pctl(0, nil), tmpseq++);
 }
 
 # Synthesize text and play through /dev/audio
@@ -538,7 +555,7 @@ sayapi(text: string): string
 	url := apiurl + "/audio/speech";
 	audiodata := apipost(url, body, "application/json");
 	if(audiodata == nil)
-		return "error: API request failed";
+		return "error: API request failed: " + apierr;
 
 	# Write PCM data to /dev/audio
 	return playpcm(audiodata);
@@ -580,18 +597,20 @@ hearcmd(): string
 # macOS STT: ffmpeg records from mic, whisper-cli transcribes
 hearcmd_macos(): string
 {
-	tmpfile := "/tmp/speech_stt.wav";
+	tmpfile := sttfile();
 	duration := string (hearduration / 1000);
 
 	# Record from macOS microphone via ffmpeg
 	# -f avfoundation -i :0 = default audio input device
 	# 16kHz mono WAV is what whisper expects
-	reccmd := "ffmpeg -y -f avfoundation -i :0 -t " + duration +
+	reccmd := "umask 077; ffmpeg -y -f avfoundation -i :0 -t " + duration +
 		" -ar 16000 -ac 1 -sample_fmt s16 " + tmpfile +
 		" </dev/null 2>/dev/null";
 	result := runcmd(reccmd);
-	if(hasprefix(result, "error:"))
+	if(hasprefix(result, "error:")) {
+		runcmd("rm -f " + tmpfile);
 		return result;
+	}
 
 	# Transcribe with whisper-cli
 	# -np = no prints (timestamps etc), -nt = no timestamps, just text
@@ -599,6 +618,7 @@ hearcmd_macos(): string
 	wcmd := cmdstt + " -m " + modelpath + " -nt -np -f " + tmpfile +
 		" 2>/dev/null";
 	text := strip(runcmd(wcmd));
+	runcmd("rm -f " + tmpfile);
 	if(text == "" || hasprefix(text, "error:"))
 		return "error: transcription failed";
 
@@ -608,19 +628,22 @@ hearcmd_macos(): string
 # Linux STT: arecord + whisper-cli
 hearcmd_linux(): string
 {
-	tmpfile := "/tmp/speech_stt.wav";
+	tmpfile := sttfile();
 	duration := string (hearduration / 1000);
 
 	# Record via arecord (ALSA)
-	reccmd := "arecord -f S16_LE -r 16000 -c 1 -d " + duration +
+	reccmd := "umask 077; arecord -f S16_LE -r 16000 -c 1 -d " + duration +
 		" " + tmpfile + " 2>/dev/null";
 	result := runcmd(reccmd);
-	if(hasprefix(result, "error:"))
+	if(hasprefix(result, "error:")) {
+		runcmd("rm -f " + tmpfile);
 		return result;
+	}
 
 	# Transcribe
 	wcmd := cmdstt + " -nt -np -f " + tmpfile + " 2>/dev/null";
 	text := strip(runcmd(wcmd));
+	runcmd("rm -f " + tmpfile);
 	if(text == "" || hasprefix(text, "error:"))
 		return "error: transcription failed";
 
@@ -633,15 +656,18 @@ hearapi(): string
 	if(apikey == "")
 		return "error: API key not set";
 
-	tmpfile := "/tmp/speech_stt.wav";
+	tmpfile := sttfile();
 
 	# Record audio
 	err := recordaudio(tmpfile, 5000);
-	if(err != nil)
+	if(err != nil) {
+		sys->remove(tmpfile);
 		return "error: recording failed: " + err;
+	}
 
 	# Read recorded file
 	audiodata := readbinaryfile(tmpfile);
+	sys->remove(tmpfile);
 	if(audiodata == nil)
 		return "error: cannot read recorded audio";
 
@@ -699,26 +725,28 @@ saylocal(text: string): string
 # when built with CUDA support (GGML_CUDA=1).
 hearlocal(): string
 {
-	tmpfile := "/tmp/speech_stt.wav";
+	tmpfile := sttfile();
 	duration := string (hearduration / 1000);
 
 	platform := detectplatform();
 	reccmd: string;
 	case platform {
 	"macos" =>
-		reccmd = "ffmpeg -y -f avfoundation -i :0 -t " + duration +
+		reccmd = "umask 077; ffmpeg -y -f avfoundation -i :0 -t " + duration +
 			" -ar 16000 -ac 1 -sample_fmt s16 " + tmpfile +
 			" </dev/null 2>/dev/null";
 	"linux" =>
-		reccmd = "arecord -f S16_LE -r 16000 -c 1 -d " + duration +
+		reccmd = "umask 077; arecord -f S16_LE -r 16000 -c 1 -d " + duration +
 			" " + tmpfile + " 2>/dev/null";
 	* =>
 		return "error: recording not supported on this platform";
 	}
 
 	result := runcmd(reccmd);
-	if(hasprefix(result, "error:"))
+	if(hasprefix(result, "error:")) {
+		runcmd("rm -f " + tmpfile);
 		return result;
+	}
 
 	# Transcribe with whisper.cpp
 	wcmd := whisperbin + " -nt -np";
@@ -727,6 +755,7 @@ hearlocal(): string
 	wcmd += " -f " + tmpfile + " 2>/dev/null";
 
 	text := strip(runcmd(wcmd));
+	runcmd("rm -f " + tmpfile);
 	if(text == "" || hasprefix(text, "error:"))
 		return "error: transcription failed";
 
@@ -1024,22 +1053,31 @@ runcmd_stdin(cmd, input: string): string
 # POST JSON to an API endpoint, return response bytes
 apipost(url, body, contenttype: string): array of byte
 {
+	# Each way out says why in apierr: "API request failed" alone was all
+	# anyone was told, for an https URL as for a refused connection.
+	apierr = nil;
 	(scheme, host, port, path, err) := parseurl(url);
-	if(err != nil)
+	if(err != nil) {
+		apierr = err;
 		return nil;
+	}
 
 	addr := sys->sprint("tcp!%s!%s", host, port);
 
 	fd: ref Sys->FD;
 	if(scheme == "https") {
 		(sfd, serr) := sslconnect(host, port);
-		if(serr != nil)
+		if(serr != nil) {
+			apierr = serr;
 			return nil;
+		}
 		fd = sfd;
 	} else {
 		(ok, conn) := sys->dial(addr, nil);
-		if(ok < 0)
+		if(ok < 0) {
+			apierr = sys->sprint("cannot connect to %s: %r", addr);
 			return nil;
+		}
 		fd = conn.dfd;
 	}
 
@@ -1054,8 +1092,10 @@ apipost(url, body, contenttype: string): array of byte
 	request += body;
 
 	reqbytes := array of byte request;
-	if(sys->write(fd, reqbytes, len reqbytes) < 0)
+	if(sys->write(fd, reqbytes, len reqbytes) < 0) {
+		apierr = sys->sprint("write: %r");
 		return nil;
+	}
 
 	# Read response
 	result: list of array of byte;
@@ -1069,6 +1109,11 @@ apipost(url, body, contenttype: string): array of byte
 		chunk[0:] = buf[0:n];
 		result = chunk :: result;
 		total += n;
+	}
+
+	if(total == 0) {
+		apierr = "the server sent no answer";
+		return nil;
 	}
 
 	# Reassemble response
@@ -1173,9 +1218,12 @@ sslconnect(host, port: string): (ref Sys->FD, string)
 	if(ok < 0)
 		return (nil, sys->sprint("cannot connect to %s: %r", addr));
 
+	# This is the ssl device's record layer, which has no TLS handshake:
+	# an https endpoint cannot be reached this way, and the reasons below
+	# say so rather than "API request failed".
 	sslctl := sys->open("/net/ssl/clone", Sys->ORDWR);
 	if(sslctl == nil)
-		return (nil, "HTTPS not available: /net/ssl not found");
+		return (nil, "https is not available to speech9p (no /net/ssl); use an http:// endpoint");
 
 	buf := array[32] of byte;
 	n := sys->read(sslctl, buf, len buf);
@@ -1194,7 +1242,7 @@ sslconnect(host, port: string): (ref Sys->FD, string)
 		return (nil, "cannot set SSL fd");
 
 	if(sys->write(ctl, array of byte "start", 5) < 0)
-		return (nil, "cannot start SSL");
+		return (nil, sys->sprint("https is not available to speech9p (the ssl device has no TLS: %r); use an http:// endpoint"));
 
 	datapath := "/net/ssl/" + connnum + "/data";
 	data := sys->open(datapath, Sys->ORDWR);
@@ -1604,17 +1652,29 @@ Serve:
 			path := int fid.path;
 			case path {
 			Qctl =>
+				# a refused command is an error to its writer: the write
+				# succeeded whatever was done, and only stderr was told
 				result := applyconfig(string m.data);
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
-				if(hasprefix(result, "error:"))
+				if(hasprefix(result, "error:")) {
 					sys->fprint(stderr, "speech9p: %s\n", result);
+					srv.reply(ref Rmsg.Error(m.tag, strip(result[len "error:":])));
+				} else
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qsay =>
 				text := string m.data;
+				# Each utterance is a host process (or a connection): so
+				# many at once and no more, where there was no limit.
+				if(nsaying >= MAXSAY) {
+					srv.reply(ref Rmsg.Error(m.tag,
+						sys->sprint("too many utterances in progress (%d); try again when one is done", nsaying)));
+					continue;
+				}
+				nsaying++;
 				fs := getfidstate(m.fid);
 				fs.sayreq = text;
 				fs.sayresp = nil;
 				# Create a new completion channel for this operation
-				fs.saydone = chan of array of byte;
+				fs.saydone = chan[1] of array of byte;
 				# Reply immediately, run TTS in background.
 				# dosay() blocks for the full duration of audio playback
 				# (e.g. 10-15s for macOS 'say'). Running it inline freezes

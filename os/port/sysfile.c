@@ -108,6 +108,23 @@ fdtochan(Fgrp *f, int fd, int mode, int chkmnt, int iref)
 	return c;
 }
 
+/*
+ * A file's offset never passes the largest there is. It was advanced by
+ * plain addition: a seek to the largest offset on a file that takes any
+ * (the console's, a pipe's, /dev/null) and then a read or write of one
+ * byte overflowed it, which is undefined in C and in practice left the
+ * offset negative, after which the descriptor refused everything.
+ */
+#define	Maxoffset	((vlong)(~(uvlong)0 >> 1))
+
+static vlong
+offadd(vlong base, long n)
+{
+	if(n > 0 && base > Maxoffset - n)
+		return Maxoffset;
+	return base + n;
+}
+
 long
 kchanio(void *vc, void *buf, int n, int mode)
 {
@@ -124,7 +141,7 @@ kchanio(void *vc, void *buf, int n, int mode)
 		r = devtab[c->type]->write(c, buf, n, c->offset);
 
 	lock(&c->l);
-	c->offset += r;
+	c->offset = offadd(c->offset, r);
 	unlock(&c->l);
 	poperror();
 	return r;
@@ -244,8 +261,11 @@ kdup(int old, int new)
 		return -1;
 
 	c = fdtochan(up->env->fgrp, old, -1, 0, 1);
-	if(c->qid.type & QTAUTH)
+	if(c->qid.type & QTAUTH){
+		/* the reference fdtochan took: it was kept, one for each refused dup */
+		cclose(c);
 		error(Eperm);
+	}
 	fd = new;
 	if(fd != -1){
 		lock(&f->l);
@@ -357,7 +377,7 @@ kfauth(int fd, char *aname)
 }
 
 int
-kfversion(int fd, uint msize, char *vers, uint arglen)
+kfversion(int fd, uint msize, char *vers, uint arglen, uint *got)
 {
 	int m;
 	Chan *c;
@@ -376,6 +396,8 @@ kfversion(int fd, uint msize, char *vers, uint arglen)
 	}
 
 	m = mntversion(c, vers, msize, arglen);
+	if(got != nil)
+		*got = c->mux != nil ? c->mux->msize : msize;
 
 	poperror();
 	cclose(c);
@@ -384,13 +406,42 @@ kfversion(int fd, uint msize, char *vers, uint arglen)
 	return m;
 }
 
+/* take c out of slot fd if it is still there; whether it was */
+static int
+unfd(Fgrp *f, int fd, Chan *c)
+{
+	int was;
+
+	was = 0;
+	lock(&f->l);
+	if(fd >= 0 && fd <= f->maxfd && f->fd[fd] == c){
+		f->fd[fd] = nil;
+		if(fd < f->minfd)
+			f->minfd = fd;
+		was = 1;
+	}
+	unlock(&f->l);
+	return was;
+}
+
 int
 kpipe(int fd[2])
 {
 	int i;
 	Dev *d;
 	Fgrp *f;
-	Chan *c[2];
+	/*
+	 * volatile: the handler closes what is here when it runs, and both
+	 * are replaced after waserror() (walk closes the channel it is
+	 * given and stores another).  Not volatile, the native kernel's
+	 * handler was compiled to close the channel c[0] held at
+	 * waserror(), which walk had already released, and nothing else:
+	 * a pipe() refused for want of a descriptor closed that channel a
+	 * second time and kept the two it had made.
+	 */
+	Chan *volatile c[2];
+	Chan *t;
+	int r;
 	static char *names[] = {"data", "data1"};
 
 	f = up->env->fgrp;
@@ -411,20 +462,32 @@ kpipe(int fd[2])
 	fd[0] = -1;
 	fd[1] = -1;
 	if(waserror()) {
-		if(c[0] != 0)
-			cclose(c[0]);
-		if(c[1] != 0)
-			cclose(c[1]);
-		if(fd[0] >= 0)
-			f->fd[fd[0]]=0;
-		if(fd[1] >= 0)
-			f->fd[fd[1]]=0;
+		/*
+		 * A channel given a descriptor is the table's, and another
+		 * process of the group may have closed it since (the second
+		 * newfd fails only with the table full, which they can
+		 * arrange). The slots were cleared with no lock held, and
+		 * the channels closed whether or not the table still had
+		 * them: a second close of one already freed.
+		 */
+		for(i = 0; i < 2; i++){
+			if(c[i] == 0)
+				continue;
+			if(fd[i] < 0 || unfd(f, fd[i], c[i]))
+				cclose(c[i]);
+		}
 		return -1;
 	}
 	c[1] = cclone(c[0]);
-	if(walk(&c[0], &names[0], 1, 1, nil) < 0)
+	t = c[0];
+	r = walk(&t, &names[0], 1, 1, nil);
+	c[0] = t;
+	if(r < 0)
 		error(Egreg);
-	if(walk(&c[1], &names[1], 1, 1, nil) < 0)
+	t = c[1];
+	r = walk(&t, &names[1], 1, 1, nil);
+	c[1] = t;
+	if(r < 0)
 		error(Egreg);
 	c[0] = d->open(c[0], ORDWR);
 	c[1] = d->open(c[1], ORDWR);
@@ -467,7 +530,8 @@ bindmount(Chan *c, char *old, int flag, char *spec)
 	int ret;
 	Chan *c1;
 
-	if(flag>MMASK || (flag&MORDER) == (MBEFORE|MAFTER) ||
+	/* (flag>MMASK let a negative flag by, its other bits kept in the mount) */
+	if((flag & ~MMASK) != 0 || (flag&MORDER) == (MBEFORE|MAFTER) ||
 	   (flag&(MCREATE|MREADONLY)) == (MCREATE|MREADONLY))
 		error(Ebadarg);
 	if(c->mflag & MREADONLY){
@@ -562,12 +626,12 @@ kunmount(char *old, char *new)
 	cmount.c = namec(new, Amount, 0, 0);
 	if(old != nil && old[0] != '\0') {
 		/*
-		 * This has to be namec(..., Aopen, ...) because
-		 * if arg[0] is something like /srv/cs or /fd/0,
-		 * opening it is the only way to get at the real
-		 * Chan underneath.
+		 * Aunmount opens non-directories such as /srv/cs and /fd/0 to
+		 * reach the underlying Chan, but preserves a directory's walked
+		 * Qid.  A remote server may change a directory Qid on open; the
+		 * bind recorded the walked Qid and unmount must compare that one.
 		 */
-		cmounted.c = namec(old, Aopen, OREAD, 0);
+		cmounted.c = namec(old, Aunmount, OREAD, 0);
 	}
 
 	cunmount(cmount.c, cmounted.c);
@@ -629,7 +693,7 @@ unionread(Chan *c, void *va, long n)
 			nr = devtab[c->umc->type]->read(c->umc, va, n, c->umc->offset);
 			if(nr < 0)
 				nr = 0;	/* dev.c can return -1 */
-			c->umc->offset += nr;
+			c->umc->offset = offadd(c->umc->offset, nr);
 			poperror();
 		}
 		if(nr > 0)
@@ -700,9 +764,11 @@ rread(int fd, void *va, long n, vlong *offp)
 			}
 			unionrewind(c);
 		}
+		if(n > Maxoffset - off)
+			n = Maxoffset - off;
 		n = devtab[c->type]->read(c, va, n, off);
 		lock(&c->l);
-		c->offset += n;
+		c->offset = offadd(c->offset, n);
 		unlock(&c->l);
 	}
 
@@ -922,6 +988,10 @@ rwrite(int fd, void *va, long n, vlong *offp)
 	if(offp == nil){
 		lock(&c->l);
 		off = c->offset;
+		if(off >= 0 && n > Maxoffset - off){
+			unlock(&c->l);
+			error(Ebadarg);
+		}
 		c->offset += n;
 		unlock(&c->l);
 	}else

@@ -43,6 +43,12 @@ struct Isched
 	Proc*	vmqt;
 	Proc*	idlevmq;	/* queue of procs wanting work */
 	Atidle*	idletasks;
+	/* the idle collector's place: execatidle, idlegc */
+	ulong	idleseen;	/* heapactivity() when it last went all the way round */
+	int	idleknown;
+	int	inround;	/* a round of idle collection is under way */
+	int	idlefrom;	/* gccolor when it began */
+	ulong	idlenext;	/* MACHP(0)->ticks before which no new round starts */
 };
 static	Isched	sched0;		/* vm0's */
 #define	VMSCHED(v)	((Isched*)(v)->vsched)
@@ -121,6 +127,64 @@ progpid(int pid)
 static Vm*	vms[MAXVM] = { &vm0 };
 static int	nvms = 1;
 static Lock	vmlk;
+
+static char *pstate[] = {
+	[Palt]	"alt",	[Psend]	"send",	[Precv]	"recv",	[Pdebug] "debug",
+	[Pready] "ready", [Prelease] "release", [Pexiting] "exiting", [Pbroken] "broken",
+};
+
+static char*
+modpath(Modlink *ml)
+{
+	if(ml == nil || ml == H || ml->m == nil)
+		return "?";
+	return ml->m->path;
+}
+
+/*
+ * The debug key 'v': for each VM, who has its interpreter, who waits
+ * for it, and each of its Progs -- its state, the module it is in and
+ * the module that called that one (a builtin's caller: the Dis code
+ * that is waiting). Read without the VM's locks, as procdump is: it is
+ * for a machine that has stopped.
+ */
+static void
+vmdump(void)
+{
+	int i, n;
+	Vm *v;
+	Isched *s;
+	Prog *p;
+	Proc *q;
+	Frame *f;
+	char *st, *caller;
+
+	for(i = 0; i < nvms; i++){
+		v = vms[i];
+		s = VMSCHED(v);
+		print("vm%d: idle %d creating %d nyield %d runhd %d\n", i, s->idle, s->creating, s->nyield,
+			s->runhd != nil ? s->runhd->pid : -1);
+		print("  vmq:");
+		for(q = s->vmq, n = 0; q != nil && n < 64; q = q->qnext, n++)
+			print(" %lud", q->pid);
+		print("\n  idlevmq:");
+		for(q = s->idlevmq, n = 0; q != nil && n < 64; q = q->qnext, n++)
+			print(" %lud", q->pid);
+		print("\n");
+		vmprocdump(v);
+		for(p = s->head, n = 0; p != nil && n < 512; p = p->next, n++){
+			st = p->state >= 0 && p->state < nelem(pstate) && pstate[p->state] != nil ? pstate[p->state] : "?";
+			caller = "";
+			for(f = (Frame*)p->reg.FP; f != nil && (uintptr)f > 0x1000; f = (Frame*)f->fp)
+				if(f->mr != nil){
+					caller = modpath(f->mr);
+					break;
+				}
+			print("  prog %d %s %s <- %s%s\n", p->pid, st, modpath(p->reg.M), caller,
+				p->kill != nil ? " (killed)" : "");
+		}
+	}
+}
 
 int
 vmcount(void)
@@ -402,6 +466,113 @@ accountant(void)
 #define Vmcycles 2
 #endif
 
+/*
+ * How long the scheduler must have had nothing to run before the idle
+ * collector finishes its epochs, in milliseconds.
+ *
+ * The bounded slice in execatidle (Idlequanta) is right for the gaps
+ * between one packet and the next, and slow on its own: an epoch ends
+ * only at a traversal of the heap in which the write barrier saw
+ * nothing, and a cycle -- every shell, through its $self -- is freed only
+ * at an epoch's end. With wm/osk's lexicon in the heap (some 250000
+ * objects, 54 traversals an epoch before marklist took a list whole) the
+ * Pi 4 ended an epoch about every 4.5 minutes at idle and 4 in 17 minutes
+ * under soak.py's loads, so a shell's 27 objects waited minutes to be
+ * freed and a load built a backlog of some 200. Under QEMU's emulated
+ * cores no epoch ended at all. Upstream ran up to three epochs at every
+ * idle moment (the 28 KB/s of the note above); emu still does.
+ *
+ * Here the scheduler, with nothing to run and collection outstanding,
+ * sleeps Idlegcms rather than for ever. If nothing has woken it by
+ * then, the machine is idle in fact -- a packet gap is far shorter --
+ * and the collector goes round as emu's does, three epochs, stopping the
+ * moment there is work and taking up the round where it was next time.
+ *
+ * Not again for Idlegcgap after a round is finished, though. An idle
+ * desktop is never still -- something allocates and frees a few dozen
+ * objects a second -- so "the heap has changed" is always true, and
+ * emu's rule alone kept a core collecting for as long as the board sat
+ * there (QEMU: 185 epochs in two quiet minutes). Epochs need to end,
+ * not to end continuously: a cycle now waits at most about Idlegcgap
+ * to be freed, and the collector rests between rounds.
+ *
+ * Idlegcgap sets what idle collection costs. At 10 s the Pi 4 inspected
+ * 22.6M objects a minute at idle, against 3.3M on the kernel before (and
+ * QEMU 22.5M); at 60 s, under QEMU, 3.9M, with a dropped cycle freed in
+ * 20-30 s. Under load it hardly matters: what keeps up there is
+ * marklist taking a list whole (gc.c), 5 traversals an epoch, not 54.
+ */
+#ifndef Idlegcms
+#define Idlegcms 10
+#endif
+#ifndef Idlegcgap
+#define Idlegcgap 60000
+#endif
+
+/* whether the heap has changed since the collector last went all the way round it */
+static int
+idlegcpending(void)
+{
+	return gcruns() && !(isched.idleknown && heapactivity() == isched.idleseen);
+}
+
+/* how long until a round may start, in milliseconds, or -1 for none pending */
+static int
+idlegcwait(void)
+{
+	long d;
+
+	if(!idlegcpending())
+		return -1;
+	d = (long)(isched.idlenext - MACHP(0)->ticks);
+	if(d <= 0)
+		return 0;
+	return TK2MS(d);
+}
+
+static void
+idlegc(void)
+{
+	int done;
+
+	if(tready(nil) || idlegcwait() != 0)
+		return;
+	/*
+	 * Three epochs from where the round began, however the heap changes
+	 * meanwhile. Counted from the last change instead (emu's rule), a
+	 * desktop that allocates a few times a second restarted the count
+	 * at every idle moment, the round never ended and the gap after it
+	 * never began.
+	 */
+	if(!isched.inround) {
+		isched.inround = 1;
+		isched.idlefrom = gccolor;
+	}
+	gcidle++;
+	up->type = IdleGC;
+	up->iprog = nil;
+	addrun(up->prog);
+	done = isched.idlefrom+3;
+	while(gccolor < done && gcruns()) {
+		if(isched.vmq != nil || isched.runhd != isched.runtl) {
+			gcpartial++;
+			break;
+		}
+		rungc(isched.head);
+		gcidlepass++;
+		if(((ulong)gcidlepass&0xFF) == 0)
+			sched();
+	}
+	if(gccolor >= done) {	/* three epochs: whatever was garbage when it began is freed */
+		isched.inround = 0;
+		isched.idleseen = heapactivity();
+		isched.idleknown = 1;
+		isched.idlenext = MACHP(0)->ticks + MS2TK(Idlegcgap);
+	}
+	up->type = Interp;
+	delrunq(up->prog);
+}
+
 static void
 execatidle(void)
 {
@@ -463,9 +634,14 @@ newprog(Prog *p, Modlink *m)
 	n->group = nil;
 
 	lock(&pidlk);
-	n->pid = ++pidnum;
-	if(n->pid <= 0)
+	/*
+	 * Asked before the count is stepped: stepping the largest int is
+	 * not defined, and a compiler may then leave out a test, made
+	 * after, that the pid is positive.
+	 */
+	if(pidnum == 0x7fffffff)
 		panic("no pids");
+	n->pid = ++pidnum;
 	if(isched.tail != nil) {
 		n->prev = isched.tail;
 		isched.tail->next = n;
@@ -498,7 +674,19 @@ newprog(Prog *p, Modlink *m)
 	addrun(n);
 
 	if(p == nil){
+		/*
+		 * A first Prog is listed and ready to run by now.  If no
+		 * group can be made for it, it goes, as one that newstack
+		 * has no memory for does.  It was left as it was, to run
+		 * with no group, no PC and an environment of zeros (the
+		 * native kernel's #X run file, which anyone may write).
+		 */
+		if(waserror()){
+			killprog(n, exNomem);
+			nexterror();
+		}
 		newgrp(n);
+		poperror();
 		return n;
 	}
 
@@ -639,12 +827,9 @@ swiprog(Prog *p)
 	Proc *q, *eq;
 
 	q = proctab(0);
-	for(eq = q+conf.nproc; q < eq; q++) {
-		if(q->iprog == p) {
-			swiproc(q, 1);
+	for(eq = q+conf.nproc; q < eq; q++)
+		if(swiprogproc(q, p))
 			return;
-		}
-	}
 	/*print("didn't find\n");*/
 }
 
@@ -704,7 +889,8 @@ exprog(Prog *p, char *exc)
 static void
 propex(Prog *p, char *estr)
 {
-	Prog *f, *nf, *pgl;
+	Prog *f, *pgl;
+	int i, n, gid, ppid, pglpid, propagate, *pids;
 
 	if(!(p->flags & (Ppropagate|Pnotifyleader)) || p->group == nil)
 		return;
@@ -718,18 +904,41 @@ propex(Prog *p, char *estr)
 		pgl = p;
 	if(!(pgl->flags & (Ppropagate|Pnotifyleader)))
 		return;	/* exceptions are local; don't propagate */
-	for(f = p->group->head; f != nil; f = nf){
-		nf = f->grpnext;
-		if(f != p && f != pgl){
-			if(pgl->flags & Ppropagate)
-				exprog(f, estr);
-			else{
-				f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
-				killprog(f, "killed");
-			}
+	/*
+	 * By pid, as the hosted kernel has it. killprog lets the VM go
+	 * (delprog), and the group's list was walked through it by
+	 * pointer: the next Prog, or the leader, could have exited and
+	 * been freed in that moment, or left for a group of its own.
+	 */
+	propagate = pgl->flags & Ppropagate;
+	gid = p->group->id;
+	ppid = p->pid;
+	pglpid = pgl->pid;
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		n++;
+	pids = malloc(n*sizeof(int));
+	if(pids == nil){
+		print("propex: no memory to propagate \"%s\" from %d\n", estr, ppid);
+		return;
+	}
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		if(f->pid != ppid && f->pid != pglpid)
+			pids[n++] = f->pid;
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f == nil || f->group == nil || f->group->id != gid)
+			continue;	/* gone, or in a group of its own now */
+		if(propagate)
+			exprog(f, estr);
+		else{
+			f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
+			killprog(f, "killed");
 		}
 	}
-	if(p != pgl)
+	free(pids);
+	if(pglpid != ppid && (pgl = progpid(pglpid)) != nil)
 		exprog(pgl, estr);
 }
 
@@ -807,8 +1016,14 @@ killprog(Prog *p, char *cause)
 		p->flags |= Pkilled;
 		p->state = Pexiting;
 		swiprog(p);
-		/* No break */
+		return 0;
 	case Pexiting:
+		/*
+		 * A previous wake can have lost the release/publication race.
+		 * A later group kill is the owner's retry; do not leave an
+		 * already-marked Prog asleep in the system call it must leave.
+		 */
+		swiprog(p);
 		return 0;
 	case Pbroken:
 	case Pdebug:
@@ -833,11 +1048,17 @@ killprog(Prog *p, char *cause)
 	}
 
 
+	/*
+	 * Exiting before propex, as the hosted kernel has it: killing the
+	 * group's others can let the VM go (delprog), and a killprog or
+	 * exprog of p from another processor then must leave p alone, not
+	 * free it a second time or queue it to run again.
+	 */
+	p->state = Pexiting;
 	propex(p, "killed");
 
 	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
-	p->state = Pexiting;
 	/*
 	 * Destroyed here, in the killer: its closes are a killed Prog's,
 	 * and a 9P clunk among them is sent and not waited for (devmnt,
@@ -863,6 +1084,16 @@ newgrp(Prog *p)
 
 	if(p->group != nil && p->group->id == p->pid)
 		return;
+	/*
+	 * A group that is being killed is not left. Its killer has the
+	 * group's Progs by pid, taken once, and lets the VM go as each
+	 * dies: a Prog of the group run in one of those moments left
+	 * for a group of its own, which is not marked, spawned, and its
+	 * child was in nobody's list (killtree, which is how a confined
+	 * command's processes are cleared away, left 36 of 42).
+	 */
+	if(p->group != nil && (p->group->flags & Pkilled))
+		error("group is being killed");
 	g = malloc(sizeof(*g));
 	if(g == nil)
 		error(Enomem);
@@ -903,8 +1134,11 @@ addgrp(Prog *n, Prog *p)
  * A read of /prog/n/grpwait waits for n's process group, as it was when
  * the file was opened, to have no Prog left: delgrp posts to each such
  * reader's queue as it frees the group (a group is freed with its last
- * Prog, and group ids are pids, never reused).  The list is changed and
- * walked with the interpreter held.
+ * Prog, and group ids are pids, never reused).  The list is one for the
+ * machine and has a lock of its own: it was changed and walked "with the
+ * interpreter held", but there are several interpreters (vm(1)): a reader
+ * adds under the Prog's and removes under its own, and a group goes under
+ * its Prog's. Two at once lost an entry, or walked one being freed.
  */
 typedef struct Grpwait Grpwait;
 struct Grpwait
@@ -914,6 +1148,7 @@ struct Grpwait
 	Grpwait*	next;
 };
 static Grpwait *grpwaits;
+static Lock grpwaitl;
 
 void
 grpwaitadd(int gid, Queue *q)
@@ -925,21 +1160,31 @@ grpwaitadd(int gid, Queue *q)
 		error(Enomem);
 	w->gid = gid;
 	w->q = q;
+	lock(&grpwaitl);
 	w->next = grpwaits;
 	grpwaits = w;
+	unlock(&grpwaitl);
 }
 
 void
 grpwaitdel(Queue *q)
 {
-	Grpwait **l, *w;
+	Grpwait **l, *w, *gone;
 
+	gone = nil;
+	lock(&grpwaitl);
 	for(l = &grpwaits; (w = *l) != nil; ){
 		if(w->q == q){
 			*l = w->next;
-			free(w);
+			w->next = gone;
+			gone = w;
 		}else
 			l = &w->next;
+	}
+	unlock(&grpwaitl);
+	while((w = gone) != nil){
+		gone = w->next;
+		free(w);
 	}
 }
 
@@ -951,9 +1196,11 @@ grpgone(int gid)
 	int n;
 
 	n = snprint(buf, sizeof(buf), "%d", gid);
+	lock(&grpwaitl);
 	for(w = grpwaits; w != nil; w = w->next)
 		if(w->gid == gid)
 			qproduce(w->q, buf, n);
+	unlock(&grpwaitl);
 }
 
 static Progs*
@@ -1016,10 +1263,45 @@ printgrp(Prog *p, char *v)
 	print("]\n");
 }
 
+/*
+ * The group with id gid, found without allocating a pid list.  Group ids are
+ * pids and are never reused.  killprog can release the VM and free the target
+ * group, so a caller must reacquire it by identity afterwards rather than
+ * retain its pointer.
+ */
+static Progs*
+grpbyidall(int gid)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(f->group != nil && f->group->id == gid)
+			return f->group;
+	return nil;
+}
+
+/*
+ * For a killer with no memory for a list of pids, which takes the first
+ * Prog not yet killed each time round: is f one killprog would still do
+ * something to?  Not one already killed or on its way out, and not one a
+ * debugger holds broken, which killprog leaves.  It left out every broken
+ * Prog, though killprog destroys one nobody is debugging: those kept
+ * their stacks and their group, and a reader of grpwait was never told.
+ */
+static int
+killable(Prog *f)
+{
+	if((f->flags & Pkilled) != 0 || f->state == Pexiting)
+		return 0;
+	if(f->state == Pbroken && ((Osenv*)f->osenv)->debug != nil)
+		return 0;
+	return 1;
+}
+
 int
 killgrp(Prog *p, char *msg)
 {
-	int i, npid, *pids;
+	int i, npid, *pids, pid, gid;
 	Prog *f;
 	Progs *g;
 
@@ -1027,9 +1309,14 @@ killgrp(Prog *p, char *msg)
 	g = p->group;
 	if(g == nil || g->head == nil)
 		return 0;
+	pid = p->pid;
+	gid = g->id;
 	while(g->flags & Pkilled){
 		release();
 		acquire();
+		/* p, and its group, may be gone while the VM was released */
+		if((p = progpid(pid)) == nil || (g = p->group) == nil || g->id != gid || g->head == nil)
+			return 0;
 	}
 	npid = 0;
 	for(f = g->head; f != nil; f = f->grpnext)
@@ -1050,20 +1337,23 @@ killgrp(Prog *p, char *msg)
 		 */
 		g->flags |= Pkilled;
 		if(waserror()){
-			g->flags &= ~Pkilled;
+			if((g = grpbyidall(gid)) != nil)
+				g->flags &= ~Pkilled;
 			nexterror();
 		}
 		for(i = 0; i < npid; i++){
 			for(f = g->head; f != nil; f = f->grpnext)
-				if(f != currun() && (f->flags & Pkilled) == 0 &&
-				   f->state != Pexiting && f->state != Pbroken)
+				if(f != currun() && killable(f))
 					break;
 			if(f == nil)
 				break;
 			killprog(f, msg);
+			if((g = grpbyidall(gid)) == nil)
+				break;
 		}
 		poperror();
-		g->flags &= ~Pkilled;
+		if((g = grpbyidall(gid)) != nil)
+			g->flags &= ~Pkilled;
 		return 1;
 	}
 	npid = 0;
@@ -1071,7 +1361,8 @@ killgrp(Prog *p, char *msg)
 		pids[npid++] = f->pid;
 	g->flags |= Pkilled;
 	if(waserror()) {
-		g->flags &= ~Pkilled;
+		if((g = grpbyidall(gid)) != nil)
+			g->flags &= ~Pkilled;
 		free(pids);
 		nexterror();
 	}
@@ -1081,7 +1372,8 @@ killgrp(Prog *p, char *msg)
 			killprog(f, msg);
 	}
 	poperror();
-	g->flags &= ~Pkilled;
+	if((g = grpbyidall(gid)) != nil)
+		g->flags &= ~Pkilled;
 	free(pids);
 	return 1;
 }
@@ -1109,24 +1401,116 @@ cleargrptreekilled(int *gids, int n)
 			}
 }
 
+/* Is a group of g's tree marked: is a killer at work in it? */
+static int
+grptreekilled(Progs *g)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g) && (f->group->flags & Pkilled))
+			return 1;
+	return 0;
+}
+
+/*
+ * A killer with no memory for a list of its groups' ids knows the marks
+ * it set by a number of its own, kept above the flags in each group's
+ * flags word (nothing else looks there) and taken away with the mark.
+ */
+enum
+{
+	Killershift	= 8,
+	Killermax	= 1<<22,
+};
+
+static void
+clearkiller(int k)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(f->group != nil && (f->group->flags >> Killershift) == k)
+			f->group->flags &= (1<<Killershift)-1 & ~Pkilled;
+}
+
+/* Kill a cleanup domain, including groups made with NEWPGRP below it. */
 int
 killgrptree(Prog *p, char *msg)
 {
-	int i, n, *gids, *pids;
+	int i, n, k, pid, *gids, *pids;
 	Prog *f;
 	Progs *g;
+	static int killer;
 
 	g = p->group;
 	if(g == nil)
 		return 0;
-	/* Do not recurse on attacker-controlled NEWPGRP depth. */
+	/*
+	 * Wait, as killgrp does, while another killer is at work in the
+	 * tree: a mark then has one owner, who alone takes it away.  With
+	 * no wait, a Prog of a tree (or group) being killed wrote killtree
+	 * to its own ctl in one of the moments its killer let the VM go:
+	 * this listed the writer's tree, killed all of it but the writer
+	 * (the Prog running is never killed by its own kill) and cleared
+	 * the mark on the writer's group, the first killer's.  The writer
+	 * then spawned, and its children were in nobody's list.  Waiting,
+	 * the writer is one of the first killer's and is killed in its
+	 * write: what it does after is a killed Prog's, which cannot spawn.
+	 */
+	pid = p->pid;
+	while(grptreekilled(g)){
+		release();
+		acquire();
+		/* p, and its group, may be gone */
+		if((p = progpid(pid)) == nil || (g = p->group) == nil)
+			return 0;
+	}
+	/*
+	 * Scan the VM's flat Prog list rather than recursing through child groups:
+	 * an adversary can build a deep NEWPGRP chain, and cleanup must not turn
+	 * that into a C-stack overflow.
+	 */
 	n = 0;
 	for(f = isched.head; f != nil; f = f->next)
 		if(grptreedescendant(f->group, g))
 			n++;
 	pids = malloc(2*n*sizeof(int));
-	if(pids == nil)
-		error(Enomem);
+	if(pids == nil){
+		/*
+		 * No memory for the list, as killgrp's: the tree is killed
+		 * anyway, the first of it not yet killed each time round.
+		 * It was an error, and the tree that could not be killed
+		 * was the one holding the memory. The groups are found by
+		 * their mark once the root's may have gone: by this
+		 * killer's, k.  They were found by any mark, and at the
+		 * end every mark in the VM was cleared: another killer's
+		 * groups, in a tree apart from this, were let go to spawn
+		 * and to leave while it still had only their old pids.
+		 */
+		if(++killer >= Killermax)
+			killer = 1;
+		k = killer;
+		for(f = isched.head; f != nil; f = f->next)
+			if(grptreedescendant(f->group, g))
+				f->group->flags |= Pkilled | (k << Killershift);
+		if(waserror()){
+			clearkiller(k);
+			nexterror();
+		}
+		for(i = 0; i < n; i++){
+			for(f = isched.head; f != nil; f = f->next)
+				if(f != currun() && f->group != nil &&
+				   (f->group->flags >> Killershift) == k && killable(f))
+					break;
+			if(f == nil)
+				break;
+			killprog(f, msg);
+		}
+		poperror();
+		clearkiller(k);
+		return 0;
+	}
 	gids = pids+n;
 	n = 0;
 	for(f = isched.head; f != nil; f = f->next)
@@ -1376,8 +1760,11 @@ schedmod(Module *m)
 	t = m->entryt;
 	if(t != nil && t->size > sizeof(Frame)){
 		fp = mallocz(t->size, 1);
-		if(fp == nil)
+		if(fp == nil){
+			/* p is ready to run: it goes, as in newstack */
+			killprog(p, exNomem);
 			error(exNomem);
+		}
 	}else{
 		memset(&f, 0, sizeof(f));
 		fp = &f;
@@ -1464,6 +1851,7 @@ vmrun(int n, int argc, char **argv)
 	Osenv *o;
 	Type *t;
 	List *l;
+	List *volatile vl;	/* l as the error handler sees it: l is changed after waserror() */
 	String *s;
 	uchar *fp;
 	int i, pid, w;
@@ -1500,16 +1888,34 @@ vmrun(int n, int argc, char **argv)
 	w = NREG+3;
 	if(t == nil || t->np <= (w+1)/8 || (t->map[w/8] & (0x80>>(w%8))) == 0 || (t->map[(w+1)/8] & (0x80>>((w+1)%8))) == 0)
 		error("not a command: init is not init(ctxt, argv)");
-	p = schedmod(root);
-
+	/*
+	 * The arguments before the Prog. They were made after schedmod,
+	 * which leaves the Prog ready to run: with the VM's heap full,
+	 * c2string or cons raised, and the Prog was left to run with an
+	 * environment of zeros, whose first system call was a fault in
+	 * the kernel. Anyone may write a VM's run file.
+	 */
 	l = (List*)H;
+	vl = l;
+	if(waserror()){
+		destroy(vl);
+		nexterror();
+	}
 	for(i = argc-1; i >= 0; i--){
 		s = c2string(argv[i], strlen(argv[i]));
+		if(waserror()){
+			destroy(s);
+			nexterror();
+		}
 		l = cons(IBY2WD, &l);
+		vl = l;		/* what the handler above gives back */
+		poperror();
 		l->t = &Tptr;
 		Tptr.ref++;
 		*(String**)l->data = s;
 	}
+	p = schedmod(root);
+	poperror();
 	fp = p->reg.FP;
 	*(WORD**)(fp + w*IBY2WD) = H;		/* ctxt: nil */
 	*(List**)(fp + (w+1)*IBY2WD) = l;	/* argv */
@@ -1615,12 +2021,25 @@ void
 release(void)
 {
 	Proc *p, **pq;
+	Prog *r;
 	int f;
 
 	if(up->type == Interp){
 		if(up->iprog != nil)
 			panic("Double release (Interp)?");
-		up->iprog = isave();
+		r = isave();
+		lock(&up->rlock);
+		up->iprog = r;
+		/*
+		 * A kill from another VM can race this publication: swiprog
+		 * sees neither a released iprog nor a sleeping Proc, then the
+		 * Prog enters the system call and sleeps with no interrupt
+		 * pending.  Preserve the already-recorded revocation for the
+		 * first sleep after release.
+		 */
+		if(r->kill != nil || (r->flags & Pkilled) != 0)
+			up->intpend = 1;
+		unlock(&up->rlock);
 	}else{
 		if(((Prog *)up->prog)->state != Pready) panic("double release (GC)?");
 		delrun(Prelease);
@@ -1842,7 +2261,16 @@ vmachine(void*)
 		}
 		if(up->iprog != nil)
 			acquire();
-		if(handler(up->env->errstr) == 0) {
+		/*
+		 * A ctl kill is ownership revocation, not an exception the
+		 * target may decline.  In particular, a catch-all around a
+		 * blocking system call must not consume the interrupt and enter
+		 * another call: no interrupt is then pending to wake that call,
+		 * and a killed Prog can retain its Proc and namespace forever.
+		 * Pkilled distinguishes that case from an ordinary, catchable
+		 * exception delivered through the same machinery.
+		 */
+		if((currun()->flags & Pkilled) != 0 || handler(up->env->errstr) == 0) {
 			propex(currun(), up->env->errstr);
 			progexit();
 		}
@@ -1874,12 +2302,18 @@ vmachine(void*)
 
 	cycles = 0;
 	for(;;) {
-		int pid;
+		int pid, w;
 		char *modname;
 
 		if(tready(nil) == 0) {
 			execatidle();
-			sleep(&isched.irend, tready, 0);
+			if((w = idlegcwait()) >= 0) {
+				/* quiet for Idlegcms, and the gap since the last round over */
+				tsleep(&isched.irend, tready, 0, w > Idlegcms ? w : Idlegcms);
+				idlegc();
+			}
+			if(tready(nil) == 0)
+				sleep(&isched.irend, tready, 0);
 		}
 
 		if(isched.vmq != nil && (isched.runhd == nil || ++cycles > Vmcycles)){
@@ -2047,6 +2481,7 @@ disinit(void *a)
 
 	vm0.vsched = &sched0;
 	up->vm = &vm0;
+	debugkey('v', "Dis VMs and their progs", vmdump, 0);
 
 	print("Initial Dis: \"%s\"\n", initmod);
 

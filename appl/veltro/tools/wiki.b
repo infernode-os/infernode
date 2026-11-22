@@ -78,7 +78,8 @@ doc(): string
 		"  wiki log                 Show operation history\n\n" +
 		"Before ingesting, bind source data:\n" +
 		"  bind /n/local/docs /mnt/wikia/raw\n\n" +
-		"The wiki is browsable via Charon at the httpd wiki URL.\n" +
+		"To browse and edit the wiki on the web, mount wikifs at wiki/ in a\n" +
+		"site and serve it: svc/httpd/httpd -w /wiki site (httpd(8)).\n" +
 		"Requires /mnt/wikia (run wiki9p), /mnt/wiki (run wikifs), /mnt/llm.\n";
 }
 

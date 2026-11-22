@@ -1,0 +1,103 @@
+.TH MD 1
+.SH NAME
+md/fmt \- fill Markdown text
+.SH SYNOPSIS
+.B md/fmt
+[
+.BI -l " n"
+] [
+.B -j
+]
+[
+.I file ...
+]
+.SH DESCRIPTION
+.I Md/fmt
+is
+.IR fmt (1)
+for Markdown.
+It copies the given
+.I files
+(standard input by default)
+to its standard output,
+filling each paragraph, list item and block quote to a line length,
+and copying the rest as it is.
+.PP
+What a block is comes from the Markdown parser Xenith's
+.B Render
+and Lucifer draw a document with,
+so the text filled is the same document to them.
+In particular:
+.IP \(bu
+List items are not joined to one another.
+A wrapped item continues under the start of its text, not its marker,
+a task's
+.B [ ]
+included.
+.IP \(bu
+A line that would begin another block (a word such as
+.BR - ,
+.BR + ,
+.BR 12. ,
+.B #tag
+or
+.B >
+at its start) is not made: the word stays on the line before,
+which may then be longer than
+.IR n .
+.IP \(bu
+Code (fenced or indented), headings, tables, horizontal rules,
+HTML and link reference definitions are copied unchanged.
+.IP \(bu
+Block quotes are filled inside their
+.B >
+marks, nested ones too.
+.IP \(bu
+A line ending in two spaces or a backslash (a hard break) still ends there.
+.IP \(bu
+A code span
+.RB ( `...` )
+is never broken, and its spaces are kept.
+.IP \(bu
+The spaces between two words of a line are kept as they were typed;
+two lines joined are joined with one.
+.PP
+The options are
+.TP
+.BI -l " n
+Output line length is
+.IR n ,
+including indent (default 70).
+.TP
+.BI -w " n
+A synonym for
+.BR -l .
+.TP
+.B -j
+Do not join short lines: only fold long lines.
+.PP
+Empty lines are kept, and inserted between input files.
+.I Md/fmt
+is idempotent: it leaves already filled text unchanged.
+.SH EXAMPLES
+In Xenith, select a list or a paragraph of a Markdown file and execute
+.IP
+.EX
+|md/fmt
+.EE
+.PP
+or fill the whole file with
+.B Edit ,|md/fmt
+.PP
+To wrap a window's lines between words without changing the file,
+execute
+.B Wrap word
+in its tag instead.
+.SH SOURCE
+.B /appl/cmd/md/fmt.b
+.SH SEE ALSO
+.IR acme (1),
+.IR fmt (1)
+.SH BUGS
+It fills what the parser it shares with Render finds, not CommonMark:
+where they differ, it follows Render.

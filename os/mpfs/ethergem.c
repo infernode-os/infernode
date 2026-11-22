@@ -504,6 +504,10 @@ gemifstat(Ether *e, void *a, long n, ulong off)
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
+	if(waserror()){
+		free(p);
+		nexterror();
+	}
 	snprint(p, READSTR,
 		"gem at %#p irq %d phy %d id %#.8ux\n"
 		"intrs %lud rx %lud tx %lud rxdrop %lud txfull %lud bna %lud ovr %lud\n"
@@ -513,6 +517,7 @@ gemifstat(Ether *e, void *a, long n, ulong off)
 		R(c, Ncr), R(c, Ncfgr), R(c, Nsr), R(c, Dmacfg), R(c, Tsr), R(c, Rsr), R(c, Imr));
 	n = readstr(off, a, n, p);
 	free(p);
+	poperror();
 	return n;
 }
 

@@ -95,7 +95,9 @@ struct Vq
 	u16int	snext[Vqmax];
 	uchar	nchain[Vqmax];
 	uchar	busy[Vqmax];
+	u32int	wlen[Vqmax];	/* per chain, by head: bytes the device may write */
 	ulong	nbogus;		/* used entries refused */
+	ulong	nlong;		/* used lengths past what was lent, cut to it */
 };
 
 struct Vdev

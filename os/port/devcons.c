@@ -10,13 +10,19 @@
 #include	"mem.h"
 #include	"dat.h"
 #include	"fns.h"
+#ifdef FWRTC
+int	rtcset(u32int);
+#endif
 #include	"../port/error.h"
 #include	<version.h>
+
+extern char*	heapaudittext(void);	/* libinterp/heapaudit.c */
 #include	"mp.h"
 #include	"libsec.h"
 #include	"keyboard.h"
 
 extern int cflag;
+extern int strictlink;	/* libinterp/link.c */
 extern int keepbroken;
 extern ulong intrcount[];	/* portclock.c: clock interrupts, per core */
 extern ulong fcallcount[];	/* portclock.c: Timer callbacks run, per core */
@@ -67,6 +73,7 @@ enum
 	CMbroken,
 	CMnobroken,
 	CMconsole,
+	CMcnsamode,
 };
 
 static Cmdtab sysctlcmd[] =
@@ -76,10 +83,28 @@ static Cmdtab sysctlcmd[] =
 	CMbooted,	"booted",	0,	/* the boot is over: release its watchdog */
 	CMhalt,	"halt", 0,
 	CMpanic,	"panic", 0,
-	CMconsole,	"console", 1,
+	CMconsole,	"console", 2,	/* lookupcmd counts the verb: console on|off */
 	CMbroken,	"broken", 0,
 	CMnobroken,	"nobroken", 0,
+	CMcnsamode,	"cnsamode", 2,	/* cnsamode on: CNSA 2.0 strict authentication, from now on */
 };
+
+/*
+ * CNSA 2.0 strict mode, for the machine: ML-KEM-1024 in every
+ * authentication instead of ML-KEM-768 (libinterp/keyring.c). The hosted
+ * emulator takes it from the host's CNSAMODE, fixed for its life; here
+ * there is no host, so osinit throws this switch at boot when the card
+ * has a cnsamode file. One way only, and for the whole machine: not the
+ * environment, which every process may rewrite for itself, because a
+ * process that could clear it could make its own connections weaker
+ * than the machine's policy. keyring.c asks once, through getenv, and
+ * keeps the answer, so the switch is refused once that answer was "no":
+ * set after an authentication, it would say a mode the handshake is not
+ * using.
+ */
+int	cnsastrict;
+int	cnsaasked;
+Lock	cnsalk;
 
 void
 printinit(void)
@@ -641,6 +666,7 @@ enum{
 	Qscancode,
 	Qmemory,
 	Qmemtags,
+	Qheaptypes,
 	Qmsec,
 	Qnull,
 	Qrandom,
@@ -651,6 +677,7 @@ enum{
 	Qjit,
 	Qsysstat,
 	Qchaos,
+	Qstrictlink,
 };
 
 static Dirtab consdir[]=
@@ -669,6 +696,7 @@ static Dirtab consdir[]=
 	"scancode",	{Qscancode},	0,		0444,
 	"memory",	{Qmemory},	0,		0444,
 	"memtags",	{Qmemtags},	0,		0444,
+	"heaptypes",	{Qheaptypes},	0,		0444,
 	"msec",		{Qmsec},	NUMSIZE,	0444,
 	"null",		{Qnull},	0,		0666,
 	"random",	{Qrandom},	0,		0444,
@@ -678,6 +706,7 @@ static Dirtab consdir[]=
 	"user",		{Quser},	0,	0644,
 	"jit",		{Qjit},	0,	0666,
 	"sysstat",	{Qsysstat},	0,	0444,
+	"strictlink",	{Qstrictlink},	0,	0644,
 #ifdef CHAOS
 	"chaos",	{Qchaos},	0,	0664,	/* chaos.c: faults made often */
 #endif
@@ -880,30 +909,37 @@ kbdsread(Chan *c, void *va, long n)
 	return n;
 }
 
-ulong	boottime;		/* seconds since epoch at boot */
-
+/*
+ * DIVERGENCE FROM UPSTREAM: the time of day is tod.c's, as Plan 9's
+ * is. Upstream had it as the boot time plus MACHP(0)->ticks, which
+ * loses every tick the clock interrupt misses; tod.c reads the
+ * hardware counter, which misses nothing. The kernel had two clocks
+ * that had to be set together (the virt boards set both), and the
+ * one /dev/time read was the one that drifted: 2.6 s an hour slow
+ * on a Pi 5, 4.5 on a Pi 3.
+ */
 long
 seconds(void)
 {
-	return boottime + TK2SEC(MACHP(0)->ticks);
+	return todget(nil) / 1000000000LL;
 }
 
 vlong
 mseconds(void)
 {
-	return ((vlong)boottime*1000)+((vlong)(TK2MS(MACHP(0)->ticks)));
+	return todget(nil) / 1000000LL;
 }
 
 vlong
 osusectime(void)
 {
-	return (((vlong)boottime*1000)+((vlong)(TK2MS(MACHP(0)->ticks)))*1000);
+	return todget(nil) / 1000LL;
 }
 
 vlong
 nsec(void)
 {
-	return osusectime()*1000;	/* TO DO */
+	return todget(nil);
 }
 
 int
@@ -945,7 +981,8 @@ fddump()
 	Chan *c;
 
 	p = proctab(6);
-	o = p->env;
+	if(p == nil || (o = p->env) == nil || o->fgrp == nil)
+		return;	/* (process 6 need not have descriptors, or be there) */
 	for(i = 0; i <= o->fgrp->maxfd; i++) {
 		if((c = o->fgrp->fd[i]) == nil)
 			continue;
@@ -1067,6 +1104,19 @@ static Chan*
 consopen(Chan *c, int omode)
 {
 	c->aux = 0;
+	/*
+	 * Whether it may be opened, first. That was asked last, after the
+	 * file's own state had been set up, and a refusal undid none of
+	 * it: an open of kprint for reading and writing was refused and
+	 * left its queue installed (in use for ever after, and the
+	 * screen's console silent), one of keyboard with a mode no file
+	 * has left the local keyboard taken from the console for good.
+	 */
+	c = devopen(c, omode, consdir, nelem(consdir), devgen);
+	if(waserror()){
+		c->flag &= ~COPEN;
+		nexterror();
+	}
 	switch((ulong)c->qid.path){
 	case Qconsctl:
 		if(!iseve())
@@ -1156,8 +1206,11 @@ consopen(Chan *c, int omode)
 		}
 		break;
 	}
-	return devopen(c, omode, consdir, nelem(consdir), devgen);
+	poperror();
+	return c;
 }
+
+static QLock heaptypesl;	/* one reader of heaptypes at a time: its text is on the channel */
 
 static void
 consclose(Chan *c)
@@ -1193,6 +1246,13 @@ consclose(Chan *c)
 		qfree(kprintq.q);
 		kprintq.q = nil;
 		wunlock(&kprintq.rw);
+		break;
+
+	case Qheaptypes:
+		qlock(&heaptypesl);
+		free(c->aux);
+		c->aux = nil;
+		qunlock(&heaptypesl);
 		break;
 	}
 }
@@ -1295,7 +1355,7 @@ consread(Chan *c, void *buf, long n, vlong offset)
 			return qread(kscanq, buf, n);
 
 	case Qtime:
-		snprint(tmp, sizeof(tmp), "%.lld", (vlong)mseconds()*1000);
+		snprint(tmp, sizeof(tmp), "%.lld", osusectime());
 		return readstr(offset, buf, n, tmp);
 
 	case Qhostowner:
@@ -1306,6 +1366,10 @@ consread(Chan *c, void *buf, long n, vlong offset)
 
 	case Qjit:
 		snprint(tmp, sizeof(tmp), "%d", cflag);
+		return readstr(offset, buf, n, tmp);
+
+	case Qstrictlink:
+		snprint(tmp, sizeof(tmp), "%d", strictlink);
 		return readstr(offset, buf, n, tmp);
 
 #ifdef CHAOS
@@ -1341,6 +1405,36 @@ consread(Chan *c, void *buf, long n, vlong offset)
 	 */
 	case Qmemtags:
 		return pooltagsread(buf, n, offset);
+
+	/*
+	 * The heap's objects, as memtags is the main pool's blocks: the
+	 * reader's VM's live objects by type and the module that declared
+	 * it (libinterp/heapaudit.c). Made at offset 0; the later reads of
+	 * the same open take the same text.
+	 */
+	case Qheaptypes:
+		/*
+		 * One reader at a time. The text is kept on the channel
+		 * and made again at offset 0, and reads of one channel are
+		 * not otherwise kept apart: two at once both freed the old
+		 * text, or one freed what the other was copying from.
+		 */
+		qlock(&heaptypesl);
+		if(waserror()){
+			qunlock(&heaptypesl);
+			nexterror();
+		}
+		if(offset == 0 || c->aux == nil){
+			free(c->aux);
+			c->aux = nil;
+			c->aux = heapaudittext();
+			if(c->aux == nil)
+				error(Enomem);
+		}
+		n = readstr(offset, buf, n, c->aux);
+		poperror();
+		qunlock(&heaptypesl);
+		return n;
 
 	/*
 	 * One line per running core: its tick count, how many clock
@@ -1417,7 +1511,7 @@ consread(Chan *c, void *buf, long n, vlong offset)
 static long
 conswrite(Chan *c, void *va, long n, vlong offset)
 {
-	vlong t;
+	vlong t, us;
 	long l, bp;
 	char *a = va;
 	Cmdbuf *cb;
@@ -1516,8 +1610,12 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			n = sizeof(buf)-1;
 		strncpy(buf, a, n);
 		buf[n] = 0;
-		t = strtoll(buf, 0, 0)/1000000;
-		boottime = t - TK2SEC(MACHP(0)->ticks);
+		us = strtoll(buf, 0, 0);
+		todset(us * 1000LL, 0, 0);
+		t = us / 1000000;
+#ifdef FWRTC
+		rtcset((u32int)t);	/* a clock worth setting is worth keeping */
+#endif
 		break;
 
 	case Qhostowner:
@@ -1567,6 +1665,24 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 		cflag = x;
 		return n;
 
+	case Qstrictlink:
+		/*
+		 * Modules are linked by their type digests alone from now on
+		 * (libinterp/link.c).  One way: init sets it when the card
+		 * has a strictlink file, and nothing that runs later can
+		 * take it back.
+		 */
+		if(!iseve())
+			error(Eperm);
+		if(n >= sizeof(buf))
+			n = sizeof(buf)-1;
+		strncpy(buf, va, n);
+		buf[n] = '\0';
+		if(buf[0] != '1' || (buf[1] != '\0' && buf[1] != '\n'))
+			error("strictlink: only 1; it stays set until the machine restarts");
+		strictlink = 1;
+		return n;
+
 	case Qnull:
 		break;
 
@@ -1614,6 +1730,17 @@ conswrite(Chan *c, void *va, long n, vlong offset)
 			break;
 		case CMnobroken:
 			keepbroken = 0;
+			break;
+		case CMcnsamode:
+			if(strcmp(cb->f[1], "on") != 0)
+				error("cnsamode: only on; it is off until the machine restarts");
+			lock(&cnsalk);
+			if(cnsaasked && !cnsastrict){
+				unlock(&cnsalk);
+				error("cnsamode: too late, an authentication has already run without it");
+			}
+			cnsastrict = 1;
+			unlock(&cnsalk);
 			break;
 		}
 		poperror();

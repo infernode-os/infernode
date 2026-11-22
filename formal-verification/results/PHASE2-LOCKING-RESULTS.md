@@ -1,5 +1,7 @@
 # Phase 2: Locking Protocol Verification Results
 
+> **Review note (2026-11-06).** The `lock_ordering` LTL property described below no longer exists in `namespace_locks.pml`; it was replaced by inline assertions that follow the statement setting the flag they test, so they cannot fail. What this model establishes is deadlock freedom on its eight scenarios. See `../README.md`, Known Limitations.
+
 **Date**: 2026-01-13
 **Verifier**: SPIN 6.5.2 (6 December 2019)
 **Status**: ✅ ALL PROPERTIES VERIFIED

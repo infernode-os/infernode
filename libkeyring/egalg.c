@@ -11,6 +11,33 @@ static char*	pkattr[] = { "p", "alpha", "key", nil };
 static char*	skattr[] = { "p", "alpha", "key", "!secret", nil };
 static char*	sigattr[] = { "r", "s", nil };
 
+enum
+{
+	MaxEGgen	= 1<<16,	/* bits of modulus eg_gen will try for */
+};
+
+/*
+ * A key in its domain, as far as what uses it goes on to divide by and
+ * loop on: a modulus of 0 reached mpdiv (sysfatal), and one of 3 or less
+ * left egsign looking for ever for a k between 1 and p-1 with an inverse.
+ */
+static int
+egpubok(EGpub *pub)
+{
+	if(!(mpcmp(pub->p, mptwo) > 0 && mpsignif(pub->p) > 2
+		&& mpcmp(pub->alpha, mpzero) > 0 && mpcmp(pub->alpha, pub->p) < 0
+		&& mpcmp(pub->key, mpzero) > 0 && mpcmp(pub->key, pub->p) < 0))
+		return 0;
+	/*
+	 * and a key signatures cannot be forged for from its public half
+	 * (libsec/egverify.c): a generator of the subgroup of order
+	 * (p-1)/2 that does not divide p-1, and a public value in that
+	 * subgroup.  Every ElGamal key made before this is refused (its
+	 * generator was 2, or had order p-1) and must be made again.
+	 */
+	return egpubvalid(pub) == 0;
+}
+
 static void*
 eg_str2sk(char *str, char **strp)
 {
@@ -24,7 +51,9 @@ eg_str2sk(char *str, char **strp)
 	eg->secret = base64tobig(p, &p);
 	if(strp)
 		*strp = p;
-	if(eg->pub.p == nil || eg->pub.alpha == nil || eg->pub.key == nil || eg->secret == nil){
+	/* a key to sign with: its prime tested too, which a public key's is not */
+	if(eg->pub.p == nil || eg->pub.alpha == nil || eg->pub.key == nil || eg->secret == nil
+	|| !egpubok(&eg->pub) || mpcmp(eg->secret, mpzero) <= 0 || egsafeprime(eg->pub.p) < 0){
 		egprivfree(eg);
 		return nil;
 	}
@@ -43,7 +72,7 @@ eg_str2pk(char *str, char **strp)
 	eg->key = base64tobig(p, &p);
 	if(strp)
 		*strp = p;
-	if(eg->p == nil || eg->alpha == nil || eg->key == nil){
+	if(eg->p == nil || eg->alpha == nil || eg->key == nil || !egpubok(eg)){
 		egpubfree(eg);
 		return nil;
 	}
@@ -138,8 +167,8 @@ eg_gen(int len)
 	 * "mpsetminbits: n < 0" (sysfatal) instead of failing cleanly.
 	 * Reject it here so genSK() returns nil per its contract.
 	 */
-	if(len < 2)
-		return nil;
+	if(len < 3 || len > MaxEGgen)
+		return nil;	/* the least safe prime is 7 */
 	return eggen(len, 0);
 }
 
@@ -149,18 +178,22 @@ eg_genfrompk(void *vpub)
 {
 	EGpub *pub;
 	EGpriv *priv;
-	int nlen;
 
+	/*
+	 * another's parameters (a signer's, at enrolment), to be this
+	 * key's for good: the prime is tested, as it is not when a public
+	 * key is only read
+	 */
 	pub = vpub;
+	if(!egpubok(pub) || egsafeprime(pub->p) < 0)
+		return nil;
 	priv = egprivalloc();
 	priv->pub.p = mpcopy(pub->p);
 	priv->pub.alpha = mpcopy(pub->alpha);
-	nlen = mpsignif(pub->p);
 	pub = &priv->pub;
 	pub->key = mpnew(0);
 	priv->secret = mpnew(0);
-	mprand(nlen-1, genrandom, priv->secret);
-	mpexp(pub->alpha, priv->secret, pub->p, pub->key);
+	egsecret(priv);
 	return priv;
 }
 
@@ -223,6 +256,9 @@ elgamalinit(void)
 	vec->genskfrompk = eg_genfrompk;
 	vec->sign = eg_sign;
 	vec->verify = eg_verify;
+	/* signs a number: a digest's leading zero bytes are not part of it */
+	vec->signb = nil;
+	vec->verifyb = nil;
 
 	vec->skfree = eg_freepriv;
 	vec->pkfree = eg_freepub;

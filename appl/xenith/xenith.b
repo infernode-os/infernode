@@ -241,6 +241,8 @@ main(argl : list of string)
 		dat->globalautoindent = TRUE;
 	'b' =>
 		dat->bartflag = TRUE;
+	'w' =>
+		dat->globalwrapword = TRUE;
 	'c' =>
 		ncol = int argf(arg);
 	'f' =>
@@ -929,6 +931,9 @@ mousetask()
 								# Ensure frame is fully populated and displayed
 								w.body.fill();
 								scrl->scrdraw(w.body);
+								# a source document shown of it set
+								# again, all of it here now (get)
+								docview->edited(w);
 							}
 						}
 						row.qlock.unlock();

@@ -127,6 +127,7 @@ struct RWlock
 	QLock	x;			/* Mutual exclusion lock */
 	QLock	k;			/* Lock for waiting writers */
 	int	readers;		/* Count of readers in lock */
+	int	writers;		/* writers holding or waiting, under l */
 };
 
 struct Talarm
@@ -161,6 +162,7 @@ enum
 	Amount,				/* to be mounted or mounted upon */
 	Acreate,			/* is to be created */
 	Aremove,			/* will be removed by caller */
+	Aunmount,			/* source of an unmount */
 
 	COPEN	= 0x0001,		/* for i/o */
 	CMSG	= 0x0002,		/* the message channel for a mount */
@@ -319,6 +321,7 @@ struct Mnt
 	Chan	*c;		/* Channel to file service */
 	Proc	*rip;		/* Reader in progress */
 	Mntrpc	*queue;		/* Queue of pending requests on this channel */
+	Mntrpc	*held;		/* answered, their tags named by flushes still out (mntfree) */
 	ulong	id;		/* Multiplexer id for channel check */
 	Mnt	*list;		/* Free list */
 	int	flags;		/* cache */

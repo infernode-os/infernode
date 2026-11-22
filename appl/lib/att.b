@@ -233,6 +233,8 @@ Client.recv(c: self ref Client, pdu: array of byte): list of ref Ev
 	Omtursp =>
 		if(len pdu >= 3){
 			m := get2(pdu, 1);
+			if(m < Defmtu)
+				m = Defmtu;	# the least an ATT bearer has (3.4.2.2), whatever the peer says
 			if(m < c.mtu)
 				c.mtu = m;
 		}
@@ -278,6 +280,18 @@ errorrsp(c: ref Client, reqop: int, h: int, code: int): list of ref Ev
 	return e :: next(c);
 }
 
+# A discovery whose server gave nothing that moves it forward is over:
+# said so once, its state dropped, and the line given to what waited.
+stalled(c: ref Client, op: int): list of ref Ev
+{
+	h := c.phandle;
+	c.svc = nil;
+	c.chars = nil;
+	c.dchar = nil;
+	c.pending = 0;
+	return ref Ev.Failed(op, h, Eattrnotfound, "discovery made no progress") :: next(c);
+}
+
 groups(c: ref Client, pdu: array of byte): list of ref Ev
 {
 	if(len pdu < 2)
@@ -285,10 +299,18 @@ groups(c: ref Client, pdu: array of byte): list of ref Ev
 	n := int pdu[1];
 	if(n < 6)
 		return next(c);
+	#
+	# Discovery goes on from the last handle the server names, so the
+	# server's handles are what moves it forward: they must start at or
+	# after what was asked and ascend, or the same request goes out again
+	# for as long as the server answers it.
+	#
 	last := 0;
 	for(i := 2; i + n <= len pdu; i += n){
 		start := get2(pdu, i);
 		end := get2(pdu, i+2);
+		if(start < c.phandle || end < start || start <= last)
+			break;
 		last = end;
 		u := uuid16(pdu, i+4, n-4);
 		if(u == c.want){
@@ -304,6 +326,8 @@ groups(c: ref Client, pdu: array of byte): list of ref Ev
 	c.pending = 0;
 	if(last >= 16rffff)
 		return ref Ev.Nosuch(c.want) :: next(c);
+	if(last < c.phandle)
+		return stalled(c, Oreadbygroupreq);
 	return request(c, groupreq(last + 1));
 }
 
@@ -317,6 +341,9 @@ chars(c: ref Client, pdu: array of byte): list of ref Ev
 	last := 0;
 	for(i := 2; i + n <= len pdu; i += n){
 		h := get2(pdu, i);
+		# inside the service, at or after what was asked, ascending; and so many, no more
+		if(h < c.phandle || h <= last || h > c.svc.end || len c.chars >= Maxchars)
+			break;
 		last = h;
 		ch := ref Characteristic(h, int pdu[i+2], get2(pdu, i+3), uuid16(pdu, i+5, n-5), nil, nil);
 		if(n - 5 == 16)
@@ -324,6 +351,8 @@ chars(c: ref Client, pdu: array of byte): list of ref Ev
 		c.chars = appendc(c.chars, ch);
 	}
 	c.pending = 0;
+	if(last < c.phandle)
+		return stalled(c, Oreadbytypereq);
 	if(last >= c.svc.end)
 		return descriptors(c);
 	return request(c, typereq(last + 1, c.svc.end));
@@ -334,7 +363,7 @@ chars(c: ref Client, pdu: array of byte): list of ref Ev
 descriptors(c: ref Client): list of ref Ev
 {
 	if(c.svc == nil)
-		return nil;
+		return next(c);
 	if(c.dstart != -1){
 		# the characteristic phase is over: start on descriptors
 		c.dchar = c.chars;
@@ -353,7 +382,7 @@ descriptors(c: ref Client): list of ref Ev
 	chs := c.chars;
 	c.svc = nil;
 	c.chars = nil;
-	return ref Ev.Found(s, chs) :: nil;
+	return ref Ev.Found(s, chs) :: next(c);	# and what waited behind discovery goes now
 }
 
 infos(c: ref Client, pdu: array of byte): list of ref Ev
@@ -364,17 +393,20 @@ infos(c: ref Client, pdu: array of byte): list of ref Ev
 	if(int pdu[1] == 2)
 		n = 18;
 	ch := hd c.dchar;
-	last := 0;
-	for(i := 2; i + n <= len pdu; i += n){
-		h := get2(pdu, i);
-		last = h;
-		ch.descs = appendd(ch.descs, (h, uuid16(pdu, i+2, n-2)));
-	}
 	end := c.svc.end;
 	if(tl c.dchar != nil)
 		end = (hd tl c.dchar).handle - 1;
+	last := 0;
+	for(i := 2; i + n <= len pdu; i += n){
+		h := get2(pdu, i);
+		# this characteristic's own handles, ascending; and so many, no more
+		if(h < c.phandle || h <= last || h > end || len ch.descs >= Maxdescs)
+			break;
+		last = h;
+		ch.descs = appendd(ch.descs, (h, uuid16(pdu, i+2, n-2)));
+	}
 	c.pending = 0;
-	if(last < end)
+	if(last >= c.phandle && last < end)
 		return request(c, inforeq(last + 1, end));
 	c.dchar = tl c.dchar;
 	return descriptors(c);

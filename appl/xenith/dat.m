@@ -278,6 +278,7 @@ Dat : module {
 
 	globalincref: int;
 	globalautoindent: int;
+	globalwrapword: int;	# new windows wrap by word (Wrap WORD, xenith -w)
 	seq : int;
 	maxtab : int;
 	mouse : ref Draw->Pointer;

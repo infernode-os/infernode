@@ -27,6 +27,11 @@ The venti fetch itself verifies every block against its score; with
 .B -s
 the payload is additionally checked against the given SHA-256 \(em the
 hash the audit chain sealed \(em and the command fails on mismatch.
+Venti's scores are SHA-1, so without
+.B -s
+what is fetched is not thereby what the chain sealed, and
+.I auditget
+says so on standard error.
 .PP
 .B -a
 names the content store; the default is the

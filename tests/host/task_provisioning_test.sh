@@ -80,7 +80,9 @@ echo LIST-AFTER-REJECT
 
 echo list > /tool/task/run
 cat /tool/task/run
-if {ftest -d /tool.4} {
+# Mount-point directories can outlive a server.  Its metadata file proves
+# that a child tools9p is actually mounted and live there.
+if {ftest -f /tool.4/meta} {
 	echo FAILED-MOUNT-PRESENT
 }{
 	echo FAILED-MOUNT-ABSENT

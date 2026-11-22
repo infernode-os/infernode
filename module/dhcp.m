@@ -41,6 +41,12 @@ Dhcpclient: module
 	bootp:	fn(net: string, ctlifc: ref Sys->FD, device: string, init: ref Bootconf): (ref Bootconf, string);
 	dhcp:	fn(net: string, ctlifc: ref Sys->FD, device: string, init: ref Bootconf, options: array of int): (ref Bootconf, ref Lease, string);
 
+	# the renewal (T1) and rebinding (T2) times, in seconds, a lease is run on:
+	# the server's when they make sense, half and seven-eighths otherwise,
+	# never sooner than Minrenew (a lease of a second or two is real, and
+	# is renewed inside it; what is not allowed is no wait at all), T1 before T2
+	Minrenew:	con 1;
+	timers:	fn(lease, t1, t2: int): (int, int);
 	applycfg:	fn(net: string, ctlifc: ref Sys->FD, conf: ref Bootconf): string;
 	removecfg:	fn(net: string, ctlifc: ref Sys->FD, conf: ref Bootconf): string;
 

@@ -305,10 +305,11 @@ current(): string
 	return name;
 }
 
-# a theme's name is a file in THEMEDIR, not a path and not "current"
+# a theme's name is a file in THEMEDIR, not a path and not one of the
+# served files: a read of event waits for the next switch
 validname(name: string): int
 {
-	if(name == nil || name == "current" || name[0] == '.')
+	if(name == nil || name == "current" || name == "event" || name[0] == '.')
 		return 0;
 	for(i := 0; i < len name; i++)
 		if(name[i] == '/' || name[i] == ' ' || name[i] == '\t' || name[i] == '\n')

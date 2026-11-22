@@ -74,6 +74,7 @@ SYSLIBS=\
 	-framework MessageUI\
 	-framework CallKit\
 	-framework Contacts\
+	-framework CoreLocation\
 	-framework LocalAuthentication\
 	-framework Security\
 	-framework AVFoundation\

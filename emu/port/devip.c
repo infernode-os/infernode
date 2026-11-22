@@ -138,6 +138,7 @@ static	char* ipstates[] = {
 static	Conv*	protoclone(Proto*, char*, int);
 static	Conv*	newconv(Proto*, Conv **);
 static	void	setladdr(Conv*);
+static	void	closeconv(Conv*);
 
 static int
 ip3gen(Chan *c, int i, Dir *dp)
@@ -383,10 +384,40 @@ static int m2p[] = {
 	1,
 };
 
+/*
+ * Does this open mode ask to change the file?  OWRITE is 1 and ORDWR is
+ * 2: a test of the OWRITE bit says no to an open for reading and
+ * writing, which then wrote all the same.
+ */
+static int
+wantswrite(int omode)
+{
+	return (omode&3) == OWRITE || (omode&3) == ORDWR || (omode & OTRUNC) != 0;
+}
+
+/*
+ * Whether the caller may open conversation cv (locked) in the way perm
+ * asks: its owner by the owner's bits, anyone else by the others', and
+ * eve regardless, as the native kernel has it (os/ip/devip.c). The test
+ * here was of the owner's bits for everyone, and only if those refused
+ * was the caller's name looked at: with the mode a conversation is
+ * given, 0660, any user could open any other's data and ctl files.
+ */
+static int
+convperm(Conv *cv, int perm)
+{
+	if(iseve())
+		return 1;
+	if(strcmp(up->env->user, cv->owner) == 0)
+		perm <<= 6;
+	return (perm & cv->perm) == perm;
+}
+
 static Chan *
 ipopen(Chan *c, int omode)
 {
-	Conv *cv, *nc;
+	Conv *cv;
+	Conv *volatile nc;
 	Proto *p;
 	uchar raddr[IPaddrlen];
 	ushort rport;
@@ -411,10 +442,16 @@ ipopen(Chan *c, int omode)
 		if(omode != OREAD)
 			error(Eperm);
 		break;
-	case Qndb:
-		if(omode & (OWRITE|OTRUNC) && !iseve())
+	case Qarp:
+		/* the host's table of who is at which address: eve's to change */
+		if(wantswrite(omode) && !iseve())
 			error(Eperm);
-		if((omode & (OWRITE|OTRUNC)) == (OWRITE|OTRUNC)){
+		break;
+	case Qndb:
+		/* the network database names the resolvers: changing it is eve's */
+		if(wantswrite(omode) && !iseve())
+			error(Eperm);
+		if(wantswrite(omode) && (omode & OTRUNC)){
 			f->ndb[0] = 0;
 			f->ndbvers++;
 		}
@@ -437,19 +474,17 @@ ipopen(Chan *c, int omode)
 			qunlock(&p->l);
 			nexterror();
 		}
-		if((perm & (cv->perm>>6)) != perm) {
-			if(strcmp(up->env->user, cv->owner) != 0)
-				error(Eperm);
-			if((perm & cv->perm) != perm)
-				error(Eperm);
-		}
-		cv->inuse++;
-		if(cv->inuse == 1) {
-			kstrdup(&cv->owner, up->env->user);
-			cv->perm = 0660;
+		if(!convperm(cv, perm))
+			error(Eperm);
+		if(cv->inuse == 0) {
+			/* the socket first: if there is none to be had,
+			 * nothing has been claimed */
 			if(cv->sfd < 0)
 				cv->sfd = so_socket(p->stype);
+			kstrdup(&cv->owner, up->env->user);
+			cv->perm = 0660;
 		}
+		cv->inuse++;
 		poperror();
 		qunlock(&cv->l);
 		qunlock(&p->l);
@@ -457,12 +492,11 @@ ipopen(Chan *c, int omode)
 	case Qlisten:
 		p = f->p[PROTO(c->qid)];
 		cv = p->conv[CONV(c->qid)];
-		if((perm & (cv->perm>>6)) != perm){
-			if(strcmp(up->env->user, cv->owner) != 0)
-				error(Eperm);
-			if((perm & cv->perm) != perm)
-				error(Eperm);
-		}
+		qlock(&cv->l);
+		sfd = convperm(cv, perm);
+		qunlock(&cv->l);
+		if(!sfd)
+			error(Eperm);
 
 		if(cv->state != Announced)
 			error("not announced");
@@ -475,16 +509,25 @@ ipopen(Chan *c, int omode)
 
 		sfd = so_accept(cv->sfd, raddr, &rport);
 
-		nc = protoclone(p, up->env->user, sfd);
-		if(nc == 0) {
-			so_close(sfd);
-			error(Enodev);
+		/* the call's socket, then its conversation, are ours to
+		 * give back if the rest fails */
+		nc = nil;
+		if(waserror()){
+			if(nc != nil)
+				closeconv(nc);
+			else
+				so_close(sfd);
+			nexterror();
 		}
+		nc = protoclone(p, up->env->user, sfd);
+		if(nc == 0)
+			error(Enodev);
 		memmove(nc->raddr, raddr, IPaddrlen);
 		nc->rport = rport;
 		setladdr(nc);
 		nc->state = Connected;
 		mkqid(&c->qid, QID(PROTO(c->qid), nc->x, Qctl), 0, QTFILE);
+		poperror();
 
 		poperror();
 		qunlock(&cv->listenq);
@@ -543,7 +586,7 @@ ipclose(Chan *c)
 static long
 ipread(Chan *ch, void *a, long n, vlong off)
 {
-	int r;
+	int r, hdrs;
 	Conv *c;
 	Proto *x;
 	char *p, *s;
@@ -595,13 +638,22 @@ ipread(Chan *ch, void *a, long n, vlong off)
 		c = x->conv[CONV(ch->qid)];
 		if(c->sfd < 0)
 			error(Ehungup);
-		if(c->headers) {
-			if(n < c->headers)
+		/* once: a ctl write changes it, and the length checked
+		 * must be the length used */
+		hdrs = c->headers;
+		if(hdrs) {
+			if(n < hdrs)
 				error(Ebadarg);
 			p = a;
-			r = so_recv(c->sfd, p + c->headers, n - c->headers, p, c->headers);
-			if(r > 0)
-				r += c->headers;
+			/*
+			 * A datagram of no bytes is its header: it was
+			 * returned as 0, the end of the file to any reader
+			 * (so one empty datagram from anyone ended a
+			 * listener's reading).
+			 */
+			r = so_recv(c->sfd, p + hdrs, n - hdrs, p, hdrs);
+			if(r >= 0)
+				r += hdrs;
 		} else
 			r = so_recv(c->sfd, a, n, nil, 0);
 		if(r < 0)
@@ -736,7 +788,6 @@ connectctlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 	USED(x);
 	if(c->state != Idle)
 		error(Econinuse);
-	c->state = Connecting;
 	c->cerr[0] = '\0';
 	switch(cb->nf) {
 	default:
@@ -754,10 +805,11 @@ connectctlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 		setlport(c);
 		break;
 	}
+	c->state = Connecting;
 	qunlock(&c->l);
 	if(waserror()){
 		qlock(&c->l);
-		c->state = Connected;	/* sic */
+		c->state = Idle;
 		nexterror();
 	}
 	/* p = x->connect(c, cb->f, cb->nf); */
@@ -773,7 +825,6 @@ announcectlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 {
 	if(c->state != Idle)
 		error(Econinuse);
-	c->state = Announcing;
 	c->cerr[0] = '\0';
 	ipmove(c->raddr, IPnoaddr);
 	c->rport = 0;
@@ -784,13 +835,14 @@ announcectlmsg(Proto *x, Conv *c, Cmdbuf *cb)
 		setladdrport(c, cb->f[1], 1);
 		break;
 	}
+	c->state = Announcing;
 	USED(x);
 	/* p = x->announce(c, cb->f, cb->nf); */
 	if(c->p->stype != S_UDP){
 		qunlock(&c->l);
 		if(waserror()){
-			c->state = Announced;	/* sic */
 			qlock(&c->l);
+			c->state = Idle;
 			nexterror();
 		}
 		so_listen(c->sfd);
@@ -819,6 +871,7 @@ ipwrite(Chan *ch, void *a, long n, vlong off)
 	Conv *c;
 	Proto *x;
 	char *p;
+	int hdrs, sfd;
 	Cmdbuf *cb;
 	Fs *f;
 
@@ -837,13 +890,14 @@ ipwrite(Chan *ch, void *a, long n, vlong off)
 			qunlock(&c->wlock);
 			nexterror();
 		}
-		if(c->headers) {
-			if(n < c->headers)
+		hdrs = c->headers;	/* once, as in ipread */
+		if(hdrs) {
+			if(n < hdrs)
 				error(Eshort);
 			p = a;
-			n = so_send(c->sfd, p + c->headers, n - c->headers, p, c->headers);
+			n = so_send(c->sfd, p + hdrs, n - hdrs, p, hdrs);
 			if(n >= 0)
-				n += c->headers;
+				n += hdrs;
 		} else
 			n = so_send(c->sfd, a, n, nil, 0);
 		poperror();
@@ -854,7 +908,7 @@ ipwrite(Chan *ch, void *a, long n, vlong off)
 	case Qarp:
 		return arpwrite(a, n);
 	case Qndb:
-		if(off > strlen(f->ndb))
+		if(off < 0 || off > strlen(f->ndb))
 			error(Eio);
 		if(off+n >= sizeof(f->ndb)-1)
 			error(Eio);
@@ -902,18 +956,25 @@ ipwrite(Chan *ch, void *a, long n, vlong off)
 		} else if(strcmp(cb->f[0], "hangup") == 0){
 			if(c->p->stype != S_TCP)
 				error(Enoctl);
+			/*
+			 * The socket is taken from the conversation while it is
+			 * locked, and closed after: two hangups each saw it
+			 * there and each closed it, the second closing whatever
+			 * had been given its number since.
+			 */
+			sfd = c->sfd;
+			c->sfd = -1;
+			c->state = Hungup;
 			qunlock(&c->l);
 			if(waserror()){
 				qlock(&c->l);
 				nexterror();
 			}
 			/* TO DO: check fd status if socket close/hangup interrupted */
-			if(c->sfd >= 0 && so_hangup(c->sfd, 1) < 0)
+			if(sfd >= 0 && so_hangup(sfd, 1) < 0)
 				oserror();
 			qlock(&c->l);
 			poperror();
-			c->sfd = -1;
-			c->state = Hungup;
 		} else if(strcmp(cb->f[0], "keepalive") == 0){
 			if(c->p->stype != S_TCP)
 				error(Enoctl);
@@ -958,12 +1019,20 @@ ipwstat(Chan *c, uchar *dp, int n)
 		error(Eshortstat);
 	p = f->p[PROTO(c->qid)];
 	cv = p->conv[CONV(c->qid)];
+	/* locked: an open compares the owner's name while this replaces it */
+	qlock(&cv->l);
+	if(waserror()){
+		qunlock(&cv->l);
+		nexterror();
+	}
 	if(!iseve() && strcmp(up->env->user, cv->owner) != 0)
 		error(Eperm);
 	if(!emptystr(d->uid))
 		kstrdup(&cv->owner, d->uid);
 	if(d->mode != ~0UL)
 		cv->perm = d->mode & 0777;
+	poperror();
+	qunlock(&cv->l);
 	poperror();
 	free(d);
 	return n;
@@ -972,7 +1041,7 @@ ipwstat(Chan *c, uchar *dp, int n)
 static Conv*
 protoclone(Proto *p, char *user, int nfd)
 {
-	Conv *c, **pp, **ep, **np;
+	Conv *c, **pp, **ep;
 	int maxconv;
 
 	c = 0;
@@ -1003,17 +1072,24 @@ protoclone(Proto *p, char *user, int nfd)
 		maxconv = 2 * p->nc;
 		if(maxconv > MAXCONV)
 			maxconv = MAXCONV;
-		np = realloc(p->conv, sizeof(Conv*) * maxconv);
-		if(np == nil)
-			error(Enomem);
-		p->conv = np;
+		/* the slots past nc are there, and nil (Fsproto) */
 		pp = &p->conv[p->nc];
-		memset(pp, 0, sizeof(Conv*)*(maxconv - p->nc));
 		p->nc = maxconv;
 		c = newconv(p, pp);
 	}
 
+	/*
+	 * c is locked and about to be claimed. What follows can fail (no
+	 * socket to be had, when the host is out of descriptors): the
+	 * conversation was left locked and in use, lost for good, and
+	 * enough of them left the protocol with none.
+	 */
 	c->inuse = 1;
+	if(waserror()){
+		c->inuse = 0;
+		qunlock(&c->l);
+		nexterror();
+	}
 	kstrdup(&c->owner, user);
 	c->perm = 0660;
 	c->state = Idle;
@@ -1023,9 +1099,11 @@ protoclone(Proto *p, char *user, int nfd)
 	c->rport = 0;
 	c->restricted = 0;
 	c->headers = 0;
-	c->sfd = nfd;
 	if(nfd == -1)
 		c->sfd = so_socket(p->stype);
+	else
+		c->sfd = nfd;
+	poperror();
 
 	qunlock(&c->l);
 	qunlock(&p->l);
@@ -1113,7 +1191,13 @@ Fsproto(Fs *f, Proto *p)
 		print("Fsproto: %s nc %d > %d\n", p->name, p->nc, Maskconv+1);
 		p->nc = Maskconv+1;
 	}
-	p->conv = malloc(sizeof(Conv*)*(p->nc+1));
+	/*
+	 * The table is made once at the size it may grow to, and never
+	 * moved: it is indexed without the protocol's lock by every read
+	 * of a conversation's files, and growing it by realloc freed the
+	 * table under them.
+	 */
+	p->conv = malloc(sizeof(Conv*)*(MAXCONV+1));
 	if(p->conv == nil)
 		panic("Fsproto");
 

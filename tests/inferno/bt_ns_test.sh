@@ -510,6 +510,55 @@ if {~ $#v 0} {
 	raise 'fail:forget took the wrong key with it'
 }
 
+# The keys file has a limit, and a pairing does not take it past it:
+# a file too large is not read at the next start, and every key in it
+# is lost then. Filled to the limit with other peers' keys, a new
+# pairing's key reaches factotum and is not added to the file; with a
+# peer forgotten there is room again.
+cp $KEYS /tmp/btns-keys.save
+echo -n > $KEYS
+hex=(0 1 2 3 4 5 6 7 8 9 a b c d e f)
+for (a in $hex) {
+	for (b in $hex) {
+		echo 'key proto=btlink addr=dd:dd:dd:dd:'^$a^$b^':00 type=4 !key=000000000000000000000000000000'^$a^$b >> $KEYS
+	}
+}
+before=`{wc -l < $KEYS}
+if {! ~ $before 256} {
+	raise 'fail:the keys file was not filled to its limit: '^$before^' lines'
+}
+{
+	echo 'connect aa:aa:aa:aa:aa:01!0x1001' >[1=0]
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+v=`{cat $FACT/ctl | grep 'proto=btlink addr=aa:aa:aa:aa:aa:01'}
+if {~ $#v 0} {
+	raise 'fail:with the keys file full, the new link key did not reach factotum'
+}
+after=`{wc -l < $KEYS}
+if {! ~ $after $before} {
+	raise 'fail:a pairing added to a keys file at its limit: '^$before^' lines became '^$after
+}
+v=`{cat $KEYS | grep 'aa:aa:aa:aa:aa:01'}
+if {! ~ $#v 0} {
+	raise 'fail:a key was written to a keys file at its limit'
+}
+echo forget aa:aa:aa:aa:aa:01 > $BT/ctl
+grep -v 'dd:dd:dd:dd:00:00' $KEYS > /tmp/btns-keys.less
+cp /tmp/btns-keys.less $KEYS
+{
+	echo 'connect aa:aa:aa:aa:aa:01!0x1001' >[1=0]
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+v=`{cat $KEYS | grep 'proto=btlink addr=aa:aa:aa:aa:aa:01'}
+if {~ $#v 0} {
+	raise 'fail:with a peer forgotten there was still no room in the keys file'
+}
+echo forget aa:aa:aa:aa:aa:01 > $BT/ctl
+cp /tmp/btns-keys.save $KEYS
+
 # iocap yesno: a numeric comparison is a line on pair, answered by a
 # write. Nobody reading it is a no.
 echo iocap yesno > $BT/ctl

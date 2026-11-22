@@ -1,0 +1,5 @@
+<!doctype html><title>loadCSS's idioms: a print sheet made all by its onload, a preload made a stylesheet by its onload</title>
+<link rel="stylesheet" href="support/loadcss-media.css" media="print" onload="this.media='all'; this.onload=null">
+<link rel="preload" href="support/loadcss-preload.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+<style>body{margin:0} div{width:100px;height:50px;background:red}</style>
+<div class="lc1"></div><div class="lc2"></div>

@@ -93,9 +93,18 @@ for s in 14 16 18 {
 # secstore stays locked and factotum starts empty in this mode.
 # Flip the default in InfernodeSDLActivity when LLM/keyring work
 # needs auth.
-if {~ $* --no-logon} {
-	skiplogon = 1
-	echo 'boot-mobile: dev mode (--no-logon)'
+#
+# --tablet (the iOS app passes it on an iPad): Lucifer lays out a
+# tablet held on its side as the desktop's three columns, and one held
+# upright as the phone's accordion (wm/lucifer's chooselayout).
+for a in $* {
+	if {~ $a --no-logon} {
+		skiplogon = 1
+		echo 'boot-mobile: dev mode (--no-logon)'
+	}
+	if {~ $a --tablet} {
+		inftablet = 1
+	}
 }
 
 # Hand off to the canonical boot sequence. `run` is Inferno sh's

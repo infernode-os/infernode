@@ -37,10 +37,7 @@ tool-result call_many_reads_0_5:
   | stream: done (0 chunks, 0 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 404 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_many_reads_0_0:read:{"args"\: "/usr/agentloop/f1.txt"}
-  | TOOL:call_many_reads_0_1:read:{"args"\: "/usr/agentloop/f2.txt"}
-  | TOOL:call_many_reads_0_2:read:{"args"\: "/usr/agentloop/...
+  | llm: STOP:tool_use\nTOOL:call_many_reads_0_0:read:{"args"\: "/usr/agentloop/f1.txt"}\nTOOL:call_many_reads_0_1:read:{"args"\: "/usr/agentloop/f2.txt"}\nTOOL:call_many_reads_0_2:read:{"args"\: "/usr/agentloop/...
   | tool read: args {"args": "/usr/agentloop/f1.txt"}
   | tool read: calling with 33 bytes
   | tool read: args {"args": "/usr/agentloop/f2.txt"}
@@ -53,24 +50,16 @@ tool-result call_many_reads_0_5:
   | tool read: calling with 33 bytes
   | tool read: args {"args": "/usr/agentloop/f6.txt"}
   | tool read: calling with 33 bytes
-  | tool read: done,     1	content-1
-  | 
-  | tool read: done,     1	content-2
-  | 
-  | tool read: done,     1	content-3
-  | 
-  | tool read: done,     1	content-4
-  | 
-  | tool read: done,     1	content-5
-  | 
-  | tool read: done,     1	content-6
-  | 
+  | tool read: done,     1	content-1\n
+  | tool read: done,     1	content-2\n
+  | tool read: done,     1	content-3\n
+  | tool read: done,     1	content-4\n
+  | tool read: done,     1	content-5\n
+  | tool read: done,     1	content-6\n
   | step 2: writing 259 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (1 chunks, 9 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 24 bytes
-  | llm: STOP:end_turn
-  | Read six.
-  | 
+  | llm: STOP:end_turn\nRead six.\n
   | turn done stop=end_turn steps=2

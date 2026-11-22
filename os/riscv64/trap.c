@@ -253,11 +253,12 @@ trap(Ureg *u)
 	 * case panicked this machine.  Trap entry moved the interrupted
 	 * SIE into SPIE (bit 5); that state is restored first.  R.PC is
 	 * set just past the faulting instruction, as a return address, for
-	 * the handler search (emu/port/dis.c:jitfault says why).
+	 * the handler search (emu/port/dis.c:jitfault says why).  A nil
+	 * address is -1 or that plus a field's offset, up to 65535, as there.
 	 */
 	if((cause == Eloadaccess || cause == Eloadpage || cause == Estoreaccess || cause == Estorepage)
 	&& up != nil && up->type == Interp && u->pc >= (uintptr)end
-	&& (u->tval == ~(u64int)0 || u->tval < 512)){
+	&& (u->tval == ~(u64int)0 || u->tval < 64*1024)){
 		splx((int)((u->status >> 4) & 2));
 		R.PC = (Inst*)(u->pc + inslen(u->pc));
 		disfault(u, exNilref);

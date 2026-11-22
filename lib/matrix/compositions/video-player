@@ -9,6 +9,11 @@
 # sync.  Add a second video-pane leaf on the same mount and it plays
 # frame-locked to the first.
 #
+# What is drawn over the frames is the feed's layers (#1095, layers(2)),
+# composed by the name space while it plays, no change here:
+#     bind -a /mnt/vision/1/layer /mnt/video/0/layer   # detections on top
+#     unmount /mnt/vision/1/layer /mnt/video/0/layer   # and off
+#
 # Wire up the feed, then load me:
 #     mount {vid9p /video-demo-media/clipC.y4m} /mnt/video
 #     wm/matrix /lib/matrix/compositions/video-player

@@ -76,6 +76,29 @@ NsConstruct: module {
 	# later shadow construction can recreate the private backing tree.
 	restricttoolns: fn(caps: ref Capabilities): string;
 
+	# Apply a spawned subagent's policy: restrictns for a child made
+	# inside its parent's restricted name space.  A child holds no part
+	# of its parent's tool server (its /tool is files of its own, saying
+	# what it was given, with no tool to call), may not be granted the
+	# model service, and writes nowhere but its scratch.  auditrequired
+	# is the install's audit switch, which cannot be seen from there:
+	# with it set, a child whose restriction cannot be recorded is
+	# refused.
+	restrictchildns: fn(caps: ref Capabilities, auditrequired: int): string;
+
+	# What restrictchildns would refuse caps for by its names and paths
+	# alone, with nothing restricted: nil if nothing.  For a caller to ask
+	# before it starts anything on the child's behalf (spawn opens the
+	# child's model session first, and a grant that would be refused was
+	# reported as that session's failure where there was none to open).
+	checkchildcaps: fn(caps: ref Capabilities): string;
+
+	# True if a subagent may not hold the tool: its effect needs the
+	# user's approval, which the coordinator asks for before its own
+	# agent's call and which a subagent's calls, made as module calls,
+	# never reach.
+	gatedtool: fn(name: string): int;
+
 	# Emit namespace manifest for the UI to display, one entry per line.
 	# Called AFTER restrictns() from the restricted namespace, on a file
 	# made by openmanifest BEFORE it: an agent granted /tmp has a /tmp of
@@ -109,8 +132,11 @@ NsConstruct: module {
 	# root. A bare grant authorises only that root when delegating to a child.
 	policyroot: fn(path: string): int;
 
-	# Clean up shadow directories for the current process.
-	# Call on agent exit to reclaim /tmp/.veltro-ns/shadow/{pid}-* entries.
+	# Clean up shadow directories for the current process: what is
+	# bound on each placeholder is unmounted in the caller's name space
+	# and the placeholders removed.  Nothing below a placeholder is
+	# removed, so a call made where the binds are live takes the view
+	# apart and leaves the files it showed.
 	cleanup: fn();
 
 	# An overlay (/tmp/veltro/cow/<actid>-<key>) made in an earlier start

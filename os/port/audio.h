@@ -50,7 +50,8 @@ enum
 {
 	Qdir = 0,		/* must start at 0 representing a directory */
 	Qaudio,
-	Qaudioctl
+	Qaudioctl,
+	Qaudiostat
 };
 
 /* required external platform specific functions */
@@ -60,6 +61,7 @@ long	audio_file_read(Chan*, void*, long, vlong);
 long	audio_file_write(Chan*, void*, long, vlong);
 long	audio_ctl_write(Chan*, void*, long, vlong);
 void	audio_file_close(Chan*);
+char*	audiostatus(char*, char*);	/* audiostat's one line, into buf..e */
 
 typedef struct _svp_t {
 	char*		s;	/* string */

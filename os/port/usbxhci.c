@@ -970,6 +970,17 @@ waittd(Wait *w, int tmout)
 				abortring(r);
 				return Eaborted;
 			}
+			/*
+			 * Stopped, and the transfer finished (or was posted
+			 * Stopped) before the command's completion: it is done.
+			 * Waiting for it again would only raise again for a
+			 * killed Prog -- and with the ring marked stopped, the
+			 * next pass would call that a dead controller.
+			 */
+			if(serr == nil){
+				r->stopped = 1;
+				return ccerrstr(w->er[2]>>24);
+			}
 		}
 		r->stopped = 1;
 
@@ -993,6 +1004,7 @@ ctlrcmd(Ctlr *ctlr, u32int c, u32int s, u64int p, u32int *er)
 {
 	Wait w[1];
 	char *err;
+	int okilling;
 
 	qlock(&ctlr->cmdlock);
 	if(needrecover(ctlr)){
@@ -1005,13 +1017,41 @@ ctlrcmd(Ctlr *ctlr, u32int c, u32int s, u64int p, u32int *er)
 	}
 	ctlr->cr->stopped = 0;
 	queuetd(ctlr->cr, c, s, p, w);
+	/*
+	 * A command is the controller's housekeeping, bounded by its own
+	 * five seconds, and not the caller's to give up: least of all the
+	 * Stop Endpoint that waittd sends for a transfer whose Prog was
+	 * killed. For such a caller every sleep raised at once (upkilled),
+	 * so the command's wait aborted the command ring, marked it
+	 * stopped, and the next pass took that for a dead controller: the
+	 * bus was reset and every device on it went (a reader of a USB
+	 * Wi-Fi adapter killed, on the Pi 5). As devmnt's clunks for a
+	 * dying Prog, the wait is made under up->killing.
+	 */
+	okilling = up->killing;
+	if(okilling == 0)
+		up->killing = 1;
 	err = waittd(w, 5000);
+	up->killing = okilling;
 	qunlock(&ctlr->cmdlock);
 
 	if(er != nil)
 		memmove(er, w->er, 4*4);
 
 	return err;
+}
+
+static void
+setresidue(Ring *r, u32int x, u32int reported)
+{
+	int queued;
+
+	queued = r->residue[x & r->mask];
+	if(queued < 0)
+		reported = 0;
+	else if(reported > (u32int)queued)
+		reported = queued;
+	r->residue[x & r->mask] = reported;
 }
 
 static void
@@ -1030,7 +1070,7 @@ completering(Ctlr *ctlr, Ring *r, u32int *er)
 		td = &r->base[4*(x & r->mask)];
 		if((*ctlr->x.dmaaddr)(td) == pa){
 			if(r->residue != nil)
-				r->residue[x & r->mask] = er[2] & 0xFFFFFF;
+				setresidue(r, x, er[2] & 0xFFFFFF);
 			r->rp = x+1;
 			break;
 		}
@@ -1399,6 +1439,32 @@ initepctx(Ctlr *ctlr, u32int *w, Ring *r, Ep *ep)
 		w[4] |= (ep->maxpkt*ep->ntds)<<16;
 }
 
+/*
+ * The length a Normal TRB can carry for a transfer of n bytes.  Its
+ * length field is 17 bits, with the count of packets left and the
+ * interrupter above it: a length past the field was sent as its low
+ * 17 bits, so a read of 128K moved nothing and returned 128K, and a
+ * longer one was reported to an interrupter nobody services.  A read
+ * is cut to the most whole packets the field holds; for a write, what
+ * comes back is not n and the caller refuses it.
+ */
+static long
+trblen(long n, int maxpkt, int rd)
+{
+	long lim;
+
+	if(n < 0)
+		return 0;
+	if(n <= 0x1ffff)
+		return n;
+	if(!rd)
+		return -1;
+	lim = 0x1ffff;
+	if(maxpkt > 0 && maxpkt <= 1024)
+		lim -= lim % maxpkt;
+	return lim;
+}
+
 static void
 initisoio(Epio *io, Ep *ep)
 {
@@ -1407,6 +1473,8 @@ initisoio(Epio *io, Ep *ep)
 	io->rp0 = io->ring->wp;
 	io->frame0 = io->frame = 0;
 	io->period = ep->pollival << 3*(ep->dev->speed == Fullspeed || ep->dev->speed == Lowspeed);
+	if(io->period < 1)
+		io->period = 1;		/* isoread and isowrite divide by it */
 	if(io->ring->id & 1){
 		io->ring->residue = smalloc((io->ring->mask+1)*sizeof(io->ring->residue[0]));
 		io->incr = 0;
@@ -1669,10 +1737,11 @@ isoread(Ep *ep, uchar *p, long n)
 	for(i = io->frame0; (int)(io->ring->rp - io->rp0) > 0 && n > 0; i++) {
 		if((io->rp0 & io->ring->mask) == io->ring->mask)
 			io->rp0++;
-		m = io->tdsz - io->ring->residue[io->rp0 & io->ring->mask];
+		m = (long)io->tdsz - io->ring->residue[io->rp0 & io->ring->mask]
+			- io->nleft;
 		if(m > 0){
 			d = io->buf + (i&io->ring->mask)*io->tdsz;
-			d += io->nleft, m -= io->nleft;
+			d += io->nleft;
 			if(n < m){
 				dmainval(d, n);
 				memmove(p, d, n);
@@ -1896,6 +1965,9 @@ epread(Ep *ep, void *va, long n)
 	if((err = unstall(ep, io->ring)) != nil)
 		error(err);
 
+	/* a read may be shorter than asked: as much as one TRB can say */
+	n = trblen(n, ep->maxpkt, 1);
+
 	/*
 	 * 9front bounces a user-space buffer; this kernel has no user
 	 * space, and what it has instead is memory a PCI device may not
@@ -2032,6 +2104,10 @@ epwrite(Ep *ep, void *va, long n)
 
 	if((err = unstall(ep, io->ring)) != nil)
 		error(err);
+
+	/* a write is all or nothing: more than one TRB can say is refused */
+	if(trblen(n, ep->maxpkt, 0) != n)
+		error(Ebadlen);
 
 	dp = p;
 	if(!pcidmaok(p, n)){
@@ -2230,4 +2306,3 @@ xhcilinkage(Hci *hp, Xhci *ctlr)
 
 	ctlr->active = hp;
 }
-

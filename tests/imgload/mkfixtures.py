@@ -26,3 +26,57 @@ open(d + "/rb.svg", "w").write('''<?xml version="1.0" encoding="UTF-8"?>
 <rect x="0" y="4" width="8" height="4" fill="#0000ff"/>
 </svg>
 ''')
+# Alpha that is not RGBA's: grey and alpha (Apple's logos), white over
+# black at half alpha; a palette whose tRNS has a translucent entry and
+# two transparent ones (pngquant's icons): red, opaque, over blue at
+# alpha 128, the right column transparent (index 2), the bottom row
+# transparent too (index 3)
+la = Image.new("LA", (8, 8), (0, 128))
+la.paste((255, 255), (0, 0, 8, 4))
+la.save(d + "/wbla.png")
+pa = Image.new("P", (8, 8), 1)
+pa.putpalette([255, 0, 0, 0, 0, 255, 0, 255, 0, 255, 255, 0])
+pa.paste(0, (0, 0, 8, 4))
+pa.paste(2, (7, 0, 8, 8))
+pa.paste(3, (0, 7, 8, 8))
+pa.save(d + "/rbpa.png", transparency=bytes([255, 128, 0, 0]))
+open(d + "/refs.svg", "w").write('''<?xml version="1.0" encoding="UTF-8"?>
+<!-- 40 by 10, four cells: a red square clipped to its left half (the
+clip path after it), a green square with its middle masked out, a blue
+square drawn by use, a yellow one by use of a symbol -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="10">
+<rect x="0" y="0" width="10" height="10" fill="#ff0000" clip-path="url(#left)"/>
+<defs>
+<mask id="hole"><rect x="10" y="0" width="10" height="10" fill="#ffffff"/><rect x="13" y="3" width="4" height="4" fill="#000000"/></mask>
+<rect id="sq" width="10" height="10" fill="#0000ff"/>
+</defs>
+<rect x="10" y="0" width="10" height="10" fill="#00ff00" mask="url(#hole)"/>
+<use xlink:href="#sq" x="20" y="0"/>
+<symbol id="sym" viewBox="0 0 1 1"><rect width="1" height="1" fill="#ffff00"/></symbol>
+<use href="#sym" x="30" y="0" width="10" height="10"/>
+<clipPath id="left"><rect x="0" y="0" width="5" height="10"/></clipPath>
+</svg>
+''')
+# A GIF whose transparent index follows a colour, across each row: red,
+# clear, white, clear (paulgraham.com's titles): the clear pixels clear
+gt = Image.new("P", (4, 1), 0)
+gt.putpalette([255, 0, 0, 0, 0, 0, 255, 255, 255])
+gt.putpixel((1, 0), 1)
+gt.putpixel((2, 0), 2)
+gt.putpixel((3, 0), 1)
+gt.save(d + "/clear.gif", transparency=1)
+# A style sheet in an SVG, as drawing programs write one: a type rule,
+# a class, two classes, an id, a style attribute after them, a
+# presentation attribute under them, two of a property in one style
+# attribute (the last taken): 70 by 10, seven cells
+open(d + "/sheet.svg", "w").write('''<svg xmlns="http://www.w3.org/2000/svg" width="70" height="10">
+<style>/* .z{fill:#ff0000} */ rect{fill:#ff0000} .a{fill:#0000ff} .b.c{fill:#00ff00} #d{fill:#ffff00}</style>
+<rect class="a" width="10" height="10"/>
+<rect class="b c" x="10" width="10" height="10"/>
+<rect id="d" class="a" x="20" width="10" height="10"/>
+<rect class="a" style="fill:#ffffff" x="30" width="10" height="10"/>
+<rect class="a" fill="#ff0000" x="40" width="10" height="10"/>
+<rect style="fill:#ff0000;fill:#00ffff" x="50" width="10" height="10"/>
+<rect x="60" width="10" height="10"/>
+</svg>
+''')

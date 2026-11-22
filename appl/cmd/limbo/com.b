@@ -297,6 +297,7 @@ modcom(entry: ref Decl)
 			hints |= HASLDT;
 		if(excs != nil)
 			hints |= HASEXCEPT;
+		hints |= HASSIGS;
 		discon(hints);		# runtime hints
 		discon(maxstack);	# minimum stack extent size
 		discon(ninst);
@@ -313,6 +314,10 @@ modcom(entry: ref Decl)
 		if(excs != nil)
 			disexc(excs);
 		dispath();
+		if(LDT)
+			dissigs(impdecl, ldts);
+		else
+			dissigs(impdecl, nil);
 	}else{
 		asminst(firstinst);
 		asmentry(entry);
@@ -748,7 +753,7 @@ nconstqual(s1: ref Node): int
 casecom(cn: ref Node)
 {
 	d: ref Decl;
-	left, p, tmp, tmpc: ref Node;
+	left, p, tmp, tmpc, tmpv: ref Node;
 	jmps, wild, j1, j2: ref Inst;
 
 	c := cn.ty.cse;
@@ -792,6 +797,15 @@ casecom(cn: ref Node)
 			ctype = tint;
 		}else{
 			(left, tmp) = eacom(left, nil);
+			#
+			# tfreenow lets go what the statement held to its
+			# end, which can be what left's address is in
+			# (case f()[i], f's array): take the value first
+			#
+			if(tpending() && !stayput(left)){
+				genmove(left.src, Mas, left.ty, left, tmpv = talloc(left.ty, nil));
+				left = tmpv;
+			}
 			tfreenow();
 		}
 	}
@@ -827,6 +841,7 @@ casecom(cn: ref Node)
 	}
 	tfree(tmp);
 	tfree(tmpc);
+	tfree(tmpv);
 
 	jmps = nil;
 	wild = nil;
@@ -1141,7 +1156,13 @@ rewritecomm(n, comm, slot: ref Node): (ref Node, ref Node)
 		return (nil, nil);
 	adr = nil;
 	if(n == comm){
-		if(comm.op == Osnd && sumark(n.right).addable < Rcant)
+		#
+		# the alt keeps the addresses in its table while it
+		# blocks: only the frame's and the module's data's stay
+		# good (see stayput), so a value in an object (g.n, a[i])
+		# is sent from, or received into, a temporary
+		#
+		if(comm.op == Osnd && sumark(n.right).addable < Ralways)
 			adr = n.right;
 		else{
 			adr = tmp = talloc(n.ty, nil);
@@ -1155,7 +1176,7 @@ rewritecomm(n, comm, slot: ref Node): (ref Node, ref Node)
 		}
 	}
 	if(n.right == comm && n.op == Oas && comm.op == Orcv
-	&& sumark(n.left).addable < Rcant && (n.left.op != Oname || n.left.decl != nildecl))
+	&& sumark(n.left).addable < Ralways && (n.left.op != Oname || n.left.decl != nildecl))
 		adr = n.left;
 	if(adr != nil){
 		p := genrawop(comm.left.src, ILEA, adr, nil, slot);

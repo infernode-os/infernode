@@ -75,6 +75,9 @@ _start:
 	ldr	x1, =_stack_top
 	mov	sp, x1
 
+#ifdef BCM2712
+	mov	x0, x19			/* its report prints this */
+#endif
 	bl	bmain			/* returns the entry address */
 
 	mov	x1, x0

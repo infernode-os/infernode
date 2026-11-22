@@ -87,6 +87,8 @@ Wpakey: module
 	# The RSN information element this supplicant offers: WPA2, CCMP
 	# for both the group and the pairwise cipher, PSK authentication.
 	rsnie:	fn(): array of byte;
+	# the same with group cipher "ccmp" or "tkip" (a WPA/WPA2 mixed-mode network's); nil for another
+	rsniegroup:	fn(group: string): array of byte;
 
 	#
 	# What recv asks of its caller, in the order returned.
@@ -113,6 +115,9 @@ Wpakey: module
 		ptk:	array of byte;
 		lastrepc:	big;
 		newptk:	int;			# a PTK is derived and not yet installed
+		snonce:	array of byte;		# ours for the handshake in progress; nil between handshakes
+		gtk:	array of byte;		# the group key last installed,
+		gtkkid:	int;			# and its index: not installed twice
 
 		mk:	fn(pmk, smac, rsne: array of byte): ref Supp;
 		reset:	fn(s: self ref Supp);

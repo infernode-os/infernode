@@ -39,6 +39,7 @@ Framem : module {
 		tickback : ref Draw->Image;	# saved image under tick
 		ticked : int;				# is tick on screen ?
 		noredraw : int;
+		wrapword : int;			# break lines between words, not anywhere
 	};
 
 	frcharofpt : fn(f : ref Frame, p : Draw->Point) : int;

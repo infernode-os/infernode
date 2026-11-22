@@ -1,0 +1,121 @@
+name: Sanitizers
+
+# The hosted emulator built with AddressSanitizer and UndefinedBehavior-
+# Sanitizer (tools/sanemu) running the test suite and sysfuzz, nightly.
+# The bugs the ordinary jobs see as a rare crash, a panic or a "flaky"
+# test -- a free of memory still in use, a block freed twice, a write
+# past an allocation -- the sanitizers report where they happen, with the
+# stacks of the use, the allocation and the free. On a pull request that
+# changes the emulator's C only the build is checked: it rots unseen
+# otherwise (a sanitizer build that did not link, its waitmem missing,
+# went unnoticed until it was needed).
+
+on:
+  schedule:
+    # nightly, 02:23 UTC
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'emu/port/**'
+      - 'emu/Linux/**'
+      - 'include/**'
+      - 'lib9/**'
+      - 'libbio/**'
+      - 'libmp/**'
+      - 'libsec/**'
+      - 'libmath/**'
+      - 'libfreetype/**'
+      - 'libmemdraw/**'
+      - 'libmemlayer/**'
+      - 'libdraw/**'
+      - 'libtk/**'
+      - 'libinterp/**'
+      - 'libkeyring/**'
+      - 'mkfiles/**'
+      - 'tools/sanemu'
+      - '.github/workflows/sanitize.yml'
+
+permissions: {}
+
+concurrency:
+  group: sanitize-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event_name == 'pull_request'
+    name: Sanitizer build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install build dependencies
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+
+    - name: Bootstrap build (mk, libraries, limbo, emulator)
+      run: ./build-linux-amd64.sh headless
+
+    - name: Build the sanitizers' emulator
+      run: tools/sanemu build
+
+  suite:
+    if: github.event_name != 'pull_request'
+    name: Suite and sysfuzz under ASan and UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install build dependencies
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+
+    - name: Bootstrap build (mk, libraries, limbo, emulator)
+      run: ./build-linux-amd64.sh headless
+
+    - name: Build runtime tree
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
+    - name: Build the sanitizers' emulator
+      run: tools/sanemu build
+
+    # Each step fails on a failing test, a suite that did not finish, or
+    # any sanitizer report, which it prints; all are kept as artifacts.
+    - name: Test suite, interpreted (-c0)
+      if: success() || failure()
+      run: tools/sanemu suite -c0
+
+    - name: Test suite, compiled (-c1)
+      if: success() || failure()
+      run: tools/sanemu suite -c1
+
+    - name: sysfuzz
+      if: success() || failure()
+      run: python3 tools/sysfuzz -a -n 12 -s 300 -j 2 -t 30
+
+    - name: Keep the reports
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: sanitizer-reports
+        path: |
+          tmp/sanemu/log/
+          tmp/sanemu/suite-c0.txt
+          tmp/sanemu/suite-c1.txt
+          tmp/sysfuzz/fail/
+        if-no-files-found: ignore
+        retention-days: 14

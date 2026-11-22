@@ -120,7 +120,7 @@ server(ac: Sys->Connection, ai: ref Keyring->Authinfo)
 
 serve(ai: ref Keyring->Authinfo, dfd: ref Sys->FD)
 {
-	(wrapped, nil) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, dfd, 0);
+	(wrapped, nil) := auth->server("aes_256_gcm" :: nil, ai, dfd, 0);
 	if(wrapped == nil)
 		return;
 	buf := array[MSGLEN] of byte;
@@ -134,7 +134,7 @@ clientproc(addr: string, ai: ref Keyring->Authinfo, index: int, rc: chan of int)
 {
 	(dok, dc) := sys->dial(addr, nil);
 	if(dok < 0){ rc <-= -1; return; }
-	(wrapped, nil) := auth->client("aes_256_cbc sha256", ai, dc.dfd);
+	(wrapped, nil) := auth->client("aes_256_gcm", ai, dc.dfd);
 	if(wrapped == nil){ rc <-= -1; return; }
 
 	msg := payload(index);

@@ -527,6 +527,7 @@ struct Type
 	uchar	flags;
 	int	sbl;			/* slot in .sbl adt table */
 	long	sig;			/* signature for dynamic type check */
+	uchar	*dig;			/* SHA-256 of the text sig is folded from */
 	long	size;			/* storage required, in bytes */
 	Decl	*decl;
 	Type	*tof;

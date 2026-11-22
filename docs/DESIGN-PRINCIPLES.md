@@ -149,14 +149,17 @@ catalogue. The enforcement mechanism and the agent's
 self-knowledge are the same object. There is no concept of an
 "unavailable" tool — an ungranted tool simply isn't there.
 
-### This is verified, not asserted
+### This is checked, not merely asserted
 
 The namespace isolation property — that a mount performed in one
 process group never appears in another's mount table except by
-its own action — has been model-checked exhaustively at small
-scale and to 3.17 billion distinct states at medium scale, with
-supporting SPIN models for the concurrent code and CBMC proofs
-over the C implementation (`formal-verification/`). The claim
+its own action — is stated as a TLA+ invariant and model-checked
+exhaustively at small scale (the medium run is incomplete), with
+SPIN models of the locking and of three fixed races and CBMC
+harnesses over `pgrpcpy` (`formal-verification/`). Those are checks
+of a specification and of one function's deep copy; the TLA+ model
+cannot express shared mount structure, so it does not by itself
+rule out the C bug. The claim
 "a small TCB you can actually verify" is the project's thesis;
 design that respects the chokepoint keeps the thesis true.
 Design that adds a second enforcement path dilutes it.
@@ -218,12 +221,13 @@ surface that, never swallow it.
 **Sessions via the clone pattern.** When clients need per-session
 state, serve a `clone` file: reading it allocates a session and
 returns its id, and a directory of that name appears with the
-session's files. Study `appl/cmd/gpusrv.b` — its 35-line header
-comment is the best tutorial on this idiom in the tree — and
-`appl/cmd/webfs.b`.
+session's files, gone when they are all closed. Study
+`appl/cmd/visionfs.b` — its header comment and `man/4/visionfs` say
+what each file does, and its sessions show both waiting reads and a
+reader's own place in a stream — and `appl/cmd/webfs.b`.
 
 **Exemplars worth studying** before writing your own:
-`gpusrv.b` (clone multiplexing), `webfs.b` (remote-backed
+`visionfs.b` (clone multiplexing), `webfs.b` (remote-backed
 `/mnt` service), `auditfs.b` (a five-file surface whose header
 comment explains every design choice), `man/4/mail9p` (the man
 page format a service should ship with), and
@@ -363,6 +367,51 @@ server appends and seals; *where* the log persists, how long,
 and whether it ships off-host are decided by what you mount at
 the path. Retention policy is a mount decision, not a code
 feature.
+
+**Compose in space, in time, and in both.** The aim is radical
+composability, and there is more than one kind; each fits a
+different shape of problem, and they compose with each other.
+
+*In time* is the pipeline: a stream flowing one way through
+stages, each with one reader.
+`{while {} {ns; echo; sleep 1}} | ns2mmd | wm/page -s` draws the
+machines a name space reaches and redraws it as mounts come and
+go: text in, text out, one consumer, nothing to steer. A pipeline
+has no names and no state, and it gives backpressure for nothing.
+When the problem has that shape, it is the simplest correct
+structure, and a file server would be ceremony.
+
+*In space* is the name space: what can be reached, from where, by
+whom, built by `mount` and `bind`. A camera's feed on one machine,
+recognition on another and a window on a third were joined by a
+mount on each and one bind: the feed read by two machines at once
+and joinable mid-stream, the detections laid over the picture by
+binding a session's `layer/` into the feed's (and taken off by
+unmounting it), the session moved from GPU to DLA by a line
+written to its `ctl` while the stream ran. A pipe gives none of
+that: it has one reader, no back channel, no late joiner, and it
+ends at the machine. And because the arrangement lives in the name
+space, `ns` can report it; a pipeline's shape is known only to the
+shell that built it.
+
+*In both* is the usual case, and it is composition composed: the
+name space wires the stages together and decides who sees what;
+pipelines do the transforming inside a stage; a stage's results
+are served as files so the next can be bound. vision(1)'s
+`vision/detect`, `vision/draw` and `vision/crop` are filters
+piped through; visionfs reads a mounted feed and serves layers for
+anyone to bind; ns2mmd is a pipeline over a file, `ns`, that
+describes the name space. The rule of thumb: one consumer, one
+direction, nothing to steer, pipe it; several consumers, control,
+a late joiner, another machine, or anyone else needing to see it,
+serve it as files and bind it.
+
+The cost to know: a pipe streams, while a 9P read is a request
+and its reply. Over a network a stream read as a file pays a round
+trip a message unless its reader keeps several reads in flight. A
+file interface that carries a stream should be designed so it can
+be read that way (whole frames, offsets that mean something), not
+abandoned for a socket.
 
 **Do not build the grand unified anything.** No central logger,
 no plugin registry, no service bus, no vector store for
@@ -606,7 +655,7 @@ In reading order for a new contributor:
   and its Plan 9 lineage.
 - [LIMBO-FOR-GO-PROGRAMMERS.md](LIMBO-FOR-GO-PROGRAMMERS.md) —
   the language, mapped from what you already know.
-- `man/2/styxservers`, `man/4/mail9p`, `appl/cmd/gpusrv.b` —
+- `man/2/styxservers`, `man/4/mail9p`, `appl/cmd/visionfs.b` —
   how to write and document a file server.
 - `doc/limbo/limbo.ms`, `doc/styx.ms`, `doc/sh.ms` — the
   original Bell Labs papers, in-tree.

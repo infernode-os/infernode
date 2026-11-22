@@ -19,6 +19,9 @@
 #      data file kept only the last 9P message of the write), so
 #      README.md showed as its last line; and the kinds Xenith shows
 #      as documents (docreg(2): an SVG image here) opening in the editor.
+#   6. Every plumbed text file opening an editor of its own (a tab per
+#      click of wm/settings's Edit buttons): text goes to the one editor,
+#      `editor`, through its posted server, as lucictx sends it.
 #
 # Boots the full Lucifer GUI headless (SDL dummy driver, skiplogon) and
 # asserts the /mnt/ui presentation namespace contract — deterministic, no
@@ -118,8 +121,17 @@ echo R_PDF_BEGIN
 cat /mnt/ui/activity/0/presentation/plumb-1/type
 echo R_PDF_END
 echo R_CFG_BEGIN
-cat /mnt/ui/activity/0/presentation/plumb-2/type
+cat /mnt/ui/activity/0/presentation/editor/type
 echo R_CFG_END
+plumb -t text /lib/sh/profile
+sleep 3
+echo R_ED_BEGIN
+mkdir -p /tmp/prestest-ed
+mount -A '"'"'#seditor/fs'"'"' /tmp/prestest-ed
+echo EDINDEX `{cat /tmp/prestest-ed/index}
+unmount /tmp/prestest-ed
+echo EDITORS `{for a in `{ls /mnt/ui/activity/0/presentation} {cat $a/dispath >[2]/dev/null} | grep editor.dis | wc -l}
+echo R_ED_END
 echo R_ARTS2_BEGIN
 ls /mnt/ui/activity/0/presentation
 echo R_ARTS2_END
@@ -156,12 +168,20 @@ else
     section R_CFG_BEGIN R_CFG_END | grep -q 'app' \
         && pass "plumbed non-media -> editor (type=app)" \
         || fail "plumbed non-media routed wrong (expected type=app)"
+    section R_ED_BEGIN R_ED_END | grep -q '^EDINDEX 1 /lib/sh/profile 0' \
+        && pass "a second text file goes to the running editor (through #seditor/fs)" \
+        || fail "the running editor was not given the second file: $(section R_ED_BEGIN R_ED_END | grep EDINDEX)"
+    section R_ED_BEGIN R_ED_END | grep -qE '^EDITORS +1$' \
+        && pass "one editor, not another started" \
+        || fail "another editor was started: $(section R_ED_BEGIN R_ED_END | grep EDITORS)"
     section R_MD_BEGIN R_MD_END | grep -qx 'markdown' \
         && pass "plumbed Markdown -> type=markdown" \
         || fail "plumbed Markdown did NOT become a markdown artifact"
     # the data is the file whole, less the final newline (one write's
     # trailing newline is not the data's)
-    want=$(head -c -1 "$ROOT/README.md" | md5sum | cut -d' ' -f1)
+    nbytes=$(wc -c < "$ROOT/README.md")
+    nbytes=$((nbytes - 1))
+    want=$(dd if="$ROOT/README.md" bs=1 count="$nbytes" 2>/dev/null | md5sum | cut -d' ' -f1)
     section R_MD_BEGIN R_MD_END | grep -q "^MD5 $want" \
         && pass "plumbed Markdown's data is the whole file (README.md, several 9P messages)" \
         || fail "plumbed Markdown's data is not the file ($(section R_MD_BEGIN R_MD_END | grep MD5), want $want)"

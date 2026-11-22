@@ -25,7 +25,7 @@ where services come and go.
 It was originally intended to register Grid resources
 but has much wider use.
 .I Registry
-serves 9P on its standard input.
+serves 9P on its standard input, until that is closed.
 That can be mounted in the local name space (see below for an example),
 or served over a connection
 (eg, via
@@ -129,6 +129,14 @@ Multiple changes are coalesced into one report.
 A service file created by
 .B new
 may be read by anyone, but may be written only by its owner.
+The owner is the user name its creator's connection attached with:
+the user who mounted the registry, or, for a registry served by
+.IR styxlisten (1),
+the name each caller authenticated with (see the examples below).
+Everyone who reaches the registry through one mount, or through an
+.IR export (4)
+of one, is the user who made that mount, and so owns, and may change
+or remove, anything registered that way.
 Each write must contain a set of attribute/value pairs, formatted as above, which adds new attributes to the service
 description and changes the value of
 existing attributes.
@@ -137,7 +145,16 @@ The owner of a service can remove its registration at any time by removing the c
 service file (eg, using
 .IR rm (1)
 or
-.IR sys-remove (2)).
+.IR sys-remove (2)),
+or by closing a file descriptor opened on it with
+.BR ORCLOSE ;
+nobody else can open it that way.
+A write is taken whole or not at all.
+A service name cannot be
+.BR . ,
+.B ..
+or one of the control files' names, and neither it nor an
+attribute name or value can contain a control character.
 .PP
 Typically, most services register themselves dynamically, perhaps using their locations (eg, network address)
 as their service names.
@@ -191,7 +208,21 @@ Start a registry that appears at the standard location for local registries,
 mount {ndb/registry} /mnt/registry
 .EE
 .PP
-Make that registry available to the network on authenticated connections:
+Serve a registry to the network on authenticated connections,
+each caller owning what it registers, and mount it here as well
+(this is what
+.B svc/registry
+does; see
+.IR svc (8)):
+.IP
+.EX
+styxlisten 'tcp!*!registry' ndb/registry
+mount -c 'tcp!127.0.0.1!registry' /mnt/registry
+.EE
+.PP
+Make an already mounted registry available to the network.
+Every caller then acts as the user who mounted it, so this suits only
+callers who are to share its entries:
 .IP
 .EX
 listen -v 'tcp!*!registry' {export /mnt/registry&}
@@ -199,7 +230,9 @@ listen -v 'tcp!*!registry' {export /mnt/registry&}
 .SH SOURCE
 .B /appl/cmd/ndb/registry.b
 .SH SEE ALSO
+.IR listen (1),
 .IR attrdb (2),
-.IR registries (2)
+.IR registries (2),
+.IR svc (8)
 .SH BUGS
 It is not currently possible to have two values with the same attribute name in the same service description.

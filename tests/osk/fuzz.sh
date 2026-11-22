@@ -56,3 +56,4 @@ sleep 2
 cat /mnt/osk/status > /tmp/status.end
 cp /edit/1/body /tmp/body
 echo R done
+echo halt > '#c/sysctl'

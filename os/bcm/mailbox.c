@@ -85,7 +85,9 @@ static u32int mboxcode;		/* the firmware's answer word from the last call */
  * a buffer the next caller was free to overwrite.
  *
  * Not lock() and not ilock(), but the bounded _tas mutex fbcons and the
- * uart use, held with interrupts off. The reasons, in order:
+ * uart use, held with interrupts off -- by every caller that is not a
+ * process free to sleep; that one queues on a QLock and keeps its
+ * interrupts (mboxql, below). The reasons, in order:
  *
  *   - the print path reaches here from INTERRUPT AND PANIC CONTEXT.
  *     panic() is putstrn(), which is screenputs(), which scrolls the
@@ -128,9 +130,44 @@ static int mboxlockable;
 typedef struct Mboxhold Mboxhold;
 struct Mboxhold
 {
-	int	spl;		/* interrupt state to put back */
-	int	held;		/* the mutex is ours to release */
+	/*
+	 * longs, not ints: the first calls are made with the MMU off, where
+	 * all memory is Device and an unaligned access faults, and the
+	 * compiler merged two of four ints' zeroing into one 8-byte store at
+	 * offset 4 -- a data abort before the banner.
+	 */
+	long	spl;		/* interrupt state to put back */
+	long	held;		/* the mutex is ours to release */
+	long	q;		/* taken by a process that may sleep: mboxql is ours too */
+	long	fail;		/* not taken at all: the call must not be made */
 };
+
+/*
+ * A process that may sleep -- interrupts on, no spin lock held -- takes
+ * the mailbox as a QLock and makes its call with interrupts ON. The
+ * mutex below only ever had to keep a second caller's words out of an
+ * exchange; keeping interrupts off for the whole of one was a way of
+ * ruling out the same-core case (see above), and it cost a core for as
+ * long as the firmware takes to answer. That is tens of milliseconds
+ * for the slow calls: SET_POWER_STATE with the wait bit, the USB block's
+ * in usbdwc's init, held a Pi 4's core for 26.4ms at every boot, and the
+ * boot's preemption check, a kproc wired to that core, timed out on
+ * about one boot in fourteen (the bench Pi 4's serial logs, every time
+ * with the usbotg init beside it). Soft real time does not survive
+ * that. A process holder may now be preempted mid-call: other process
+ * callers sleep on mboxql meanwhile, and the firmware's reply waits in
+ * the FIFO for the holder, the only reader.
+ *
+ * Anything else -- no process yet, interrupts off, a spin lock held --
+ * takes the mutex as before, with interrupts off. If the holder is a
+ * process on THIS core it cannot finish while we spin (it was
+ * preempted, and a preempted proc resumes only on its own core,
+ * #622), so that caller does not wait for it: its call fails. No
+ * mailbox caller runs at interrupt time, so in practice that is a
+ * splhi section that happens to want the firmware just then.
+ */
+static QLock mboxql;
+static int mboxqcore = -1;	/* the core of a process holder, or -1 */
 
 enum
 {
@@ -176,12 +213,36 @@ mboxacquire(Mboxhold *h)
 
 	h->held = 0;
 	h->spl = 0;
+	h->q = 0;
+	h->fail = 0;
 	if(!mboxlockable)
 		return;
+	if(up != nil && islo() && up->pri != PriLock){
+		qlock(&mboxql);
+		h->q = 1;
+		/* the mutex is only ever held briefly by the others */
+		for(;;){
+			h->spl = splhi();
+			if(_tas(&mboxmutex) == 0)
+				break;
+			splx(h->spl);
+			microdelay(10);
+		}
+		h->held = 1;
+		mboxqcore = m->machno;
+		splx(h->spl);
+		return;
+	}
 	for(i = 0; i < Mboxlockwait; i++){
 		h->spl = splhi();
 		if(_tas(&mboxmutex) == 0){
 			h->held = 1;
+			return;
+		}
+		if(mboxqcore == m->machno){
+			splx(h->spl);
+			uartputstr("mbox: a process on this core holds the mailbox; not waiting for it\n");
+			h->fail = 1;
 			return;
 		}
 		splx(h->spl);
@@ -200,8 +261,15 @@ mboxacquire(Mboxhold *h)
 static void
 mboxrelease(Mboxhold *h)
 {
-	if(!mboxlockable)
+	if(!mboxlockable || h->fail)
 		return;
+	if(h->q){
+		mboxqcore = -1;
+		coherence();
+		mboxmutex = 0;
+		qunlock(&mboxql);
+		return;
+	}
 	if(h->held){
 		coherence();
 		mboxmutex = 0;
@@ -424,6 +492,8 @@ mboxprop1(u32int tag, u32int *data, int nreq, int nresp, u32int *tagresp)
 		return -1;
 
 	mboxacquire(&h);
+	if(h.fail)
+		return -1;
 
 	mboxbuf[0] = (nval + 6) * 4;	/* total size in bytes */
 	mboxbuf[1] = Propreq;
@@ -505,6 +575,8 @@ mboxcmdline(char *buf, int n)
 	 * itself is serialised by the same mutex as everyone else's.
 	 */
 	mboxacquire(&h);
+	if(h.fail)
+		return -1;
 	if(mboxcall(Mboxchanprop, cmdlinebuf, sizeof cmdlinebuf) < 0){
 		mboxrelease(&h);
 		return -1;

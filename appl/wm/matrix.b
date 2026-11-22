@@ -559,33 +559,50 @@ Serve:
 			}
 
 			qtype := TYPE(c.path);
-			data := string m.data;
-			if(len data > 0 && data[len data - 1] == '\n')
-				data = data[0:len data - 1];
-
-			case qtype {
-			Qctl =>
-				ctlerr := handlectl(data);
-				if(ctlerr != nil)
-					srv.reply(ref Rmsg.Error(m.tag, ctlerr));
-				else
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
-
-			Qcomposition =>
-				# Write new composition → trigger reload
-				alt {
-				reloadch <-= string m.data =>
-					;
-				* =>
-					;  # drop if reload already pending
-				}
+			if(qtype != Qctl && qtype != Qcomposition) {
+				srv.reply(ref Rmsg.Error(m.tag, Eperm));
+				break;
+			}
+			# A composition or a ctl request is one write, sent as
+			# several 9P messages when it is longer than one, each but
+			# the last full: gathered on the fid and taken whole at the
+			# first that is not full, or at the clunk.  Each message
+			# was a composition of its own, so one longer than a
+			# message was loaded as its beginning and then, when the
+			# reload was free, as its end: lines a writer had checked
+			# as part of a comment were the composition.
+			if(len c.data + len m.data > MAXWRITE) {
+				c.data = array[MAXWRITE + 1] of byte;	# refused until the clunk
+				srv.reply(ref Rmsg.Error(m.tag, "composition too long"));
+				break;
+			}
+			whole := m.data;
+			if(len c.data > 0) {
+				whole = array[len c.data + len m.data] of byte;
+				whole[0:] = c.data;
+				whole[len c.data:] = m.data;
+			}
+			if(len m.data >= srv.iounit()) {
+				c.data = whole;
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				break;
+			}
+			c.data = nil;
+			werr := takewrite(qtype, whole);
+			if(werr != nil)
+				srv.reply(ref Rmsg.Error(m.tag, werr));
+			else
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
-			* =>
-				srv.reply(ref Rmsg.Error(m.tag, Eperm));
-			}
-
 		Clunk =>
+			cf := srv.getfid(m.fid);
+			if(cf != nil && len cf.data > 0 && len cf.data <= MAXWRITE) {
+				qt := TYPE(cf.path);
+				if(qt == Qctl || qt == Qcomposition)
+					takewrite(qt, cf.data);
+			}
+			if(cf != nil)
+				cf.data = nil;
 			srv.clunk(m);
 
 		Remove =>
@@ -595,6 +612,28 @@ Serve:
 			srv.default(gm);
 		}
 	}
+}
+
+# The longest composition or ctl request.
+MAXWRITE: con 256*1024;
+
+# One whole write to ctl or composition.
+takewrite(qtype: int, raw: array of byte): string
+{
+	if(qtype == Qctl) {
+		data := string raw;
+		if(len data > 0 && data[len data - 1] == '\n')
+			data = data[0:len data - 1];
+		return handlectl(data);
+	}
+	# Write new composition → trigger reload
+	alt {
+	reloadch <-= string raw =>
+		;
+	* =>
+		;  # drop if reload already pending
+	}
+	return nil;
 }
 
 handlectl(data: string): string
@@ -1442,6 +1481,13 @@ guiloop()
 			# events for it.
 			if(len c >= 7 && c[0:7] == "delete ")
 				menuposted = 0;
+			# hosted apps and services run in process groups of their
+			# own: the exit's killgrp misses them, and one left running
+			# keeps its window, with nothing left to take a Delete
+			if(c == "exit" && comp != nil) {
+				shutdowndisplaymodules(comp.layout);
+				shutdownservices(comp.services);
+			}
 			tkclient->wmctl(top, c);
 			if(c != nil && len c > 0 && c[0] == '!') {
 				aw := int tk->cmd(top, ".c cget -actwidth");

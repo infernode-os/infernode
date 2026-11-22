@@ -172,13 +172,11 @@ throughputOnce(srv, cli: ref Keyring->Authinfo, cipher: string, total: int): int
 	# client's unencrypted request rather than rejecting an unoffered cipher.
 	serverAlgs: list of string;
 	if(cipher != "none")
-		serverAlgs = cipher :: "sha256" :: nil;
+		serverAlgs = cipher :: nil;
 	rc := chan of (ref Sys->FD, string);
 	spawn serverWrap(fds[0], srv, serverAlgs, rc);
 
 	clientalg := cipher;
-	if(cipher != "none")
-		clientalg = cipher + " sha256";
 	(wc, cerr) := auth->client(clientalg, cli, fds[1]);
 	if(wc == nil)
 		return -1;
@@ -276,7 +274,7 @@ init(nil: ref Draw->Context, args: list of string)
 		srv := mkauthinfo(esk, epk, alpha, p, "server");
 		cli := mkauthinfo(esk, epk, alpha, p, "client");
 		total := tmib * 1048576;
-		ciphers := array[] of { "none", "aes_256_cbc", "aes_128_cbc", "ideacbc", "ideaecb" };
+		ciphers := array[] of { "none", "hmac_sha384", "aes_256_gcm" };
 		for(i = 0; i < len ciphers; i++){
 			c := ciphers[i];
 			mbps100 := throughputOnce(srv, cli, c, total);

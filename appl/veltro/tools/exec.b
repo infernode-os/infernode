@@ -9,9 +9,7 @@ implement ToolExec;
 # IMPORTANT: Inferno shell syntax differs from POSIX/bash:
 #   - Use SINGLE quotes for strings: echo 'hello world'
 #   - Double quotes do NOT work like bash
-#   - Use {braces} for command grouping, not (parens)
-#   - Use ; to separate commands (no && or ||)
-#   - Semicolon needs space before it: cmd ; cmd2
+#   - One command a call: ; | & && || and substitutions are refused
 #
 # Usage:
 #   Exec <command>
@@ -84,7 +82,8 @@ doc(): string
 		"  list             - directory listing\n" +
 		"  find/search/grep - search\n\n" +
 		"IMPORTANT: Inferno shell syntax, not POSIX:\n" +
-		"  - No &&, ||; use ; to sequence\n" +
+		"  - One command a call: a command with ; | & && || $name or a\n" +
+		"    `{} ${} <{} >{} substitution is refused, not run in part\n" +
 		"  - Single quotes for strings\n\n" +
 		"Returns program output: all of it, or, when it is long, its start\n" +
 		"and its end (where errors are), and how much was left out.\n" +
@@ -96,7 +95,7 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"exec\"," +
-		"\"description\":\"Run a program inside the Inferno namespace via the shell. Inferno rc-style syntax (no && or ||; sequence with ;). GUI/wm apps are not run here \\u2014 use the launch tool for the presentation zone.\"," +
+		"\"description\":\"Run a program inside the Inferno namespace via the shell. Inferno rc-style syntax; one command a call (no ; | & && || or $ and `{} substitution: such a command is refused). GUI/wm apps are not run here \\u2014 use the launch tool for the presentation zone.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -132,17 +131,23 @@ exec(args: string): string
 		i := 3;
 		while(i < len cmd && cmd[i] == ' ')
 			i++;
+		# (A count of 0, or one large enough to wrap to it or below,
+		# left "-t" in the command, which the shell then looked for.)
 		secs := 0;
-		for(; i < len cmd && cmd[i] >= '0' && cmd[i] <= '9'; i++)
-			secs = secs * 10 + cmd[i] - '0';
-		if(secs > 0) {
-			timeoutms = secs * 1000;
-			if(secs > MAX_TIMEOUT / 1000)
-				timeoutms = MAX_TIMEOUT;
-			while(i < len cmd && (cmd[i] == ' ' || cmd[i] == '\t'))
-				i++;
-			cmd = cmd[i:];
+		digits := 0;
+		for(; i < len cmd && cmd[i] >= '0' && cmd[i] <= '9'; i++) {
+			if(secs <= MAX_TIMEOUT)
+				secs = secs * 10 + cmd[i] - '0';
+			digits++;
 		}
+		if(digits == 0 || secs == 0 || (i < len cmd && cmd[i] != ' ' && cmd[i] != '\t'))
+			return sys->sprint("error: -t takes a number of seconds, 1 to %d, then the command", MAX_TIMEOUT / 1000);
+		timeoutms = secs * 1000;
+		if(secs > MAX_TIMEOUT / 1000)
+			timeoutms = MAX_TIMEOUT;
+		while(i < len cmd && (cmd[i] == ' ' || cmd[i] == '\t'))
+			i++;
+		cmd = cmd[i:];
 	}
 	while(len cmd > 0 && (cmd[len cmd - 1] == ' ' || cmd[len cmd - 1] == '\t' || cmd[len cmd - 1] == '\n'))
 		cmd = cmd[0:len cmd - 1];
@@ -164,10 +169,13 @@ exec(args: string): string
 	if(cmd == "")
 		return "error: usage: Exec <command>";
 
-	# Sanitize: strip backticks and ${} command substitution patterns.
-	# The namespace restriction is the primary security boundary, but
-	# defense-in-depth prevents command substitution attacks.
-	cmd = sanitizecmd(cmd);
+	# One command, with no substitution.  The name space is the boundary;
+	# this keeps a call to what its one line says.  These were taken out
+	# of the command and the rest run: "a ; b" ran a with b as an
+	# argument, "echo $x" ran echo, and nothing said so.
+	if((what := refused(cmd)) != nil)
+		return "error: exec runs one command and no substitution: " + what +
+			" is not taken (make a call for each command; nothing was run)";
 
 	# Convert double quotes to single quotes for Inferno shell compatibility
 	# Inferno's sh uses single quotes for literal strings, not double quotes
@@ -224,6 +232,41 @@ exec(args: string): string
 		}
 	}
 
+	# The command, its pipe, its wait file and its process control are
+	# all opened by a process with a file descriptor group of its own.
+	# Every tool call of a tool server shares one group, and the command
+	# was given that group's descriptors 0, 1 and 2: whatever any call
+	# had open there at that moment (another call's directory, a pipe of
+	# its copy-on-write mount, a process control file).
+	answer := chan[1] of string;
+	spawn supervise(cmd, timeoutms, answer);
+	return <-answer;
+}
+
+supervise(cmd: string, timeoutms: int, answer: chan of string)
+{
+	{
+		answer <-= capture(cmd, timeoutms);
+	} exception e {
+	"*" =>
+		answer <-= "error: exec: " + e;
+	}
+}
+
+capture(cmd: string, timeoutms: int): string
+{
+	# Nothing of the caller's, and /dev/null as 0, 1 and 2 for as long as
+	# this process lives: the command keeps 0, and nothing opened below
+	# is taken for a standard descriptor.
+	if(sys->pctl(Sys->NEWFD, nil) < 0)
+		return sys->sprint("error: cannot isolate descriptors: %r");
+	std := array[3] of ref Sys->FD;
+	for(n := 0; n < len std; n++) {
+		std[n] = sys->open("/dev/null", Sys->ORDWR);
+		if(std[n] == nil || std[n].fd != n)
+			return sys->sprint("error: cannot open /dev/null for the command: %r");
+	}
+
 	# Create pipe for capturing output
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0)
@@ -234,7 +277,8 @@ exec(args: string): string
 	# even after the alt has moved on, preventing indefinite blocking.
 	result := chan[1] of string;
 	ctlch := chan[1] of ref Sys->FD;
-	spawn runcommand(cmd, fds[1], result, ctlch);
+	release := chan[1] of int;
+	spawn runcommand(cmd, fds[1], result, ctlch, release);
 	fds[1] = nil;
 
 	# Hold an already-open capability to the worker's process control. The
@@ -250,7 +294,8 @@ exec(args: string): string
 	spawn timer(timeout, timeoutms);
 
 	reader := chan[1] of string;
-	spawn readoutput(fds[0], reader);
+	quit := chan[1] of int;
+	spawn readoutput(fds[0], reader, quit);
 
 	# A long output is kept as its start and its end, and the command
 	# runs to its finish: cut off at the cap, a build or a test run was
@@ -284,7 +329,10 @@ exec(args: string): string
 			sys->sprint("\n... [%d bytes of output left out] ...\n", omitted) +
 			output[HEAD_OUTPUT:];
 
-	# Close read fd to unblock readoutput goroutine if still blocked on read
+	# Tell the reader nobody is listening.  A command still printing at
+	# the timeout left it blocked for good in a send on a full channel,
+	# with the pipe: one process and one pipe a timed-out call.
+	quit <-= 1;
 	fds[0] = nil;
 
 	# Collect the command's exit status.  If it has not finished on its own
@@ -305,6 +353,9 @@ exec(args: string): string
 		;
 	}
 	killed := killtree(groupctl);
+	# A leader that could not be killed waited for ever to be: let it go.
+	if(!killed)
+		release <-= 1;
 	if(!finished) {
 		if(killed)
 			output += "\n... (command still running at return; process tree terminated)";
@@ -326,7 +377,7 @@ exec(args: string): string
 
 # Run command in a separate thread with isolated fd group.
 # NEWFD prevents dup from affecting other goroutines' stdout/stderr.
-runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, ctlch: chan of ref Sys->FD)
+runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, ctlch: chan of ref Sys->FD, release: chan of int)
 {
 	# Become a process-group leader so the parent can kill this command and
 	# everything it spawns as one unit if it overruns its deadline (INFR-421).
@@ -348,8 +399,11 @@ runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, ctlch: chan 
 		result <-= sys->sprint("cannot open private wait channel: %r");
 		return;
 	}
-	# Isolate fd group so dup only affects this goroutine
-	if(sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: outfd.fd :: waitfd.fd :: nil) < 0) {
+	# The command's descriptors: 0 is the /dev/null capture() opened, 1
+	# and 2 are the pipe, and the wait file is the only other.  (0, 1 and
+	# 2 were kept from the group all tool calls share.)
+	ofd := outfd.fd;
+	if(sys->pctl(Sys->NEWFD, 0 :: ofd :: waitfd.fd :: nil) < 0) {
 		result <-= sys->sprint("cannot isolate descriptors: %r");
 		return;
 	}
@@ -358,10 +412,18 @@ runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, ctlch: chan 
 		return;
 	}
 
-	# Redirect stdout/stderr to pipe
-	sys->dup(outfd.fd, 1);
-	sys->dup(outfd.fd, 2);
+	# Redirect stdout/stderr to pipe; a command with no way to say
+	# anything is not run
+	if(sys->dup(ofd, 1) != 1 || sys->dup(ofd, 2) != 2) {
+		result <-= sys->sprint("cannot set up the command's output: %r");
+		return;
+	}
 	outfd = nil;
+	# and not the pipe a third time, under the number it was made with
+	if(sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: waitfd.fd :: nil) < 0) {
+		result <-= sys->sprint("cannot isolate descriptors: %r");
+		return;
+	}
 
 	err := sh->systemfd(nil, cmd, waitfd);
 	result <-= err;
@@ -370,8 +432,7 @@ runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, ctlch: chan 
 	# every descriptor first so the output reader reaches EOF.
 	waitfd = nil;
 	sys->pctl(Sys->NEWFD, nil);
-	park := chan of int;
-	<-park;
+	<-release;
 }
 
 # Kill through the ctl opened before the worker dropped device attachment.
@@ -391,16 +452,21 @@ timer(ch: chan of int, ms: int)
 }
 
 # Read output from fd
-readoutput(fd: ref Sys->FD, ch: chan of string)
+readoutput(fd: ref Sys->FD, ch: chan of string, quit: chan of int)
 {
 	buf := array[4096] of byte;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
-		if(n <= 0) {
-			ch <-= nil;
+		s: string;
+		if(n > 0)
+			s = string buf[0:n];
+		alt {
+		ch <-= s =>
+			if(n <= 0)
+				return;
+		<-quit =>
 			return;
 		}
-		ch <-= string buf[0:n];
 	}
 }
 
@@ -453,7 +519,7 @@ convertquotes(s: string): string
 	return result;
 }
 
-# Sanitize command string for Inferno sh(1).
+# What in a command exec does not take, or nil.
 #
 # Inferno shell metacharacters (from sh(1) man page):
 #   # ; & | ^ $ ` ' { } ( ) < > " =
@@ -467,85 +533,28 @@ convertquotes(s: string): string
 #   >{cmd}   — process substitution (write end)
 #
 # Note: Inferno does NOT support bash's $() syntax or bare backticks.
-# Semicolons, pipes, and ampersands are stripped to prevent command chaining
-# or backgrounding outside the tool call's lifetime (defense-in-depth).
-sanitizecmd(s: string): string
+# Chaining and backgrounding (; | &) are not taken either, so that a call
+# is one command that ends with the call.  Quotes are not looked at: a
+# quoted ; is refused too, which costs an argument now and then and
+# leaves no quoting rule to get wrong.
+refused(s: string): string
 {
-	result := "";
-	i := 0;
-	while(i < len s) {
+	for(i := 0; i < len s; i++) {
 		c := s[i];
-
-		# Strip backtick command substitution: `{cmd}
-		if(c == '`') {
-			if(i + 1 < len s && s[i+1] == '{') {
-				i = skipbraced(s, i + 1);
-				continue;
-			}
-			# Bare backtick — strip it regardless
-			i++;
-			continue;
-		}
-
-		# Strip double-quote command substitution: "{cmd}
-		if(c == '"' && i + 1 < len s && s[i+1] == '{') {
-			i = skipbraced(s, i + 1);
-			continue;
-		}
-
-		# Strip $ variable/substitution references
-		if(c == '$') {
-			if(i + 1 < len s && s[i+1] == '{') {
-				# ${builtin args} — skip entire braced block
-				i = skipbraced(s, i + 1);
-				continue;
-			}
-			# $varname — strip $ and the variable name
-			i++;
-			while(i < len s && isnamec(s[i]))
-				i++;
-			continue;
-		}
-
-		# Strip process substitution: <{cmd} and >{cmd}
-		if((c == '<' || c == '>') && i + 1 < len s && s[i+1] == '{') {
-			i = skipbraced(s, i + 1);
-			continue;
-		}
-
-		# Strip chaining and backgrounding operators.
-		if(c == ';' || c == '|' || c == '&') {
-			i++;
-			continue;
-		}
-
-		result[len result] = c;
-		i++;
+		if(c == '`')
+			return "a ` substitution";
+		if(c == '$')
+			return "a $ variable or substitution";
+		if(c == ';')
+			return "';' (a second command)";
+		if(c == '|')
+			return "'|' (a pipe)";
+		if(c == '&')
+			return "'&'";
+		if(c == '\n' || c == '\r')
+			return "a second line";
+		if((c == '"' || c == '<' || c == '>') && i + 1 < len s && s[i+1] == '{')
+			return s[i:i+2] + "} (a substitution)";
 	}
-	return result;
-}
-
-# Skip past a balanced {}-block starting at s[pos] == '{'.
-# Returns index after the closing '}'.
-skipbraced(s: string, pos: int): int
-{
-	if(pos >= len s || s[pos] != '{')
-		return pos + 1;
-	pos++;
-	depth := 1;
-	while(pos < len s && depth > 0) {
-		if(s[pos] == '{')
-			depth++;
-		else if(s[pos] == '}')
-			depth--;
-		pos++;
-	}
-	return pos;
-}
-
-# Is c a valid Inferno variable name character?
-isnamec(c: int): int
-{
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-	       (c >= '0' && c <= '9') || c == '_';
+	return nil;
 }

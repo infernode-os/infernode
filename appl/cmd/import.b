@@ -45,7 +45,7 @@ init(nil: ref Draw->Context, args: list of string)
 	arg->init(args);
 	arg->setusage("import [-a|-b] [-c] [-e enc digest] host file [localfile]");
 	flags := 0;
-	cryptalg := "";	# will be aes_256_cbc sha256
+	cryptalg := "";	# none: -e naming one is refused (p9sk1 below)
 	keyspec := "";
 	while((o := arg->opt()) != 0)
 		case o {
@@ -70,6 +70,10 @@ init(nil: ref Draw->Context, args: list of string)
 	if(len args != 2 && len args != 3)
 		arg->usage();
 	arg = nil;
+	# said before anything is dialled: it used to be said once the
+	# far end had been authenticated to and told the tree
+	if(cryptalg != nil)
+		fail("import", "Plan 9's p9sk1 gives a 56-bit key, too weak for ssl(3)'s aes_256_gcm and hmac_sha384; leave out -e for clear text, on a network you trust");
 	addr := hd args;
 	file := hd tl args;
 	mountpt := file;
@@ -97,42 +101,13 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->werrstr("bad remote tree: "+string buf[0:n]);
 		fail("import", sys->sprint("import %s %s: %r", addr, file));
 	}
-	if(cryptalg != nil){
-		if(ai.secret == nil)
-			fail("import", "factotum didn't establish shared secret");
-		random := load Random Random->PATH;
-		if(random == nil)
-			nomod(Random->PATH);
-		kr := load Keyring Keyring->PATH;
-		if(kr == nil)
-			nomod(Keyring->PATH);
-		base64 := load Encoding Encoding->BASE64PATH;
-		if(base64 == nil)
-			nomod(Encoding->BASE64PATH);
-		if(sys->fprint(c.dfd, "impo nofilter ssl\n") < 0)
+	if(sys->fprint(c.dfd, "impo nofilter clear\n") < 0)
 			fail("import", sys->sprint("can't write to remote: %r"));
-		key := array[16] of byte;	# myrand[4] secret[8] hisrand[4]
-		key[0:] = random->randombuf(Random->ReallyRandom, 4);
-		ns := len ai.secret;
-		if(ns > 8)
-			ns = 8;
-		key[4:] = ai.secret[0:ns];
-		if(sys->write(c.dfd, key, 4) != 4)
-			fail("import", sys->sprint("can't write key to remote: %r"));
-		if(sys->readn(c.dfd, key[12:], 4) != 4)
-			fail("import", sys->sprint("can't read remote key: %r"));
-		digest := array[Keyring->SHA1dlen] of byte;
-		kr->sha1(key, len key, digest, nil);
-		err: string;
-		(c.dfd, err) = pushssl(c.dfd, base64->dec(S(digest[0:10])), base64->dec(S(digest[10:20])), cryptalg);
-		if(err != nil)
-			fail("import", sys->sprint("can't push security layer: %s", err));
-	}else
-		if(sys->fprint(c.dfd, "impo nofilter clear\n") < 0)
-			fail("import", sys->sprint("can't write to remote: %r"));
+	# the attach is authenticated with the key the connection was (it
+	# was not given -k's), and not mounted if that fails (it was)
 	afd := sys->fauth(c.dfd, "");
-	if(afd != nil)
-		factotum->proxy(afd, facfd, "proto=p9any role=client");
+	if(afd != nil && factotum->proxy(afd, facfd, "proto=p9any role=client "+keyspec) == nil)
+		fail("auth", sys->sprint("can't authenticate the attach: %r"));
 	if(sys->mount(c.dfd, afd, mountpt, flags, "") < 0)
 		fail("mount failed", sys->sprint("import %s %s: mount failed: %r", addr, file));
 }

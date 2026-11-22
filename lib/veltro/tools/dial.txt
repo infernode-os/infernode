@@ -11,7 +11,10 @@ Usage:
   dial <number>           Place a call to a phone number
 
 The number should be in international format where possible
-(e.g. +14155551234). Call state notifications (connected /
+(e.g. +14155551234). Only a plain number is dialled: digits, with +
+first for an international one; codes (*, #), pauses and letters are
+refused. The user is asked to allow each call before it is placed.
+Call state notifications (connected /
 disconnected) arrive via /mnt/msg/notify, not from this tool.
 Returns "dial: requested <number>".
 

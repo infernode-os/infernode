@@ -90,6 +90,7 @@ Ctlsize : con 5*12;
 
 Edel		:= "deleted window";
 Ebadctl	:= "ill-formed control message";
+Ecutctl	:= "control message cut at the message size: a write is whole lines";
 Ebadaddr	:= "bad address syntax";
 Eaddr	:= "address out of range";
 Einuse	:= "already in use";
@@ -1026,6 +1027,21 @@ ctlcmd2(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		w.limit.q1 = w.addr.q1;
 		return (TRUE, 10, nil, FALSE);
 	}
+	if(strncmp(p, "wrap ", 5) == 0){	# wrap word|char: lines by word or anywhere
+		pp := p[5:];
+		q := utils->strchr(pp, '\n');
+		if(q < 0)
+			q = len pp;
+		case pp[0:q] {
+		"word" or "char" =>
+			w.setwrap(pp[0:q] == "word");
+		* =>
+			return (TRUE, 0, Ebadctl, FALSE);
+		}
+		if(q < len pp)
+			q++;
+		return (TRUE, 5 + q, nil, FALSE);
+	}
 	if(strncmp(p, "nomark", 6) == 0){	# turn off automatic marking
 		w.nomark = TRUE;
 		return (TRUE, 6, nil, FALSE);
@@ -1238,6 +1254,20 @@ Xfid.ctlwrite(x : self ref Xfid, w : ref Window)
 	err = nil;
 	scrdrw = FALSE;
 	settag = FALSE;
+	# One write is whole commands, as in Acme. A write longer than a 9P
+	# message reaches here in pieces, cut by the mount driver wherever
+	# the message ended, and each piece would be run as commands of its
+	# own: the end of a long line as a command the writer never wrote
+	# (name, put). A piece is known by filling its message; one that
+	# does not end a line is refused before anything is done, and the
+	# writer's write fails there, the rest unsent. Whole lines that
+	# fill a message are still taken.
+	nb = count(x.fcall);
+	if(nb >= fsys->messagesize-Styx->IOHDRSZ && data(x.fcall)[nb-1] != byte '\n'){
+		fc.count = 0;
+		respond(x, fc, Ecutctl);
+		return;
+	}
 	w.tag.commit(TRUE);
 	nb = sys->utfbytes(data(x.fcall), count(x.fcall));
 	r = string data(x.fcall)[0:nb];

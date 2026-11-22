@@ -51,7 +51,8 @@ The upstream import this tree started from is commit `46439007c`
 - `appl/mpeg/` — MPEG decoding
 - `os/` — native kernels: `os/arm64` and `os/riscv64` (architecture),
   `os/port` (portable kernel), boards `os/bcm2837` (Raspberry Pi 3B+),
-  `os/bcm2711` (Pi 4B), `os/virt` and `os/riscvvirt` (QEMU), `os/mpfs`
+  `os/bcm2711` (Pi 4B), `os/bcm2712` (Pi 5), `os/virt` and `os/riscvvirt`
+  (QEMU), `os/mpfs`
   (PolarFire SoC). See [BAREMETAL.md](BAREMETAL.md).
 - `emu/Android/`, `emu/iOS/` — mobile platform glue
 - `formal-verification/` — TLA+, SPIN and CBMC models
@@ -100,6 +101,28 @@ InferNode adds Ed25519 signatures (`libkeyring/ed25519alg.c`) and post-quantum
 algorithms (ML-KEM, ML-DSA and SLH-DSA in `libsec/`, with keyring support in
 `libkeyring/`). See
 [CRYPTO-MODERNIZATION.md](CRYPTO-MODERNIZATION.md).
+
+Several of the changes are on the wire, and **an InferNode node cannot make an
+encrypted connection to standard Inferno®**, nor to an InferNode older than
+0.10.1:
+
+- **Authentication** (`Keyring->auth`, the Station-to-Station handshake) is
+  protocol version 2: hybrid Diffie-Hellman and ML-KEM, its transcript signed
+  over SHA-256. Version 1 peers are refused.
+- **`ssl(3)`** offers `aes_256_gcm` (the default) and `hmac_sha384` (integrity
+  alone), nothing else; `sha256`, `aes_128_cbc`, `aes_256_cbc` and the padded
+  record are gone. Each direction has its own secret (`ssl(2)`'s
+  `secrets`).
+- **`9cpu`, `import` and `9export`** talk to Plan 9, whose p9sk1 key is 56
+  bits, and refuse encryption; without `-e` they run in the clear.
+- **`crypt(1)`** uses AES-256-GCM with PBKDF2-HMAC-SHA-384 and a salt per
+  file, not upstream's `md5/ideacbc`.
+- **Random numbers** come from NIST's HMAC_DRBG with SHA-512 (SP 800-90A) in
+  the emulator and the native kernels, not upstream's generators. See
+  [TLS-ENTROPY.md](TLS-ENTROPY.md).
+- **CNSA 2.0 mode** (`CNSAMODE`, `/env/cnsamode`) holds node authentication
+  and login to ML-KEM-1024, ML-DSA-87 and AES-256-GCM; `CNSATLS` does the same
+  for TLS. Two nodes must agree on it.
 
 ## Build System
 

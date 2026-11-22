@@ -32,8 +32,9 @@ text lines, never JSON
    Flush-cancel idiom. (Upstream heritage, but verified still mounting and
    serving in this tree, 2026-08-22.)
 2. `appl/cmd/mntgen.b` (~190 lines) — smallest; dynamic tree mutation.
-3. `appl/cmd/gpusrv.b` — the clone/session-multiplexing idiom; its 35-line
-   header comment is the best tutorial in the tree. (`appl/cmd/webfs.b`
+3. `appl/cmd/visionfs.b` — the clone/session-multiplexing idiom: sessions
+   from `clone`, gone with their last open file; reads that wait; each
+   reader its own place in a stream (`man/4/visionfs`). (`appl/cmd/webfs.b`
    shows the same idiom for a remote-backed `/mnt` service, but it is
    upstream heritage nothing in this tree exercises — read it for the
    shape, don't assume its behavior.)
@@ -104,7 +105,7 @@ clunks everything on it. So:
   **exclusive-open** (`DMEXCL` in the file's mode) so a second open
   fails honestly at open time — not as a first-come global busy flag
   that only the winner can clear.
-- `chatsrv.b` shows the pending-request/Flush-cancel idiom; `gpusrv.b`
+- `chatsrv.b` shows the pending-request/Flush-cancel idiom; `visionfs.b`
   shows per-session state behind `clone`.
 
 And on the client side of any 9P interface: **a write can fail — check

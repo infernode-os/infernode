@@ -16,11 +16,16 @@
 #   - both limb widths: 64 (where the compiler has a 128-bit product) and
 #     32 (MPEXP32: MSVC, 32-bit hosts)
 #   - timing, the Montgomery path against the general one
+#   - mpmuladdmod, (a*b + c) mod m, against libmp's product, sum and
+#     division: odd moduli (Montgomery), even ones and operands longer
+#     than the modulus or negative (the general way), in place
 #   - constant time (ctgrind): with valgrind, an exponentiation with the
 #     exponent's digits marked undefined; memcheck reports any branch or
 #     address depending on them.  Only mpnorm, trimming the result (which
 #     is public: it is sent, or the caller looks at it), may be reported.
-#     The general path through the same check must be caught
+#     The general path through the same check must be caught.  The same
+#     with the base's digits undefined (DSA's 1/k is k^(q-2): the base
+#     went through a division), and mpmuladdmod's three numbers
 #
 # The constant-time check needs valgrind (Linux); CI installs it, and
 # there its absence is a failure.  No emulator is needed.
@@ -85,9 +90,9 @@ else
 			def=""
 			[ $limbs = 32 ] && def=-DMPEXP32
 			$cc $CFLAGS -DCTGRIND $def $INC -o "$TMP/mptest-ct" "$D/mptest.c" $SRCS || { echo "FAIL: mptest -DCTGRIND does not compile with $cc"; exit 1; }
-			for what in ct ctslow; do
+			for what in ct ctslow ctbase; do
 				for bits in 255 1024 2048; do
-					[ $what = ctslow ] && [ $bits != 1024 ] && continue
+					[ $what != ct ] && [ $bits != 1024 ] && continue
 					log="$TMP/vg.$what.$bits"
 					valgrind --error-limit=no --read-inline-info=yes --log-file="$log" "$TMP/mptest-ct" $what $bits >/dev/null 2>&1
 					# the function each report is in
@@ -99,6 +104,14 @@ else
 							fails=$((fails+1))
 						else
 							echo "PASS: $cc: $limbs-bit limbs: the check catches the general path ($(echo $bad | tr '\n' ' '))"
+						fi
+					elif [ $what = ctbase ]; then
+						if [ -n "$bad" ]; then
+							echo "FAIL: $cc: $limbs-bit limbs: branches or addresses depend on the base, or on mpmuladdmod's numbers, in:"
+							sed 's/^/    /' "$TMP/fns"
+							fails=$((fails+1))
+						else
+							echo "PASS: $cc: $limbs-bit limbs: exponentiation constant time in the base, mpmuladdmod in its numbers"
 						fi
 					elif [ -n "$bad" ]; then
 						echo "FAIL: $cc: $limbs-bit limbs: $bits bits: branches or addresses depend on the exponent in:"

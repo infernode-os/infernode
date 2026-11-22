@@ -123,6 +123,54 @@ testBlockedIPv6(t: ref T)
 	t.assert(publicnet->hostblocked("fc00::1"), "fc00::/7 blocked");
 }
 
+# The address the check passes is the address that is dialled only if
+# both read it alike.  The kernel takes each number of an address in C's
+# bases; publicipv4 read them as decimal, so 0177.0.0.1 was 177.0.0.1 and
+# public, and was dialled as given: loopback.
+testOneFormOfAddress(t: ref T)
+{
+	t.asserteq(publicnet->publicipv4("8.8.8.8"), 1, "8.8.8.8 is public");
+	t.asserteq(publicnet->publicipv4("127.0.0.1"), 0, "127.0.0.1 is not");
+	t.asserteq(publicnet->publicipv4("0.0.0.0"), 0, "0.0.0.0 is not");
+	bad := array[] of {
+		"0177.0.0.1", "0177.0.0.018", "012.0.0.1", "0144.0100.1.1",
+		"1.2.3.04", "08.8.8.8", "00.0.0.0", "1.2.3.0004",
+		"0x7f.0.0.1", "1.2.3", "1.2.3.4.5", "1..2.3", "", "1.2.3.4 ",
+	};
+	for(i := 0; i < len bad; i++)
+		t.asserteq(publicnet->publicipv4(bad[i]), -1,
+			sys->sprint("%q is no address in the form the kernel and the check share", bad[i]));
+
+	# and so is not dialled: with or without a connection server, the
+	# string comes back as given and is refused
+	for(i = 0; i < 4; i++){
+		(addr, err) := publicnet->dialaddr(bad[i], "80");
+		t.assert(addr == nil && err != nil, sys->sprint("dialaddr refuses %q: %s", bad[i], err));
+	}
+
+	# the tools' own first look: a host of numbers that is no address
+	blocked := array[] of {"0177.0.0.018", "0177.0.0.08", "09.1.2.3", "1.2.3.4.5", "0x7f.0.0.0x100000000"};
+	for(i = 0; i < len blocked; i++)
+		t.assert(publicnet->hostblocked(blocked[i]),
+			sys->sprint("%q, numbers that are no address, is blocked", blocked[i]));
+	t.assert(!publicnet->hostblocked("8.8.8.8"), "8.8.8.8 is not");
+
+	# a fresh module folds a scheme's case
+	p2 := load Publicnet Publicnet->PATH;
+	t.asserteq(p2->transitionallowed("HTTP://a/", "file"), 0, "HTTP://... to file: is refused before init");
+	t.asserteq(p2->transitionallowed("http://a/", "https"), 1, "http to https is allowed");
+}
+
+testNamesNotAddresses(t: ref T)
+{
+	names := array[] of {"fdroid.org", "fcc.gov", "fe80.example.com", "123.ee", "3com.com", "1e100.net", "0x.org"};
+	for(i := 0; i < len names; i++)
+		t.assert(!publicnet->hostblocked(names[i]), sys->sprint("%s is a name, and not blocked", names[i]));
+	t.assert(publicnet->hostblocked("fd00::1"), "fd00::1 is still blocked");
+	t.assert(publicnet->hostblocked("[fc00::1]"), "[fc00::1] too");
+	t.assert(publicnet->hostblocked("fe80::1"), "and fe80::1");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -148,6 +196,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Blocked/Names", testBlockedNames);
 	run("Blocked/IPv4", testBlockedIPv4);
 	run("Blocked/IPv6", testBlockedIPv6);
+	run("OneFormOfAddress", testOneFormOfAddress);
+	run("NamesNotAddresses", testNamesNotAddresses);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -106,9 +106,13 @@ armtick(void)
 {
 	/*
 	 * TVAL is a down-counter: writing it sets the comparator that
-	 * many ticks into the future.  Rearming from TVAL rather than
-	 * from an absolute CVAL means a late interrupt shifts the whole
-	 * schedule rather than causing a burst of catch-up interrupts.
+	 * many ticks into the future. clockintr() writes it only as a
+	 * fallback and lets timerintr()'s absolute CVAL override it (see
+	 * there): rearming from TVAL alone shifted the schedule by every
+	 * interrupt's lateness, and the time of day lost it. A late
+	 * interrupt does not cause a burst of catch-up interrupts either
+	 * way: timerintr() runs every overdue Timer in one pass and arms
+	 * the next deadline still to come.
 	 */
 	__asm__ volatile("msr cntp_tval_el0, %0" :: "r"(tickinterval));
 	__asm__ volatile("msr cntp_ctl_el0, %0" :: "r"((u64int)1));
@@ -252,11 +256,22 @@ clockintr(Ureg *u)
 	 * USB driver's channel re-arm tick is what finally needed the
 	 * chain alive.
 	 *
-	 * timerintr's timerset() programs CVAL for the earliest
-	 * deadline, and armtick() below immediately re-arms TVAL for
-	 * the fixed millisecond -- TVAL wins, so dispatch stays at HZ
-	 * granularity, which every ms-scale periodic here is fine with.
+	 * armtick() first, then timerintr(), whose timerset() programs
+	 * CVAL for the earliest deadline over it. The deadline must win.
+	 * It was the other way round, armtick() after timerintr(), so
+	 * every tick was a millisecond counted from the END of this
+	 * handler: a millisecond plus the interrupt's latency plus the
+	 * handler. portclock's periodic Timer keeps the exact schedule,
+	 * so it pulled ahead of the interrupts until one came a whole
+	 * period late and its tick was lost -- 2.6 s an hour on the
+	 * Pi 5, 4.5 on the Pi 3, the clock always slow. The deadline is
+	 * absolute, so a late interrupt no longer moves the next one.
+	 * armtick() stays as the fallback for a queue with nothing on
+	 * it (it always has this core's tick once timersinitmach() ran,
+	 * but not before), and it takes the pending interrupt down.
+	 * os/riscv64/clock.c has always done it in this order.
 	 */
+	armtick();
 	timerintr(u, 0);
 
 	/*
@@ -286,7 +301,6 @@ clockintr(Ureg *u)
 			ainc(&profbuck[ix]);
 	}
 
-	armtick();
 	return 1;
 }
 

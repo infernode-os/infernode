@@ -27,6 +27,10 @@ extern void slhdsa_H(uchar*, int, const uchar*, int, const uchar*, const uchar*,
 extern void slhdsa_PRF(uchar*, int, const uchar*, int, const uchar*, int, const uchar*);
 extern void slhdsa_Tl(uchar*, int, const uchar*, int, const uchar*, const uchar*, int);
 
+enum {
+	FORS_MAXROOTS = 22 * 32,	/* k*n of the largest set offered (256s) */
+};
+
 /*
  * Extract a-bit index from message digest at position i
  */
@@ -100,8 +104,14 @@ fors_node(uchar *out, int n,
  *   3. Output the authentication path (a nodes)
  *
  * sig_fors = k * (1 + a) * n bytes
+ *
+ * Returns 0, or -1 with sig untouched if there is no memory for a
+ * tree's leaves (2^a * n bytes).  It returned nothing: the caller's
+ * signature kept a FORS part of zeros, the FORS public key was computed
+ * from that, and the hypertree signed it: a signature that verified,
+ * made with a one-time key on a value it should never have signed.
  */
-void
+int
 slhdsa_fors_sign(uchar *sig, int n,
 	const uchar *md,
 	const uchar *pkseed, int seedlen,
@@ -120,9 +130,15 @@ slhdsa_fors_sign(uchar *sig, int n,
 	/* Allocate space for computing auth paths */
 	nodes = malloc(leaves * n);
 	if(nodes == nil)
-		return;
+		return -1;
 
-	slhdsa_adrs_set_type(adrs, 3);	/* FORS_TREE */
+	/*
+	 * adrs comes as FIPS 205 Algorithm 19 makes it for fors_sign: type
+	 * FORS_TREE with the key pair address idx_leaf.  The type used to
+	 * be set again here, which clears the key pair address with the
+	 * rest of the address: every leaf of a bottom tree then shared one
+	 * FORS key pair, and no signature was the standard's.
+	 */
 
 	for(i = 0; i < k; i++){
 		idx = fors_get_index(md, i, a);
@@ -172,14 +188,18 @@ slhdsa_fors_sign(uchar *sig, int n,
 
 	secureZero(nodes, leaves * n);
 	free(nodes);
+	return 0;
 }
 
 /*
  * Compute FORS public key from signature
  *
  * Algorithm 17 from FIPS 205
+ *
+ * Returns 0, or -1 with pk untouched.  The k roots are on the stack
+ * (704 bytes at most), so nothing here can run out of memory.
  */
-void
+int
 slhdsa_fors_pk_from_sig(uchar *pk, int n,
 	const uchar *sig,
 	const uchar *md,
@@ -187,18 +207,17 @@ slhdsa_fors_pk_from_sig(uchar *pk, int n,
 	uchar adrs[32],
 	int k, int a)
 {
-	uchar *roots;
+	uchar roots[FORS_MAXROOTS];
 	uchar node0[64], node1[64];
 	uchar pkadrs[32];
 	u32int idx, base;
 	int i, j;
 	const uchar *auth;
 
-	roots = malloc(k * n);
-	if(roots == nil)
-		return;
+	if(k * n > sizeof(roots))
+		return -1;
 
-	slhdsa_adrs_set_type(adrs, 3);	/* FORS_TREE */
+	/* adrs is FORS_TREE with the key pair address set: see slhdsa_fors_sign */
 
 	for(i = 0; i < k; i++){
 		idx = fors_get_index(md, i, a);
@@ -240,6 +259,5 @@ slhdsa_fors_pk_from_sig(uchar *pk, int n,
 	memmove(pkadrs + 20, adrs + 20, 4);
 
 	slhdsa_Tl(pk, n, pkseed, seedlen, pkadrs, roots, k * n);
-
-	free(roots);
+	return 0;
 }

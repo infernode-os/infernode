@@ -1,6 +1,6 @@
 .TH SECURITY-SSL 2
 .SH NAME
-ssl: connect, secret \- interface to the Secure Sockets Layer
+ssl: connect, secret, secrets \- interface to the Secure Sockets Layer
 .SH SYNOPSIS
 .EX
 include "sys.m";
@@ -10,6 +10,8 @@ ssl := load SSL SSL->PATH;
 connect: fn(fd: ref Sys->FD): (string, ref Sys->Connection);
 secret:  fn(c: ref Sys->Connection, secretin,
                 secretout: array of byte): string;
+secrets: fn(shared: array of byte, client: int):
+                (array of byte, array of byte);
 .EE
 .SH DESCRIPTION
 .B SSL
@@ -50,7 +52,29 @@ sets the secrets for each direction on Connection
 .I c ;
 if a secret is nil, the existing setting for that direction remains unchanged.
 The string returned describes errors encountered, if any; otherwise it is nil.
+.IR Ssl (3)
+takes a secret of 32 bytes or more each way, and not the same both ways.
 .PP
+.B Secrets
+makes a secret that the two ends of a connection share into one for each way:
+HMAC-SHA-384 keyed by
+.IR shared ,
+of
+.B "infernode ssl client to server"
+and of
+.BR "infernode ssl server to client" ,
+48 bytes each.
+It returns the pair
+.RI ( secretin ,
+.IR secretout )
+for the client if
+.I client
+is non-zero, and for the server otherwise, ready for
+.BR secret .
+.IR Security-auth (2)
+and
+.IR security-login (2)
+use it on the secret their protocols agree.
 .SH SOURCE
 .B /appl/lib/ssl.b
 .SH "SEE ALSO"

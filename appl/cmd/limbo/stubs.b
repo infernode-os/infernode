@@ -182,7 +182,12 @@ modcode(globals: ref Decl)
 
 modtab(globals: ref Decl)
 {
-	print("typedef struct{char *name; long sig; void (*fn)(void*); int size; int np; uchar map[16];} Runtab;\n");
+	#
+	# Runtab is interp.h's.  It was a typedef written here, at the head
+	# of each table: a table left over from before a row had its
+	# signature's digest would have been read as rows of the new
+	# length; with the old typedef in it, it no longer compiles.
+	#
 	for(d := globals; d != nil; d = d.next){
 		if(d.store == Dtype && d.ty.kind == Tmodule && d.sym.name == emittab){
 			n := 0;
@@ -200,7 +205,11 @@ modtab(globals: ref Decl)
 					md := mkdesc(idoffsets(id.ty.ids, MaxTemp, MaxAlign), id.ty.ids);
 					print("%d,%d,%s,", md.size, md.nmap, mapconv(md));
 				}
-				print("\n");
+				dig := signdigest(id);
+				print("{");
+				for(i := 0; i < SIGDLEN; i++)
+					print("0x%x,", int dig[i]);
+				print("},\n");
 			}
 			print("\t0\n};\n");
 			print("#define %smodlen	%d\n", d.sym.name, n);

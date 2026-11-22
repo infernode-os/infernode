@@ -19,11 +19,17 @@ FLAGS=""
 while [ "${1#-}" != "$1" ]; do FLAGS="$FLAGS $1"; shift; done
 SRC="$1"; OUT="$2"; W="${3:-1024}"
 [ -n "$SRC" ] && [ -n "$OUT" ] || { echo "usage: $0 <url-or-file> <out.png> [width[xheight]]" >&2; exit 2; }
-case "$(uname -s)" in
-Darwin) EMU="$ROOT/emu/MacOSX/o.emu" ;;
-*)      EMU="$ROOT/emu/Linux/o.emu" ;;
-esac
+if [ -z "$EMU" ]; then
+	case "$(uname -s)" in
+	Darwin) EMU="$ROOT/emu/MacOSX/o.emu" ;;
+	*)      EMU="$ROOT/emu/Linux/o.emu" ;;
+	esac
+fi
 [ -x "$EMU" ] || { echo "build the emulator first ($EMU)" >&2; exit 1; }
+# an SDL emu wants a video device even for an image drawn off screen:
+# with none ("No available video device") every shot was "no image"
+: "${SDL_VIDEODRIVER:=dummy}"
+export SDL_VIDEODRIVER
 [ -f "$ROOT/dis/tests/charonshot.dis" ] || { echo "build tests first: (cd tests; mk install)" >&2; exit 1; }
 case "$SRC" in
 *://*) URL="$SRC" ;;

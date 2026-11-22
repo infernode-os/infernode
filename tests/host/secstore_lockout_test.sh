@@ -22,6 +22,10 @@ set -e
 ROOT="${ROOT:-.}"
 . "$(dirname "$0")/common.sh"
 
+# a port of this test's own for its secstored (it used 5356, and killed
+# whatever held it)
+PORT=$(freeport)
+
 USER="testuser-lockout"
 CORRECT="correcthorse-battery-staple"
 WRONG="wrongpass-guessing"
@@ -31,8 +35,7 @@ if [ ! -x "$EMU" ]; then
     exit 0
 fi
 
-# Free the secstore port and clear prior state for a reproducible run.
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
+# Clear prior state for a reproducible run.
 sleep 1
 rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
 
@@ -74,12 +77,12 @@ cat > "$ROOT/tmp/test_lockout.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
 auth/secstore-setup -u $USER -k $CORRECT
 echo '--- begin wrong-password attempts ---'
 for(i in 1 2 3 4 5 6 7 8 9 10 11 12){
-	echo $WRONG | auth/secstore -i -u $USER -s tcp!localhost!5356 x factotum >[2=1]
+	echo $WRONG | auth/secstore -i -u $USER -s tcp!127.0.0.1!$PORT x factotum >[2=1]
 }
 echo '--- end wrong-password attempts ---'
 EOF
@@ -89,7 +92,6 @@ OUTPUT=$(run_emu 90 /tmp/test_lockout.sh)
 check "account locks at the failed-attempt threshold" "$OUTPUT" "locked after"
 check "attempts are rejected while the account is locked" "$OUTPUT" "rejected locked account"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
 sleep 1
 
@@ -101,15 +103,15 @@ cat > "$ROOT/tmp/test_reset.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
 auth/secstore-setup -u $USER -k $CORRECT
 echo '--- 3 wrong attempts (below the threshold) ---'
 for(i in 1 2 3){
-	echo $WRONG | auth/secstore -i -u $USER -s tcp!localhost!5356 x factotum >[2=1]
+	echo $WRONG | auth/secstore -i -u $USER -s tcp!127.0.0.1!$PORT x factotum >[2=1]
 }
 echo '--- now the correct password ---'
-echo $CORRECT | auth/secstore -i -u $USER -s tcp!localhost!5356 t >[2=1]
+echo $CORRECT | auth/secstore -i -u $USER -s tcp!127.0.0.1!$PORT t >[2=1]
 echo '--- reset scenario done ---'
 EOF
 
@@ -118,7 +120,6 @@ OUTPUT2=$(run_emu 60 /tmp/test_reset.sh)
 checkabsent "a few wrong attempts do not lock a legitimate account" "$OUTPUT2" "locked after"
 check "correct password authenticates despite prior failures" "$OUTPUT2" "authenticated: $USER"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
 rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
 sleep 1
 
@@ -129,13 +130,13 @@ cat > "$ROOT/tmp/test_abort_lockout.sh" << EOF
 load std
 bind -a '#I' /net
 ndb/cs
-auth/secstored &
+auth/secstored -a tcp!127.0.0.1!$PORT &
 sleep 2
 auth/secstore-setup -u $USER -k $CORRECT
 echo '--- abort after server verifier attempts ---'
-/tests/secstore_abort_probe.dis $USER 10
+/tests/secstore_abort_probe.dis $USER 10 tcp!127.0.0.1!$PORT
 echo '--- prove the account is now locked ---'
-echo $WRONG | auth/secstore -i -u $USER -s tcp!localhost!5356 x factotum >[2=1]
+echo $WRONG | auth/secstore -i -u $USER -s tcp!127.0.0.1!$PORT x factotum >[2=1]
 echo '--- abort scenario done ---'
 EOF
 
@@ -144,7 +145,42 @@ OUTPUT3=$(run_emu 90 /tmp/test_abort_lockout.sh)
 check "abort-after-verifier attempts lock the account" "$OUTPUT3" "locked after"
 check "post-abort attempts are rejected while locked" "$OUTPUT3" "rejected locked account"
 
-lsof -ti :5356 2>/dev/null | xargs kill 2>/dev/null || true
+rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
+sleep 1
+
+# Scenario 4 (an m outside the group): the client's m must be between 0 and p.
+# Zero in any spelling but the probe's "0" was taken, and made the shared
+# secret 0 whatever the server chose: its verifier, sent next, was then the
+# hash of things the client knows and the password's own verifier, so one
+# connection let the password be searched for with no further word to the
+# server. Refused, said to be bad, and counted as a failed attempt.
+cat > "$ROOT/tmp/test_badm.sh" << EOF
+load std
+bind -a '#I' /net
+ndb/cs
+auth/secstored -a tcp!127.0.0.1!$PORT &
+sleep 2
+auth/secstore-setup -u $USER -k $CORRECT
+echo '--- m outside the group ---'
+/tests/secstore_abort_probe.dis -m 'AA==' $USER tcp!127.0.0.1!$PORT
+/tests/secstore_abort_probe.dis -m 'AAAAAAAA' $USER tcp!127.0.0.1!$PORT
+/tests/secstore_abort_probe.dis -m '!!!!' $USER tcp!127.0.0.1!$PORT
+echo '--- an m inside it is still answered ---'
+/tests/secstore_abort_probe.dis -m 'AQ==' $USER tcp!127.0.0.1!$PORT
+echo '--- and the right password still authenticates ---'
+echo $CORRECT | auth/secstore -i -u $USER -s tcp!127.0.0.1!$PORT t >[2=1]
+echo '--- bad m scenario done ---'
+EOF
+
+OUTPUT4=$(run_emu 60 /tmp/test_badm.sh)
+
+check "an m of zero is refused" "$OUTPUT4" "m-probe AA==: reply begins '!bad m"
+check "zero in another spelling is refused" "$OUTPUT4" "m-probe AAAAAAAA: reply begins '!bad m"
+check "an m that is no number is refused" "$OUTPUT4" "m-probe !!!!: reply begins '!bad m"
+check "an m in the group is answered" "$OUTPUT4" "m-probe AQ==: reply begins mu="
+check "the server says it refused an m outside the group" "$OUTPUT4" "rejected m outside the group"
+check "the right password authenticates after them" "$OUTPUT4" "authenticated: $USER"
+
 rm -rf "$ROOT/usr/inferno/secstore/$USER" 2>/dev/null || true
 
 echo ""

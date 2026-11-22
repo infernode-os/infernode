@@ -284,6 +284,14 @@ pres_pct := 45;
 # the zone whose body is visible (0 = conv, 1 = pres, 2 = ctx); the
 # other two zones collapse to a tappable title bar. Title bar geometry
 # is recorded on every layout pass so mouseproc can route taps.
+#
+# touch is $infmobile itself: finger-sized header, tiles and tab strips,
+# and the keyboard on the screen.  mobile is the accordion layout, chosen
+# by chooselayout() from the screen's shape: always on a phone; on a
+# tablet ($inftablet, boot-mobile.sh --tablet: an iPad) only while it is
+# held upright, the desktop's three columns while it is on its side.
+touch := 0;
+tablet := 0;
 mobile := 0;
 expanded_zone := 0;
 mobile_conv_title_y := 0;
@@ -397,8 +405,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# split-zones + pager refactor lands.
 	mobenv := readfile("/env/infmobile");
 	if(mobenv != nil && strip(mobenv) == "1") {
-		mobile = 1;
-		sys->fprint(stderr, "lucifer: mobile=1 (accordion layout)\n");
+		touch = 1;
+		tabenv := readfile("/env/inftablet");
+		tablet = tabenv != nil && strip(tabenv) == "1";
+		sys->fprint(stderr, "lucifer: touch=1 tablet=%d\n", tablet);
 	}
 
 	buildstamp := readfile("/lib/lucifer/buildstamp");
@@ -561,6 +571,9 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	# Layout zones and allocate sub-images + wmsrv
 	r := mainwin.r;
+	chooselayout(r);
+	if(!mobile)	# chooselayout says only when the accordion is chosen
+		sys->fprint(stderr, "lucifer: layout columns (%dx%d)\n", r.dx(), r.dy());
 	(convr, presr, ctxr) := zonerects(r);
 	preszone = presr;
 
@@ -696,6 +709,33 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 # --- Zone layout ---
 
+# The task bar's height: taller on a touch screen, for the tiles' sake.
+headerheight(): int
+{
+	if(touch)
+		return MOBILE_HEADERH;
+	return 40;
+}
+
+# Choose the layout for a screen of r's shape (see touch above).  When it
+# changes, what the old one kept is let go: the accordion's title bars,
+# and the geometry that lets a zone toggle skip the full layout.
+chooselayout(r: Rect)
+{
+	m := touch && !(tablet && r.dx() > r.dy());
+	if(m == mobile)
+		return;
+	mobile = m;
+	titleconv_img = nil;
+	titlepres_img = nil;
+	titlectx_img = nil;
+	lastlaidout = Rect((0, 0), (0, 0));
+	how := "columns";
+	if(mobile)
+		how = "accordion";
+	sys->fprint(stderr, "lucifer: layout %s (%dx%d)\n", how, r.dx(), r.dy());
+}
+
 zonerects(r: Rect): (Rect, Rect, Rect)
 {
 	if(mobile) {
@@ -771,7 +811,7 @@ zonerects(r: Rect): (Rect, Rect, Rect)
 	}
 
 	# Desktop: classic three-column.
-	headerh := 40;
+	headerh := headerheight();
 	zonety := r.min.y + headerh + 1;
 	w := r.dx();
 	convw := w * conv_pct / 100;
@@ -896,9 +936,7 @@ drawchrome(r: Rect)
 	# Only clear and redraw the header area — never clear zone areas.
 	# The full-window clear would blank all zone sub-images and leave them
 	# black until the next user interaction triggers a zone redraw.
-	headerh := 40;
-	if(mobile)
-		headerh = MOBILE_HEADERH;
+	headerh := headerheight();
 	headerr := Rect((r.min.x, r.min.y), (r.max.x, r.min.y + headerh));
 	mainwin.draw(headerr, headercol, nil, (0, 0));
 
@@ -913,7 +951,7 @@ drawchrome(r: Rect)
 			# Mobile: draw an enlarged copy (built once, cached in
 			# logobig). Desktop draws the logo at native size.
 			limg := logoimg;
-			if(mobile) {
+			if(touch) {
 				if(logobig == nil)
 					logobig = biglogo(logoimg);
 				limg = logobig;
@@ -933,7 +971,7 @@ drawchrome(r: Rect)
 		tileh := 28;
 		tilepad := 8;	# horizontal text padding per side
 		tilegap := 4;	# gap between tiles
-		if(mobile) {
+		if(touch) {
 			# Fill most of the header so the tile is a ~44pt tap target
 			# (MOBILE_HEADERH is 132 = 44pt; leave a thin margin).
 			tileh = MOBILE_HEADERH - 12;
@@ -958,7 +996,7 @@ drawchrome(r: Rect)
 					tlabel += " · " + t.status;
 				tw := mainfont.width(tlabel) + tilepad * 2;
 				mintw := 60;
-				if(mobile)
+				if(touch)
 					mintw = 140;	# thumb-target minimum
 				if(tw < mintw)
 					tw = mintw;
@@ -1140,7 +1178,7 @@ drawmobiletitle(target: ref Image, label: string, expanded: int)
 # SDL slides it above the keyboard.
 reqkbd(on: int)
 {
-	if(!mobile)
+	if(!touch)
 		return;
 	if(softkbd != nil){
 		if(on){
@@ -1285,7 +1323,7 @@ runosk(wm: chan of (string, chan of (string, ref Draw->Wmcontext)), fd: ref Sys-
 		return;
 	}
 	args := "osk" :: "-s" :: "-F" :: string fd.fd :: nil;
-	if(mobile)
+	if(touch)
 		args = "osk" :: "-s" :: "-m" :: "-F" :: string fd.fd :: nil;
 	osk->init(ref Draw->Context(display, nil, wm), args);
 }
@@ -1630,6 +1668,12 @@ preswmloop(scr: ref Screen, zoner: Rect,
 	curzone := zoner;
 	ptrgrab: ref Client;	# the window a press in the content area began in
 	ptrbuttons := 0;	# the buttons down at the last pointer event there
+	# Cursors: each window's last "cursor" request, and the one shown,
+	# that of the window the pointer goes to (wm/wm's gunsight for
+	# Delete, its box, its cross).  Out of the zone, the arrow.
+	cursors: list of (ref Client, string);
+	ptrto: ref Client;	# where the pointer went; nil out of the zone
+	shown := "cursor";
 	for(;;) alt {
 	(c, rc) := <-join =>
 		if(lucipresclient == nil && c.token == lucipretoken) {
@@ -1696,6 +1740,10 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			# Client disconnected — clear from lucipres slot or app slot.
 			# MUST NOT fall through to the reply code below: rc is nil,
 			# and alt send on a nil channel is a fatal Dis error.
+			cursors = dropcursor(cursors, c);
+			if(c == ptrto)
+				ptrto = nil;
+			shown = showcursor(cursorof(cursors, ptrto), shown);
 			if(c == lucipresclient) {
 				lucipresclient = nil;
 				break;	# lucipres gone — presentation zone dead, exit loop
@@ -1730,6 +1778,14 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			oshown := 0;
 			if(c != lucipresclient && c != presrenderclient)
 				(oa, oshown) = otherslot(c);
+			# "cursor ..." (wmlib's request; "cursor" alone, the
+			# arrow): kept for the window, shown while the pointer
+			# goes to it.  Lucifer's own window changes the screen's.
+			if(s == "cursor" || len s > 7 && s[0:7] == "cursor ") {
+				cursors = setcursor(cursors, c, s);
+				if(c == ptrto)
+					shown = showcursor(s, shown);
+			}
 			if(len s >= 8 && s[0:8] == "!reshape" ||
 			   len s >= 9 && s[0:9] == "!onscreen") {
 				if(c == lucipresclient) {
@@ -1762,7 +1818,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					if(c.image("app") == nil) {
 						ptabh := 0;
 						if(mainfont != nil) ptabh = mainfont.height + 13;
-						if(mobile && ptabh < MOBILE_TAPMIN) ptabh = MOBILE_TAPMIN;
+						if(touch && ptabh < MOBILE_TAPMIN) ptabh = MOBILE_TAPMIN;
 						pr := Rect((curzone.min.x, curzone.min.y + ptabh), curzone.max);
 						pimg := scr.newwindow(pr, Draw->Refbackup, Draw->Nofill);
 						if(pimg == nil) {
@@ -1956,7 +2012,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		# Resize ALL tasks' app windows (content area)
 		tabh3 := 0;
 		if(mainfont != nil) tabh3 = mainfont.height + 13;
-		if(mobile && tabh3 < MOBILE_TAPMIN) tabh3 = MOBILE_TAPMIN;
+		if(touch && tabh3 < MOBILE_TAPMIN) tabh3 = MOBILE_TAPMIN;
 		appr2 := Rect((curzone.min.x, curzone.min.y + tabh3), curzone.max);
 		for(rtpi := 0; rtpi < ntaskpres; rtpi++) {
 			rtp := taskpres[rtpi];
@@ -2005,9 +2061,15 @@ preswmloop(scr: ref Screen, zoner: Rect,
 		# content area routes to active app or lucipres.
 		tabh_m := 0;
 		if(mainfont != nil) tabh_m = mainfont.height + 13;
-		if(mobile && tabh_m < MOBILE_TAPMIN) tabh_m = MOBILE_TAPMIN;
-		if(p.xy.y < curzone.min.y + tabh_m) {
+		if(touch && tabh_m < MOBILE_TAPMIN) tabh_m = MOBILE_TAPMIN;
+		if(p.buttons < 0) {
+			# mouseproc: the pointer has left the zone
+			ptrto = nil;
+			shown = showcursor("cursor", shown);
+		} else if(p.xy.y < curzone.min.y + tabh_m) {
 			# Tab strip: always deliver to lucipres
+			ptrto = lucipresclient;
+			shown = showcursor(cursorof(cursors, ptrto), shown);
 			if(lucipresclient != nil)
 				alt { lucipresclient.ptr <-= p => ; * => ; }
 		} else {
@@ -2050,10 +2112,51 @@ preswmloop(scr: ref Screen, zoner: Rect,
 				else
 					actclient = lucipresclient;
 			}
+			ptrto = actclient;
+			shown = showcursor(cursorof(cursors, ptrto), shown);
 			if(actclient != nil)
 				alt { actclient.ptr <-= p => ; * => ; }
 		}
 	}
+}
+
+# A window's cursor in the zone: its last "cursor" request, else the
+# arrow ("cursor" alone).
+cursorof(l: list of (ref Client, string), c: ref Client): string
+{
+	if(c != nil)
+		for(; l != nil; l = tl l)
+			if((hd l).t0 == c)
+				return (hd l).t1;
+	return "cursor";
+}
+
+setcursor(l: list of (ref Client, string), c: ref Client, s: string): list of (ref Client, string)
+{
+	l = dropcursor(l, c);
+	if(s != "cursor")
+		l = (c, s) :: l;
+	return l;
+}
+
+dropcursor(l: list of (ref Client, string), c: ref Client): list of (ref Client, string)
+{
+	r: list of (ref Client, string);
+	for(; l != nil; l = tl l)
+		if((hd l).t0 != c)
+			r = hd l :: r;
+	return r;
+}
+
+# The screen's cursor made want, through Lucifer's own window, if it
+# is not already; the cursor now shown.
+showcursor(want, shown: string): string
+{
+	if(want == shown)
+		return shown;
+	if(wmclient->win.wmctl(want) != nil)
+		return shown;
+	return want;
 }
 
 # --- Main loop ---
@@ -2225,6 +2328,7 @@ topexpandedzone()
 handleresize()
 {
 	r := mainwin.r;
+	chooselayout(r);
 	h := dockh;
 	if(h > r.dy() * 6 / 10)
 		h = r.dy() * 6 / 10;
@@ -2283,15 +2387,19 @@ handleresize()
 	# Recreate all zone sub-images on a fresh mainscr.
 	# Must happen before drawchrome so separators are drawn on top of the fill.
 	#
-	# On a phone the zones are laid out again on the screen they had,
-	# not a fresh one.  The old windows (the presentation zone's, held
-	# by its apps until preswmloop moves them) are freed after the new
-	# ones are drawn; freed from a screen of their own, each painted
+	# The zones are laid out again on the screen they had, not a fresh
+	# one (first seen on a phone; the desktop's columns had it as soon
+	# as a tablet docked the keyboard on the screen under them).  The
+	# old windows (the presentation zone's, held by its apps until
+	# preswmloop moves them) are freed after the new ones are drawn; freed from a screen of their own, each painted
 	# its rectangle in that screen's fill over the new zones -- the
 	# Chat title and the chat gone blank each time the keyboard on the
 	# screen showed or hid.  On one screen, a window freed shows what
-	# is beneath it, and the new windows are above.
-	if(!mobile || mainscr == nil)
+	# is beneath it, and the new windows are above.  A screen turned (a
+	# phone's or tablet's rotation, an iPad's Split View) replaces the
+	# window itself, and the old screen is clipped to the old window's
+	# size: the zones go on a screen of the new one.
+	if(mainscr == nil || mainscr.image != mainwin)
 		mainscr = Screen.allocate(mainwin, bgcol, 0);
 	if(mainscr == nil)
 		return;
@@ -2860,8 +2968,22 @@ mouseproc()
 	tilepressed := 0;	# a button-1 press is active in the tile strip
 	SLOP: con 20;
 	prevb := 0;
+	inpres := 0;	# the last event went to the presentation zone
 	for(;;) {
 		p := <-win.ctxt.ptr;
+		# Leaving the zone, buttons up: its cursor goes (preswmloop
+		# shows the cursor of the app the pointer is in).  A press
+		# begun there keeps it until let go, as a window's grab does.
+		if(inpres && p.buttons == 0 &&
+		   (!p.xy.in(preszone) || mobile && expanded_zone != 1 ||
+		    dockclient != nil && dockscr != nil && p.xy.in(dockr))) {
+			alt {
+			presMouseCh <-= ref Pointer(-1, p.xy, p.msec) =>
+				inpres = 0;
+			* =>
+				;	# full: told with the next event
+			}
+		}
 		# the keyboard on the screen's: a press in its strip and the
 		# rest of that press.  Not taken as where the mouse is, which
 		# decides (on a desktop) which zone has the keyboard.
@@ -2874,12 +2996,10 @@ mouseproc()
 		if(wmclient->win.pointer(*p) == 0) {
 			wasdown := prevb;
 			prevb = p.buttons;
-			headerh := 40;
+			headerh := headerheight();
 			titleh  := 0;
-			if(mobile) {
-				headerh = MOBILE_HEADERH;
+			if(mobile)
 				titleh  = MOBILE_TITLEBARH;
-			}
 			# KLUDGE-MOBILE-ACCORDION-INFR-119 — title-bar tap →
 			# switch expanded zone. Check this before falling through
 			# to header / zone routing so a tap in a title bar can't
@@ -2899,12 +3019,12 @@ mouseproc()
 					continue;
 				}
 			}
-			# Mobile: tile-strip (activity bar) touch gesture.  A press
+			# Touch: tile-strip (activity bar) touch gesture.  A press
 			# in the header arms; a horizontal drag scrolls the strip; a
 			# release without a drag switches the activity.  This defers
 			# the switch off button-1 down so a swipe never activates the
 			# tile under the finger.  Desktop keeps switch-on-press below.
-			if(mobile) {
+			if(touch) {
 				inheader := p.xy.y < mainwin.r.min.y + headerh;
 				if((p.buttons & 1) && (wasdown & 1) == 0 && inheader) {
 					cid := -1;
@@ -3009,7 +3129,7 @@ mouseproc()
 				# zone gets pointer events; the collapsed ones have
 				# zero body height anyway.
 				case expanded_zone {
-				1 => alt { presMouseCh <-= p => ; * => ; }
+				1 => alt { presMouseCh <-= p => inpres = 1; * => ; }
 				2 => alt { ctxMouseCh  <-= p => ; * => ; }
 				*  => alt { convMouseCh <-= p => ; * => ; }
 				}
@@ -3018,7 +3138,7 @@ mouseproc()
 				if(pres_zone_minx > 0 && p.xy.x >= pres_zone_minx &&
 						p.xy.x < pres_zone_maxx) {
 					# Presentation zone
-					alt { presMouseCh <-= p => ; * => ; }
+					alt { presMouseCh <-= p => inpres = 1; * => ; }
 				} else if(ctx_zone_minx > 0 && p.xy.x >= ctx_zone_minx) {
 					# Context zone
 					alt { ctxMouseCh <-= p => ; * => ; }
@@ -3577,7 +3697,7 @@ contentarea(zone: Rect): Rect
 	tabh := 0;
 	if(mainfont != nil)
 		tabh = mainfont.height + 13;
-	if(mobile && tabh < MOBILE_TAPMIN)
+	if(touch && tabh < MOBILE_TAPMIN)
 		tabh = MOBILE_TAPMIN;
 	return Rect((zone.min.x, zone.min.y + tabh), zone.max);
 }

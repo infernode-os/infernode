@@ -99,6 +99,25 @@ paylen(kind: int, b: array of byte): int
 	return -1;
 }
 
+# Could this header begin a packet? A connection handle is 12 bits and
+# no more than 16rEFF (Vol 4 Part E 5.4.2), and no controller's buffers
+# are near the 64K a 16-bit length can claim: noise after an indicator
+# byte is most often caught by one or the other.
+Maxdata: con 4096;
+
+plausible(kind: int, b: array of byte): int
+{
+	case kind {
+	Hacl or Hiso =>
+		if((get2(b, 1) & 16rfff) > 16reff)
+			return 0;
+		return paylen(kind, b) <= Maxdata;
+	Hsco =>
+		return (get2(b, 1) & 16rfff) <= 16reff;
+	}
+	return 1;
+}
+
 Deframer.new(): ref Deframer
 {
 	return ref Deframer(array[4096] of byte, 0, 0);
@@ -122,14 +141,27 @@ Deframer.feed(d: self ref Deframer, b: array of byte): list of ref Pkt
 		kind := int d.buf[0];
 		hl := hdrlen(kind);
 		if(hl < 0){
-			# not an indicator: noise, or we joined mid-packet. Drop it and look again.
+			# not an indicator: noise, or we joined mid-packet. Drop
+			# all of it up to the next byte that could be one, in one move.
+			j := 1;
+			while(j < d.n && hdrlen(int d.buf[j]) < 0)
+				j++;
+			d.buf[0:] = d.buf[j:d.n];
+			d.n -= j;
+			d.junk += j;
+			continue;
+		}
+		if(d.n < 1 + hl)
+			break;
+		if(!plausible(kind, d.buf)){
+			# an indicator's value, but no header a controller sends:
+			# waiting for the length it claims would take in the real
+			# packets behind it. Drop the byte and look again.
 			d.buf[0:] = d.buf[1:d.n];
 			d.n--;
 			d.junk++;
 			continue;
 		}
-		if(d.n < 1 + hl)
-			break;
 		total := 1 + hl + paylen(kind, d.buf);
 		if(d.n < total)
 			break;
@@ -176,6 +208,8 @@ cmdstatus(e: ref Event): (int, int, int)
 
 command(op: int, params: array of byte): ref Pkt
 {
+	if(len params > 255)
+		return nil;	# the length is one byte; one that wraps would run the rest into the next packet
 	d := array[3 + len params] of byte;
 	put2(d, 0, op);
 	d[2] = byte len params;
@@ -619,7 +653,12 @@ Hci.cmd(h: self ref Hci, op: int, params: array of byte, ms: int): (int, array o
 {
 	if(h.dead)
 		return (-1, nil, "controller gone");
-	r := ref Req(op, command(op, params), sys->millisec() + ms, chan of (int, array of byte, string));
+	p := command(op, params);
+	if(p == nil)
+		return (-1, nil, "command parameters too long");
+	# room for the answer, so that a caller killed while it waits does
+	# not stop the one process every other caller depends on
+	r := ref Req(op, p, sys->millisec() + ms, chan[1] of (int, array of byte, string));
 	h.reqs <-= r;
 	return <-r.reply;
 }
@@ -670,9 +709,36 @@ mux(h: ref Hci, pidc: chan of int)
 	late: list of ref Req;
 	r: ref Req;
 	stucksince := 0;
+	ghosts: list of ref Ghost;	# timed out; their answers may yet come
+	held: list of ref Event;	# events that must not be lost, waiting for room; oldest first
+	nheld := 0;
+	heldp: list of ref Pkt;		# data likewise
+	nheldp := 0;
+	never := chan of ref Event;	# nobody receives: an arm of the alt with nothing to send
+	neverp := chan of ref Pkt;
 
 	for(;;){
+		evc := never;
+		ev: ref Event;
+		if(held != nil){
+			evc = h.events;
+			ev = hd held;
+		}
+		pc := neverp;
+		pk: ref Pkt;
+		if(heldp != nil){
+			pc = h.data;
+			pk = hd heldp;
+		}
 		alt {
+		evc <-= ev =>
+			held = tl held;
+			nheld--;
+
+		pc <-= pk =>
+			heldp = tl heldp;
+			nheldp--;
+
 		nr := <-h.reqs =>
 			queue = append(queue, nr);
 			(queue, inflight, credits) = pump(h, queue, inflight, credits);
@@ -688,12 +754,25 @@ mux(h: ref Hci, pidc: chan of int)
 				for(; inflight != nil; inflight = tl inflight)
 					(hd inflight).reply <-= (-1, nil, why);
 				h.dead = 1;
-				kill(tickpid);
-				alt { h.events <-= nil => ; * => ; }
+				linger(h, why, held, tick, tickpid);
 				return;
 			}
 			if(p.kind != Hevt){
-				alt { h.data <-= p => ; * => h.dropped++; }
+				# data in order: behind what is held, if anything is
+				if(heldp == nil){
+					alt {
+					h.data <-= p =>
+						continue;
+					* =>
+						;
+					}
+				}
+				if(nheldp >= Maxheldp)
+					h.dropped++;
+				else{
+					heldp = appendp(heldp, p);
+					nheldp++;
+				}
 				continue;
 			}
 			e := Event.parse(p);
@@ -703,6 +782,14 @@ mux(h: ref Hci, pidc: chan of int)
 			EvCmdComplete =>
 				(ncmd, op, ret) := cmdcomplete(e);
 				credits = ncmd;
+				g: ref Ghost;
+				(ghosts, g) = unghost(ghosts, op);
+				if(g != nil && !sameasked(g, inflight)){
+					# the answer to a request that has already been told
+					# "timeout": not the answer to the one asked since
+					(queue, inflight, credits) = pump(h, queue, inflight, credits);
+					continue;
+				}
 				(inflight, r) = take(inflight, op);
 				if(r != nil){
 					if(len ret > 0)
@@ -710,25 +797,34 @@ mux(h: ref Hci, pidc: chan of int)
 					else
 						r.reply <-= (Sok, nil, nil);
 				}else if(op != 0)
-					deliver(h, e);
+					(held, nheld) = deliver(h, e, held, nheld);
 			EvCmdStatus =>
 				(status, ncmd, op) := cmdstatus(e);
 				credits = ncmd;
+				g: ref Ghost;
+				(ghosts, g) = unghost(ghosts, op);
+				if(g != nil && !sameasked(g, inflight)){
+					(queue, inflight, credits) = pump(h, queue, inflight, credits);
+					continue;
+				}
 				(inflight, r) = take(inflight, op);
 				if(r != nil)
 					r.reply <-= (status, nil, nil);
 				else
-					deliver(h, e);
+					(held, nheld) = deliver(h, e, held, nheld);
 			* =>
-				deliver(h, e);
+				(held, nheld) = deliver(h, e, held, nheld);
 			}
 			(queue, inflight, credits) = pump(h, queue, inflight, credits);
 
 		<-tick =>
 			now := sys->millisec();
 			(inflight, late) = expire(inflight, now);
-			for(; late != nil; late = tl late)
+			ghosts = fade(ghosts, now);
+			for(; late != nil; late = tl late){
 				(hd late).reply <-= (-1, nil, "timeout");
+				ghosts = ref Ghost((hd late).op, now + Ghostms, (hd late).p.data) :: ghosts;
+			}
 			(queue, late) = expire(queue, now);
 			for(; late != nil; late = tl late)
 				(hd late).reply <-= (-1, nil, "timeout: no command credit");
@@ -757,20 +853,157 @@ mux(h: ref Hci, pidc: chan of int)
 			for(; inflight != nil; inflight = tl inflight)
 				(hd inflight).reply <-= (-1, nil, "stopped");
 			h.dead = 1;
-			kill(tickpid);
 			h.t.stop();
-			alt { h.events <-= nil => ; * => ; }
+			linger(h, "stopped", held, tick, tickpid);
 			return;
 		}
 	}
 }
 
-deliver(h: ref Hci, e: ref Event)
+#
+# The end. h.dead is set, so new callers are turned away where they
+# stand; one that had looked before it was set is on its way to
+# h.reqs or h.ctl, where nobody would ever answer, so those are
+# answered a while longer. What was held for the reader of events is
+# given to it, and then the nil that says there will be no more.
+#
+Lingerms: con 2000;
+
+linger(h: ref Hci, why: string, held: list of ref Event, tick: chan of int, tickpid: int)
 {
-	alt {
-	h.events <-= e =>	;
-	* =>			h.dropped++;
+	spawn lastevents(h.events, held);
+	for(n := 0; n < Lingerms/Tickms; ){
+		alt {
+		nr := <-h.reqs =>
+			nr.reply <-= (-1, nil, why);
+		<-h.ctl =>
+			;
+		<-tick =>
+			n++;
+		}
 	}
+	kill(tickpid);
+}
+
+# A send that waits: the reader of events finds out, however much was
+# ahead of it. If nobody reads, this is one process left waiting, which
+# is less than a reader left waiting for an event that will not come.
+lastevents(c: chan of ref Event, held: list of ref Event)
+{
+	for(; held != nil; held = tl held)
+		c <-= hd held;
+	c <-= nil;
+}
+
+# A request that timed out. HCI's answers name an opcode and nothing
+# else, so one that comes late looks like the answer to whatever was
+# asked next with that opcode.
+Ghost: adt {
+	op:	int;
+	until:	int;
+	cmd:	array of byte;	# what was asked
+};
+
+Ghostms: con 10000;	# how long a late answer is still taken for what it is
+Maxheld: con 256;	# events kept for a reader that has fallen behind
+Maxheldp: con 128;	# data packets likewise
+
+# an answer for an opcode: was it asked by a request that has timed out?
+# The oldest such, removed. (The list is newest first.)
+unghost(l: list of ref Ghost, op: int): (list of ref Ghost, ref Ghost)
+{
+	found: ref Ghost;
+	for(m := l; m != nil; m = tl m)
+		if((hd m).op == op)
+			found = hd m;
+	if(found == nil)
+		return (l, nil);
+	keep: list of ref Ghost;
+	for(; l != nil; l = tl l)
+		if(hd l != found)
+			keep = hd l :: keep;
+	rev: list of ref Ghost;
+	for(; keep != nil; keep = tl keep)
+		rev = hd keep :: rev;
+	return (rev, found);
+}
+
+# The request now waiting on the ghost's opcode asked the very same
+# thing (a retry): the late answer is as good an answer to it, and
+# withholding it would cost the retry its own timeout.
+sameasked(g: ref Ghost, inflight: list of ref Req): int
+{
+	for(; inflight != nil; inflight = tl inflight){
+		r := hd inflight;
+		if(r.op != g.op)
+			continue;
+		if(len r.p.data != len g.cmd)
+			return 0;
+		for(i := 0; i < len g.cmd; i++)
+			if(r.p.data[i] != g.cmd[i])
+				return 0;
+		return 1;
+	}
+	return 0;
+}
+
+fade(l: list of ref Ghost, now: int): list of ref Ghost
+{
+	keep: list of ref Ghost;
+	n := 0;
+	for(; l != nil; l = tl l)
+		if((hd l).until - now > 0 && n++ < 32)
+			keep = hd l :: keep;
+	rev: list of ref Ghost;
+	for(; keep != nil; keep = tl keep)
+		rev = hd keep :: rev;
+	return rev;
+}
+
+# What a reader can lose and ask for again: results of a search that is
+# still going on. Everything else says something once (a link gone, a
+# key, a pairing request, packets completed) and is kept for it.
+droppable(e: ref Event): int
+{
+	case e.code {
+	EvInquiryResult or EvInquiryResultRssi or EvExtInquiryResult =>
+		return 1;
+	EvLeMeta =>
+		return len e.params > 0 && int e.params[0] == LeAdvReport;
+	}
+	return 0;
+}
+
+deliver(h: ref Hci, e: ref Event, held: list of ref Event, nheld: int): (list of ref Event, int)
+{
+	# in order: nothing passes what is held
+	if(held == nil){
+		alt {
+		h.events <-= e =>
+			return (held, nheld);
+		* =>
+			;
+		}
+	}
+	if(droppable(e) || nheld >= Maxheld){
+		h.dropped++;
+		return (held, nheld);
+	}
+	return (appende(held, e), nheld+1);
+}
+
+appende(l: list of ref Event, e: ref Event): list of ref Event
+{
+	if(l == nil)
+		return e :: nil;
+	return hd l :: appende(tl l, e);
+}
+
+appendp(l: list of ref Pkt, p: ref Pkt): list of ref Pkt
+{
+	if(l == nil)
+		return p :: nil;
+	return hd l :: appendp(tl l, p);
 }
 
 pump(h: ref Hci, queue, inflight: list of ref Req, credits: int): (list of ref Req, list of ref Req, int)

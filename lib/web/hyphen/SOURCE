@@ -1,0 +1,7 @@
+https://github.com/hyphenation/tex-hyphen, commit 5684c0f51c0b81133db2efbe60a408b4155a3ff5:
+hyph-utf8/tex/generic/hyph-utf8/patterns/txt/hyph-en-us.pat.txt -> en-us.pat
+  sha256 0f57318b878b132547ae92db39a6e1d1cf2a05d9008874955d6ecb910007a463
+hyph-utf8/tex/generic/hyph-utf8/patterns/txt/hyph-en-us.hyp.txt -> en-us.hyp
+  sha256 5e785c27e151f878c312991d937b5582615b77737ab30bac413d5967d6aa21da
+(hyph-utf8/tex/generic/hyph-utf8/patterns/tex/hyph-en-us.tex carries the
+copyright and licence in NOTICE; its hyphenmins, left 2 and right 3.)

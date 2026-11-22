@@ -328,6 +328,22 @@ these two modules over a shared mount —
 `/lib/matrix/compositions/video-player` and `video-live`; multiplex a
 wall by adding one pane(+ctl) pair per feed.
 
+What is drawn over the frames is not the composition's business: it is
+the feed's `layer/` directory as Matrix's name space has it (#1095,
+[layers(2)](../man/2/layers)), each file a layer of text records, stacked
+in the union's order. The composition wires the pane to its feed; the
+name space composes what is drawn on it, while it runs:
+
+```
+; bind -a /mnt/vision/1/layer /mnt/video/0/layer    # a detector's boxes, on top
+; unmount /mnt/vision/1/layer /mnt/video/0/layer
+```
+
+These are composition at two levels: the composition file is the
+wiring (which module reads which mount, where), and the name space
+decides what each mount holds. Display modules run in Matrix's own
+process, so all of one Matrix's panes see the same stack of a feed.
+
 ### Service Module
 
 ```

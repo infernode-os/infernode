@@ -8,7 +8,8 @@ implement Llmsrv;
 #
 # Filesystem layout:
 #   /mnt/llm/
-#       new              read: allocates session N, returns "N\n"
+#       new              read: allocates a session and returns its name;
+#                            one for each open of the file
 #       N/               per-session directory
 #           ask          rw: write prompt, read response (blocks until done)
 #           stream       r:  blocking reads return chunks during generation
@@ -17,13 +18,18 @@ implement Llmsrv;
 #           system       rw: system prompt
 #           thinking     rw: "disabled" / "max" / integer
 #           prefill      rw: assistant response prefill
-#           tools        w:  write JSON tool definitions
+#           tools        w:  write JSON tool definitions; a document that
+#                            is no list of tools is refused: the session
+#                            answers no prompt until one is written that
+#                            is, and a read says what was wrong
 #           context      rw: JSON conversation history; written (between
 #                            turns), it becomes the history: a saved
 #                            session taken up where it was left
 #           compact      rw: write to trigger compaction
 #           ctl          w:  "reset", "close", or "cancel" (stop the
-#                            generation under way)
+#                            generation under way; an error if it cannot
+#                            be stopped).  close stops it too: nothing of
+#                            it reaches a reader after
 #           usage        r:  "estimated_tokens/window\n"
 #           window       rw: the context window, in tokens: as the backend
 #                            reports it for the model (or llmsrv -C says);
@@ -157,6 +163,9 @@ LlmSession: adt {
 	# Session lifecycle
 	closed:         int;
 	refs:           int;
+
+	toolserr:       string;  # why the last tools document was refused
+	compacting:     int;     # a /compact is rewriting the history
 };
 
 stderr: ref Sys->FD;
@@ -432,7 +441,9 @@ newsession(): ref LlmSession
 		0,             # genpid
 		nil,           # pendingwrite
 		0,             # closed
-		1              # refs (starts at 1)
+		1,             # refs (starts at 1)
+		"",            # toolserr
+		0              # compacting
 	);
 
 	if(nsessions >= len sessions) {
@@ -474,9 +485,14 @@ resetsession(sess: ref LlmSession)
 	sess.contexttokens = 0;
 }
 
+# A closed session's generation is stopped, and a reader waiting on it is
+# told the session has closed.  The generation went on: its reply, made
+# for a session no longer there, was delivered to a read begun before the
+# close, and the backend worked on for nobody.
 closesession(sess: ref LlmSession)
 {
 	sess.closed = 1;
+	cancelgeneration(sess);
 	freesession(sess.id);
 }
 
@@ -689,23 +705,27 @@ Serve:
 
 			case ft {
 			Qnew =>
-				sess := newsession();
-				if(sess == nil) {
-					srv.reply(ref Rmsg.Error(m.tag, "cannot allocate session"));
-					break;
+				# One session for one open of the file, its name read
+				# at any offset.  Every read made one: cat reads until
+				# a read returns nothing, so each cat left a session
+				# nobody had the name of, and 64 used them up.
+				if(c.data == nil) {
+					sess := newsession();
+					if(sess == nil) {
+						srv.reply(ref Rmsg.Error(m.tag, "cannot allocate session"));
+						break;
+					}
+					# Return the capability token, not the numeric id: it is the
+					# only handle by which the creator can reach this session.
+					c.data = array of byte (sess.name + "\n");
 				}
-				# Return the capability token, not the numeric id: it is the
-				# only handle by which the creator can reach this session.
-				data := array of byte (sess.name + "\n");
-				srv.reply(styxservers->readbytes(m, data));
+				srv.reply(styxservers->readbytes(m, c.data));
 
 			Qmodels =>
-				(mtext, merr) := availablemodels();
-				if(merr != nil) {
-					srv.reply(ref Rmsg.Error(m.tag, merr));
-					break;
-				}
-				srv.reply(styxservers->readbytes(m, array of byte mtext));
+				# asks the backend: not here, where a backend that
+				# does not answer would stop every session
+				modelsid := trackasync(m.tag);
+				spawn asyncmodelsread(modelsid, m);
 
 			Qask =>
 				sess := findsession(sid);
@@ -851,8 +871,13 @@ Serve:
 				srv.reply(styxservers->readbytes(m, array of byte (val + "\n")));
 
 			Qtools =>
-				# Write-only
-				srv.reply(styxservers->readbytes(m, nil));
+				# Nothing to read, unless the last document written
+				# was refused: then why.
+				sess := findsession(sid);
+				terr := "";
+				if(sess != nil && sess.toolserr != "")
+					terr = "error: " + sess.toolserr + "\n";
+				srv.reply(styxservers->readbytes(m, array of byte terr));
 
 			* =>
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
@@ -879,6 +904,10 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Eperm));
 					break;
 				}
+				if(sess.compacting) {
+					srv.reply(ref Rmsg.Error(m.tag, "ask: compaction in progress, retry"));
+					break;
+				}
 				# Accumulate the prompt across mnt write-fragments. The mnt
 				# device splits one client write() into multiple <=iounit
 				# Twrites; generation is deferred to the following read so the
@@ -903,6 +932,12 @@ Serve:
 					break;
 				}
 				model := resolvemodel(strip(string m.data));
+				# A model's name is a word; it goes into every request
+				# and into the log.
+				if(!ismodelname(model)) {
+					srv.reply(ref Rmsg.Error(m.tag, "model: not a model's name"));
+					break;
+				}
 				if(model != "")
 					sess.model = model;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -919,7 +954,8 @@ Serve:
 				}
 				tstr := strip(string m.data);
 				temp := parsefloat(tstr);
-				if(temp < 0.0 || temp > 2.0) {
+				# what is no number was read as 0, and taken
+				if(!isnumber(tstr) || temp < 0.0 || temp > 2.0) {
 					srv.reply(ref Rmsg.Error(m.tag, "temperature must be between 0.0 and 2.0"));
 					break;
 				}
@@ -932,7 +968,7 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				if(sess.genactive) {
+				if(sess.genactive || sess.compacting) {
 					srv.reply(ref Rmsg.Error(m.tag, "context: generation in progress"));
 					break;
 				}
@@ -1086,6 +1122,18 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
+				# One rewriting of the history at a time, and none
+				# beside a generation: asked here, where requests
+				# are taken one at a time.  It was asked in the
+				# compaction's own process, once, with nothing to
+				# say a compaction had begun: two of them, or one
+				# and a prompt written after it, each put their own
+				# history in the session's place.
+				if(sess.genactive || sess.compacting || sess.pendingwrite != nil) {
+					srv.reply(ref Rmsg.Error(m.tag, "compact: generation in progress, retry"));
+					break;
+				}
+				sess.compacting = 1;
 				compactid := trackasync(m.tag);
 				spawn asynccompact(compactid, m.tag, len m.data, sess);
 
@@ -1104,13 +1152,18 @@ Serve:
 					closesession(sess);
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				"cancel" =>
-					cancelgeneration(sess);
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					cerr := cancelgeneration(sess);
+					if(cerr != nil)
+						srv.reply(ref Rmsg.Error(m.tag, cerr));
+					else
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				* =>
 					# autocompact <n>: per-session auto-compact high-water
 					# mark in estimated tokens; 0 disables (caller owns its
 					# own compaction policy). See rungeneration (INFR-223).
-					if(hasprefix(cmd, "autocompact")) {
+					# the word, then its argument: "autocompact5" was
+					# taken as it
+					if(cmd == "autocompact" || hasprefix(cmd, "autocompact ") || hasprefix(cmd, "autocompact\t")) {
 						# auto: from the session's window
 						arg := strip(cmd[len "autocompact":]);
 						n := AUTOMARK;
@@ -1185,7 +1238,10 @@ reapstale(srv: ref Styxserver, fid: int)
 {
 	c := srv.getfid(fid);
 	if(c != nil) {
-		finalizewrite(srv, fid);  # drop any half-written reassembly buffer
+		# Drop any half-written reassembly buffer.  It was committed,
+		# as a clunk commits a whole one: half a system prompt or
+		# history from a client that had gone.
+		c.data = nil;
 		srv.delfid(c);
 	}
 }
@@ -1223,18 +1279,28 @@ appendbyteslimit(buf, data: array of byte, limit: int): (array of byte, string)
 # prompt writes), since the /ask fid is never clunked between turns.
 triggerpending(sess: ref LlmSession)
 {
-	if(sess.pendingwrite == nil || sess.genactive)
+	if(sess.pendingwrite == nil || sess.genactive || sess.compacting)
 		return;
 	prompt := strip(string sess.pendingwrite);
 	sess.pendingwrite = nil;
 	if(prompt == "")
 		return;
+	# The tools last written were refused: the model is not asked with
+	# the ones before them, as though the write had been taken.
+	if(sess.toolserr != "") {
+		sess.lastresponse = "Error: tools: " + sess.toolserr;
+		return;
+	}
 	# Allocate channels before spawning, then run generation async.
 	sess.streamch = chan[256] of string;
 	sess.streamleft = nil;
 	sess.donech = chan[1] of int;
 	sess.genactive = 1;
-	spawn rungeneration(sess, prompt);
+	# Its process group is known before another request is taken, so
+	# that a cancel or a close that comes next has something to stop.
+	pidc := chan of int;
+	spawn rungeneration(sess, prompt, pidc);
+	sess.genpid = <-pidc;
 }
 
 # Commit a reassembled /tools or /system document on clunk. Tool-defs validity
@@ -1247,22 +1313,30 @@ finalizewrite(srv: ref Styxserver, fid: int)
 	c := srv.getfid(fid);
 	if(c == nil || c.data == nil)
 		return;
+	ft := FTYPE(c.path);
 	sess := findsession(SESSID(c.path));
-	if(sess == nil) {
+	if(sess == nil || (ft != Qtools && ft != Qsystem && ft != Qcontext)) {
 		c.data = nil;
 		return;
 	}
 	content := strip(string c.data);
 	c.data = nil;
-	case FTYPE(c.path) {
+	case ft {
 	Qtools =>
+		sess.toolserr = "";
 		if(content == "") {
 			sess.tools = nil;
 			return;
 		}
 		(tools, terr) := parsetooldefs(content);
 		if(terr != nil) {
+			# The writes were answered piece by piece, so the writer
+			# has been told nothing.  The session keeps the reason
+			# and answers no prompt until tools are written that
+			# parse: it went on with the tools before these, the
+			# writer taking it that these had been set.
 			sys->fprint(stderr, "llmsrv: tools parse on clunk: %s\n", terr);
+			sess.toolserr = terr;
 			return;
 		}
 		sess.tools = tools;
@@ -1319,11 +1393,11 @@ parsecontext(content: string): (list of ref LlmMessage, string)
 
 # Run one generation turn. Caller (triggerpending) has set genactive/streamch/
 # donech and the triggering write was already replied to.
-rungeneration(sess: ref LlmSession, prompt: string)
+rungeneration(sess: ref LlmSession, prompt: string, pidc: chan of int)
 {
 	# A group of its own, the backend's readers in it, so cancel can stop
 	# all of it.
-	sess.genpid = sys->pctl(Sys->NEWPGRP, nil);
+	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
 	sesswindow(sess, 1);	# learned here, off the serving loop
 	# Check for TOOL_RESULTS
 	if(hasprefix(prompt, "TOOL_RESULTS\n") || hasprefix(prompt, "TOOL_RESULTS\r\n")) {
@@ -1542,14 +1616,24 @@ resultstokens(results: list of ref ToolResult): int
 # Stop the generation under way: the model's answer is not waited for.
 # The history stays a valid one: a prompt not yet answered was never
 # added; tool results not yet answered are answered so.
-cancelgeneration(sess: ref LlmSession)
+# Returns nil when no generation is running any more, or why one still
+# is: the caller was told it had been stopped whatever had happened.
+cancelgeneration(sess: ref LlmSession): string
 {
-	if(!sess.genactive || sess.genpid <= 0)
-		return;
+	if(!sess.genactive)
+		return nil;
 	fd := sys->open("/prog/" + string sess.genpid + "/ctl", Sys->OWRITE);
 	if(fd == nil || sys->fprint(fd, "killgrp") < 0) {
-		sys->fprint(stderr, "llmsrv: cancel: cannot stop generation %d: %r\n", sess.genpid);
-		return;
+		err := sys->sprint("cancel: cannot stop the generation: %r");
+		# Its process may have gone without ending the generation
+		# (it raised): then there is nothing to stop, and the session
+		# is given back.  Only where /prog shows our own process can
+		# its absence be believed.
+		if(!exists("/prog/" + string sys->pctl(0, nil) + "/status") ||
+		   exists("/prog/" + string sess.genpid + "/status")) {
+			sys->fprint(stderr, "llmsrv: %s (process %d)\n", err, sess.genpid);
+			return err;
+		}
 	}
 	fd = nil;
 	sess.genpid = 0;
@@ -1560,6 +1644,13 @@ cancelgeneration(sess: ref LlmSession)
 		sess.messages = addmessage(sess.messages, "assistant", "(stopped by the user)", "");
 	sess.lastresponse = "STOP:end_turn\n";
 	endgeneration(sess);
+	return nil;
+}
+
+exists(path: string): int
+{
+	(ok, nil) := sys->stat(path);
+	return ok >= 0;
 }
 
 endgeneration(sess: ref LlmSession)
@@ -1618,12 +1709,32 @@ completeasync(id: int): int
 	return found;
 }
 
+asyncmodelsread(id: int, m: ref Tmsg.Read)
+{
+	(mtext, merr) := availablemodels();
+	if(merr != nil)
+		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(m.tag, merr));
+	else
+		asyncrepl <-= ref Asyncreply(id, styxservers->readbytes(m, array of byte mtext));
+}
+
 asyncaskread(id: int, m: ref Tmsg.Read, sess: ref LlmSession)
 {
-	# Block until generation completes
+	# Block until generation completes.  The end is told once, to one
+	# reader: it is passed on, or a second reader of the same turn
+	# waited for ever.
 	donech := sess.donech;
-	if(donech != nil)
+	if(donech != nil) {
 		<-donech;
+		alt {
+		donech <-= 0 =>	;
+		* =>		;
+		}
+	}
+	if(sess.closed) {
+		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(m.tag, "session closed"));
+		return;
+	}
 
 	content := sess.lastresponse;
 	if(content != "" && content[len content - 1] != '\n')
@@ -1648,13 +1759,35 @@ asyncstreamread(id: int, m: ref Tmsg.Read, sess: ref LlmSession)
 	data := sess.streamleft;
 	sess.streamleft = nil;
 	if(data == nil) {
-		chunk := <-ch;
+		# The end of a generation is one marker in the channel.  The
+		# reader that takes it puts it back for the next, and a
+		# channel that is empty once its generation is over has
+		# ended (the marker is not sent when the channel is full):
+		# a second read after the end, or a second reader, waited
+		# for a chunk that was never to come.
+		chunk: string;
+		alt {
+		chunk = <-ch =>
+			;
+		* =>
+			if(sess.genactive && sess.streamch == ch)
+				chunk = <-ch;
+		}
 		if(chunk == nil || chunk == "") {
-			# Channel "closed" (EOF sentinel)
-			asyncrepl <-= ref Asyncreply(id, ref Rmsg.Read(m.tag, nil));
-			return;
+			alt {
+			ch <-= "" =>	;
+			* =>		;
+			}
+			if(!sess.closed) {
+				asyncrepl <-= ref Asyncreply(id, ref Rmsg.Read(m.tag, nil));
+				return;
+			}
 		}
 		data = array of byte chunk;
+	}
+	if(sess.closed) {
+		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(m.tag, "session closed"));
+		return;
 	}
 	if(len data > m.count) {
 		sess.streamleft = data[m.count:];
@@ -1930,18 +2063,22 @@ compactsplit(msgs: list of ref LlmMessage, budget, midturn: int): (list of ref L
 }
 
 # Manual /compact trigger. Compaction rewrites sess.messages, which the
-# generation proc actively appends to, so reject while a turn is in flight
-# (serialize per session, INFR-223) rather than race it. Clients drive
-# /compact between turns (e.g. veltro's checkandcompact, after queryllmfd
-# returns), so this guard does not impede normal use.
+# generation proc actively appends to, so it is refused while a turn is in
+# flight, and marked while it runs (compacting: the serving loop sets it,
+# and takes no prompt, context or second compaction until it is cleared
+# here), INFR-223. Clients drive /compact between turns (e.g. veltro's
+# checkandcompact, after queryllmfd returns), so this does not impede
+# normal use.
 asynccompact(id, tag, count: int, sess: ref LlmSession)
 {
-	if(sess.genactive) {
-		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(tag, "compact: generation in progress, retry"));
-		return;
+	err: string;
+	{
+		err = compactnow(sess, 0);
+	} exception e {
+	"*" =>
+		err = e;
 	}
-
-	err := compactnow(sess, 0);
+	sess.compacting = 0;
 	if(err != nil) {
 		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(tag, "compact: " + err));
 		return;
@@ -2351,6 +2488,40 @@ parsefloat(s: string): real
 	if(neg)
 		result = -result;
 	return result;
+}
+
+# A decimal number as parsefloat reads one: digits, with a point among
+# them or not, and a sign.
+isnumber(s: string): int
+{
+	i := 0;
+	if(i < len s && s[i] == '-')
+		i++;
+	digits := 0;
+	point := 0;
+	for(; i < len s; i++) {
+		if(s[i] >= '0' && s[i] <= '9')
+			digits++;
+		else if(s[i] == '.' && !point)
+			point = 1;
+		else
+			return 0;
+	}
+	return digits > 0;
+}
+
+# A model's name: printable, without blanks, quotes or backslashes, and
+# no longer than names are.  Empty is no change.
+ismodelname(s: string): int
+{
+	if(len s > 256)
+		return 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c <= ' ' || c == 16r7F || c == '"' || c == '\'' || c == '\\')
+			return 0;
+	}
+	return 1;
 }
 
 hasprefix(s, prefix: string): int

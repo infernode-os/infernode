@@ -1,29 +1,23 @@
-vision - Analyze images using AI vision
+vision - What is in a picture
 
 Usage:
-  vision <imagepath> [prompt]          Auto-detect backend
-  vision --local <imagepath>           Force local GPU inference
-  vision --cloud <imagepath> [prompt]  Force Anthropic cloud API
+  vision [-c class,...] [-t thresh] imagepath
+
+Returns one line for each thing a detector finds, best first:
+  class=dog score=0.86 x0=133 y0=207 x1=326 y1=543
+x0 y0 x1 y1 are its box in the picture's pixels. Nothing found is said so.
 
 Arguments:
-  imagepath - Path to image file (PNG, JPEG, GIF, WebP)
-  prompt    - Analysis prompt (cloud only; default: "Describe this image in detail.")
-
-Backends:
-  auto  - Prefers local GPU if /mnt/gpu is mounted with a vision model;
-          falls back to Anthropic cloud API otherwise
-  local - TensorRT inference via /mnt/gpu (Jetson Orin, etc.)
-  cloud - Anthropic Messages API with Claude vision
+  imagepath  the picture (JPEG, PNG, GIF, WebP, ...)
+  -c         only these classes, comma-separated (person,car)
+  -t         the lowest score kept, 0 to 1 (0.30 unless given)
 
 Examples:
   vision /tmp/photo.jpg
-  vision /tmp/diagram.png What components are shown?
-  vision --local /tmp/capture.png
-  vision --cloud /tmp/screenshot.png Extract all visible text
+  vision -c person,car /tmp/street.png
 
 Notes:
-  - Maximum image size: 5MB
-  - Cloud requires a factotum key: proto=pass service=anthropic
-  - Cloud requires /net access (HTTPS to Anthropic API)
-  - Local requires /mnt/gpu mounted with a vision model loaded
-  - Local GPU can be on a remote Jetson via encrypted 9P mount
+  - The picture goes only to the vision service at /mnt/vision
+    (visionfs(4)): this machine's, or another machine's mounted there.
+    There is no cloud backend.
+  - Requires /mnt/vision with a model loaded.

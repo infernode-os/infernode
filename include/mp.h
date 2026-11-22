@@ -41,7 +41,6 @@ mpint*	strtomp(char*, char**, int, mpint*);	/* ascii */
 int	mpfmt(Fmt*);
 char*	mptoa(mpint*, int, char*, int);
 mpint*	letomp(uchar*, uint, mpint*);	/* byte array, little-endian */
-int	mptole(mpint*, uchar*, uint, uchar**);
 mpint*	betomp(uchar*, uint, mpint*);	/* byte array, little-endian */
 int	mptobe(mpint*, uchar*, uint, uchar**);
 uint	mptoui(mpint*);			/* unsigned int */
@@ -64,6 +63,10 @@ void	mpleft(mpint *b, int shift, mpint *res);	/* res = b<<shift */
 void	mpright(mpint *b, int shift, mpint *res);	/* res = b>>shift */
 void	mpmul(mpint *b1, mpint *b2, mpint *prod);	/* prod = b1*b2 */
 void	mpexp(mpint *b, mpint *e, mpint *m, mpint *res);	/* res = b**e mod m */
+/* res = x**kp mod p and x**kq mod q, c2 = 1/p mod q, in constant time; -1 if the numbers' lengths do not suit */
+int	mpexpcrt(mpint *x, mpint *p, mpint *q, mpint *kp, mpint *kq, mpint *c2, mpint *res);
+/* res = (a*b + c) mod m, in constant time for an odd m and a, b, c no longer than it; c may be nil */
+void	mpmuladdmod(mpint *a, mpint *b, mpint *c, mpint *m, mpint *res);
 void	mpmod(mpint *b, mpint *m, mpint *remainder);	/* remainder = b mod m */
 
 /* quotient = dividend/divisor, remainder = dividend % divisor */
@@ -116,24 +119,6 @@ void	mpdigdiv(mpdigit *dividend, mpdigit divisor, mpdigit *quotient);
 int	mpmagcmp(mpint *b1, mpint *b2);
 void	mpmagadd(mpint *b1, mpint *b2, mpint *sum);	/* sum = b1+b2 */
 void	mpmagsub(mpint *b1, mpint *b2, mpint *sum);	/* sum = b1+b2 */
-
-/* chinese remainder theorem */
-typedef struct CRTpre	CRTpre;		/* precomputed values for converting */
-					/*  twixt residues and mpint */
-typedef struct CRTres	CRTres;		/* residue form of an mpint */
-
-struct CRTres
-{
-	int	n;		/* number of residues */
-	mpint	*r[1];		/* residues */
-};
-
-CRTpre*	crtpre(int, mpint**);			/* precompute conversion values */
-CRTres*	crtin(CRTpre*, mpint*);			/* convert mpint to residues */
-void	crtout(CRTpre*, CRTres*, mpint*);	/* convert residues to mpint */
-void	crtprefree(CRTpre*);
-void	crtresfree(CRTres*);
-
 
 #pragma	varargck	type	"B"	mpint*
 #pragma varargck	type	"U" mpint*

@@ -35,9 +35,6 @@ LuciCtx: module
 	         req:   chan of string);
 };
 
-# Resource mounting base
-MNT_BASE: con "/tmp/veltro/mnt";
-
 # Resource activity fade timeout (ms) - how long after last use
 # to keep showing active indicator
 RES_ACTIVE_FADE_MS: con 4000;
@@ -171,16 +168,28 @@ nsentry_badgerects: array of Rect;	# clickable [ro]/[rw] permission badge
 ctxentryrects: array of Rect;
 nctxentryrects := 0;
 
-# Tool section rects
+# Tool section rects, and beside each the tool drawn there: a row is
+# found by its rectangle and acted on by its name.  The rows are drawn
+# most recently used first, and a click used to count down the list as
+# tools9p gives it instead, so Remove on a row took away another tool.
 toolplusrects: array of Rect;
+toolplusnames: array of string;
 ntoolplusrects := 0;
 toolentryrects: array of Rect;
+toolentrynames: array of string;
 ntoolentryrects := 0;
+
+# The path of each agent namespace entry drawn, beside nsentryrects.
+nsentrypaths: array of string;
+
+# What a point of the zone is on (hit).
+Hnone, Hnshdr, Htoolhdr, Havailhdr, Htool, Hplus, Hbadge, Hpath, Huserhdr, Hbrowse: con iota;
 
 # Browse rect (inside user namespace)
 browserect: Rect;
 mobile := 0;		# /env/infmobile=1 — floor browser/list rows at a tap target
 TAPMIN: con 132;	# 44pt at a 3x device
+Dragmin: con 10;	# px a press moves before it is a drag (a scroll), not a tap
 
 # File browser state (module-level to avoid stack allocation in inner loop)
 brow_dirrects:  array of Rect;
@@ -260,14 +269,9 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	# Initialize tool management state — sync from running tools9p
 	updatetoolmount();
 	reloadtools();
-	if(activetoolset == nil) {
-		# Fallback if tools9p not yet running
-		activetoolset = "read" :: "list" :: "find" :: "search" ::
-			"write" :: "edit" :: "present" :: "ask" ::
-			"diff" :: "json" :: "git" :: "memory" ::
-			"websearch" :: "http" :: "mail" ::
-			"spawn" :: "gap" :: nil;
-	}
+	# With no tools9p yet there is no list: the first event reads it.
+	# (A list was made up here and shown as Active, whatever the agent
+	# had.)
 	toolsec_expanded = 1;
 	toolavail_expanded = 0;
 	knowntoolnames = scantoolcatalog();
@@ -300,11 +304,12 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	# motion under button-1 and convert it into ctx_scroll deltas
 	# ourselves. To keep tap-on-headers working we DEFER click handlers
 	# to button-1 release and skip them if the gesture committed to a
-	# drag (|delta| > DRAG_THRESHOLD).
+	# drag (|delta| > Dragmin).
 	press_xy: Draw->Point;
+	presskind := Hnone;	# what the press was on, as drawn then
+	pressname: string;
 	drag_lasty := 0;
 	dragstarted := 0;
-	DRAG_THRESHOLD := 10;	# px before a touch becomes a drag (not a tap)
 	for(;;) alt {
 	p := <-mouse =>
 		wasdown := prevbuttons;
@@ -339,6 +344,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 		# the press bit, so `== 1` silently drops legitimate taps.
 		if((p.buttons & 1) && !(wasdown & 1)) {
 			press_xy = p.xy;
+			(presskind, pressname) = hit(p.xy);
 			drag_lasty = p.xy.y;
 			dragstarted = 0;
 			continue;
@@ -353,7 +359,7 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			if(!dragstarted) {
 				total_dy := p.xy.y - press_xy.y;
 				if(total_dy < 0) total_dy = -total_dy;
-				if(total_dy > DRAG_THRESHOLD)
+				if(total_dy > Dragmin)
 					dragstarted = 1;
 			}
 			if(dragstarted) {
@@ -372,166 +378,60 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			continue;
 		}
 
-		# Button-1 RELEASE: if the gesture stayed within DRAG_THRESHOLD
+		# Button-1 RELEASE: if the gesture stayed within Dragmin
 		# treat it as a tap and run the click handlers at the PRESS
 		# location (press_xy). If it dragged, just reset state — the
 		# scroll already happened on the held branch above.
-		if(!(p.buttons & 1) && (wasdown & 1)) {
+		#
+		# Button 1 going up as button 3 goes down is a finger held
+		# still (os/init/touch.b, emu/port/draw-sdl3.c): the context
+		# menu below, not a tap as well.
+		if(!(p.buttons & 1) && (wasdown & 1) && (p.buttons & 4)) {
+			dragstarted = 0;
+		} else if(!(p.buttons & 1) && (wasdown & 1)) {
 			if(dragstarted) {
 				dragstarted = 0;
 				continue;
 			}
-			clickpt := press_xy;
-			tabclicked := 0;
-
-			# Agent Namespace header toggle
-			if(agentnshdrrect.max.x > agentnshdrrect.min.x &&
-					agentnshdrrect.contains(clickpt)) {
-				if(agentns_expanded)
-					agentns_expanded = 0;
-				else
-					agentns_expanded = 1;
-				tabclicked = 1;
+			# What is under the press now.  The zone is drawn again at
+			# every event (an agent's every tool call is one), so between
+			# press and release the rows can move: a tap acts only if it
+			# is still on what it was put down on.
+			(kind, name) := hit(press_xy);
+			if(kind != presskind || name != pressname)
+				kind = Hnone;
+			case kind {
+			Hnshdr =>
+				agentns_expanded = !agentns_expanded;
 				redrawctx();
-			}
-
-			# Tool section header toggle
-			if(!tabclicked &&
-					toolsechdrrect.max.x > toolsechdrrect.min.x &&
-					toolsechdrrect.contains(clickpt)) {
-				if(toolsec_expanded)
-					toolsec_expanded = 0;
-				else
-					toolsec_expanded = 1;
-				tabclicked = 1;
+			Htoolhdr =>
+				toolsec_expanded = !toolsec_expanded;
 				redrawctx();
-			}
-
-			# Tool available sub-section header toggle
-			if(!tabclicked && toolsec_expanded &&
-					toolavailhdrrect.max.x > toolavailhdrrect.min.x &&
-					toolavailhdrrect.contains(clickpt)) {
-				if(toolavail_expanded)
-					toolavail_expanded = 0;
-				else
-					toolavail_expanded = 1;
-				tabclicked = 1;
+			Havailhdr =>
+				toolavail_expanded = !toolavail_expanded;
 				redrawctx();
-			}
-
-			# Active tool click — remove on left-click anywhere on entry row
-			if(!tabclicked && toolsec_expanded) {
-				for(pi := 0; pi < ntoolentryrects; pi++) {
-					if(toolentryrects[pi].contains(clickpt)) {
-						tidx := 0;
-						for(tp := activetoolset; tp != nil; tp = tl tp) {
-							if(tidx == pi) {
-								removetool(hd tp);
-								tabclicked = 1;
-								break;
-							}
-							tidx++;
-						}
-						break;
-					}
-				}
-			}
-
-			# Available tool click — add on left-click anywhere on entry row
-			if(!tabclicked && toolsec_expanded) {
-				for(pi := 0; pi < ntoolplusrects; pi++) {
-					if(toolplusrects[pi].contains(clickpt)) {
-						kidx := 0;
-						for(kp := knowntoolnames; kp != nil; kp = tl kp) {
-							kname := hd kp;
-							isact := 0;
-							for(ap := activetoolset; ap != nil; ap = tl ap)
-								if(hd ap == kname) { isact = 1; break; }
-							if(isact)
-								continue;
-							if(kidx == pi) {
-								addtool(kname);
-								tabclicked = 1;
-								break;
-							}
-							kidx++;
-						}
-						break;
-					}
-				}
-			}
-
-			# Agent NS entry [ro]/[rw] badge click — toggle permission
-			# (checked before path-click since the badge is right-aligned
-			# inside the same row band)
-			if(!tabclicked && agentns_expanded) {
-				for(bi := 0; bi < nnsentryrects; bi++) {
-					if(nsentry_badgerects != nil &&
-							bi < len nsentry_badgerects &&
-							nsentry_badgerects[bi].max.x > nsentry_badgerects[bi].min.x &&
-							nsentry_badgerects[bi].contains(clickpt)) {
-						bsi := 0;
-						for(bsl := nsmanifest; bsl != nil; bsl = tl bsl) {
-							if(bsi == bi) {
-								bse := hd bsl;
-								ppb := findpinnedpath(bse.path);
-								if(ppb != nil) {
-									togglepathperm(ppb);
-									tabclicked = 1;
-								}
-								break;
-							}
-							bsi++;
-						}
-						break;
-					}
-				}
-			}
-
-			# Agent NS entry path click — open file or browse directory
-			if(!tabclicked && agentns_expanded) {
-				for(pi := 0; pi < nnsentryrects; pi++) {
-					if(nsentry_pathrects != nil &&
-							pi < len nsentry_pathrects &&
-							nsentry_pathrects[pi].max.x > nsentry_pathrects[pi].min.x &&
-							nsentry_pathrects[pi].contains(clickpt)) {
-						# Find the NsEntry at index pi
-						nsi := 0;
-						for(nsl := nsmanifest; nsl != nil; nsl = tl nsl) {
-							if(nsi == pi) {
-								nspath := (hd nsl).path;
-								openpath(nspath);
-								tabclicked = 1;
-								break;
-							}
-							nsi++;
-						}
-						break;
-					}
-				}
-			}
-
-			# User Namespace header toggle
-			if(!tabclicked &&
-					usernshdrrect.max.x > usernshdrrect.min.x &&
-					usernshdrrect.contains(clickpt)) {
-				if(userns_expanded)
-					userns_expanded = 0;
-				else
-					userns_expanded = 1;
-				tabclicked = 1;
+			Htool =>
+				# Active tool: remove on a click anywhere on its row
+				removetool(name);
+			Hplus =>
+				# Loadable tool: add on a click anywhere on its row
+				addtool(name);
+			Hbadge =>
+				# [ro]/[rw] badge of a path the user bound: toggle it
+				ppb := findpinnedpath(name);
+				if(ppb != nil)
+					togglepathperm(ppb);
+			Hpath =>
+				# open the file or browse the directory
+				openpath(name);
+			Huserhdr =>
+				userns_expanded = !userns_expanded;
 				redrawctx();
-			}
-
-			# Browse button click (inside user namespace)
-			if(!tabclicked && userns_expanded &&
-					browserect.max.x > browserect.min.x &&
-					browserect.contains(clickpt)) {
+			Hbrowse =>
 				fpath := filebrowser("/");
 				if(fpath != nil && fpath != "")
 					bindpath(fpath);
 				prevbuttons = 0;
-				tabclicked = 1;
 				redrawctx();
 			}
 		}
@@ -539,64 +439,42 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 		# Button-3: context menus
 		if((p.buttons & 4) != 0 && (wasdown & 4) == 0) {
 			# Tool entry right-click
-			if(toolsec_expanded) {
-				for(tei := 0; tei < ntoolentryrects; tei++) {
-					if(toolentryrects[tei].contains(p.xy)) {
-						if(menumod != nil) {
-							titems := array[] of {"Remove"};
-							tpop := menumod->new(titems);
-							tres := tpop.show(mainwin, p.xy, mouse);
-							if(tres == 0) {
-								tidx2 := 0;
-								for(tp2 := activetoolset; tp2 != nil; tp2 = tl tp2) {
-									if(tidx2 == tei) {
-										removetool(hd tp2);
-										break;
-									}
-									tidx2++;
-								}
-							}
-							redrawctx();
-						}
-						prevbuttons = 0;
-						break;
-					}
+			(rkind, rname) := hit(p.xy);
+			if(rkind == Htool) {
+				if(menumod != nil) {
+					titems := array[] of {"Remove"};
+					tpop := menumod->new(titems);
+					tres := tpop.show(mainwin, p.xy, mouse);
+					# the row named when the menu came up, wherever
+					# the rows are by now
+					if(tres == 0)
+						removetool(rname);
+					redrawctx();
 				}
+				prevbuttons = 0;
 			}
 
-			# Agent NS entry right-click — unbind for pinned (user-bound) paths
-			if(agentns_expanded && menumod != nil) {
-				for(nei := 0; nei < nnsentryrects; nei++) {
-					if(nsentryrects[nei].contains(p.xy)) {
-						# Find the NsEntry at this index
-						nsi2 := 0;
-						for(nsl2 := nsmanifest; nsl2 != nil; nsl2 = tl nsl2) {
-							if(nsi2 == nei) {
-								nse := hd nsl2;
-								# Only allow unbind for pinned paths (not infrastructure)
-								pp2 := findpinnedpath(nse.path);
-								if(pp2 != nil) {
-									# Build context menu: toggle perm + unbind
-									permlabel := "Set read-only";
-									if(pp2.perm == "ro")
-										permlabel = "Set read-write";
-									nitems := array[] of {permlabel, "Unbind"};
-									npop := menumod->new(nitems);
-									nres := npop.show(mainwin, p.xy, mouse);
-									if(nres == 0)
-										togglepathperm(pp2);
-									else if(nres == 1)
-										unbindpath(pp2);
-									redrawctx();
-								}
-								break;
-							}
-							nsi2++;
-						}
-						prevbuttons = 0;
-						break;
-					}
+			# Agent NS entry right-click — toggle or unbind a path the
+			# user bound (not infrastructure)
+			nspath := nsrowat(p.xy);
+			if(rkind != Htool && nspath != nil && menumod != nil) {
+				pp2 := findpinnedpath(nspath);
+				if(pp2 != nil) {
+					permlabel := "Set read-only";
+					if(pp2.perm == "ro")
+						permlabel = "Set read-write";
+					nitems := array[] of {permlabel, "Unbind"};
+					npop := menumod->new(nitems);
+					nres := npop.show(mainwin, p.xy, mouse);
+					# the path may have gone while the menu was up
+					pp2 = findpinnedpath(nspath);
+					if(pp2 != nil && nres == 0)
+						togglepathperm(pp2);
+					else if(pp2 != nil && nres == 1)
+						unbindpath(pp2);
+					redrawctx();
 				}
+				prevbuttons = 0;
 			}
 
 		}
@@ -613,6 +491,59 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 			ctx_scroll = maxscroll;
 		redrawctx();
 	}
+}
+
+visible(r: Rect): int
+{
+	return r.max.x > r.min.x;
+}
+
+# What a point is on, and its name (a tool's, a path's), as the zone
+# was last drawn: the one place a pointer position becomes the thing
+# acted on.
+hit(pt: Point): (int, string)
+{
+	if(visible(agentnshdrrect) && agentnshdrrect.contains(pt))
+		return (Hnshdr, nil);
+	if(visible(toolsechdrrect) && toolsechdrrect.contains(pt))
+		return (Htoolhdr, nil);
+	if(toolsec_expanded) {
+		if(visible(toolavailhdrrect) && toolavailhdrrect.contains(pt))
+			return (Havailhdr, nil);
+		for(i := 0; i < ntoolentryrects; i++)
+			if(toolentryrects[i].contains(pt))
+				return (Htool, toolentrynames[i]);
+		for(i = 0; i < ntoolplusrects; i++)
+			if(toolplusrects[i].contains(pt))
+				return (Hplus, toolplusnames[i]);
+	}
+	if(agentns_expanded) {
+		# the badge before the path: it is in the same row
+		for(i := 0; i < nnsentryrects; i++)
+			if(nsentry_badgerects != nil && i < len nsentry_badgerects &&
+					visible(nsentry_badgerects[i]) && nsentry_badgerects[i].contains(pt))
+				return (Hbadge, nsentrypaths[i]);
+		for(i = 0; i < nnsentryrects; i++)
+			if(nsentry_pathrects != nil && i < len nsentry_pathrects &&
+					visible(nsentry_pathrects[i]) && nsentry_pathrects[i].contains(pt))
+				return (Hpath, nsentrypaths[i]);
+	}
+	if(visible(usernshdrrect) && usernshdrrect.contains(pt))
+		return (Huserhdr, nil);
+	if(userns_expanded && visible(browserect) && browserect.contains(pt))
+		return (Hbrowse, nil);
+	return (Hnone, nil);
+}
+
+# The path of the agent namespace entry whose row a point is in.
+nsrowat(pt: Point): string
+{
+	if(!agentns_expanded)
+		return nil;
+	for(i := 0; i < nnsentryrects; i++)
+		if(nsentryrects[i].contains(pt))
+			return nsentrypaths[i];
+	return nil;
 }
 
 # Read the current activity's /mnt/toolctl*/event, a tick for each
@@ -908,6 +839,7 @@ drawcontext(zone: Rect)
 
 		if(agentns_expanded) {
 			nsentryrects = array[64] of Rect;
+			nsentrypaths = array[64] of string;
 			nsentry_pathrects = array[64] of Rect;
 			nsentry_badgerects = array[64] of Rect;
 			glyphw := mainfont.width("● ");
@@ -922,6 +854,7 @@ drawcontext(zone: Rect)
 				if(nnsentryrects < len nsentryrects) {
 					nsentryrects[nnsentryrects] = Rect(
 						(zone.min.x, y), (zone.max.x, y + entryH));
+					nsentrypaths[nnsentryrects] = entry.path;
 				}
 
 				# Glyph: ● mounted (green), ○ not mounted (dim)
@@ -995,10 +928,12 @@ drawcontext(zone: Rect)
 	}
 
 	# --- Tools section (two-column layout) ---
-	# Activity 0 shows "Budget" instead of "Tools"
+	# Activity 0 lists the delegation budget, and a click there changes
+	# both the budget and activity 0's own tools: the heading says so
+	# (it said "Budget").
 	toolseclabel := "Tools";
 	if(actid_g == 0)
-		toolseclabel = "Budget";
+		toolseclabel = "Tools and budget";
 	{
 		ind := "▸";
 		if(toolsec_expanded) ind = "▾";
@@ -1010,7 +945,9 @@ drawcontext(zone: Rect)
 
 		if(toolsec_expanded) {
 			toolentryrects = array[64] of Rect;
+			toolentrynames = array[64] of string;
 			toolplusrects = array[64] of Rect;
+			toolplusnames = array[64] of string;
 
 			# Two-column layout: enabled on left, available on right
 			zonew := zone.dx();
@@ -1116,9 +1053,11 @@ drawcontext(zone: Rect)
 						}
 					}
 
-					if(ntoolentryrects < len toolentryrects)
+					if(ntoolentryrects < len toolentryrects) {
+						toolentrynames[ntoolentryrects] = tname;
 						toolentryrects[ntoolentryrects++] = Rect(
 							(lcol, y), (rcol, y + rowH));
+					}
 
 					if(visible) {
 						tindy := y + (rowH - indh) / 2;
@@ -1140,10 +1079,12 @@ drawcontext(zone: Rect)
 					if(visible)
 						mainwin.text((rcol + pad, texty), text2col, (0, 0),
 							mainfont, "○ " + aname);
-					if(ntoolplusrects < len toolplusrects)
+					if(ntoolplusrects < len toolplusrects) {
+						toolplusnames[ntoolplusrects] = aname;
 						toolplusrects[ntoolplusrects++] = Rect(
 							(rcol, y),
 							(zone.max.x, y + rowH));
+					}
 
 					avp = tl avp;
 				}
@@ -1227,15 +1168,22 @@ drawcentertext(r: Rect, text: string)
 
 # --- File browser ---
 
+# The browser's row height
+browlineh(): int
+{
+	h := mainfont.height + 2;
+	if(mobile && h < TAPMIN)
+		h = TAPMIN;	# 44pt finger tap target for browser entries
+	return h;
+}
+
 drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 {
 	if(mainwin == nil)
 		return;
 	zone := mainwin.r;
 	pad := 8;
-	lineH := mainfont.height + 2;
-	if(mobile && lineH < TAPMIN)
-		lineH = TAPMIN;	# 44pt finger tap target for browser entries
+	lineH := browlineh();
 	y := zone.min.y + pad;
 
 	#
@@ -1496,6 +1444,10 @@ filebrowser(startpath: string): string
 	scroll := 0;
 	result := "";
 	prevbut := 0;
+	press: Point;		# where button 1 went down
+	draglasty := 0;
+	dragacc := 0;		# pixels dragged not yet a row
+	dragging := 0;
 
 	#
 	# The directory is read when the path changes and the view is
@@ -1580,14 +1532,74 @@ filebrowser(startpath: string): string
 			continue;
 		}
 
-		# Button-3: cancel
+		# Button-3: cancel.  Not a finger held still (button 1 up as
+		# button 3 comes down): a finger resting before it drags
+		# would close the browser under it.
 		if((p.buttons & 4) != 0 && (wasdown2 & 4) == 0) {
+			if(wasdown2 & 1) {
+				dragging = 0;
+				continue;
+			}
 			result = nil;
 			break;
 		}
 
-		# Button-1 just pressed
+		#
+		# A finger scrolls by dragging, as the context view below it
+		# does: a touch screen has no wheel, and this view acted on
+		# every press, so a directory longer than the zone (/dis/wm on
+		# the Pi's panel) could never be scrolled and what was past its
+		# end could never be reached.  So button 1 decides at release:
+		# a press that moved less than Dragmin is a tap, taken at
+		# where it was pressed; one that moved more scrolled the rows
+		# under it, a row for each row's height dragged, and does
+		# nothing else.
+		#
 		if((p.buttons & 1) && !(wasdown2 & 1)) {
+			press = p.xy;
+			draglasty = p.xy.y;
+			dragacc = 0;
+			dragging = 0;
+			continue;
+		}
+		if((p.buttons & 1) && (wasdown2 & 1)) {
+			if(!dragging) {
+				dy := p.xy.y - press.y;
+				if(dy < 0)
+					dy = -dy;
+				if(dy > Dragmin)
+					dragging = 1;
+			}
+			if(dragging) {
+				# drag up (y falls): the rows move up, later ones show
+				dragacc += draglasty - p.xy.y;
+				draglasty = p.xy.y;
+				rowh := browlineh();
+				was := scroll;
+				while(dragacc >= rowh) {
+					dragacc -= rowh;
+					if(scroll < brow_maxscroll)
+						scroll++;
+				}
+				while(dragacc <= -rowh) {
+					dragacc += rowh;
+					if(scroll > 0)
+						scroll--;
+				}
+				if(scroll != was)
+					needdraw = 1;
+			}
+			continue;
+		}
+
+		# Button 1 released: a tap, unless it dragged (button 3 coming
+		# down as it goes up, a finger held still, was passed over above)
+		if(!(p.buttons & 1) && (wasdown2 & 1)) {
+			if(dragging) {
+				dragging = 0;
+				continue;
+			}
+			p = ref Pointer(p.buttons, press, p.msec);
 			# Cancel button
 			if(brow_cancelrect.max.x > brow_cancelrect.min.x &&
 					brow_cancelrect.contains(p.xy)) {
@@ -1808,30 +1820,6 @@ loadcatalog()
 
 # --- Resource mounting ---
 
-slugify(s: string): string
-{
-	r := "";
-	lastdash := 0;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(c >= 'A' && c <= 'Z')
-			c += 'a' - 'A';
-		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-		   c == '_' || c == '-') {
-			r[len r] = c;
-			lastdash = 0;
-		} else if(!lastdash && len r > 0) {
-			r[len r] = '-';
-			lastdash = 1;
-		}
-	}
-	while(len r > 0 && r[len r - 1] == '-')
-		r = r[0:len r - 1];
-	if(r == "")
-		return "resource";
-	return r;
-}
-
 safeattrtext(s: string): string
 {
 	out := "";
@@ -1884,62 +1872,6 @@ pathparent(s: string): string
 	if(i == 0)
 		return "/";
 	return s[0:i];
-}
-
-ensuredir_mnt(mntdir: string)
-{
-	sys->create(MNT_BASE, Sys->OREAD, Sys->DMDIR | 8r777);
-	sys->create(mntdir, Sys->OREAD, Sys->DMDIR | 8r777);
-}
-
-mountresource(ce: ref CatalogEntry)
-{
-	if(ce == nil || ce.dial == "")
-		return;
-
-	if(ce.rtype == "path") {
-		# Local filesystem path: route through tools9p so lucibridge
-		# binds it in the agent namespace (not lucifer's).
-		cmd := "bindpath " + ce.dial;
-		if(writetofile(toolctlmount() + "/ctl", cmd) != len array of byte cmd)
-			return;
-		writetofile(mountpt_g + "/ctl",
-			"catalog mounted name=" + safeattrtext(ce.name) + " path=" + safeattrtext(ce.dial));
-	} else {
-		# Network mount via dial: mount into lucifer's namespace at
-		# /tmp/veltro/mnt/<slug> (network catalog mounts are separate
-		# from agent namespace management).
-		slug := slugify(ce.name);
-		mntdir := MNT_BASE + "/" + slug;
-		ensuredir_mnt(mntdir);
-		(ok, conn) := sys->dial(ce.dial, nil);
-		if(ok < 0) {
-			sys->fprint(stderr, "lucictx: mount '%s': %r\n", ce.name);
-			return;
-		}
-		if(sys->mount(conn.dfd, nil, mntdir, Sys->MREPL, "") < 0) {
-			conn.dfd = nil;
-			conn.cfd = nil;
-			sys->fprint(stderr, "lucictx: mount '%s' at %s: %r\n", ce.name, mntdir);
-			return;
-		}
-		writetofile(mountpt_g + "/ctl",
-			"catalog mounted name=" + safeattrtext(ce.name) + " path=" + safeattrtext(mntdir));
-	}
-}
-
-unmountresource(ce: ref CatalogEntry)
-{
-	if(ce == nil || ce.mntpath == "")
-		return;
-	if(ce.rtype == "path") {
-		cmd := "unbindpath " + ce.mntpath;
-		if(writetofile(toolctlmount() + "/ctl", cmd) != len array of byte cmd)
-			return;
-	} else {
-		sys->unmount(nil, ce.mntpath);
-	}
-	writetofile(mountpt_g + "/ctl", "catalog unmounted " + safeattrtext(ce.name));
 }
 
 scantoolcatalog(): list of string
@@ -1996,13 +1928,16 @@ addtool(name: string)
 			return;
 	if(!toolmount_ready())
 		return;
-	writetofile(toolctlmount() + "/ctl", "add " + name);
-	if(actid_g == 0) {
-		# MA: also add to delegation budget so child tasks can use it
-		writetofile(toolctlmount() + "/ctl", "budget-add " + name);
-	} else {
-		writetofile(sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g),
-			"resource add path=" + name + " label=" + name + " type=tool status=idle");
+	# What follows an add is done only if tools9p took it: refused, the
+	# tool was still put in the budget, or shown as a resource.
+	if(ctlwrite(toolctlmount() + "/ctl", "add " + name)) {
+		if(actid_g == 0) {
+			# MA: also add to delegation budget so child tasks can use it
+			ctlwrite(toolctlmount() + "/ctl", "budget-add " + name);
+		} else {
+			writetofile(sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g),
+				"resource add path=" + name + " label=" + name + " type=tool status=idle");
+		}
 	}
 	# Re-read from tools9p to confirm the change took effect
 	reloadtools();
@@ -2014,11 +1949,12 @@ removetool(name: string)
 {
 	if(!toolmount_ready())
 		return;
-	writetofile(toolctlmount() + "/ctl", "remove " + name);
+	removed := ctlwrite(toolctlmount() + "/ctl", "remove " + name);
 	if(actid_g == 0) {
-		# MA: also remove from delegation budget
-		writetofile(toolctlmount() + "/ctl", "budget-remove " + name);
-	} else {
+		# MA: also remove from delegation budget (a tool that is in
+		# the budget and not among its own is removed from the budget)
+		ctlwrite(toolctlmount() + "/ctl", "budget-remove " + name);
+	} else if(removed) {
 		writetofile(sys->sprint("%s/activity/%d/context/ctl", mountpt_g, actid_g), "resource remove " + name);
 	}
 	# Re-read from tools9p to confirm the change took effect
@@ -2352,6 +2288,12 @@ readfile(path: string): string
 	if(result == "")
 		return nil;
 	return result;
+}
+
+# A request to a control file: 1 if it was taken whole.
+ctlwrite(path: string, text: string): int
+{
+	return writetofile(path, text) == len array of byte text;
 }
 
 writetofile(path: string, text: string): int

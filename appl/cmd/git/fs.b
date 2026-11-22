@@ -54,6 +54,7 @@ CEntry: adt {
 repo: ref git->Repo;
 gitdir: string;
 dflag := 0;
+nflag := 0;	# serve with no device attach and no host symlinks
 ss: ref Styxserver;
 
 # Object cache: index -> CEntry
@@ -99,7 +100,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->pctl(sys->NEWPGRP, nil);
 
 	arg->init(args);
-	arg->setusage(arg->progname() + " [-D] [-m mtpt] gitdir");
+	arg->setusage(arg->progname() + " [-Dn] [-m mtpt] gitdir");
 
 	mtpt: string;
 	while((ch := arg->opt()) != 0)
@@ -109,6 +110,8 @@ init(nil: ref Draw->Context, args: list of string)
 			dflag = 1;
 		'm' =>
 			mtpt = arg->earg();
+		'n' =>
+			nflag = 1;
 		* =>
 			arg->usage();
 		}
@@ -146,7 +149,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	navchan := chan of ref Navop;
 	nav := Navigator.new(navchan);
-	spawn navigator(navchan);
+	navready := chan of int;
+	spawn navigator(navchan, navready);
+	<-navready;
 
 	msgc: chan of ref Tmsg;
 	(msgc, ss) = Styxserver.new(fds[0], nav, big rootqid);
@@ -164,8 +169,22 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->print("git/fs mounted on %s\n", mtpt);
 }
 
+# With -n the processes that read the repository give up device attach
+# and host symbolic links (NODEVS), each in a copy of the name space taken
+# before the mount is made, so that the caller's name space, where the
+# mount goes, keeps its own.  (The agent's git tool forked its name space
+# for this before calling here, and so mounted where nothing looked.)
+confine()
+{
+	if(nflag) {
+		sys->pctl(Sys->FORKNS, nil);
+		sys->pctl(Sys->NODEVS, nil);
+	}
+}
+
 serveloop(msgc: chan of ref Tmsg, pidc: chan of int)
 {
+	confine();
 	pidc <-= sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: ss.fd.fd :: nil);
 
 Serve:
@@ -215,7 +234,10 @@ allocnode(name: string, parent: big, hash: git->Hash, otype, isdir: int): int
 		say("node table full");
 		return 0;
 	}
-	qpath := big ((otype << QSHIFT) | idx);
+	# In big: as an int, a type of 8 or more (a tree, a blob, the object
+	# and branch directories) made the path negative, which a walk took
+	# for its "not found" (-1): the first walk into each of them failed.
+	qpath := (big otype << QSHIFT) | big idx;
 	n := ref Qnode(qpath, name, parent, hash, otype, isdir);
 	nodes[idx] = n;
 	nnodes++;
@@ -268,8 +290,10 @@ getobj(h: git->Hash): ref CEntry
 # Navigator
 # =====================================================================
 
-navigator(c: chan of ref Navop)
+navigator(c: chan of ref Navop, ready: chan of int)
 {
+	confine();
+	ready <-= 1;
 	for(;;) {
 		navop := <-c;
 		if(dflag) say(sprint("navop path=%bd", navop.path));
@@ -355,7 +379,9 @@ walknode(parentpath: big, name: string): ref Sys->Dir
 
 	# Check if child already exists
 	child := findchild(parentpath, name);
-	if(child != nil)
+	if(child != nil && moved(child))
+		child.name = "";	# unlinked: open fids keep it; walk again
+	else if(child != nil)
 		return nodestat(child.qpath);
 
 	# Create child on demand
@@ -368,6 +394,33 @@ walknode(parentpath: big, name: string): ref Sys->Dir
 		return nil;
 
 	return nodestat(nqpath);
+}
+
+# A ref's node made before the ref moved: HEAD and branch heads are
+# read again at each walk, so a commit made since the mount (an agent's
+# git commit, then git log) is seen; it was the commit of the first walk
+# for as long as the file system was mounted.
+moved(n: ref Qnode): int
+{
+	if(n.otype != Qt_COMMITDIR)
+		return 0;
+	parent := getnode(n.parent);
+	if(parent == nil)
+		return 0;
+	rname := "";
+	if(parent.otype == Qt_ROOT && n.name == "HEAD") {
+		(r, err) := repo.head();
+		if(err != nil)
+			return 0;
+		rname = r;
+	} else if(parent.otype == Qt_HEADSDIR)
+		rname = "refs/heads/" + n.name;
+	else
+		return 0;
+	(h, herr) := repo.readref(rname);
+	if(herr != nil)
+		return 1;
+	return !h.eq(n.hash);
 }
 
 createchild(parent: ref Qnode, name: string): big

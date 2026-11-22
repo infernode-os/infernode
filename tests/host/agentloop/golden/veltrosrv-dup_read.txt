@@ -14,7 +14,7 @@ tool-result call_dup_read_0_0:
 tools: list read write
 assistant-call call_dup_read_1_0 read {"args": "\/usr\/agentloop\/a.txt"}
 tool-result call_dup_read_1_0:
-  | (skipped: you already made the call `read {"args": "/usr/agentloop/a.txt"}` in this turn, and nothing has changed anything since, so its output is the same as then)
+  | (skipped: you already made the call `read {"args": "/usr/agentloop/a.txt"}` in this turn, and no call of yours since has changed anything, so its output is the same as then)
 
 == output
   | == user
@@ -28,27 +28,20 @@ tool-result call_dup_read_1_0:
   | stream: done (0 chunks, 0 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 76 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_dup_read_0_0:read:{"args"\: "/usr/agentloop/a.txt"}
-  | 
+  | llm: STOP:tool_use\nTOOL:call_dup_read_0_0:read:{"args"\: "/usr/agentloop/a.txt"}\n
   | tool read: args {"args": "/usr/agentloop/a.txt"}
   | tool read: calling with 32 bytes
-  | tool read: done,     1	alpha
-  | 
+  | tool read: done,     1	alpha\n
   | step 2: writing 48 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (0 chunks, 0 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 76 bytes
-  | llm: STOP:tool_use
-  | TOOL:call_dup_read_1_0:read:{"args"\: "/usr/agentloop/a.txt"}
-  | 
-  | step 3: writing 200 bytes to LLM
+  | llm: STOP:tool_use\nTOOL:call_dup_read_1_0:read:{"args"\: "/usr/agentloop/a.txt"}\n
+  | step 3: writing 209 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (1 chunks, 11 bytes)
   | step 3: waiting for LLM response...
   | step 3: LLM response 26 bytes
-  | llm: STOP:end_turn
-  | Read twice.
-  | 
+  | llm: STOP:end_turn\nRead twice.\n
   | turn done stop=end_turn steps=3

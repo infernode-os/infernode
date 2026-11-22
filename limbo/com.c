@@ -317,6 +317,7 @@ if(debug['v']) print("fncom: %s %d %p\n", d->sym->name, d->refs, d);
 			hints |= HASLDT;
 		if(excs != nil)
 			hints |= HASEXCEPT;
+		hints |= HASSIGS;
 		discon(hints);		/* runtime hints */
 		discon(maxstack);	/* minimum stack extent size */
 		discon(ninst);
@@ -333,6 +334,7 @@ if(debug['v']) print("fncom: %s %d %p\n", d->sym->name, d->refs, d);
 		if(excs != nil)
 			disexc(excs);
 		dispath();
+		dissigs(impdecl, LDT ? ldts : nil);
 	}else{
 		asminst(firstinst);
 		asmentry(entry);
@@ -791,7 +793,7 @@ casecom(Node *cn)
 	Decl *d;
 	Type *ctype;
 	Inst *j, *jmps, *wild, *k, *j1, *j2;
-	Node *n, *p, *left, tmp, nto, tmpc;
+	Node *n, *p, *left, tmp, nto, tmpc, tmpv;
 	Label *labs;
 	char buf[32];
 	int i, nlab, op, needwild, igoto;
@@ -821,7 +823,7 @@ casecom(Node *cn)
 	nto.ty = d->ty;
 	nto.decl = d;
 
-	tmp.decl = tmpc.decl = nil;
+	tmp.decl = tmpc.decl = tmpv.decl = nil;
 	left = cn->left;
 	left = simplify(left);
 	cn->left = left;
@@ -839,6 +841,15 @@ casecom(Node *cn)
 			ctype = tint;
 		}else{
 			left = eacom(left, &tmp, nil);
+			/*
+			 * tfreenow lets go what the statement held to its
+			 * end, which can be what left's address is in
+			 * (case f()[i], f's array): take the value first
+			 */
+			if(tpending() && !stayput(left)){
+				genmove(&left->src, Mas, left->ty, left, talloc(&tmpv, left->ty, nil));
+				left = &tmpv;
+			}
 			tfreenow();
 		}
 	}
@@ -874,6 +885,7 @@ casecom(Node *cn)
 	}
 	tfree(&tmp);
 	tfree(&tmpc);
+	tfree(&tmpv);
 
 	jmps = nil;
 	wild = nil;
@@ -1214,7 +1226,13 @@ rewritecomm(Node *n, Node *comm, Node *tmp, Node *slot)
 		return nil;
 	adr = nil;
 	if(n == comm){
-		if(comm->op == Osnd && sumark(n->right)->addable < Rcant)
+		/*
+		 * the alt keeps the addresses in its table while it
+		 * blocks: only the frame's and the module's data's stay
+		 * good (see stayput), so a value in an object (g.n, a[i])
+		 * is sent from, or received into, a temporary
+		 */
+		if(comm->op == Osnd && sumark(n->right)->addable < Ralways)
 			adr = n->right;
 		else{
 			adr = talloc(tmp, n->ty, nil);
@@ -1228,7 +1246,7 @@ rewritecomm(Node *n, Node *comm, Node *tmp, Node *slot)
 		}
 	}
 	if(n->right == comm && n->op == Oas && comm->op == Orcv
-	&& sumark(n->left)->addable < Rcant && (n->left->op != Oname || n->left->decl != nildecl))
+	&& sumark(n->left)->addable < Ralways && (n->left->op != Oname || n->left->decl != nildecl))
 		adr = n->left;
 	if(adr != nil){
 		p = genrawop(&comm->left->src, ILEA, adr, nil, slot);

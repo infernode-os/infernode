@@ -9,13 +9,13 @@ with sufficient memory and uninterrupted execution time.
 |-------------|--------|-----------|
 | SPIN (5 models) | **DONE** | CI / any host |
 | CBMC quick (3 kernel harnesses + PQC crypto harnesses) | **DONE** | CI / any host |
-| TLA+ TLC small (11 invariants) | **DONE** | CI / any host (8 min, 4GB) |
-| TLA+ TLC medium | **DONE** (partial) | Jetson Orin AGX (50GB heap, 10h50m) |
+| TLA+ TLC small (11 invariants) | **DONE** (2026-11, 2 proc/2 pgrp/4 chan/1 path, MaxChanRef=2, about 5 h on 4 cores (checkpointed and resumed), 8 GB heap + 19 GB disk state) | any host. The 2026-03 run with MaxChannels=3 reached no copy and was vacuous |
+| TLA+ TLC medium | **INCOMPLETE** (BFS depth 13, 2.56B queued) | Jetson Orin AGX (50GB heap, 10h50m) |
 | TLA+ TLC large | **TODO** | Dedicated host (32GB+, ~hours) |
 | CBMC full (pgrpcpy, MNTLOG=1) | **DONE** | AMD Ryzen 7 255 x86-64 (<1s, --slice-formula) |
 | CBMC full (pgrpcpy, MNTLOG=2) | **DONE** | AMD Ryzen 7 255 x86-64 (<1s, --slice-formula) |
 | CBMC full (pgrpcpy, MNTLOG=5) | **DONE** | AMD Ryzen 7 255 x86-64 (<1s, --slice-formula) |
-| CBMC crypto (ML-KEM/ML-DSA) | **DONE** | AMD Ryzen 7 255 x86-64 (5/9 pass, 4 documented findings) |
+| CBMC crypto (ML-KEM/ML-DSA) | **DONE** | 16/16 harnesses in `verify-all.sh` pass (the "5/9, 4 findings" of 2026-03 were against an earlier harness; the hard harnesses, NTT round trip, 10/11/12-bit encode, Montgomery correctness, are not in the script) |
 
 ## Prerequisites
 
@@ -40,9 +40,11 @@ curl -L -o tla2tools.jar \
 **Requirements**: 16GB+ RAM, 16+ cores recommended, ~30 minutes
 
 The medium configuration (3 processes, 4 pgrps, 4 channels, 3 paths)
-generates ~100M+ distinct states. Previous attempts with 4GB heap were
-OOM-killed at ~108M distinct states. With 12GB heap, reached 36M distinct
-states before the process was terminated externally.
+has tens of billions of distinct states at least. Previous attempts with 4GB
+heap were OOM-killed at ~108M distinct states; 12GB reached 36M; 50GB plus
+341GB of disk reached 3.17B at BFS depth 13 with the queue still growing.
+Note that with 4 channels a copy consumes the last two, so post-copy mounts
+in this configuration can only mount a slash or dot channel.
 
 ```bash
 cd formal-verification
@@ -54,9 +56,9 @@ cd formal-verification
 TLC_HEAP=24g ./run-verification.sh medium
 ```
 
-**Expected outcome**: All 11 invariants verified, 0 violations. The small
-configuration (19.3M distinct states) passed completely. Medium exercises
-deeper interleavings with more processes and paths.
+**Expected outcome**: All 11 invariants hold, 0 violations. The small
+configuration passes completely (see results/). Medium exercises deeper
+interleavings with more processes and paths, but has not been exhausted.
 
 ## 2. TLC Large Configuration
 
@@ -156,7 +158,8 @@ For CBMC, record:
   in 10h50m on Jetson Orin AGX. 341GB state files on NVMe SSD. Zero violations.
   Queue still growing at ~3.5M/min net (2.56B states remaining).
 - **Actual total distinct states**: tens to hundreds of billions (not exhaustible
-  on current hardware). Partial result at 3.17B is strong evidence of correctness.
+  on current hardware). The partial result at 3.17B shows no counterexample of
+  depth 12 or less under those constants; it is not a result for the configuration.
 
 ### CBMC pgrpcpy (MNTLOG=2, MNTHASH=4, unwind=6)
 
@@ -194,9 +197,9 @@ tractable size. This should be the default for all future CBMC harness runs.
 ### General Notes
 
 - All verification code is committed and ready to run. No code changes needed.
-- The quick verification suite (SPIN + CBMC quick + TLC small) runs in
-  ~10 minutes and is suitable for CI. It provides the core isolation proof.
-- The extended runs (TLC medium/large + CBMC full) strengthen the result
-  by exploring larger state spaces and verifying actual C code.
+- The quick suite (SPIN + CBMC quick) runs in under a minute and is what CI
+  runs. TLC small (about 5 h on 4 cores) and SPIN/CBMC full (minutes) are run by hand.
+- The extended runs (TLC medium/large) would explore larger state spaces of
+  the same model; they do not change what the model can express.
 - **The CBMC full pgrpcpy verification is now complete** at all three MNTLOG
   levels (1, 2, 5) with sound unwinding assertions on x86-64 hardware.

@@ -119,6 +119,10 @@ trusted control files such as
 .B /mnt/msg/approve
 imply
 .BR privileged_control_path ,
+a video feed at
+.B /mnt/video
+(which may be a live camera) implies
+.BR reads_video ,
 and raw mail9p send surfaces such as
 .B /mnt/mail
 or paths containing
@@ -282,7 +286,18 @@ Pipe machine output to a query:
 .I Nsaudit
 exits nonzero when any
 .B high
-severity violation is present. This makes
+severity violation is present, and when it could not check: with no
+rules, or a file among them that is not a rule, with a
+.B meta/role
+that is neither
+.B toplevel
+nor
+.BR child ,
+a
+.B meta/actid
+that is not a number, or a tool whose name is not a name in the
+manifest directory.
+Nothing is reported clean that was not checked. This makes
 .I nsaudit
 suitable as a CI gate: any fixture whose expected state includes no
 high violations will fail the build if one is introduced.

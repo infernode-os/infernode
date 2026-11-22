@@ -11,7 +11,7 @@ Rcmd: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-DEFAULTALG := "aes_256_cbc sha256";
+DEFAULTALG := "aes_256_gcm";
 Rstyx2 := "!rstyx2";
 Rstyx2ok := "OK rstyx2\n";
 sys: Sys;

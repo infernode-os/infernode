@@ -11,7 +11,7 @@ Examples:
   args = "read 7"
 
 Commands:
-  create [name]              Create window, returns ID
+  create [label]             Create window /+label, returns ID
   write <id> body <text>     Write to window body
   write <id> tag <text>      Write to window tag
   read <id> [body|tag]       Read content (default: body)
@@ -24,8 +24,12 @@ Commands:
 
 Status states: ok (green), warn (yellow), error (red), info (blue), reset
 
-Control commands:
-  name <string>    Set window title
+A window you create is named /+label: a label, not a file.  Xenith
+neither reads nor writes a file for it.  To change a file, use write or
+edit.
+
+Control commands (layout and display only; name, get, put, dump are
+refused):
   clean            Mark as unmodified
   show             Scroll to cursor
   growmax          Maximum size

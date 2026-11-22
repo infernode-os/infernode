@@ -145,6 +145,8 @@ xallocz(ulong size, int zero)
 	Hole *h, **l;
 	int pass;
 
+	if(size > ~(ulong)0 - 2*(BY2V + sizeof(Xhdr)))
+		return nil;	/* the sum below would wrap to a few bytes */
 	size += BY2V + sizeof(Xhdr);
 	size &= ~(BY2V-1);
 
@@ -169,8 +171,14 @@ xallocz(ulong size, int zero)
 			p = KADDR(p);
 			p->magix = Magichole;
 			p->size = size;
+			/*
+			 * the data's bytes, not the block's: size has the
+			 * header in it, so this zeroed that many bytes past
+			 * the end (16), into whatever came next when the
+			 * block used its hole up
+			 */
 			if(zero)
-				memset(p->data, 0, size);
+				memset(p->data, 0, size - datoff);
 			return p->data;
 		}
 		l = &h->link;
@@ -270,6 +278,21 @@ xhole(ulong addr, ulong size)
 	h->link = *l;
 	*l = h;
 	iunlock(&xlists.l);
+}
+
+/* how much is free, in all */
+ulong
+xbytesfree(void)
+{
+	Hole *h;
+	ulong n;
+
+	n = 0;
+	ilock(&xlists.l);
+	for(h = xlists.table; h; h = h->link)
+		n += h->size;
+	iunlock(&xlists.l);
+	return n;
 }
 
 void

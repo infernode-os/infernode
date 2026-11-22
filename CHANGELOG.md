@@ -4,7 +4,1051 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **The camera on the Raspberry Pi 5.** `#V` drives RP1's CSI-2
+  receiver on either camera connector and serves the Pi 4's
+  `#V/unicam` files, so camsrv(4), `wm/camera`, vision(4) and the
+  card's `camera` file work unchanged; a Camera Module 3 gives frames
+  at 576x324. ctl gains `port 0|1` for the connector, and has one
+  writer at a time, its close powering the camera off. `#J` gains
+  i2c4 and i2c6, the connectors' buses, and each open of a data file
+  keeps its own address (the sensor's reads went to the lens).
+- **The Pi 5 in Raspberry Pi Imager's list.** The release's
+  `os_list_infernode.json` has a Pi 5 item (`pi5-64bit`) beside the
+  3B+ and 4B.
+
+## [0.11.0] - 2026-11-19
+
+### Added
+
+- **httpd: a web server for a name space, with a TLS 1.3 server side
+  (#1193).** `svc/httpd/httpd` is one module serving HTTP/1.1 from a
+  directory and whatever is bound or mounted under it; dynamic content
+  comes from file servers in the site, not CGI. Each connection runs in
+  a name space of its own (the site over `/`, `NODEVS`, its own
+  environment and fds). The TLS library gains a server side: TLS 1.3
+  only, X25519MLKEM768, X25519 and P-256, an ECDSA P-256 certificate,
+  ALPN, client certificates. Passwords (`-P`, HTTP Basic over TLS only,
+  PBKDF2-SHA-256 lines from `svc/httpd/passwd`, with lockout), rules per
+  path and method (`-x`, matched by the file's identity as well as its
+  name), wikifs's edit form (`-w`), a redirect to https (`-r`), HSTS
+  (`-S`) and a rotated access log (`-m`, `-M`).
+- **wercfs: werc sites served by httpd (#1194).** A file server that
+  reads a werc site directory and serves its pages rendered, werc's rc
+  reimplemented in Limbo (pages, menu, templates): `mount {wercfs
+  site} /services/www; svc/httpd/httpd -T text/html /services/www`.
+  `mdhtml(2)` converts Markdown to HTML as Markdown.pl does, raw HTML,
+  images, nested lists and reference links kept.
+- **Charon: text selection, zoom, container queries (#1203, #1204).**
+  Drag to select, double-click for a word, Ctrl-A, Ctrl-C and Ctrl-V;
+  zoom from 0.5x to 3x with `+`, `-` and `0`, kept across pages; a hand
+  over links and scrolling while dragging past the edge. CSS `@container`
+  queries; SVG `clip-path`, `mask`, `use` and `symbol`, forward
+  references included; `loading="lazy"` images deferred; first letters
+  by grapheme cluster; TeX Gyre Helvetica and Times as Arial's and Times
+  New Roman's stand-ins. A web-platform-tests reftest baseline, with
+  regressions against it reported.
+- **JPEGs decoded at 1/2, 1/4 or 1/8 (#1197).** readjpg implements
+  `Jpegscaled` (imagefile(2)) through a smaller inverse DCT, and Charon
+  decodes a photograph no larger than the screen needs: a 24-megapixel
+  JPEG 2.4 s to 1.3 s. `/env/pagetime` gives each image's fetch and
+  decode.
+- **Module link digests (#1205).** Both compilers write a SHA-256 of each
+  exported and imported function's type into a module, and the loader
+  compares those where it compared a 32-bit fold of MD5. `emu -L`, or
+  `1` written to `/dev/strictlink` (once, for good), refuses a link
+  where either side has none. An emulator built before this loads
+  modules built after it; `dis/` grows about 9.5%.
+- **The soak runs kfs, gefs and video beside its network loads (#1176,
+  #1179),** and a stalled network push records where it stopped and
+  both ends' TCP.
+
+### Security
+
+- **A review of the cryptography, certificates, authentication and
+  network services, and what it changes for an installation.** The
+  fixes and their tests are in `CLAUDE.md`'s table. These are the changes
+  that are not compatible with what ran before:
+  - **Login (login(6)) is version 2.** logind and `getauthinfo` speak
+    only it; an old end is told which version is spoken. A realm that
+    ran the old `auth/logind` or `auth/countersigner` on a network
+    should make a new signer key and enrol its users again.
+  - **Certificates to sign again.** ML-DSA (`mldsa65`, `mldsa87`) and
+    SLH-DSA certificates and signatures made before are refused: both
+    now sign as FIPS 204 and FIPS 205 say. ElGamal keys of the old
+    default group are refused. One Ed25519 or SLH-DSA certificate in 256
+    (a digest beginning with a zero byte) is refused. Keys are unchanged
+    except ElGamal's; signers issue again. Audit-log checkpoints signed
+    before are verified with the build that made them.
+  - **CNSA mode is a rule.** In it a signer key is ML-DSA-87 with a
+    3072-bit group or it is refused, keys made by the old
+    `createsignerkey -c` included.
+  - **Both ends of an authenticated connection need this build.** The
+    ssl algorithm is now confirmed under the shared secret and made part
+    of the keys (version 2 of the exchange in auth(2)); old and new
+    refuse each other and say why. Keyring's messages take a five-digit
+    length, so a certificate of any algorithm fits one.
+  - **Listeners.** A list of algorithms ssl(3) does not have is refused
+    at start. `svc/auth` no longer starts `signer` or `countersigner`.
+  - **keyfs** converts an old key file when it starts; the file is
+    salted PBKDF2-HMAC-SHA-384 and AES-256-GCM, mode 0600.
+  - **secstore** accounts move to a verifier that costs what the files
+    cost; an old client and a moved account do not interoperate, and an
+    old-format file is converted once with `auth/secstore m file`.
+    `secstore-setup` wants eight characters and `-f` to replace an
+    account.
+  - **factotum** refuses keys its protocol cannot use (an empty
+    password, a WPA passphrase under eight characters). The `infauth`
+    protocol, which could not start, is gone.
+  - **Removed:** the SSL 3.0 client (`ssl3`, `sslsession`; POP3 and
+    webget use the TLS client), `$Crypt`, DES, `auth/ai2key`, X.509's
+    and PKCS's encoders and unused arms, and C that nothing built.
+  - **Interfaces:** `X509->verify_certchain` and
+    `verify_certchain_roots` take the usage asked for; ASN.1 decoding
+    takes DER only; `Random->randombuf` raises where it returned zeros;
+    `IPint.bits` of zero is 0; a wstat naming another owner on a host
+    file is an error.
+  - **Feeds and services.** vid9p's `ctl` drives the playhead and names
+    no source (`replay file` to `ctl` is gone; use `-r`); a network GPS
+    source is a clock only when named `sync`; mail9p sends a compose
+    whole or not at all; the registry lets only a service's owner change
+    it.
+  - **Slower by design:** AES in C is constant time, about half the
+    speed for GCM where the processor has no AES instructions used
+    (x86-64 as built, the Pi 3 and 4, RISC-V); an RSA private operation
+    is blinded.
+- **The source review's other tranches.** Each fix has a regression test
+  that fails on the code before; the commit messages say what was wrong.
+  - **TLS, 9P, name spaces, parsers and file servers (#1200).** A TLS
+    server's handshake messages are taken once each and in order, its
+    version and suite held to the configuration; Keyring refuses key
+    strings that are not keys and Ed25519 signatures of a second
+    encoding; auth, factotum and secstored refuse short messages and a
+    PAK value outside the group; export(2), the mount driver and devssl
+    hold a read to its buffer and a fid to one changer.
+  - **The kernels' system calls and devices (#1201),** hosted and
+    native: sizes and offsets no file has refused before use, `#U`,
+    `#s` and the other devices a confined program can name bounded and
+    locked, three ways a program outlived its group's kill closed, and
+    locals changed after `waserror()` made volatile (clang, which builds
+    every emulator but Linux's and every native kernel, gave the handler
+    their old values).
+  - **The Dis VM, builtin modules and `limbo` (#1202):** places where a
+    program compiled by the stock compiler could get outside Limbo's
+    type safety, a builtin trusting a size or object it was given or
+    generated code keeping an address into an object that could be
+    freed (print, `$Math`, `$Keyring`, `$IPint`, `$Draw`, `$Tk`,
+    `$Tensor`, `$Bayer`, `$I420`).
+  - **The agent confinement stack (#1205).** What the human or the
+    harness decides can no longer be decided by text a model or remote
+    content chose: the approval gate judges the parsed call that will
+    run (`sms` and `dial` ask too); a task's staged changes are applied
+    only to the folder the harness granted; a subagent cannot reach its
+    parent's tool server, the model service or a tool needing approval,
+    and ends with its parent; after `NODEVS` a program opens only its
+    own name space's `#D` conversations. `git` is no longer in the
+    default delegation budget. Memory and plans are per activity; the
+    old shared stores are not carried over.
+  - **What a peer, a radio or a device sends (#1185-#1191).** The native
+    IP stack (Ethernet, ARP, ICMP, UDP, IPv6 extension headers and
+    reassembly, TCP options and control arguments, the route table),
+    USB (xHCI's completion residuals), Bluetooth, Wi-Fi, DNS and DHCP:
+    lengths checked before use, a peer's numbers bounded, tables read
+    under their locks. TCP's initial sequence numbers are a keyed hash
+    (RFC 6528) and only a reset at the expected sequence number closes a
+    connection (RFC 5961).
+  - **logind (#1182, #1184).** Ten failed attempts for a name refuse it
+    for 60 s, before any lookup or key exchange (NIST AC-7), counted in
+    `/keydb/loginfail` by the name's hash. A missing, disabled or
+    expired account is answered as a wrong password, after the same
+    work, so names cannot be enumerated; the reason goes to the console.
+  - **wikifs (#1196).** What anyone writes through `httpd -w` stays text:
+    titles, links, headings and the edit form were written raw (stored
+    XSS, `javascript:` links). An edit of an out-of-date version is a
+    conflict again, the losing edit kept in the history.
+
+### Changed
+
+- **The old httpd is gone (#1193).** Lucent's HTTP/1.0 server and its
+  modules under `services/httpd/` are replaced by the new one above.
+- **`listen -A` runs each connection's command in a process of its own
+  (#1183).** It ran in the listener's loop, so one idle client held up
+  every other: `lib/sh/srv`'s logind and every `listen -A ... {export
+  ...}` served one client at a time.
+
+- **sdrfs(4)'s `iq` says its own format, so nothing is told the rate
+  twice (#1094).** Each open starts with a header in audio(6)'s form
+  (`rate`, `enc cu8`, `freq`, each a command `ctl` takes, padded to 4
+  bytes), true for the whole stream: a write to `ctl` changing the rate
+  or frequency ends every open stream after what it has queued, and a
+  reopen on the held connection gets the new header. `sdr/fm` and
+  `sdr/am` take their rate from it (`-r` is gone) and write audio(6)
+  sound that `auplay` sets `audioctl` from (`-R` for raw).
+  `sdr/rawiq -r rate [-f freq]` gives a headerless capture a header;
+  `sdr/iqhdr < rec > /mnt/sdr/ctl` retunes the radio to a recording's.
+  `ctl` takes `enc cu8`.
+
+### Fixed
+
+- **An idle emu no longer spins or holds memory after Charon, a camera
+  or a video window.** Three causes, each enough to keep a core busy
+  for as long as emu ran:
+  - **The idle collector rests when there is nothing to free, whatever
+    wakes.** Any allocation began its round again, so a proc that
+    polls (a layers watcher, a page's timer) kept it running. A round
+    now runs to its end; one that frees nothing rests 1 s, doubling to
+    60 s; one that freed something, or a heap changed by a quarter,
+    does not rest. `idle_poll_cpu_test.sh` (a page loaded, a poller
+    beside it): 5 s of CPU in 15 before, 0 after.
+  - **A layers(2) watcher ends with its window.** `Stack.stop` was a
+    send that was lost unless the watcher was waiting for it, and a
+    window that died never called it; each lost one read its directory
+    twice a second for good. The stop is kept, and a watcher whose
+    owner is gone stops itself.
+  - **Closing Charon ends the page's scripts.** wm's Delete, Quit and
+    Ctrl-Q left the page's realm, its own process group, running with
+    its timers; the reaper meant to end it was killed with Charon, so
+    the timers' procs (and 130 MB of heap) stayed. The session is
+    closed on the way out and the reaper is in a group of its own. In
+    a run on four real sites: 9 procs and 400 MB left and a core busy
+    before, none, 8 MB and 2 s of CPU in 10 minutes after.
+- **The login profile with no `HOME` (#737).** A hosted emu started with
+  no `HOME` (a launchd or systemd service, `env -i`) stopped the profile
+  at "null list in concatenation": no `~/.infernode` overlay, factotum or
+  services. The home is now `$HOME` or the passwd entry's, kept as one
+  name when it has a blank, and with neither the profile says so and
+  goes on with `/usr/$user`.
+- **The native kernels' clocks keep time (#1180).** Every ARM board ran
+  slow (2.6 s an hour on a Pi 5, 4.5 on a Pi 3): the tick was rearmed
+  after the next deadline and overrode it, and a tick an interrupt came
+  late for was lost from the time of day. The time of day now comes
+  from the hardware counter, as Plan 9's does, and every overdue tick is
+  counted.
+- **A text file of vid9p, vidjpeg or camsrv read in pieces is one text
+  (#1210).** `status`, `fmt` and `ctl` were made again at each read, so
+  a second read could come from a newer, longer text.
+- **wm/tetris, About, wm/lens (#1177).** Tetris's keys work after New
+  game; About's version no longer says its build twice; wm/lens
+  magnifies instead of opening solid red.
+
+## [0.10.1] - 2026-11-11
+
+### Added
+
+- **A video feed's frames as JPEG between machines, raw at both ends:
+  videnc(1) and vidjpeg(1).** `videnc`, union-mounted after a feed
+  (vid9p, camsrv), serves `jpeg/` beside its `frame`: `ctl` (the
+  quality), `fmt`, `index` (frame N's offset and length in `data` at
+  N*32) and `data`. A frame is encoded when first asked for, once however
+  many read it. `vidjpeg`, on the viewer, serves vid9p's files again from
+  a feed's `jpeg/`, so wm/camera, vidplay9p and vision(4) read it
+  unchanged. From a Pi 5 to a Mac on Wi-Fi, a 480x270 street scene at
+  6 fps takes about 40 KB a frame on the wire instead of 204, for a sixth
+  of a core on the Pi. Under it, jpegenc(2): a baseline JPEG encoder of
+  I420 frames in Limbo (25 ms a 480x270 frame on a Pi 5), and readjpg's
+  `planes`, which decodes a 4:2:0 JPEG to I420 with no RGB between.
+  `tests/jpeg_test.b` and `tests/vidjpeg_test.b` check them.
+
+- **vid9p replays a `.y4m` file as a live feed: `vid9p -r file.y4m`, or
+  `replay file.y4m` to its `ctl`.** Its frames come at the file's rate
+  and start again from the first after the last, numbered on, so what
+  reads the feed (vision(4), wm/camera, Matrix) sees a live source, as
+  from camsrv or a host decoder, with `-w`'s window kept. It needs no
+  host decoder, so a bare-metal board with no camera can serve one.
+  A frame read past a live feed's window is now refused as `frame
+  expired`, as camsrv refuses it: vid9p added ` (retention window)`, and
+  wm/camera, vision(4), vidplay9p and Matrix's video pane, which match
+  the words to go on from the newest frame, stopped instead (wm/camera
+  showed "no camera"). `tests/host/vid9p_replay_test.sh` checks both.
+
+- **The machines a name space reaches, drawn from it:
+  `{while {} {ns; echo; sleep 1}} | ns2mmd | wm/page -s` (#1136).**
+  `ns2mmd` turns ns(1)'s lines into a Mermaid flowchart: this machine,
+  each machine a mount reaches (named by ndb), an edge for each mount
+  with its service and mount point, marked when encrypted; a stream in,
+  a chart out each time the name space changes. `wm/page -s` shows a
+  stream of documents, each in the last one's place. An encrypted
+  mount's source in a name space is its SSL conversation (`#D/0/data`),
+  which nothing joined to its connection: ssl(3) has a new read-only
+  file, `#D/n/lower`, naming the channel the conversation was pushed
+  onto (`/net/tcp/3/data`), in emu and the native kernel. Mermaid text
+  on standard input (`flowchart`, `sequenceDiagram`) is now known as
+  Mermaid by its first bytes. `tests/host/ns_topology_test.sh` checks it.
+
+- **A detector's boxes are drawn in a colour for each class.** A
+  detection (vision(4)'s records) with no `colour=` of its own was drawn
+  in the theme's accent, so people, cars and traffic lights were one
+  colour. layers(2) now gives each class one of the theme's eight
+  categorical colours (`pie0` to `pie7`), by a hash of its name, so it
+  is the same colour in every frame, viewer and run; a record's own
+  `colour=` still comes first. In wm/camera, Matrix's video pane and
+  vidplay9p alike.
+
+- **sdgsrv(1), a responder for sdg(2), as an experiment.** It serves an
+  export over sdg's Noise datagrams, each session its own export and tags,
+  so `tests/ninep_bench.b -U keydir` can measure sdg beside 9P over TCP.
+  It has no cookies and no idle expiry (a session's procs stay until it is
+  killed): it is for measuring, not deploying. `-d n` loses one data
+  packet in n each way, for tests. `tests/sdgsrv_test.b` reads through
+  sdg(2)'s own client: 1, 4 and 16 in flight, a slow file answered
+  `pending`, two sessions, a reader killed mid-read, and eight reads
+  through a server losing 1 in 20.
+
+- **`drop N` in a CHAOS kernel's `/dev/chaos`** loses one IPv4 packet in N
+  sent and one in N received on an Ethernet or Wi-Fi interface,
+  machine-wide, so TCP and sdg can be measured under loss. It exists only
+  in a kernel built with `-DCHAOS`.
+
+### Security
+
+- **ssl(3) is AES-256-GCM and HMAC-SHA-384, nothing else.** Every
+  connection InferNode encrypts (mount, listen, styxlisten, cpu, login,
+  secstore, the grid registries, the bare-metal cpu listener) now takes
+  `aes_256_gcm` by default: each record sealed with its header authenticated,
+  key and nonce by HKDF-SHA-384, record n's nonce n exclusive-ored in, so a
+  record changed, cut, replayed, reordered or reflected is refused.
+  `hmac_sha384` remains for integrity alone. `sha256` (SSL 2's hash, not an
+  HMAC), `aes_128_cbc` and `aes_256_cbc` are gone, as is the padded record.
+  Each direction must have its own secret of 32 bytes or more (the same both
+  ways is refused); ssl(2)'s new `secrets` makes a shared secret into one for
+  each way, which auth(2), login(2), logind, secstore and secstored use. This
+  is not compatible with older peers: both ends must run this release.
+  crypt(1) uses AES-256-GCM with PBKDF2-HMAC-SHA-384 and a salt per file (its
+  old `md5/ideacbc` default no longer existed in the device). 9cpu, import and
+  9export refuse encryption, as Plan 9's p9sk1 key is 56 bits; without `-e`
+  they run in the clear.
+
+- **Every generator InferNode has is NIST's HMAC_DRBG.** The native kernels'
+  (`os/port/random.c`, behind every key, `#c/random` and `#c/notquiterandom` on
+  bare metal) and the emulator's (`libsec/genrandom.c`, behind every key and
+  `#c/notquiterandom`) were ChaCha20, which no NIST or CNSA list admits as a
+  generator. Both are now HMAC_DRBG with SHA-512 (SP 800-90A Rev. 1), one
+  implementation (`libsec/hmacdrbg.c`) checked against NIST's CAVP vectors
+  before its first output. The kernels' is instantiated from 64 bytes of
+  hardware entropy and a 16-byte nonce under SP 800-90B's repetition-count and
+  adaptive-proportion tests (a kernel that fails the vectors panics); the
+  emulator's from the host's generator, reseeded every 1M bytes, every 65536
+  requests and after a fork, and gives nothing rather than fall back when the
+  host has no generator. `tests/host/kernrandom_test.sh` checks the kernels'
+  against 60 of NIST's vectors, `tests/host/emurandom_test.sh` the emulator's.
+
+- **Login takes AES-256-GCM in CNSA mode.** The key exchange with a signer
+  (login(2), logind(8)) sealed its Diffie-Hellman value with ChaCha20-Poly1305,
+  which CNSA does not admit. A client in CNSA mode (`/env/cnsamode`) now seals
+  it with AES-256-GCM under a key from HKDF with SHA-384, and says so by its
+  IV's length (44 bytes, not 32); a signer takes either, and in CNSA mode
+  refuses ChaCha20-Poly1305 with a message saying why. Clients not in CNSA mode
+  are unchanged. login(6) describes the protocol as it is.
+
+- **AES-GCM's GHASH takes the same time whatever it hashes.** It looked up a
+  table by nibbles of the running hash, which a cache shared with an attacker
+  shows. It is now PMULL where the processor has it, and otherwise integer
+  multiplication that indexes nothing, after BearSSL's (MIT). With the AES
+  instructions for its counter mode too, AES-256-GCM is 1444 MB/s on an
+  M-series Mac (171 before) and 476-569 MB/s on a Jetson Orin. The native
+  kernels take the ARMv8 AES, PMULL and SHA-256 instructions too where
+  `ID_AA64ISAR0_EL1` says the core has them: on a Pi 5 AES-256-GCM is 361
+  MB/s (64.9 in C), AES-256-CBC 496 (133), SHA-256 703 (148), and ssl(3)'s
+  `aes_256_gcm` 258 MB/s. The Pi 3 and 4 have no such instructions and keep
+  the C, constant time and faster: 42.0 MB/s on a Pi 4 (37.6), 20.3 MB/s
+  on a Pi 3 (19.4). `tests/host/armcrypto_test.sh` checks it against
+  438 of OpenSSL's answers in each configuration and, with valgrind, its
+  constant time; `tests/libsec_kat_test.b` checks Keyring's AES-GCM,
+  AES-CBC and SHA-256 against answers made elsewhere in the native kernel
+  itself (it found the counter mode's last part-block wrong under QEMU
+  from a compiler-vectorised loop, now done through a whole block).
+
+- **A Prog killed in a 9P call over an encrypted mount no longer takes
+  the mount down for everyone else.** The killed call's flush is written
+  through devssl, and the kill, still pending, interrupted that write
+  before any of the record was sent; devssl hung the connection up for
+  any error in a write, so every later request on the mount failed with
+  "inappropriate use of fd". A pending interrupt is now raised before a
+  record is begun, and only a record begun and not sent whole hangs the
+  connection up. And the flush is sent: what was pending was a second
+  interrupt for the kill already being handled, and devmnt now clears it
+  before a killed call's flush, clunk or remove, which its watch still
+  bounds. Unsent, the server kept the killed read's fid and the client
+  gave its number to the next walk, so the file could not be opened
+  again ("fid in use"), over any mount. Changing a vision(4) session's `place` while it follows
+  a feed mounted from another machine did this. `tests/host/ssl_killedcall_test.sh`
+  checks it. The native kernel's devssl has the same write path; it is
+  not changed here.
+
+- **The Claude and Codex gateways' Python dependencies are pinned
+  exactly, past the fixes OSV reports.** `tools/claude-gate` and
+  `tools/codex-gate` name aiohttp 3.14.5 and claude-agent-sdk 0.2.179, not
+  a lower bound an old environment already met, and their serve scripts
+  install the requirements on every start, so a persistent virtual
+  environment made before a fix is brought up to it. Security Analysis
+  audits each gateway's resolved dependencies against OSV
+  (`pip-audit`), Dependabot keeps the pins current, and
+  `tests/host/gateway_dependencies_test.sh` checks both.
+
+### Fixed
+
+- **`sys->fversion` gives the message size agreed.** It gave back the size
+  it was asked for, whatever the server and the channel allowed: over devssl,
+  where a mount takes 32512 bytes at most, asking for 64K was reported as 64K.
+  The mount itself always used the size agreed; what read the result was told
+  otherwise (ninep_bench's "asked msize X, got Y" never fired, and
+  `ninep_msize_test` asserted the 64K it was echoed). Emulator and native
+  kernels alike.
+
+- **9P mounts carry messages larger than 8K.** A mount offers 64K on a
+  plain connection and 32512 bytes on an encrypted one (`mount -k`,
+  `-C`, listen's connections), and gets what the server takes. Over the
+  wire from a Jetson to a Raspberry Pi, a single reader went from 5.6
+  to 10.4 MB/s encrypted.
+
+- **Stat works whatever message size a client offers.** exportfs gave
+  a stat the rest of the message as its room in a 16-bit field, so a
+  client offering more than 65544 bytes (Linux's v9fs offers 512K) had
+  every stat refused, "stat buffer too small". This, not devssl, is why
+  raising the size was reverted in May (INFR-214).
+
+- **Replies on an encrypted connection are not interleaved.** devssl
+  sent a write longer than about 32K as pieces locked one at a time, so
+  two replies written at once could interleave, and the client matched
+  replies to the wrong requests ("unexpected reply tag") until the
+  mount wedged. Every server built before this release has it, which is
+  why an encrypted mount offers no more than 32512 bytes.
+
+- **Mermaid flowcharts: quoted labels, `<br>` line breaks, edges round
+  the nodes in their way, and room for edge labels.** A label in quotes
+  (`a["a [b]"]`, `-- "AES-256" -->`) is read to its closing quote, so it
+  may hold brackets, pipes and dashes; it kept its quotes, and a dash in
+  an edge's quoted label lost the edge. `<br>` and `<br/>` break a
+  label's lines, in nodes and on edges. An edge that skips a layer goes
+  round the side, as one against the flow does: it ran straight under
+  the node between, hidden. The gap between layers is wide enough for
+  the edge labels in it, which the nodes either side were drawn over,
+  and edges bending into one node keep their labels apart, each where
+  it leaves its own source's row. `tests/mermaid_flow_test.b` checks
+  each.
+
+- **listen(1) can be started again while a connection it made is
+  open.** Each authenticated connection kept a copy of the listener's
+  file descriptors, the announcement's among them, so a listen killed
+  and started again on the same address was refused ("address in
+  use") until every connection it had made ended, and the address
+  stayed announced with nothing taking connections. A connection now
+  keeps only its own files.
+
+- **vid9p exits when its client hangs up.** When its 9P channel ended
+  it went on serving nothing, its ticker with it, for ever; under
+  `listen -A`, which runs a connection's command in the listener, no
+  second client was served at all. It now takes a process group of its
+  own and ends it, feeder and host decoder included, with the channel.
+
+- **TCP over a native kernel's loopback no longer drops most of what it
+  sends.** The loopback interface's queue held 128K for both directions
+  of every conversation while TCP's windows are 512K, so a bulk transfer
+  overflowed it: on a Raspberry Pi 4, 95% of loopback packets were
+  dropped and TCP spent its time retransmitting. With a 2 MB queue none
+  are dropped, and a transfer between two programs on one board went
+  from 9-30 MB/s to about 500.
+
+- **An encrypted 9P mount survives its readers being killed.** Viewers
+  of a feed come and go, and each one killed in the middle of its reads
+  could break the mount for everyone else on it. Four causes, found by
+  `ninep_disconnect_test`, which kills readers at random moments, round
+  after round, and failed at its first round before:
+  - devssl hung up its connection when a writer was interrupted. A 9P
+    client killed while sending its request took the mount down with it
+    ("inappropriate use of fd"). Records now go through a queue to a
+    writer of their own in the emulator, so none is ever left half
+    sent, and an interrupt after a record is queued is no reason to
+    hang up (native too).
+  - The emulator threw away what a socket read or write had done when
+    an interrupt arrived during it: bytes read off the connection were
+    lost, and devssl's next record failed its digest ("bad digest").
+  - A tag was used again while a flush naming it was still out, so the
+    server flushed the wrong call and replies went to the wrong calls:
+    an Rclunk to a Twalk, an Rwalk to a Tclunk ("too many QIDs
+    returned by walk", "unexpected reply tag"). Native too; this is how
+    a board's feed went out of step after many viewers left.
+  - A clunk or walk given up on unanswered left its fid to be used
+    again while the server might still hold it ("fid in use"). Native
+    too.
+
+- **Recognition boxes no longer freeze when a session's settings
+  change.** Moving a vision session to another place (`place dla0`),
+  or changing its threshold, classes, model or rate, starts a new
+  follower for the same feed, and stopping the old one told every
+  waiting reader the feed had ended. A layer bound into a camera's
+  (wm/camera, Matrix) stopped there, its boxes frozen, until it was
+  unmounted and bound again. Readers now go on to the new follower's
+  frames.
+
+- **A native kernel's TCP no longer sends past its peer's window.**
+  When more was in flight than the peer's window allowed -- which
+  happens whenever the peer's right edge draws back even a byte, as a
+  scaled window rounded to its granularity does (Linux's too) -- the
+  sender's usable window, unsigned, wrapped to 4G, and it sent full
+  segments hundreds of K past the window. The receiver dropped them all
+  and the sender recovered one segment a round trip. Any connection
+  whose receiver fell behind its sender could hit it: devssl over a Pi
+  4's loopback with 24K or 32K records ran at 1 MB/s; with the fix,
+  24-67 MB/s (SHA-256) and 18-35 MB/s (AES-256-CBC with SHA-256), as
+  with 16K records.
+
+- **sdg(2) reads no longer fail with `reply gone` when a packet is lost.**
+  The brick and sdgsrv move their floor up whenever a request id arrives
+  more than 64 beyond it, so with several reads in flight at LAN rates a
+  lost request was abandoned before its 40 ms retransmission. A request
+  that would be 64 or more past the oldest still unanswered now waits, in
+  order, until the window allows it (STYX-DGRAM Rev S7), and sdgsrv
+  answers `pending` for a request still running after the window has
+  passed it. `sdgsrv_test`'s Lossy fails without this, under `-c1` and
+  `-c0`.
+
+### Performance
+
+- **Video feeds are read with several reads in flight.** wm/camera,
+  vidplay9p, Matrix's video pane and vision(4)'s feed follower read a
+  frame as four reads of its pieces at once (`parread(2)`), so a frame
+  over the network waits about one round trip, not one per message. A
+  Raspberry Pi 4 reading 720p from a Pi 5 over an encrypted mount went
+  from 67 to 39 ms a frame (15 to 25 frames a second).
+
+- **AES and SHA-256 by the ARMv8 instructions.** On Apple Silicon and
+  on arm64 Linux and Android processors that have them (getauxval's
+  `HWCAP_AES`, `HWCAP_SHA2`), libsec's AES-CBC, AES blocks and SHA-256
+  use the Cryptography Extension instead of tables and C. On an M-series
+  Mac AES-256-CBC went from 234 to 1640 MB/s and SHA-256 from 442 to
+  2298 MB/s; an encrypted devssl session (AES-256-CBC with SHA-256)
+  from 140 to 579 MB/s. On a Jetson Orin, AES-256-CBC 138 to 1077 MB/s
+  encrypting and 142 to 2118 decrypting, SHA-256 163 to 828. Results
+  are byte for byte the C's (`tests/host/armcrypto_test.sh`). The native
+  kernels use them too where `ID_AA64ISAR0_EL1` says the core has them
+  (a Pi 5; see AES-GCM's entry under Security).
+
+- **The native kernels' TCP recovers from loss faster.** After a
+  retransmission the slow-start threshold is half what was in flight
+  (RFC 5681), not one segment, so the window doubles back instead of
+  growing a segment a round trip; and the least retransmission timeout
+  is 200 ms (Linux's), not 500. Reading 720p frames from a Raspberry
+  Pi 5 with four reads in flight while a bulk download shared its path,
+  65 frames came through in the time master's kernel took 46 and 48,
+  and the slowest frame took 2.4 s to master's 3.3 and 5.4. With no
+  competing traffic nothing changed.
+
+- **The native kernels' TCP finds a loss from its peer's SACK blocks.** It
+  parses them (RFC 2018), counts an ACK at `snd.una` that SACKs new data as
+  a duplicate whether or not it carries data, and takes a segment for lost
+  once more than three segments' worth above it are SACKed (RFC 6675). A
+  9P peer sends its ACKs with its next requests and a receiver SACKs what
+  follows a hole in one or two ACKs, so three plain duplicates rarely came
+  and three losses in four waited for the retransmission timer. An 18 MB
+  read by eight readers from a Pi 4 at 1% loss each way takes 6.5-8.4 s,
+  not 28-34; with no loss nothing changed. At 5% neither finishes in a
+  minute: recovery is still one segment at a time. `kernelpins_test.sh`
+  pins the rule.
+
+## [0.10.0] - 2026-11-09
+
+This release adds a native kernel for the Raspberry Pi 5, and runs Dis
+on every core of a board: one VM a core, each with its own heap and
+collector. A Camera Module 3 on a Pi 4 is a live video feed at
+`/mnt/video/0`, and object recognition is a file system,
+`/mnt/vision`, on a board's CPU or a Jetson's GPU; the old `$GPU` and
+`gpusrv` are gone (see Breaking & behavior changes). A file on the card
+puts a board in CNSA 2.0 mode.
+A keyboard on the screen, `wm/osk`, makes touch screens usable on the
+Pi, iOS and Android, and on the Pi a finger now scrolls and reaches
+context menus. GPS receivers and RTL-SDR radios are served as files,
+with a moving map and FM and AM demodulators. The security hardening
+begun after 0.9.0's review is finished: the network stack, agent
+containment, constant-time elliptic-curve and modular arithmetic, and
+a bare-metal random number generator that takes keys only from the
+hardware. Inbound TCP connections to a bare-metal board are no longer
+reset partway through. Upgrading is recommended for every 0.9.0
+installation, especially bare-metal nodes and systems that ran
+`voice/listen`.
+
+### Breaking & behavior changes
+
+- **The February GPU experiment is removed: `$GPU`, `gpusrv`,
+  `/mnt/gpu` and the Veltro `gpu` tool (#1115).** vision(4) replaces
+  them: `/mnt/vision` in place of `/mnt/gpu`, `visionfs` in place of
+  `gpusrv`, and on a Jetson `trtsrv` in place of the TensorRT `$GPU`
+  module. Agents use the `vision` tool. The emulator no longer has a
+  GPU build option (`emu/Linux/mkfile-gpu-*`), and `lib/gpu`'s plans
+  are gone. A TensorRT engine for trtsrv is built with `mkengines.sh`.
+- **The Veltro `vision` tool no longer sends pictures to the cloud
+  (#1115).** It used to describe a picture through the Anthropic API
+  (`--cloud`, and as a fallback when no GPU was mounted), or run a
+  model on `/mnt/gpu` (`--local`). Now it returns only what the
+  detector at `/mnt/vision` finds, as records, and fails if nothing is
+  mounted there. There is no fallback. Its options are `-c` (classes)
+  and `-t` (threshold).
+- **Matrix's `video-overlay` is retired (#1115).** A bound layer
+  replaces it. Load `video-player` or `video-live`, and
+  `bind -a DIR /mnt/video/0/layer` whatever is to be drawn on top. The
+  composition's comments show the line.
+
+### Security
+
+- **`brick(1)` keeps a styxbrick's credentials in factotum, and its TLS
+  and lease handling are hardened (#1111).** The four commander secrets
+  move out of ordinary profile files into purpose-scoped factotum keys;
+  factotum's sync is a real durability barrier, and pairing is local
+  first, serialized and safe to retry. TLS client authentication
+  reloads its key from factotum encrypted, so no private scalar appears
+  in the name space, and handshakes and provisioning check the same
+  strict SPKI pin and refuse malformed or non-canonical DER. The D2
+  lease's release/renew race, counter lock, transport state, frame
+  bounds, rollback and lease validation are fixed. What remains open
+  (BLE admission when built with BLE, reconnect floods, unattended
+  provisioning on bare metal) is in `docs/PR-1015-SECURITY-REVIEW.md`.
+- **The formal-verification claims are narrowed to what the artefacts
+  establish, and the TLA+ small configuration now reaches a copy.** The
+  exhaustive small TLC run (2 processes, 3 pgrps, 3 channels) never
+  executed a namespace copy: each pgrp costs two channels and a fork is
+  enabled only while two remain, so `pgrp_parent` was 0 in all 19.3M
+  states and every isolation invariant held vacuously. The small
+  configuration is now 2 processes, 2 pgrps, 5 channels, and
+  `run-verification.sh` refuses to run unless TLC can reach a copy and a
+  post-copy mount (probes in `MC_Namespace.tla`). The 3.17B-state medium
+  run is described as the incomplete breadth-first search it is. The
+  READMEs, `METHODOLOGY.md`, `SECURITY.md` and `DESIGN-PRINCIPLES.md` no
+  longer say "proven" or "formally verified containment": the TLA+ and
+  Promela models cannot express shared mount structure, the CBMC
+  `pgrpcpy` harnesses are one concrete mount each, the lock-ordering and
+  exportfs assertions cannot fail, CBMC does not check constant time,
+  and CI runs no LTL. `formal-verification/README.md` has a "What this
+  does and does not establish" section to cite instead.
+- **IPv4 fragments cannot claim bytes that were not received.** Reassembly now
+  validates and trims every fragment to its IPv4 total length, rejects lengths
+  beyond the received block, rejects invalid fragment alignment, and caps the
+  assembled extent before handing a packet to ICMP, TCP, or UDP. The flaw is
+  inherited from upstream Inferno; the final Bell Labs Plan 9 source has the
+  same trust error, while 9front's receive path has used received block lengths
+  and capped completed assemblies since 2019.
+- **TCP out-of-order storage is bounded by both bytes and Blocks.** InferNode
+  now carries 9front's receive-window byte limit and MSS-derived packet-count
+  limit, including segments inserted at the head of the resequencing queue.
+  This is an upstream Inferno omission; 9front has carried the limits since
+  2013.
+- **Malformed transport and ICMPv6 packets are rejected before indexed or
+  trimmed access.** UDP lengths smaller than the UDP header, TCP data offsets
+  larger than the IP payload, and truncated neighbor solicitation or
+  advertisement bodies are dropped. These checks port applicable 9front fixes
+  `7838d689` and `9211c6c5`.
+- **Inherited IP and mount boundary checks are current.** Negative IP device
+  attaches are rejected before indexing a stack, conversation permissions and
+  accepted-call ownership are enforced under lock, authentication fids must
+  belong to the mounted connection, mount-cache data comes from immutable
+  kernel replies rather than mutable caller buffers, and completion cannot race
+  request recycling. Protocol conversation counts are capped to the qid field;
+  IPv6 lifetime comparisons cannot wrap, TCP backoff cannot roll over, and UDP
+  transmits checksum negative zero as `ffff` rather than the IPv4 “no checksum”
+  value.
+- **Interface teardown and authentication proxy errors fail cleanly.** Native
+  IP configuration now releases interface/self-cache locks when medium hooks
+  fail, completes fallible address removal before publishing an unbound
+  conversation, and does not leak IPv6 prefix metadata. Factotum proxy framing
+  rejects a non-growing `toosmall` request instead of constructing an invalid
+  input slice, and internal fd close rejects out-of-range descriptors.
+- **Inherited SSL, capability, and 9P identity checks are current.** Opening an
+  existing SSL conversation now applies its owner/other mode correctly;
+  presenting a capability as the wrong source user cannot consume it; legacy
+  Styx servers bound oversized replies to the negotiated message size; and
+  persistent 9P authentication verifies factotum's caller identity.
+- **Authentication RPC concurrency is bounded.** Factotum refuses a seventeenth
+  active RPC worker, preventing unauthenticated connection attempts from
+  pinning an unbounded number of protocol processes.
+- **Untrusted image data cannot cross decoder or geometry bounds.** Compressed
+  image transforms stop at the supplied buffer, the LZ history starts zeroed
+  instead of disclosing stack contents, and image allocation/load paths reject
+  rectangles whose size or offsets overflow. Window stacking checks every image
+  before dereferencing its layer, and zero or negative full-circle arcs take
+  bounded special paths. This ports the applicable 9front draw hardening through
+  `e252b1b9`, `c4f5b99c`, `d7538ebb`, `e8228856`, and `0fea8e09`.
+- **Certificate and X25519 inputs fail closed.** BER decoding stops at a fixed
+  recursion depth instead of allowing a crafted certificate to exhaust the
+  interpreter stack, and the common X25519 primitive rejects low-order peer
+  keys that produce the RFC 7748 all-zero shared secret. This covers TLS 1.2,
+  TLS 1.3, and hybrid key agreement callers.
+- **The common cryptographic generator uses rekeyed ChaCha20.** The inherited
+  two-key 3DES X9.17 state has been replaced with a 256-bit ChaCha20 state that
+  rekeys itself before each response and advances a per-call nonce. Hosted
+  seeds come from the operating-system CSPRNG; native seeds come from the
+  platform hardware generator.
+- **Voice exports require keyring authentication and expose audio only.** The
+  original `voice/listen` script anonymously exported all of `/dev`, allowing
+  a network peer to inject input and operate control devices. It now constructs
+  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners
+  and dialers explicitly select their keyring. There is no anonymous remote
+  mode in the shipped voice scripts; acceptance tests use a process-local 9P
+  pipe and open no listener. Provision a signer and peer auth information with
+  `auth/createsignerkey` and `auth/mkauthinfo` before using voice on a fresh node.
+- **Exec cleanup owns the whole descendant group tree.** `/prog/N/ctl` accepts
+  `killtree`, which kills N's group and every descendant group. The exec tool
+  uses it on deadlines and output caps, so a confined command cannot survive by
+  calling `NEWPGRP`.
+- **Approval and messaging surfaces are content-bound.** Lucifer grants a gated
+  call only for the exact `Allow` action, not delivered task/message events or
+  conversational text. Message pending entries show a losslessly escaped,
+  immutable body, and approval sends that exact body.
+- **Namespace checks match the host filesystem and actual parent authority.**
+  Policy comparisons are ASCII case-insensitive for case-insensitive hosts;
+  bare `/chan`, `/fd`, `/usr`, keyring paths, and numbered `/mnt/toolctl.*`
+  and `/tool.*` aliases are rejected. A parent root grant no longer authorizes
+  a child path the parent cannot see, and `/usr` grants mask both keyring and
+  secstore credentials. Confined `NODEVS` processes cannot follow host symlinks
+  out of a granted tree.
+- **mc9p responses and filesystem authority are scoped.** One client can no
+  longer read or replace another client's endpoint response. The `fs` domain
+  requires a non-root `-r` directory, rejects requests outside it, and applies
+  `NODEVS` so host symlinks cannot escape it.
+- **The rest of the review's findings, and the 9front audit, are
+  closed (#1032, #1082, #1096, #1099).** The native kernel's TCP keeps
+  window scaling, half-open cleanup and ACK and window checks bounded
+  after the multi-VM merge. Veltro's confinement hides `/dev/vm`, and
+  `NODEVS` refuses a direct attach of `#X`, since `vm(1)` makes a fresh
+  process group. A revoked program stays revoked across a caught 9P or
+  name-lookup error, and a killed mount call waits for one flush, no
+  more. Hostile USB HID descriptors cannot overflow report sizes,
+  counts or the multi-touch contacts kept. `docs/9FRONT-SECURITY-AUDIT.md`
+  records 204 source-traced 9front candidates and what was done with
+  each; the one residual is that secure memory is not scrubbed on a
+  warm reset.
+- **gefs refuses hostile disk metadata (#1101).** A checksum-valid but
+  hostile disk could index past Limbo bounds, hang a mount or check in
+  a cycle of allocation logs or dead lists, or point outside its arena.
+  All metadata is now validated before use, reads and writes are
+  bounded to the device and the arena, cycles are found, and the crash
+  journal is mode 0600, not 0644. The disk format is unchanged. gefs
+  has no authentication of its own: put it behind an authenticated
+  export. `docs/GEFS-SECURITY-REVIEW.md`.
+- **Agents cannot leave their name space through Xenith, and the Claude
+  gateway no longer hands them the user's notes (#1087, #1096).** A
+  window an agent made could be named after any file, and `ctl
+  name`/`put` had Xenith, in its own unrestricted name space, write
+  it; `get` read one. The xenith tool's `create` now takes a label
+  (`/+label`), its `ctl` takes layout and display commands only, and
+  another window's body is readable only for `+Errors`. claude-gate's
+  sessions loaded the host user's Claude Code memory and git status for
+  the gateway's working directory; each turn now runs in an empty
+  private directory of its own with those off.
+- **Elliptic curves and modular exponentiation in constant time (#1061,
+  #1066, #1067).** P-256 is rewritten and P-384 added in `libsec/ecc.c`,
+  and secp256k1 rewritten, all on Montgomery arithmetic with complete
+  addition formulas and fixed-window scalar multiplication, so no
+  branch or address depends on a secret; secp256k1 signs with RFC 6979
+  nonces and low S. `libmp`'s `mpexp` uses a Montgomery fixed window
+  for odd moduli. Each has known answers from OpenSSL or Python and a
+  valgrind constant-time check (`ecc_test.sh`, `secp256k1_test.sh`,
+  `mpexp_test.sh`). The TLS 1.3 client offers P-256 and P-384 and
+  answers a HelloRetryRequest for either (`tls_hrr_test`).
+- **A bare-metal board can join a CNSA-mode fleet (#1093, #1099).** The
+  handshake asked for `CNSAMODE` through `getenv`, which on bare metal
+  always said no, so a Pi used ML-KEM-768 and could not authenticate
+  with any CNSA-mode machine (`bad ml-kem public key length: this node
+  is in CNSA mode`, from the other side). With a file `cnsamode` on its
+  card, every authenticated connection uses ML-KEM-1024; without it a
+  board uses ML-KEM-768, as before, and it is off by default. Both ends
+  must agree, and a mismatch is refused saying which side is in CNSA
+  mode. Boot turns it on through a kernel switch (`cnsamode on` on
+  `/dev/sysctl`), not `/env`, which any process can rewrite: the switch
+  is one way and refused once anything has authenticated without it.
+  Boot also sets `/env/cnsamode`, as the hosted emulator does, where
+  CNSA mode is still the `CNSAMODE` environment variable. The native
+  `sysctl` `console on|off` works too: it refused `console off`, and a
+  bare `console` misread its arguments inside the kernel.
+- **Bare metal: a key is made only from a hardware generator.** A board
+  with no working generator (the Pi 4's RNG200 not answering, the
+  PolarFire's nonce service refusing, a QEMU virt without virtio-rng)
+  handed libsec's key generators, `#c/notquiterandom` and `#c/random` a
+  counter stirred with the time, after one line on the console; the
+  PolarFire did the same, silently, if its service stopped after boot.
+  On a board that means a driver or address map at fault, and on a Pi 5,
+  which no emulator models, it could only mean that. Now `hwrandom`
+  never makes bytes up: it says -1 when there is no generator, and
+  `genrandom`, `prng` and `prngtry`, which every board copied, are
+  `os/port/random.c`'s, waiting for real bytes and saying why every five
+  seconds (`prngtry` answers -1 at once, as libsec.h says). The kernel
+  still boots and its network still works: nrand, for port and sequence
+  numbers, no longer waits on the pool. What reads `/dev/random` waits
+  with the keys: the first-boot login, and DNS, whose query ids come
+  from it. An emulator that has nothing better passes `insecurerandom`
+  on its command line and gets the counter, labelled; the harness and
+  `tests/host/piimage_boot_test.sh` do for QEMU's `raspi4b`, and the
+  Icicle Kit's tree says it. A `virt` boot with no virtio-rng checks
+  both ways.
+- **Bare metal: the Pi's generator is read one word at a time under a
+  lock.** The Pi 3 and Pi 4 drivers tested for a word and read it with
+  no lock, on four cores with preemption: two readers could both see
+  one word waiting and both read it, and what an empty FIFO reads as is
+  not documented. The test and the read are now one step under a spin
+  lock, as `virt` and the PolarFire already did.
+- **Bare metal: the RNG200's own health test is heeded.** The Pi 4's
+  generator says in its interrupt status when its NIST health test has
+  failed; nothing read the register. A failure now resets the block before another word is taken from it, and says
+  so. The driver is `os/bcm/rng200.c`, for the Pi 4 and the Pi 5, with
+  the board's `io.h` naming where it is.
+- **Bare metal: one ChaCha20 generator, keyed from the hardware, behind
+  every reader (#1059).** `#c/random`, `#c/notquiterandom`,
+  `genrandom`, `prng` and `truerand` read ChaCha20 with fast key
+  erasure, keyed by SHA-256 of the old stream and 32 hardware bytes and
+  reseeded every second or megabyte. Readers got the hardware's raw
+  output before, at its speed (45 KB/s from `/dev/random` on a Pi 4).
+  Nothing is returned before the first hardware seed; a dry generator
+  keeps the old key for ten minutes at most; a stuck or repeated seed
+  is refused; and a key waiting for the generator no longer holds the
+  Dis VM (a Pi 5 with no generator froze VM 0 and its console).
+  `tests/host/kernrandom_test.sh`.
+- **How long a release gets security fixes is stated (#1050).**
+  `SECURITY.md`: the latest release gets fixes, and the one before it
+  until six months after the latest came out, Pi card images included.
+  Fixes come as a new signed release; nothing updates itself. Every Pi
+  card carries a `README.txt` saying so, that there is no default
+  password, what is offered on the network, and where to report a
+  problem privately.
+
+### Raspberry Pi and bare metal
+
+- **The Raspberry Pi 5 has a native kernel (#1046).** BCM2712 and its
+  RP1 I/O chip, with no host OS: four cores, the JIT, all 8 GB,
+  multi-core Dis, SD, gigabit Ethernet (946 Mbit/s in, 930 out), USB,
+  Wi-Fi, Bluetooth (pairing, L2CAP, LE scan), GPIO with edges, I2C
+  (`#J`), SPI (`#Q`), PWM (`#W`), the real-time clock, the fan, the
+  power button, NVMe at PCIe gen 2 (370 MB/s read) and booting from
+  it, and Lucifer on either HDMI port. `jitbench` takes 6.0 s, against
+  a Pi 4's 10.4. One board has run it, a Pi 5 8GB rev 1.0, in two
+  12-hour soaks with every device busy and no panic. `os/bcm2712/README.md` is
+  the guide and `os/bcm2712/INVENTORY.md` says what is proved, feature
+  by feature. No emulator models a Pi 5, so CI builds the kernel but
+  cannot boot it.
+- **A Pi 5 card image is attached to the release.**
+  `infernode-0.10.0-rpi5.img.xz` is built by the release job and
+  checked as the boot ROM and firmware read a card (`piromcheck`), and
+  by `piimage_test` as the other boards' cards are (#1125).
+- **Shared kernel fixes the Pi 5 found (#1046).** Core 0 idled in `wfi`,
+  which the `sev` that wakes a core does not end, so a process that had
+  to run there waited for a clock tick; with #1032's IP hardening
+  gigabit input fell to 300 Mbit/s. Every core now idles in `wfe`.
+  `runproc` no longer spins on the run-queue lock at `splhi`, starving
+  `ready()`. A process preempted between winning a spin lock and
+  raising its priority no longer deadlocks a spinner on its core
+  (`lock loop ... held by pc 0x0`, #640, #1069). The audio jack's fuzz, a
+  fractional clock divider, is gone. kfs marks itself clean when idle,
+  so a reboot or a power cut while idle needs no check.
+- **Dis on every core (#1038).** The native kernel runs one Dis VM per
+  core, each with its own interpreter, scheduler, heap, collector and
+  module table. Programs in different VMs share only the kernel: files,
+  pipes, 9P and served names. Within a VM nothing changes, so its
+  soft real-time behaviour is as before, and crossing between VMs
+  costs no more than talking within one. `#X` (`/dev/vm`, `vm(3)`)
+  has a `ctl` and each VM's `run` and `status`; `vm(1)` runs a program
+  in a chosen VM; the card's `vms` file places programs at boot; and
+  `vmstress` stresses them. 24-hour soaks on a Pi 4 and a 3B+
+  started 450,000 programs and made 16,500 kills across VMs, with none
+  failed. The soaks found, and this fixes, a module swept by its VM's
+  collector while it waited for the JIT's lock, and a kill from one VM
+  into a program inside another's served file corrupting both heaps.
+- **Inbound TCP connections to a board are no longer reset partway
+  through (#1110).** On every Raspberry Pi, a large transfer into the
+  board could be cut off with "connection reset". The native kernel's
+  `canrlock` failed whenever another reader held the lock for a moment,
+  with no writer anywhere; IP output took that as "no route" and closed
+  the live connection. It now refuses only while a writer holds or
+  waits. On a 3B+, 64 MB transfers went from about 1 in 15 reset to
+  none in 180. Packets arriving beside other network activity were
+  dropped the same way, as lost fragments of large datagrams: the 3B+'s
+  reassembly timeouts in a test burst went from 29 to 0.
+- **A 3B+ under heavy incoming traffic no longer crashes while its USB
+  channels are only busy (#1117, #723).** It panicked ("miller is a
+  lazy git") when no USB host channel was free at that moment, counting
+  busy channels with ones retired as stuck. It now waits for a channel,
+  and puts a retired one back once it has halted. Only when every
+  channel is stuck does the board restart, which brings its network
+  back.
+- **The Pi 4 camera (#1085).** A Camera Module 3 on the Pi 4's camera
+  connector is a live video feed at `/mnt/video/0`, served by the new
+  `camsrv` in the same files as other video sources, so anything that
+  shows a feed shows the camera. Pictures are 576x324 or 1152x648, 30
+  frames a second by default, with automatic exposure and white
+  balance, and focus set by hand or by a one-shot autofocus. The camera
+  is powered only while something reads it. A camera mounted sideways
+  or upside down is turned with `rotate 0`, `90`, `180` or `270` on
+  camsrv's ctl file, or `-r` when it starts, and every reader gets the
+  picture upright. The kernel keeps only the mechanism: `#V` is the
+  CSI receiver (`/dev/unicam`) and `#J` the camera connectors' I2C bus;
+  the sensor, exposure, white balance and focus are in Limbo. See
+  camsrv(4). A 24-hour soak on a Pi 4 ran at 30 frames a second
+  throughout.
+- **`wm/camera`, a camera window (#1085).** It shows the feed, starting
+  `camsrv` if nothing is serving one. `+` and `-` move the focus, `a`
+  autofocuses, `q` quits. Hidden by the window manager, it lets go of
+  the feed and the camera switches off; shown again, it picks the feed
+  back up. With no camera it says so in the window. See wm-camera(1).
+- **The camera from the card, and from another machine (#1085).** A file
+  `camera` on a Pi 4's card, holding camsrv settings one per line (for
+  instance `rotate 90`), starts the camera at boot, already set up, for
+  every session on the machine; without the file nothing starts
+  (`docs/BAREMETAL.md`, section 5). Because the feed is files, another
+  InferNode can mount it over an authenticated, encrypted 9P connection
+  and show it in its own `wm/camera`. For now the Pi has to be told to
+  offer it: run `listen -a aes_256_cbc -a sha256 'tcp!*!5650' {export
+  /mnt/video &}` on it, and the listener lasts until the next reboot.
+- **Touch screens on the Pi (#1097).** A finger was button 1 and nothing
+  else. Now, on the DSI panel and on a USB touchscreen alike, a finger
+  held still for half a second is button 3, which reaches every context
+  menu, and two fingers dragged are the wheel, as on a phone. Lucifer's
+  namespace browser scrolls by a drag and takes a tap where it was
+  pressed; ftree's folders open from their name's first letters, not
+  only their 14-pixel triangle; a double tap may land 32 pixels from
+  the first. USB multi-touch digitizers are read.
+- **The native kernels copy memory eight bytes at a time (#1100).**
+  `memmove`, `memcpy` and `memset` went a byte at a time, so every 9P
+  read, camera frame and slice copy on bare metal did too. On a Pi 4
+  core, copies in cache are about ten times faster (870 to about 8,700
+  MB/s) and copies from DRAM about twice as fast (900 to 1,800 MB/s). A
+  copy of 2 GB or more, which used to copy nothing, now works. The USB
+  disk and USB serial drivers wait for the bus walk to let go of a
+  device before they open it, as the keyboard, mouse and Ethernet
+  drivers already did; before, a multi-LUN disk could be left with no
+  driver.
+- **The card's FAT is read through a 1.1 MB cache, not a floppy's 90 KB
+  (#1062).** `/dis` and `/lib` come off the card through dossrv, whose
+  sector cache was sized for floppies, so a busy board went back to the
+  card for every lookup. On a Pi 5 under load, loading `/lib/certs`'s
+  122 roots took 54 s, and every verified TLS handshake timed out; it
+  now takes under 3 s.
+- **A frame that does not fit in a USB transfer goes in the next
+  (#1004).** The Ethernet writer dropped it, uncounted, so TCP out over
+  a USB NCM link ran at about a tenth of what came in. A Pi 4's NCM
+  gadget link went from about 90 to 240 Mbit/s out. A frame too big for
+  any transfer is still dropped, and now counted in `oerrs`.
+- **A connect to something that is not an IP address fails at once
+  (#1090).** `connect localhost!1234` with no connection server sent a
+  SYN to `0.0.0.0` and waited for ever; a name, or the unspecified
+  address, now gets `invalid IP address`, as the hosted emulator says.
+- **Firmware calls and console output keep a core's interrupts
+  (#1008, #1033).** A mailbox call held interrupts off on its core
+  until the firmware answered, 26 ms for the USB power-up; console
+  output held them off for a whole line, about 10 ms at 115200 baud, so
+  steady console output starved the Bluetooth UART ("Host is down"). A
+  process that may sleep now makes both with interrupts on, queued on a
+  lock; interrupt-time prints and panics are as before.
+- **The Pi 4's headphone jack plays (#1034, #1098).** It drove the
+  first PWM block, which no pin carries on a BCM2711; it now drives the
+  second. On every Pi, a program that opened `/dev/audio` after another
+  started where the last stopped, sometimes under the DMA engine, so a
+  sound came out in pieces; and a writer that stopped part way through
+  a buffer was heard as bursts of stale sound (the static in FM from a
+  remote SDR). `#A/audiostat` says what the jack has done: engine
+  state, rate, frames ahead and played, underruns. See audio(3).
+- **A key held down at the login screen is harmless (#1035, #1041).**
+  Something resting on a 3B+'s keyboard for two days typed 83,000
+  characters into the password field; Tk's growing copies of the text
+  fragmented the kernel's main pool until every key failed with "out of
+  memory", printed on the console. The password field takes 1024
+  characters, and a Tk entry's key now costs the same however long its
+  text: a `-show` entry draws only its visible part, and the text grows
+  by doubling.
+- **A 3B+ card's candidate kernel runs (#1003).** The firmware the cards
+  are made with reads `tryboot.txt` after a tryboot reset and ignores
+  `config.txt`'s `[tryboot]` section, so on a 3B+ the candidate kernel
+  silently never ran. The 3B+ card now carries `tryboot.txt`, and
+  `piromcheck` refuses one without it.
+- **The Pi card images are in Raspberry Pi Imager's format (#1042,
+  #1049).** Each release attaches `os_list_infernode.json`, the Imager
+  entry for its 3B+ and 4B images, made from the images it has just
+  built, so `releases/latest/download/os_list_infernode.json` follows
+  every release with no hand edit. The trademark policy's logo is
+  orange `#FF6633`, as every icon has used, not red.
+
+### Vision and video
+
+- **Recognition as files: vision(4) at `/mnt/vision` (#1115).** `visionfs`
+  serves object detectors as files. A model is a directory
+  (`models/NAME/info`, `classes`). A session comes from `clone`: write a
+  picture to its `image` file, read `detections`, one `class=dog
+  score=0.86 x0=... y0=... x1=... y1=...` record a line. A session can
+  also follow a live feed: write `src /mnt/video/0` to its `ctl`, and
+  each read gives one frame's records, keyed by `frame=` and `pts=`. A
+  detector slower than the camera takes the newest frame and counts the
+  frames it skipped (`stats`). Because it is files, a picture can be
+  recognised by a server on another machine, mounted at `/mnt/vision`
+  like a local one. `vision/detect`, `vision/draw` and `vision/crop` are
+  filters over it for batches of pictures (`-j` runs sessions in
+  parallel). The Veltro `vision` tool is now a client of `/mnt/vision`.
+  The CPU engine is `$Tensor`, a built-in module with NEON on arm64, in
+  the emulators and the native kernels alike. See visionfs(4) and
+  vision(1).
+- **On a Pi 4, one core finds the objects in a 416x416 picture in
+  276 ms (#1115).** That is YOLOX-nano on the native kernel. On the
+  live camera, one detector kept up about 2 detections a second while
+  the camera stayed at 30 frames a second. That was measured before the
+  last speed-up, so it is now somewhat higher. Four detectors, one a
+  core, handled three times as many pictures as one.
+- **The Jetson's GPU and DLAs as a vision engine: `trtsrv` (#1115).**
+  On a Jetson, `trtsrv` (`tools/trtsrv`, in Rust) serves TensorRT
+  engines as 9P on its standard input and output. The name space mounts
+  it, so it is never on the network. A visionfs session's `place` is
+  then `gpu`, `dla0` or `dla1` as well as `cpu`, and finds the same
+  objects as the CPU. Engines are written into it through its files.
+  It refuses one whose SHA-256 is not recorded, or whose layers are not
+  where its place says. `mkengines.sh` builds the three engines from a
+  model. On an Orin, one inference takes 1.3 ms on the GPU and 8.4 ms
+  on a DLA. A whole picture through the files takes 54 to 62 ms, most
+  of it in moving the picture over 9P.
+- **What is drawn over a video is composed by the name space: a feed's
+  `layer/` directory (#1095, #1115).** vid9p and camsrv feeds each have
+  a `layer/` directory. Every file in it is a layer of marks drawn over
+  the frames: boxes, lines, text and points, each keyed to a frame
+  number. `bind -a` adds a layer, `bind -b` puts one underneath, and
+  `unmount` takes it off. Each viewer draws what its own name space
+  has, so two viewers of one feed can show different layers. For
+  example, `bind -a /mnt/vision/1/layer /mnt/video/0/layer` puts a
+  session's detections over the picture while it plays. Matrix's
+  video-pane, vidplay9p and wm/camera draw layers. camsrv numbers its
+  frames as vid9p does, so a record for frame N lands on frame N in any
+  viewer. `layerfs` makes any file written into a stack a layer. See
+  layers(2) and layerfs(4).
+- **`post`: a mounted directory offered to other name spaces (#1115).**
+  `post NAME DIR` posts DIR in `#s`, where any other name space on the
+  machine, or another Dis VM, mounts it with `mount -A '#sNAME/fs'`.
+  This replaces the posting option each server had: camsrv's and
+  visionfs's `-s` are gone. Use `post` after mounting the server. See
+  post(1).
+
 ### Applications
+
+- **`md/fmt` fills Markdown, and Xenith's `Wrap` breaks lines between
+  words (#1112).** Plain `fmt` joins everything between blank lines,
+  so a list became one paragraph and code, tables and headings were
+  filled too. `md/fmt` finds blocks with the parser Render and Lucifer
+  use: paragraphs and list items are filled, quotes inside their `>`
+  marks, and code, headings, tables, rules and HTML are copied as they
+  are; `fmt` itself is unchanged. In Xenith, `Wrap` toggles a window
+  between breaking lines at the window's edge and between words
+  (`Wrap word`, `Wrap char`; `Wrap WORD` for every window; `xenith -w`
+  to start that way). It changes the display only: lines, addresses,
+  Edit and Put still go by newlines. A window's ctl takes `wrap word`
+  and `wrap char`, so a plumb rule can choose it per file. Markdown
+  drawn by Render no longer splits a paragraph at a `|` inside a code
+  span.
+- **Xenith's Get updates a live document of a file changed outside it
+  (#1114).** When an agent or another program changed a file, Get read
+  the new text into the window but left its Live view or Zerox twin
+  showing the old document. Get now counts as an edit: a small file's
+  document is set again at once, and a large one's when the background
+  read finishes. A document that is not live is left until `Live`.
+- **An app's cursor in Lucifer's presentation zone is shown (#1129).**
+  wm/wm run as an app under Lucifer showed only the arrow for New's cross, Delete's
+  gunsight and the box: it asks for its cursor through wmlib's `cursor`
+  request, as at the top, and Lucifer's window server answered OK and did
+  nothing with it. Lucifer now keeps each window's last cursor request
+  and shows the cursor of the window the pointer goes to, the arrow on
+  the tab strip and once the pointer leaves the zone (a press begun in
+  the zone keeps it until let go). `tests/host/lucifer_cursor_test.sh`
+  drives wm/wm in the zone with `wm_cursor_test.sh`'s shim.
 
 - **`/prog/n/grpwait`: Lucifer knows an app has gone without reading
   `/prog` (#1019).** Lucifer looked for an app's main process every
@@ -32,6 +1076,32 @@ All notable changes to InferNode are documented in this file.
   expires, and gets the outcome; the first read still gives the id at
   once, and a read at another offset does not wait. x402 makes that
   read under its time limit, and hears a denial as it is made.
+- **A service that does not answer no longer stops Settings or llmsrv.**
+  Settings' panels read llmsrv, factotum, msg9p and audit in its one
+  loop; each read, write and stat now has its own proc and a time limit,
+  and the status line names what did not answer. llmsrv asked the backend
+  for `models` in its serve loop, stopping every session behind a slow
+  one; it now does so as it does for `ask`.
+- **Delete on Matrix takes what it hosts; Delete on Task no longer takes
+  wm/wm.** A composition's hosted programs (wm/scene in `scene-demo`) run
+  in groups of their own, so Matrix's exit left them, holding the window
+  with nothing left to take a Delete. wm/task and wm/dir never made a
+  process group of their own, so an exit killed the group they were
+  started in, wm's among them.
+- **Quitting a program leaves nothing of it running.** wm/about, colors,
+  dir, fractals, ftree, keyring, man and wallet ended only their main
+  proc on their own Quit (wm/dir on Delete too), leaving their theme
+  watchers; wm/shell's Delete missed its own. In ftree and shell that
+  also kept their posted files alive.
+- **Settings no longer freezes on its Theme panel, and Delete takes the
+  window of a program that has frozen.** `event`, served in the theme
+  directory since themefs, was listed as a theme: loading it read a file
+  that waits for the next switch, in Settings' main loop, so the Theme
+  panel never came back (and Xenith's `Theme` would have stopped on it).
+  wm/wm's Delete only asks a program to exit, and a stuck one never
+  hears: if the exit is not taken in two seconds the window now leaves
+  the screen. The program itself is not killed (wm does not know its
+  process); it takes the exit if it ever wakes.
 - **A task is ready when its provisioning write returns; nothing polls
   for it (#1019).** The task tool read tools9p's `provision` file every
   50ms until its child was ready, and tools9p looked for the child's
@@ -170,8 +1240,8 @@ All notable changes to InferNode are documented in this file.
   could not be read closed the window. `tests/host/wm_dir_test.sh`
   drives it.
 - **Icons: Tabler's glyphs, drawn at any size in any colour.**
-  `icons/ui` holds the 63 glyphs the interface uses, from Tabler Icons
-  (MIT), 30KB of SVG; `icons/ui/LIST` names them and
+  `icons/ui` holds the 63 glyphs the interface uses, from Tabler Icons,
+  30KB of SVG; `icons/ui/LIST` names them and
   `tools/update-icons.sh` fetches any added. `icon(2)` draws one with
   readsvg at the size asked for and paints it in a theme's colour, so
   a glyph is sharp on any display and a theme switch repaints it.
@@ -194,136 +1264,288 @@ All notable changes to InferNode are documented in this file.
   `tests/host/wm_edit_test.sh` drives it. `man/1/edit` described
   `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
   `wm/edit`'s.
+- **A keyboard on the screen for touch screens (#1065).** `wm/osk` is
+  InferNode's own keyboard for the Raspberry Pi's touch panel, iOS,
+  Android and any screen with no keyboard. A key types when the finger
+  lifts, so a finger that lands on the wrong key can slide to the right
+  one, and two thumbs may overlap. Words are put right as they end (a
+  slip onto the next key, a letter missed, doubled or swapped, an
+  apostrophe left out), and a delete straight after takes the
+  correction back. A stroke through a word's letters types the word;
+  suggestions show above the keys; a long press offers accents; a swipe
+  down hides it. The layouts are QWERTY, Dvorak and Colemak, symbols
+  and a shell's keys (Esc, Tab, Ctrl, arrows), each a text file in
+  `lib/osk/layouts`, and it learns where its typist's touches land. It
+  serves `osk(4)` at `/mnt/osk`. Lucifer shows it in a strip of its own
+  once the screen is touched with no keyboard attached, and hides it
+  while one is; the boot starts it in secret mode for `wm/logon`, where
+  nothing typed is shown, put right, learned or recorded. Under it are
+  new devices any program can use: `/dev/kbdin`, `/dev/keyboards`
+  (which keyboards are attached, waited on rather than polled) and
+  `/dev/fingers` (every finger's events). On iOS and Android the
+  system's keyboard is never shown, whatever asks for it.
+- **The keyboard on the screen, fixed where it was used (#1076, #1078,
+  #1079, #1080).** On the Pi's 800x480 panel the login form moves above
+  the keyboard while it shows, and has the whole screen back when it
+  hides; the keyboard's window had blanked the form and put the
+  password field under its keys. A swipe's trail goes when the finger
+  lifts. On a phone the letters' labels are drawn in a 48-point face
+  (0.30 of the key's height, from 0.23). osk no longer dies when a
+  keyboard is attached while it is busy, which left a phone with no
+  keyboard at all; Keyring's list no longer runs a command `C` on every
+  click. A fuzzer of Lucifer's phone layout found both
+  (`phone_fuzz_test.sh`).
+- **iPad: rotation, and the desktop's columns on its side (#1083).** On
+  iOS and Android a turned screen kept its launch size and was drawn
+  cut off; the screen now follows the window, as a desktop's does. An
+  iPad held on its side has the desktop's three columns, upright the
+  accordion; phones keep the accordion. CI boots Lucifer on an iPad
+  simulator too.
+- **A phone is not offered the Claude or Codex CLI (#1071).** Both need
+  a gateway on the host, which a phone does not have, so choosing one
+  only ever ended at "configured, but I can't reach it". The first-run
+  setup and Settings offer Remote API, Local model and Remote 9P on a
+  phone, and say how to use a computer's CLI login through Remote 9P.
+- **The login screen chooses the interface (#1092).** Lucia (Lucifer's
+  three zones) or Desktop (`wm/wm` with a shell and plumbing rules for
+  files, folders, web pages and PDFs), as radio buttons under the
+  password field; the choice is kept for later boots. Phones offer only
+  Lucia.
+- **`wm/shell` is a real console, and what New starts (#1007).** It was
+  not one: `^D` sent a byte rather than end of file, input was queued
+  last first, `^C` put DEL into the next line, lines showed twice, ESC
+  froze output, the window outlived its shell, and every key redrew the
+  whole transcript. It is now `wm/sh`'s terminal with history (`^P`,
+  `^N`), `^C` discarding what is typed, `^L`, `/chan/shctl`, plumbing
+  on button 3 and the theme's font and colours, and `wm/wm`'s New
+  starts it. Settings lists the LLM service first.
+- **GPS as files, and a moving map (#1073).** gpsfs(4) at `/mnt/gps`
+  serves the fix, satellites, traffic, `nmea`, `event` and `time` from
+  a serial or TCP NMEA feed, gpsd, a log or a replay, a marine gateway's
+  NMEA 0183 and AIS over UDP, an ADS-B receiver's GDL 90, or Garmin's
+  Aviation output. `#o` (location(3)) is the host's location service as an NMEA
+  receiver. timesync(8) sets the clock from it. The Veltro `gps` tool
+  reads the position and nothing else; `/mnt/gps` cannot be granted as
+  a plain path. `wm/road` is a moving map following `/mnt/gps`, with
+  AIS traffic, heading and nautical units, driven through its own
+  files.
+- **An RTL-SDR as files, with FM and AM (#1073, #1075, #1091).**
+  sdrfs(4) serves an RTL-SDR at `/mnt/sdr` through rtl_tcp: settings
+  as a `ctl` file, samples as `iq`, the radio dialled by the first
+  reader and hung up by the last. `sdr/fm` (wide and narrow) and
+  `sdr/am` (sdr(1)) demodulate `iq` to `/dev/audio`, in Limbo, about 25
+  times real time under the JIT on amd64 and 4 on a Pi 4. They read
+  ahead of the arithmetic, so a radio mounted from another machine over
+  9P drops nothing. `docs/SDR.md`.
+- **A plumbed Markdown file is shown whole in Lucifer (#1058).**
+  luciuisrv took each 9P write to an artifact's `data` as the whole of
+  it, so a plumbed `README.md` showed as its last line. Writes now
+  append. Mermaid, SVG, WebP and the other images Xenith shows render in
+  the presentation zone, and Markdown's inline `<b>`, `<i>`, `<code>`,
+  `<br>` and the like take effect rather than showing as markup.
 
-### Security
+### Veltro and the LLM client
 
-- **Bare metal: a key is made only from a hardware generator.** A board
-  with no working generator (the Pi 4's RNG200 not answering, the
-  PolarFire's nonce service refusing, a QEMU virt without virtio-rng)
-  handed libsec's key generators, `#c/notquiterandom` and `#c/random` a
-  counter stirred with the time, after one line on the console; the
-  PolarFire did the same, silently, if its service stopped after boot.
-  On a board that means a driver or address map at fault, and on a Pi 5,
-  which no emulator models, it could only mean that. Now `hwrandom`
-  never makes bytes up: it says -1 when there is no generator, and
-  `genrandom`, `prng` and `prngtry`, which every board copied, are
-  `os/port/random.c`'s, waiting for real bytes and saying why every five
-  seconds (`prngtry` answers -1 at once, as libsec.h says). The kernel
-  still boots and its network still works: nrand, for port and sequence
-  numbers, no longer waits on the pool. What reads `/dev/random` waits
-  with the keys: the first-boot login, and DNS, whose query ids come
-  from it. An emulator that has nothing better passes `insecurerandom`
-  on its command line and gets the counter, labelled; the harness and
-  `tests/host/piimage_boot_test.sh` do for QEMU's `raspi4b`, and the
-  Icicle Kit's tree says it. A `virt` boot with no virtio-rng checks
-  both ways.
-- **Bare metal: the Pi's generator is read one word at a time under a
-  lock.** The Pi 3 and Pi 4 drivers tested for a word and read it with
-  no lock, on four cores with preemption: two readers could both see
-  one word waiting and both read it, and what an empty FIFO reads as is
-  not documented. The test and the read are now one step under a spin
-  lock, as `virt` and the PolarFire already did.
-- **Bare metal: the RNG200's own health test is heeded.** The Pi 4's
-  generator says in its interrupt status when its NIST health test has
-  failed; nothing read the register. As Linux's driver does, a failure
-  now resets the block before another word is taken from it, and says
-  so. The driver is `os/bcm/rng200.c`, for the Pi 4 and the Pi 5, with
-  the board's `io.h` naming where it is.
+- **llmclient keeps its connections (#1063).** Sequential requests to
+  one API reuse an HTTP/1.1 connection, with no TCP or TLS handshake
+  each time; a connection the server closed while idle is replaced
+  without an error, and a stream cut short is not reused.
+  `tests/host/llmclient_pool_test.sh`.
+- **A refused local model service says which daemon is not running
+  (#1013).** With the Claude or Codex CLI backend chosen and its gateway
+  down, or Ollama down, the error names it and how to start it, not just
+  `Connection refused`.
+- **A native tool call's heredoc is unwrapped (#1072).** Models send
+  the text protocol's `<<EOF` in native calls too, and its delimiter
+  lines were written into Xenith windows and files.
+- **Veltro in Xenith: git and tool fixes (#1087).** An InferNode `git
+  add` kept its staging list in `.git/index`, git's own binary index,
+  so it corrupted a host repository's index, and a commit kept only
+  the staged files. Staging is now `.git/inferno-index`, and an empty
+  index is HEAD's tree. git/fs's first walk into a tree or blob failed
+  on a negative qid, and HEAD was resolved once a mount.
 
-## [0.9.1] - 2026-10-30
+### Charon and JavaScript
 
-This security patch release fixes remotely reachable IPv4 reassembly and voice
-export flaws, bounds TCP out-of-order queues, and closes the hosted agent
-containment gaps found in the 0.9.0 review. Upgrading is recommended for every
-0.9.0 installation, especially bare-metal nodes and systems that ran
-`voice/listen`.
+- **Script-heavy pages hold less heap (#1009, #1010, #1017, #1018,
+  #1024).** Compiled functions kept their compiler's whole buffers
+  alive through slices; an object given properties one at a time made a
+  shape per property, each with its own copy of the keys; every
+  operation word kept a source position. JSTOR's home page went from
+  about 575 to 464 MB of live heap. A flags enum (`1<<30` as an index,
+  as TypeScript emits) made an array of 2^30 holes and ran the realm out
+  of memory; TypeScript's own compiler now loads, in 1.25 s. A
+  photograph is converted for the screen a strip at a time, not in one
+  32 MB block a fragmented heap could not give.
+- **Pages lay out and run faster (#1023, #1025, #1026, #1027, #1028,
+  #1029, #1031).** A regular expression is tried only where a match can
+  start, and parsed patterns are shared: a 56 KB search from 87 ms to
+  3. `srcset` takes the candidate `sizes` asks for, not always one 1024
+  pixels wide: BBC News's first layout with pictures from 1295 to 312
+  ms. Identical inline SVGs are drawn once (Spiegel's first layout from
+  1.3 s to 0.15 s for them). A style sheet linked twice is indexed once,
+  English paragraphs no longer take the bidi algorithm for a curly
+  quote, and the lexer no longer scans back to the line's start before
+  every token.
 
-### Security
+### Emulator and the Dis VM
 
-- **IPv4 fragments cannot claim bytes that were not received.** Reassembly now
-  validates and trims every fragment to its IPv4 total length, rejects lengths
-  beyond the received block, rejects invalid fragment alignment, and caps the
-  assembled extent before handing a packet to ICMP, TCP, or UDP. The flaw is
-  inherited from upstream Inferno; the final Bell Labs Plan 9 source has the
-  same trust error, while 9front's receive path has used received block lengths
-  and capped completed assemblies since 2019.
-- **TCP out-of-order storage is bounded by both bytes and Blocks.** InferNode
-  now carries 9front's receive-window byte limit and MSS-derived packet-count
-  limit, including segments inserted at the head of the resequencing queue.
-  This is an upstream Inferno omission; 9front has carried the limits since
-  2013.
-- **Malformed transport and ICMPv6 packets are rejected before indexed or
-  trimmed access.** UDP lengths smaller than the UDP header, TCP data offsets
-  larger than the IP payload, and truncated neighbor solicitation or
-  advertisement bodies are dropped. These checks port applicable 9front fixes
-  `7838d689` and `9211c6c5`.
-- **Inherited IP and mount boundary checks are current.** Negative IP device
-  attaches are rejected before indexing a stack, conversation permissions and
-  accepted-call ownership are enforced under lock, authentication fids must
-  belong to the mounted connection, mount-cache data comes from immutable
-  kernel replies rather than mutable caller buffers, and completion cannot race
-  request recycling. Protocol conversation counts are capped to the qid field;
-  IPv6 lifetime comparisons cannot wrap, TCP backoff cannot roll over, and UDP
-  transmits checksum negative zero as `ffff` rather than the IPv4 “no checksum”
-  value.
-- **Interface teardown and authentication proxy errors fail cleanly.** Native
-  IP configuration now releases interface/self-cache locks when medium hooks
-  fail, completes fallible address removal before publishing an unbound
-  conversation, and does not leak IPv6 prefix metadata. Factotum proxy framing
-  rejects a non-growing `toosmall` request instead of constructing an invalid
-  input slice, and internal fd close rejects out-of-range descriptors.
-- **Inherited SSL, capability, and 9P identity checks are current.** Opening an
-  existing SSL conversation now applies its owner/other mode correctly;
-  presenting a capability as the wrong source user cannot consume it; legacy
-  Styx servers bound oversized replies to the negotiated message size; and
-  persistent 9P authentication verifies factotum's caller identity.
-- **Authentication RPC concurrency is bounded.** Factotum refuses a seventeenth
-  active RPC worker, preventing unauthenticated connection attempts from
-  pinning an unbounded number of protocol processes.
-- **Untrusted image data cannot cross decoder or geometry bounds.** Compressed
-  image transforms stop at the supplied buffer, the LZ history starts zeroed
-  instead of disclosing stack contents, and image allocation/load paths reject
-  rectangles whose size or offsets overflow. Window stacking checks every image
-  before dereferencing its layer, and zero or negative full-circle arcs take
-  bounded special paths. This ports the applicable 9front draw hardening through
-  `e252b1b9`, `c4f5b99c`, `d7538ebb`, `e8228856`, and `0fea8e09`.
-- **Certificate and X25519 inputs fail closed.** BER decoding stops at a fixed
-  recursion depth instead of allowing a crafted certificate to exhaust the
-  interpreter stack, and the common X25519 primitive rejects low-order peer
-  keys that produce the RFC 7748 all-zero shared secret. This covers TLS 1.2,
-  TLS 1.3, and hybrid key agreement callers.
-- **The common cryptographic generator uses rekeyed ChaCha20.** The inherited
-  two-key 3DES X9.17 state has been replaced with a 256-bit ChaCha20 state that
-  rekeys itself before each response and advances a per-call nonce. Hosted
-  seeds come from the operating-system CSPRNG; native seeds come from the
-  platform hardware generator.
-- **Voice exports require keyring authentication and expose audio only.** The
-  original `voice/listen` script anonymously exported all of `/dev`, allowing
-  a network peer to inject input and operate control devices. It now constructs
-  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners
-  and dialers explicitly select their keyring. There is no anonymous remote
-  mode in the shipped voice scripts; acceptance tests use a process-local 9P
-  pipe and open no listener. Provision a signer and peer auth information with
-  `auth/createsignerkey` and `auth/mkauthinfo` before using voice on a fresh node.
-- **Exec cleanup owns the whole descendant group tree.** `/prog/N/ctl` accepts
-  `killtree`, which kills N's group and every descendant group. The exec tool
-  uses it on deadlines and output caps, so a confined command cannot survive by
-  calling `NEWPGRP`.
-- **Approval and messaging surfaces are content-bound.** Lucifer grants a gated
-  call only for the exact `Allow` action, not delivered task/message events or
-  conversational text. Message pending entries show a losslessly escaped,
-  immutable body, and approval sends that exact body.
-- **Namespace checks match the host filesystem and actual parent authority.**
-  Policy comparisons are ASCII case-insensitive for case-insensitive hosts;
-  bare `/chan`, `/fd`, `/usr`, keyring paths, and numbered `/mnt/toolctl.*`
-  and `/tool.*` aliases are rejected. A parent root grant no longer authorizes
-  a child path the parent cannot see, and `/usr` grants mask both keyring and
-  secstore credentials. Confined `NODEVS` processes cannot follow host symlinks
-  out of a granted tree.
-- **mc9p responses and filesystem authority are scoped.** One client can no
-  longer read or replace another client's endpoint response. The `fs` domain
-  requires a non-root `-r` directory, rejects requests outside it, and applies
-  `NODEVS` so host symlinks cannot escape it.
+- **Cycles of garbage are freed in seconds, not minutes, and
+  `/dev/heaptypes` shows what is live (#1123).** The collector marked a
+  list a cell per pass, so with the on-screen keyboard's word list in
+  the heap an epoch took about 55 passes; it now marks a whole list at
+  once, as it does an array, and an idle Pi 4 finishes an epoch in
+  about 5. On the native kernels, an idle scheduler with collection
+  outstanding now runs it, at most once a minute (`Idlegcgap`, 60 s),
+  where it slept until something woke it. In a 12-hour Pi 4 soak the
+  live objects stayed flat, and throughput was unchanged; that soak
+  ran with a 10 s gap, and the 60 s default has been measured only
+  under QEMU.
+  `/dev/heaptypes`, in the emulator and the native kernels, lists the
+  reading VM's live objects by type and module, most numerous first,
+  under the collector's counters.
+- **Option and Alt are the compose key only when tapped alone (#1113).**
+  The SDL3 display started a compose sequence on every Alt or Option
+  release, so after typing a character with Option (Option-Shift-hyphen
+  for an em dash on macOS), Option-clicking, or using AltGr on a
+  European layout, the next keys were read as a compose sequence: two
+  spaces became `␣`, and other keys were swallowed or came out in a
+  burst. Compose now starts only when Alt goes down and up with no other
+  key, typed text or mouse button between, as Plan 9's compose key is
+  used; tapping Option then `e` `m` still gives an em dash.
+- **Fixes from fuzzing the kernels and JITs (#1069).** A kill no longer
+  hangs on a 9P server that never answers. A compile refused memory no
+  longer leaves the JIT's lock held, stopping every later module load.
+  An exception a builtin raises inside a handler block is caught in the
+  right frame by compiled code on amd64, arm64 and riscv64 (it resumed
+  on garbage and faulted). `spawn`, channels and `killgrp` survive
+  refused memory, and emu waits for memory where it panicked. The
+  native virtio driver refuses a device's bad descriptors rather than
+  panicking. A chaos build of the native kernel (`EXTRACFLAGS=-DCHAOS`,
+  `/dev/chaos`) and `sysfuzz -P` found them; `docs/NATIVE-FUZZING.md`.
+- **amd64 compiles small modules (#1060).** Every module of fewer than
+  128 Dis instructions, one in eight in `dis/`, ran interpreted under
+  `-c1` since March. An exception a built-in module raised in C,
+  caught by amd64-compiled code, crashed emu; it no longer does. The
+  64-bit JITs use a fixed scratch buffer again.
+- **Long IPint operations let other threads run (#1064).** A 2048-bit
+  `expmod` held the VM, freezing every Limbo thread for 90 ms on x86
+  and seconds on ARM. `expmod`, `invert`, `mul`, `div` and `mod` on
+  large operands now release it while they compute.
+- **The collector's crashes in Keyring and `destroystack` are fixed
+  (#1084, #1089).** Freeing a key whose signature algorithm the same
+  sweep had freed raised an error inside the collector, which emu then
+  handled as a Prog's and faulted. Killing a Prog between a `frame` and
+  its `call` freed older frames by the wrong type map (`alloc:D2B`).
+  `tools/sanemu` links again and runs nightly.
+- **The hosted `canrlock` fails only for a writer (#1070).** It failed
+  beside other readers, so a kernel print could go to the console
+  rather than `/dev/kprint`.
+- **`-p` takes pools past 2 GB, with a `g` suffix (#1011).**
+  `-pheap=2048m` overflowed; `-pheap=3g` works.
+- **A refused allocation names the module that asked (#1021),** and
+  under the interpreter its instruction, to look up in the module's
+  `.sbl`.
+- **`prof(1)` works, and profiles compiled code on macOS (#1030,
+  #1037).** The emulators' root had no `/prof` to bind the profiler
+  on. Under `-c1` a sample now goes to the compiled module's own Dis
+  instruction, not to wherever the VM last interpreted, and
+  `/prog/N/stack` prints real PCs for arm64- and riscv64-compiled
+  modules.
+- **Devices keep the letters their precedents give them (#1036, #1037,
+  #1039, #1040, #1052).** `docs/DEVICE-LETTERS.md` lists every letter
+  against Plan 9, 9front and Inferno, and a CI check refuses a build
+  with a letter twice or one the registry does not give. The profiler
+  moves from `#P` to `#K`, the bench timer from `#b` to `#x`, `wmsz`
+  from `#w` to `#z` and 2fa from `#F` to `#h`. A script that binds the
+  old letters itself must bind the new ones; `/dev/wmsize`, `/dev/2fa`
+  and `/dev/busec` are where they were.
+
+### For developers
+
+- **`t.refused(why)` in `testing.m` (#1109).** A far end that answered
+  no (an HTTP 4xx or 5xx from someone else's server, a rate limit, a
+  challenge page) is reported as `REFUSED` and counted with the skips,
+  not as our failure. No test file needs changing.
+- **One soak runner for every Raspberry Pi (#1116).**
+  `tests/soak/soak.py` replaces the per-board scripts. It probes each
+  board for its hardware and skips loads whose hardware is absent, with
+  the reason; runs the same core loads and samples the same measures on
+  every board, TLS against a local server and TCP connection churn
+  among them; budgets and verifies its flash writes; keeps every
+  failure's output; and ends each run with a summary. `docs/SOAK.md`
+  is the design. It has run on the 3B+, the Pi 4 and the Pi 5.
+- **Release card images are checked for every bench setting (#1118).**
+  The image test refuses a card carrying any file boot reads as a
+  setting (`cnsamode`, `camera`, `cpulisten`, `bt`, `btkeys`, `vms`,
+  `usbquirks`), as well as `skiplogon`, `wifi`, `netconsole` and
+  `rootpath`, so a release card always starts at the login screen and
+  offers nothing on the network.
+- **camsrv's sensor settings say what they are (#1121).** Each register
+  it writes has its MIPI CCS name, the two that are not CCS are
+  described by what they do, and the PLL arithmetic is written out.
+
+### Build and CI
+
+- GitHub Actions bumped (docker/login-action, codeql-action,
+  action-gh-release, cosign-installer, setup-java; #1047, #1104–#1108).
+  CI splits the macOS and Linux GUI tests across runners (#1052, #1081)
+  and reports the GUI job's required check under its old name again
+  (#1124); a run whose only fault is jobs that never got a runner is
+  re-run once (#1102); the iOS simulator test relaunches an app that
+  never started (#1057, #1077). Flaky or stale tests are fixed:
+  tools9p's provisioning probes (#549, #1053, #1054), `sed_test`
+  (#1055), the bare-metal camera listing (#1056) and
+  `ipint_release_test` (#1068).
+
+### Known issues
+
+- **On a Raspberry Pi 3B+, sustained heavy incoming traffic can still
+  leave the USB Ethernet adapter's receive channels stuck (#723).** When
+  all of them are stuck, the board restarts by itself and its network
+  returns, as in 0.9.0. A test with two senders reproduced this within
+  30 minutes. The fix above removes the crashes that happened while
+  channels were only busy; it does not stop channels from sticking.
+- **On a 3B+, very large fragmented datagrams (about 60 KB) are usually
+  lost when the switch or router does not honour Ethernet flow
+  control:** the USB adapter's receive buffer overflows. Smaller
+  fragmented datagrams arrive as they would on other hosts on the same
+  network.
+- **Bluetooth connections to a 3B+ or a Pi 4 sometimes fail with "Host
+  is down" on the first attempt,** most often just after the other
+  device has asked for the board's name. Retrying works. This predates
+  0.9.0.
+- **The boards' clocks are not set from the network at boot on some
+  networks, and drift a few seconds an hour.** Certificate checks need
+  a correct date, so set the clock if a board will make verified TLS
+  connections.
+- **A network interface can stop passing traffic for good under heavy
+  load (#1120),** when a writer waits behind IP output blocked in a
+  device write. It has been seen once, on a Pi 5 after 74 minutes; a
+  later 85-minute run of the same kernel did not. The code is shared by
+  every board, but the trigger seen was the Pi 5's Ethernet stalling.
+  Restart the board if it happens.
+- **The Pi 5 has run on one board.** The D0 stepping's pin tables have
+  run only as a dry run, Pi 5s with 1 to 4 GB have been simulated with
+  `memlimit=`, and the bench board logs under-voltage at boot. Pools
+  keep what they grow to, so after one VM's runaway the others have
+  little.
+- **A remote camera mount can still drop now and then.** #1110 fixes
+  the inbound TCP resets behind most drops, but one reset remained in a
+  two-hour Pi 5 soak. Mount again if it happens.
+- **The remote camera lags.** Frames travel uncompressed, about 8 MB/s
+  at 30 frames a second, so over the network the picture trails the
+  camera, worse on Wi-Fi than wired. Setting `fps 15` halves the data:
+  in the card's `camera` file, or on the feed's ctl file while nothing
+  is reading it.
+- **The remote camera has to be offered by hand,** as above; there is
+  no card setting for it yet, and a reboot ends it.
+- **No model ships with the release (#1115).** visionfs needs a model
+  directory. The examples' `/lib/vision/yolox-nano` is not in the
+  package: make one from YOLOX-nano's ONNX file with
+  `tools/vision/onnx2vis.py`, and on a Jetson its engines with
+  `tools/trtsrv/mkengines.sh`. Until a model is loaded, a session refuses
+  a picture and the `vision` tool reports the error.
 
 ## [0.9.0] - 2026-10-29
 

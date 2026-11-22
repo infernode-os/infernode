@@ -13,6 +13,17 @@ init:       fn();
 privacy:    fn(): int;
 cansecstore:    fn(addr: string, user: string): int;
 mkseckey:   fn(pass: string): array of byte;
+mkseckey2:  fn(pass: string): array of byte;
+mkseckey4:  fn(rootkey: array of byte): array of byte;
+connect4:   fn(addr: string, user: string,
+                pwhash, pwhash2, pwhash4: array of byte):
+                (ref Dial->Connection, string, string);
+setverifier: fn(conn: ref Dial->Connection, version, hexHi: string): string;
+vaultkey:   fn(dk: array of byte): array of byte;
+vaultstate: fn(conn: ref Dial->Connection): (int, string);
+showvault:  fn(conn: ref Dial->Connection, wk: array of byte): (int, string);
+enrolvault: fn(conn: ref Dial->Connection, wk: array of byte): string;
+unenrolvault: fn(conn: ref Dial->Connection): string;
 dial:       fn(addr: string): ref Dial->Connection;
 auth:       fn(conn: ref Dial->Connection, user: string, seckey: array of byte):
                 (string, string);
@@ -20,16 +31,22 @@ connect:    fn(addr: string, user: string, seckey: array of byte):
                 (ref Dial->Connection, string, string);
 sendpin:    fn(conn: ref Dial->Connection, pin: string): int;
 files:       fn(conn: ref Dial->Connection):
-                list of (string, int, string, string, array of byte);
+                (list of (string, int, string, string, array of byte), string);
 getfile:    fn(conn: ref Dial->Connection, name: string,
                 maxsize: int): array of byte;
+fetch:      fn(conn: ref Dial->Connection, name: string,
+                maxsize: int): (array of byte, int, string);
 putfile:    fn(conn: ref Dial->Connection, name: string, data: array of byte): int;
 remove:     fn(conn: ref Dial->Connection, file: string): int;
 bye:        fn(conn: ref Dial->Connection);
 
-mkfilekey:   fn(pass: string): array of byte;
-decrypt:    fn(data: array of byte, filekey: array of byte): array of byte;
-encrypt:    fn(data: array of byte, filekey: array of byte): array of byte;
+mkfilekey3: fn(user, pass: string): array of byte;
+encrypt3:   fn(data: array of byte, rootkey: array of byte): array of byte;
+decrypt3:   fn(data: array of byte, rootkey: array of byte,
+                gcm1key: array of byte, legacykey: array of byte): array of byte;
+iscurrent:  fn(data: array of byte): int;
+mkfilekey2: fn(pass: string): array of byte;
+mkfilekey:  fn(pass: string): array of byte;
 erasekey:   fn(key: array of byte);
 
 lines:      fn(file: array of byte): list of array of byte;
@@ -178,20 +195,109 @@ from the secure store, and returns its contents as an array of bytes.
 .I Maxsize
 gives the largest acceptable file size; if the value is zero or negative,
 a large value is used by default.
-The files stored on the service are separately encrypted under the user's secret key.
-.B Mkfilekey
-takes a textual secret
-.I key
-and returns a hash of it as an array of bytes,
-suitable for use as the
-.I filekey
-parameter in subsequent calls to
-.BR decrypt .
-(The
-.I filekey
-is not the same value as the
-.I seckey
-used for initial authentication, although the secret text is the same.)
+It returns nil, with the error string set, both when the server has no such file
+and when the file could not be read.
+.B Fetch
+tells them apart: it returns a tuple
+.BI ( file,\ absent,\ err ),
+the file's contents with
+.I absent
+zero and
+.I err
+nil; or nil with
+.I absent
+non-zero when the server says it has no file of that name; or nil and a diagnostic
+when the file could not be read (the server's own error, an answer that is not a size,
+a connection that ended part way).
+A caller that will later store the file should use
+.BR fetch :
+a file that could not be read is not a file that is not there.
+.B Files
+returns the account's files as a list of tuples
+.BI ( name,\ size,\ date,\ hash,\ rawhash )
+and a diagnostic, nil if the listing was read.
+A Plan 9
+.I secstore
+lists each file's SHA-1 hash;
+.IR secstored (8)
+its SHA-256.
+Nothing a server sends raises an exception in these functions: an answer that is not
+what the protocol has is an error.
+.PP
+.B Connect4
+is how a client of
+.IR secstored (8)
+logs in.
+.I Pwhash4
+is
+.B mkseckey4
+of the file key's root,
+.BI mkfilekey3( user,\ pass ) :
+version 4 of the exchange, whose verifier costs as much to guess against as the files do.
+.I Pwhash
+.RB ( mkseckey )
+and
+.I pwhash2
+.RB ( mkseckey2 )
+are for an account not yet at version 4:
+it is logged in to at its own version, given its version 4 verifier
+.RB ( setverifier ),
+and logged in to again, so that the connection returned is a version 4 session.
+In such a session
+.B putfile
+and
+.B remove
+are answered by the server and return its refusal;
+in a session of an older version (from
+.BR connect ,
+or from a server that knows no version 4) nothing is said either way, and
+.IR secstored (8)
+stores nothing.
+.B Setverifier
+replaces the account's verifier, with one made by
+.BI mkverifier( user ,\ \&"secstore4" ,\ pwhash4 )
+for a new password.
+.PP
+The files stored on the service are separately encrypted by the client.
+.B Encrypt3
+encrypts
+.I data
+under
+.I rootkey
+(for an ordinary account,
+.BR mkfilekey3 's
+result; for an account with a second factor, its data key)
+in the format called SGCM2:
+AES-256-GCM under a key made from
+.I rootkey
+and a salt of the file's own, the format's name and the salt under the tag.
+It returns nil if no random numbers can be had.
+.B Decrypt3
+decrypts such a file, and returns nil, with the error string set,
+if the file is not one or
+.I rootkey
+is not its key.
+It is the only format written.
+The two before it (SGCM1; and Plan 9's AES-CBC under a SHA-1 of the password, which has no integrity)
+are read by
+.B decrypt3
+only when it is given their keys,
+.I gcm1key
+.RB ( mkfilekey2 )
+and
+.I legacykey
+.RB ( mkfilekey ):
+a caller that passes nil for both, as a login does, takes SGCM2 and nothing else,
+and one that passes them is moving an old file
+.RB ( "auth/secstore m" ,
+see
+.IR secstore (1)).
+(They were passed by every caller, so the file chose its own format,
+and whoever could put a file in the store could put an old one there.)
+.B Iscurrent
+says whether
+.I data
+is in the current format.
 .PP
 .B Putfile
 writes
@@ -200,9 +306,8 @@ under file
 .I name
 to the secure store, overwriting a possibly existing file by that name.
 .I Data
-should already be encrypted.
-The caller can arrange this by calling
-.BR encrypt .
+should already be encrypted, by
+.BR encrypt3 .
 .B Putfile
 returns 0 on success and a negative value on error.
 .PP
@@ -212,48 +317,35 @@ deletes the given
 from the server.
 It returns 0 on success and a negative value on error.
 .PP
-.B Decrypt
-decrypts the
-.I data
-previously fetched from a file on the secure store.
-It uses the
-.I filekey
-produced by
-.B mkfilekey
-to decrypt the data in place (ie, modifying the contents of
-.IR data )
-and returns a slice of
-.I data
-that excludes any headers and trailers in the encoding.
-It returns nil if the file could not be decrypted (usually because the
-.I key
-value is not actually the encryption key).
-.PP
-.B Encrypt
-does the opposite of
-.BR decrypt .
-Given plain
-.I data
-and
-.I filekey
-produced by
-.BR mkfilekey ,
-it returns an encrypted version of data, including headers and trailers.
-This data is suitable for writing to the secure store with
-.BR putfile .
+The remaining functions are the second factor's lock on an account's files (see
+.IR secstored (8)).
+.B Vaultkey
+makes the vault key from the data key
+.IR dk .
+.B Enrolvault
+has the server keep its hash: from then on the account's files are stored and removed
+only in a session to which
+.B showvault
+has shown the key.
+.B Showvault
+returns 1 if the key was taken, 0 if no second factor is enrolled, and -1 with a diagnostic otherwise;
+.B vaultstate
+returns 1 if one is enrolled, 0 if not.
+.B Unenrolvault
+removes the enrolment, in a session that has shown the key.
 .PP
 .B Erasekey
 clears the bytes of
 .I key
-to zero; it should be called on every value produced by
+to zero; it should be called on every value produced by the
 .B mkfilekey
 and
-.BR mkseckey ,
-after use,
+.B mkseckey
+functions, after use,
 but can also be used on the data arrays returned by
 .B getfile
 and
-.BR decrypt .
+.BR decrypt3 .
 .PP
 .B Lines
 returns a list of slices of

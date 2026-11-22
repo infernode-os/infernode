@@ -12,6 +12,20 @@
 //  a 400 MHz Pentium II.
 //
 
+// O(n^2); prereq: alen >= blen, p is already zeroed
+static void
+mpvecmulslow(mpdigit *a, int alen, mpdigit *b, int blen, mpdigit *p)
+{
+	int i;
+	mpdigit d;
+
+	for(i = 0; i < blen; i++){
+		d = b[i];
+		if(d != 0)
+			mpvecdigmuladd(a, alen, d, &p[i]);
+	}
+}
+
 // karatsuba like (see knuth pg 258)
 // prereq: p is already zeroed
 static void
@@ -40,9 +54,13 @@ mpkaratsuba(mpdigit *a, int alen, mpdigit *b, int blen, mpdigit *p)
 	v1 = b + v0len;
 
 	// room for the partial products
-	t = mallocz(Dbytes*5*(2*n+1), 1);
-	if(t == nil)
-		sysfatal("mpkaratsuba: %r");
+	// (with none, by the slower way, which needs none: a raise from
+	// here left every level of the recursion above its scratch)
+	t = mallocz(Dbytes*5*((ulong)2*n+1), 1);
+	if(t == nil){
+		mpvecmulslow(a, alen, b, blen, p);
+		return;
+	}
 	u0v0 = t;
 	u1v1 = t + (2*n+1);
 	diffprod = t + 2*(2*n+1);
@@ -92,6 +110,8 @@ mpkaratsuba(mpdigit *a, int alen, mpdigit *b, int blen, mpdigit *p)
 		mpvecadd(res+n, reslen-n, diffprod, u0len+v0len, res+n);
 	memmove(p, res, (alen+blen)*Dbytes);
 
+	// the halves' products and the product: cleared as mpfree clears
+	memset(t, 0, Dbytes*5*((ulong)2*n+1));
 	free(t);
 }
 
@@ -101,7 +121,6 @@ void
 mpvecmul(mpdigit *a, int alen, mpdigit *b, int blen, mpdigit *p)
 {
 	int i;
-	mpdigit d;
 	mpdigit *t;
 
 	// both mpvecdigmuladd and karatsuba are fastest when a is the longer vector
@@ -122,28 +141,39 @@ mpvecmul(mpdigit *a, int alen, mpdigit *b, int blen, mpdigit *p)
 		// O(n^1.585)
 		mpkaratsuba(a, alen, b, blen, p);
 	} else {
-		// O(n^2)
-		for(i = 0; i < blen; i++){
-			d = b[i];
-			if(d != 0)
-				mpvecdigmuladd(a, alen, d, &p[i]);
-		}
+		mpvecmulslow(a, alen, b, blen, p);
 	}
 }
 
-void
-mpmul(mpint *b1, mpint *b2, mpint *prod)
+// mpmultry is the product: -1 if there is no memory for it (or it
+// would be longer than a number may be), nothing raised: see dat.h
+int
+mpmultry(mpint *b1, mpint *b2, mpint *prod)
 {
 	mpint *oprod;
+	vlong bits;
+
+	// the product's digits, asked for before anything is made: the sum
+	// was an int, and wrapped (see dat.h)
+	bits = ((vlong)b1->top + b2->top + 1)*Dbits;
+	if(bits > MAXBITS)
+		return -1;
 
 	oprod = nil;
 	if(prod == b1 || prod == b2){
+		// room in the operand the product replaces, before the
+		// product is made beside it
+		if(mpreservetry(prod, bits) < 0)
+			return -1;
 		oprod = prod;
-		prod = mpnew(0);
-	}
+		prod = mptrynew(bits);
+		if(prod == nil)
+			return -1;
+	}else if(mpreservetry(prod, bits) < 0)
+		return -1;
 
 	prod->top = 0;
-	mpbits(prod, (b1->top+b2->top+1)*Dbits);
+	mpbits(prod, bits);
 	mpvecmul(b1->p, b1->top, b2->p, b2->top, prod->p);
 	prod->top = b1->top+b2->top+1;
 	prod->sign = b1->sign*b2->sign;
@@ -153,4 +183,13 @@ mpmul(mpint *b1, mpint *b2, mpint *prod)
 		mpassign(prod, oprod);
 		mpfree(prod);
 	}
+	return 0;
+}
+
+void
+mpmul(mpint *b1, mpint *b2, mpint *prod)
+{
+	mpsizebits((vlong)b1->top + b2->top + 1, 0, "mpmul");
+	if(mpmultry(b1, b2, prod) < 0)
+		sysfatal("mpmul: no memory");
 }

@@ -17,11 +17,6 @@ CLEANCONFLIST=
 # Default: sdl3 (Lucifer GUI via SDL3)
 GUIBACK=sdl3
 
-# GPU Acceleration (TensorRT/CUDA)
-# Set ENABLEGPU=1 to build with GPU support (requires CUDA + TensorRT).
-# Default: disabled. Only available on NVIDIA Jetson (arm64) at this stage.
-ENABLEGPU=0
-
 INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is installed
 
 #end configurable parameters
@@ -29,9 +24,6 @@ INSTALLDIR=$ROOT/$SYSTARG/$OBJTYPE/bin	#path of directory where kernel is instal
 
 <| AWK=$AWK $SHELLNAME ../port/mkdevlist  $CONF	#sets $IP, $DEVS, $PORT, $LIBS
 <mkfile-$OBJTYPE	# sets $ARCHFILES
-
-# Include GPU configuration (set ENABLEGPU=1 for Jetson TensorRT support)
-<mkfile-gpu-$ENABLEGPU
 
 # GUI backend variables (GUISRC, GUIFLAGS, GUILIBS)
 # Included here for variable definitions only; build rules are below default target.
@@ -60,12 +52,11 @@ CFLAGS=\
 	-I$ROOT/$SYSTARG/$OBJTYPE/include\
 	-I$ROOT/include\
 	-I$ROOT/libinterp\
-	$CTHREADFLAGS $CFLAGS $EMUOPTIONS $GUIFLAGS $GPUFLAGS\
+	$CTHREADFLAGS $CFLAGS $EMUOPTIONS $GUIFLAGS\
 
 KERNDATE=0
 
 SYSLIBS=\
-	$GPULIBS\
 	-lm\
 	-lpthread\
 

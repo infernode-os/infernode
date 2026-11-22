@@ -66,6 +66,9 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	tkclient= load Tkclient Tkclient->PATH;
 	dialog = load Dialog Dialog->PATH;
 
+	# a group of its own: an exit is a killgrp, and the one it was
+	# started in may be wm's
+	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
 	dialog->init();
 

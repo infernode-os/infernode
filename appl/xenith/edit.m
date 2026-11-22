@@ -61,7 +61,7 @@ Edit: module {
 
 	aNo, aDot, aAll: con iota;	# default addresses
 
-	ALLLOOPER, ALLTOFILE, ALLMATCHFILE, ALLFILECHECK, ALLELOGTERM, ALLEDITINIT, ALLUPDATE, ALLINCREF, ALLDECREF, FIXINDENT: con iota;
+	ALLLOOPER, ALLTOFILE, ALLMATCHFILE, ALLFILECHECK, ALLELOGTERM, ALLEDITINIT, ALLUPDATE, ALLINCREF, ALLDECREF, FIXINDENT, FIXWRAP: con iota;
 
 	C_nl, C_a, C_b, C_c, C_d, C_B, C_D, C_e, C_f, C_g, C_i, C_k, C_m, C_n, C_p, C_s, C_u, C_w, C_x, C_X, C_pipe, C_eq: con iota;
 

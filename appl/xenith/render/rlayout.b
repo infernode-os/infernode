@@ -1370,8 +1370,9 @@ pmd_parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
 			(k, nil, nil, nil) := pmd_listmarker(line);
 			if(k != 0)
 				break;
-			# Stop at table rows
-			if(pmd_istablerow(line))
+			# Stop at a table: a row with its separator under it. A
+			# line with a | in it is otherwise text (`a | b`)
+			if(pmd_istablerow(line) && i+1 < nlines && pmd_istablesep(lines[i+1]))
 				break;
 		}
 		# two spaces or a backslash at the end of a line break it there

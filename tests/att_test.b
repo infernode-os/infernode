@@ -381,6 +381,131 @@ testUse(t: ref T)
 	t.assertseq(att->errtext(Att->Einsufauthn), "insufficient authentication", "error text");
 }
 
+# what one round of events holds: requests sent, and whether it failed or found
+sends(evs: list of ref Ev): list of array of byte
+{
+	l: list of array of byte;
+	for(; evs != nil; evs = tl evs)
+		pick e := hd evs {
+		Send =>	l = e.pdu :: l;
+		}
+	return l;
+}
+
+nfailed(evs: list of ref Ev): int
+{
+	n := 0;
+	for(; evs != nil; evs = tl evs)
+		pick e := hd evs {
+		Failed =>	n++;
+		}
+	return n;
+}
+
+nfound(evs: list of ref Ev): int
+{
+	n := 0;
+	for(; evs != nil; evs = tl evs)
+		pick e := hd evs {
+		Found =>	n++;
+		}
+	return n;
+}
+
+# a Read By Group Type Response naming the HID service at 0x10-0x20
+hidgroup(): array of byte
+{
+	return array[] of {byte Att->Oreadbygrouprsp, byte 6, byte 16r10, byte 0, byte 16r20, byte 0, byte 16r12, byte 16r18};
+}
+
+#
+# Discovery moves forward by the handles the server names.  A server that
+# names none, or ones that go nowhere, ends the discovery; it does not get
+# the same request again, and what it sends is not kept without bound.
+#
+testStalled(t: ref T)
+{
+	# a group response with no entries
+	c := Client.new();
+	c.discover(Att->Uhidservice);
+	evs := c.recv(array[] of {byte Att->Oreadbygrouprsp, byte 6});
+	t.asserteq(len sends(evs), 0, "an empty group response is not answered with the same request");
+	t.asserteq(nfailed(evs), 1, "the discovery is reported failed");
+	t.asserteq(c.pending, 0, "and nothing is left pending");
+
+	# a group whose end is before its start
+	c = Client.new();
+	c.discover(Att->Uhidservice);
+	evs = c.recv(array[] of {byte Att->Oreadbygrouprsp, byte 6, byte 1, byte 0, byte 0, byte 0, byte 0, byte 16r18});
+	t.asserteq(len sends(evs), 0, "a group that ends before it starts moves nothing");
+	t.asserteq(nfailed(evs), 1, "and fails the discovery");
+
+	# the service found; then characteristics below what was asked, over and over
+	c = Client.new();
+	c.discover(Att->Uhidservice);
+	evs = c.recv(hidgroup());
+	t.asserteq(len sends(evs), 1, "the service found, its characteristics are asked for");
+	low := array[] of {byte Att->Oreadbytypersp, byte 7, byte 1, byte 0, byte 2, byte 2, byte 0, byte 16r4d, byte 16r2a};
+	evs = c.recv(low);
+	t.asserteq(len sends(evs), 0, "a characteristic outside the service asks for nothing more");
+	t.asserteq(nfailed(evs), 1, "and fails the discovery");
+	t.asserteq(len c.chars, 0, "keeping nothing");
+	for(i := 0; i < 100; i++)
+		c.recv(low);
+	t.asserteq(len c.chars, 0, "however often it is sent");
+
+	# descriptors that name handle 0: the characteristic is done, discovery goes on to the end
+	c = Client.new();
+	c.discover(Att->Uhidservice);
+	c.recv(hidgroup());
+	evs = c.recv(array[] of {byte Att->Oreadbytypersp, byte 7, byte 16r11, byte 0, byte 2, byte 16r12, byte 0, byte 16r4d, byte 16r2a});
+	# the server has no more characteristics
+	if(len sends(evs) == 1 && int (hd sends(evs))[0] == Att->Oreadbytypereq)
+		evs = c.recv(array[] of {byte 16r01, byte Att->Oreadbytypereq, byte 16r13, byte 0, byte Att->Eattrnotfound});
+	t.assert(len sends(evs) == 1 && int (hd sends(evs))[0] == Att->Ofindinforeq, "the descriptors are asked for");
+	zero := array[] of {byte Att->Ofindinforsp, byte 1, byte 0, byte 0, byte 2, byte 16r29};
+	evs = c.recv(zero);
+	t.asserteq(nfound(evs), 1, "a descriptor at handle 0 ends that characteristic, and the service is found");
+	t.asserteq(len sends(evs), 0, "with no request sent again");
+}
+
+#
+# A request made while discovery runs is sent when discovery ends.
+#
+testQueueAfterDiscovery(t: ref T)
+{
+	tab := table();
+	w := ref (0, array[0] of byte);
+	c := Client.new();
+	r := newresult();
+	evs := c.discover(Att->Uhidservice);
+	t.asserteq(len sends(c.read(16r14)), 0, "a read made during discovery waits");
+	drive(c, tab, evs, 23, r, w);
+	t.asserteq(len r.found, 1, "discovery finishes");
+	t.asserteq(len r.values, 1, "and the read that waited was sent and answered");
+	t.asserteq(c.pending, 0, "with nothing left pending");
+	t.assert(c.q == nil, "or queued");
+}
+
+#
+# The MTU is never below ATT's minimum.
+#
+testMtuFloor(t: ref T)
+{
+	c := Client.new();
+	c.exchangemtu(100);
+	c.recv(array[] of {byte 16r03, byte 0, byte 0});
+	t.asserteq(c.mtu, Att->Defmtu, "an MTU of 0 from the peer is the minimum");
+	c = Client.new();
+	c.exchangemtu(100);
+	c.recv(array[] of {byte 16r03, byte 22, byte 0});
+	t.asserteq(c.mtu, Att->Defmtu, "and so is 22");
+	c = Client.new();
+	c.exchangemtu(100);
+	c.recv(array[] of {byte 16r03, byte 64, byte 0});
+	t.assert(c.mtu <= 64 && c.mtu >= Att->Defmtu, "a real one is taken");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -396,6 +521,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Discovery", testDiscovery);
 	run("Use", testUse);
+	run("Stalled", testStalled);
+	run("QueueAfterDiscovery", testQueueAfterDiscovery);
+	run("MtuFloor", testMtuFloor);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

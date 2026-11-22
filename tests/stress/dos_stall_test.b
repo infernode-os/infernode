@@ -94,7 +94,7 @@ mkauthinfo(signersk: ref Keyring->SK, signerpk: ref Keyring->PK,
 # spawn-per-connection server, mirroring node_server.b
 serve(ai: ref Keyring->Authinfo, dfd: ref Sys->FD)
 {
-	(wrapped, nil) := auth->server("aes_256_cbc" :: "sha256" :: nil, ai, dfd, 0);
+	(wrapped, nil) := auth->server("aes_256_gcm" :: nil, ai, dfd, 0);
 	if(wrapped == nil)
 		return;
 	buf := array[256] of byte;
@@ -141,7 +141,7 @@ legit(addr: string, ai: ref Keyring->Authinfo): string
 	(dok, dc) := sys->dial(addr, nil);
 	if(dok < 0)
 		return sys->sprint("dial: %r");
-	(wrapped, cerr) := auth->client("aes_256_cbc sha256", ai, dc.dfd);
+	(wrapped, cerr) := auth->client("aes_256_gcm", ai, dc.dfd);
 	if(wrapped == nil)
 		return "client auth: " + cerr;
 	msg := array of byte "legit-ping";

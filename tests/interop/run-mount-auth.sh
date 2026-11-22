@@ -5,7 +5,7 @@
 #
 # For each signer algorithm it runs, inside one emu over loopback:
 #   auth/createsignerkey -a <alg> -f <keyfile>      (writes a signer keyfile)
-#   styxlisten -a aes_256_cbc -a sha256 -k <keyfile> tcp!*!PORT export /lib
+#   styxlisten -a aes_256_gcm -k <keyfile> tcp!*!PORT export /lib
 #                                                   (cert-auth + ssl server)
 #   mount -k <keyfile> tcp!127.0.0.1!PORT /n/remote
 #                              (cert-auth + secure default ssl client)
@@ -52,7 +52,7 @@ for alg in "${ALGS[@]}"; do
 	mkdir -p "$ROOT$mnt"        # mountpoint must exist in the emu namespace
 	out="$(rc_run "load std
 if {auth/createsignerkey -a $alg -f $key mauthowner} {echo KEY-OK} {echo KEY-FAIL; raise 'fail:key'}
-styxlisten -a aes_256_cbc -a sha256 -k $key tcp!*!$port export /lib &
+styxlisten -a aes_256_gcm -k $key tcp!*!$port export /lib &
 sleep 2
 if {mount -k $key tcp!127.0.0.1!$port $mnt} {echo MOUNT-OK} {echo MOUNT-FAIL; raise 'fail:mount'}
 if {cp $mnt$XFER $pulled} {echo COPY-OK} {echo COPY-FAIL; raise 'fail:copy'}
@@ -70,7 +70,7 @@ port=$((port+1))
 key="/tmp/mauth-neg-$port"
 out="$(rc_run "load std
 auth/createsignerkey -a ed25519 -f $key mauthowner
-styxlisten -a aes_256_cbc -a sha256 -k $key tcp!*!$port export /lib &
+styxlisten -a aes_256_gcm -k $key tcp!*!$port export /lib &
 sleep 2
 if {mount -A tcp!127.0.0.1!$port /n/manon$port} {echo ANON-ACCEPTED-BAD} {echo ANON-REJECTED-GOOD}")"
 if echo "$out" | grep -q "ANON-REJECTED-GOOD"; then

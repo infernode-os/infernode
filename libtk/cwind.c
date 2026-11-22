@@ -214,6 +214,9 @@ tkcvswindchk(Tk *tk, TkCwind *w, Tk *oldsub)
 		if(sub->master != nil || sub->parent != nil)
 			return TkWpack;
 
+		if(tkisinside(tk, sub))	/* the canvas itself, or what it is in */
+			return TkRecur;
+
 		if (oldsub != nil) {
 			oldsub->parent = nil;
 			oldsub->geom = nil;

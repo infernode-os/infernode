@@ -91,29 +91,64 @@ nprog(void)
  * page laid out) took a core to do it, over and over, for as long as
  * the emulator sat idle.
  *
- * Going round is counted over however many idle moments it takes, while
- * the heap does not change between them (idlemark, idlefrom): a program
- * that wakes now and then to do nothing (Charon's) cuts each moment
- * short, and counted afresh in each one the three colours were never
- * reached, so the collector went round for ever.
+ * A round (three colours) is counted from where it began, over however
+ * many idle moments it takes, however the heap changes meanwhile
+ * (idleround, idlefrom).  Counted from the heap's last change instead,
+ * a program that wakes and allocates a little (lib/layers' watcher
+ * lists a directory twice a second) restarted the count at every idle
+ * moment: the round never ended, and a desktop left with two such
+ * watchers and a page's timers spent three days going round a heap of
+ * two million objects, 600,000 passes a second, a core for all of it.
+ * The native kernel met this first (os/port/dis.c, idlegc).
+ *
+ * Nor does a round follow a round at once when the last found nothing
+ * to free after a small change: a desktop is never still, so "the heap
+ * has changed" is always true, and rounds back to back are a core.  The
+ * collector rests (idlegap), from Idlegcmin doubling to Idlegcmax while
+ * rounds find nothing.  A round that freed something (a page left, a
+ * shell ended: cycles), or that followed a change of more than a
+ * quarter of the heap's objects (a page loaded), is followed as before,
+ * at the next change: what real work leaves is freed at once, and only
+ * a trickle that leaves nothing waits, Idlegcmax at most.  The kernel
+ * rests Idlegcgap after every round; emu frees a page left in seconds
+ * (web_browser_test's testLeftPageFreed), so rests only when it finds
+ * nothing.
  */
+#ifndef Idlegcmin
+#define Idlegcmin 1000
+#endif
+#ifndef Idlegcmax
+#define Idlegcmax 60000
+#endif
 static ulong idleseen;
 static int idleknown;
-static ulong idlemark;	/* the heap's activity when idlefrom was taken */
-static int idlefrom;	/* gccolor then */
+static int idleround;		/* a round under way */
+static int idlefrom;		/* gccolor when it began */
+static uvlong idledestroys;	/* gcdestroys then */
+static int idlebig;		/* it began after a large change */
+static long idlegap;		/* the rest after the last round, ms */
+static long idlenext;		/* osmillisec() when that rest ends */
 
 static void
 execatidle(void)
 {
 	int done;
+	long d;
 
 	if(tready(nil))
 		return;
 	if(idleknown && heapactivity() == idleseen)
 		return;
-	if(heapactivity() != idlemark) {
-		idlemark = heapactivity();
+	if(!idleround) {
+		idlebig = !idleknown || heapactivity() - idleseen > heaplive()/4;
+		if(idleknown && !idlebig) {
+			d = idlenext - osmillisec();
+			if(d > 0 && d <= Idlegcmax)	/* resting (a clock gone back ends it) */
+				return;
+		}
+		idleround = 1;
 		idlefrom = gccolor;
+		idledestroys = gcdestroys;
 	}
 
 	gcidle++;
@@ -131,11 +166,20 @@ execatidle(void)
 		if(((ulong)gcidlepass&0xFF) == 0)
 			osyield();
 	}
-	if(gccolor >= done) {	/* all the way round since the heap last changed */
+	if(gccolor >= done) {	/* three colours: what was garbage when it began is freed */
+		idleround = 0;
 		idleseen = heapactivity();
 		idleknown = 1;
+		if(idlebig || gcdestroys != idledestroys)
+			idlegap = 0;
+		else if(idlegap < Idlegcmin)
+			idlegap = Idlegcmin;
+		else if(idlegap < Idlegcmax/2)
+			idlegap *= 2;
+		else
+			idlegap = Idlegcmax;
+		idlenext = osmillisec() + idlegap;
 	}
-	idlemark = heapactivity();	/* what this pass freed is not a change */
 	up->type = Interp;
 	delrunq(up->prog);
 }
@@ -168,9 +212,14 @@ newprog(Prog *p, Modlink *m)
 		error(exNomem);
 	}
 
-	n->pid = ++pidnum;
-	if(n->pid <= 0)
+	/*
+	 * Asked before the count is stepped: stepping the largest int is
+	 * not defined, and a compiler may then leave out a test, made
+	 * after, that the pid is positive.
+	 */
+	if(pidnum == 0x7fffffff)
 		panic("no pids");
+	n->pid = ++pidnum;
 	n->group = nil;
 
 	if(isched.tail != nil) {
@@ -205,7 +254,19 @@ newprog(Prog *p, Modlink *m)
 	addrun(n);
 
 	if(p == nil){
+		/*
+		 * A first Prog is listed and ready to run by now.  If no
+		 * group can be made for it, it goes, as one that newstack
+		 * has no memory for does.  It was left as it was, to run
+		 * with no group, no PC and an environment of zeros (the
+		 * native kernel's #X run file, which anyone may write).
+		 */
+		if(waserror()){
+			killprog(n, exNomem);
+			nexterror();
+		}
 		newgrp(n);
+		poperror();
 		return n;
 	}
 
@@ -325,9 +386,8 @@ swiprog(Prog *p)
 
 	lock(&procs.l);
 	for(q = procs.head; q; q = q->next) {
-		if(q->iprog == p) {
+		if(swiprogproc(q, p)) {
 			unlock(&procs.l);
-			swiproc(q, 1);
 			return;
 		}
 	}
@@ -505,8 +565,9 @@ killprog(Prog *p, char *cause)
 		p->flags |= Pkilled;
 		p->state = Pexiting;
 		swiprog(p);
-		/* No break */
+		return 0;
 	case Pexiting:
+		swiprog(p);
 		return 0;
 	case Pbroken:
 	case Pdebug:
@@ -566,6 +627,16 @@ newgrp(Prog *p)
 
 	if(p->group != nil && p->group->id == p->pid)
 		return;
+	/*
+	 * A group that is being killed is not left. Its killer has the
+	 * group's Progs by pid, taken once, and lets the VM go as each
+	 * dies: a Prog of the group run in one of those moments left
+	 * for a group of its own, which is not marked, spawned, and its
+	 * child was in nobody's list (killtree, which is how a confined
+	 * command's processes are cleared away, left 36 of 42).
+	 */
+	if(p->group != nil && (p->group->flags & Pkilled))
+		error("group is being killed");
 	g = malloc(sizeof(*g));
 	if(g == nil)
 		error(Enomem);
@@ -742,6 +813,41 @@ grpbyid(int gid, int *pids, int npid)
 	return nil;
 }
 
+/*
+ * The group with id gid, found without allocating a pid list.  Group ids are
+ * pids and are never reused.  This is the low-memory killgrp path: killprog
+ * can release the VM and free the target group, so that path must reacquire
+ * the group by identity after every kill rather than retain its pointer.
+ */
+static Progs*
+grpbyidall(int gid)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(f->group != nil && f->group->id == gid)
+			return f->group;
+	return nil;
+}
+
+/*
+ * For a killer with no memory for a list of pids, which takes the first
+ * Prog not yet killed each time round: is f one killprog would still do
+ * something to?  Not one already killed or on its way out, and not one a
+ * debugger holds broken, which killprog leaves.  It left out every broken
+ * Prog, though killprog destroys one nobody is debugging: those kept
+ * their stacks and their group, and a reader of grpwait was never told.
+ */
+static int
+killable(Prog *f)
+{
+	if((f->flags & Pkilled) != 0 || f->state == Pexiting)
+		return 0;
+	if(f->state == Pbroken && ((Osenv*)f->osenv)->debug != nil)
+		return 0;
+	return 1;
+}
+
 int
 killgrp(Prog *p, char *msg)
 {
@@ -781,20 +887,23 @@ killgrp(Prog *p, char *msg)
 		 */
 		g->flags |= Pkilled;
 		if(waserror()){
-			g->flags &= ~Pkilled;
+			if((g = grpbyidall(gid)) != nil)
+				g->flags &= ~Pkilled;
 			nexterror();
 		}
 		for(i = 0; i < npid; i++){
 			for(f = g->head; f != nil; f = f->grpnext)
-				if(f != currun() && (f->flags & Pkilled) == 0 &&
-				   f->state != Pexiting && f->state != Pbroken)
+				if(f != currun() && killable(f))
 					break;
 			if(f == nil)
 				break;
 			killprog(f, msg);
+			if((g = grpbyidall(gid)) == nil)
+				break;
 		}
 		poperror();
-		g->flags &= ~Pkilled;
+		if((g = grpbyidall(gid)) != nil)
+			g->flags &= ~Pkilled;
 		return 1;
 	}
 	npid = 0;
@@ -842,17 +951,71 @@ cleargrptreekilled(int *gids, int n)
 			}
 }
 
+/* Is a group of g's tree marked: is a killer at work in it? */
+static int
+grptreekilled(Progs *g)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(grptreedescendant(f->group, g) && (f->group->flags & Pkilled))
+			return 1;
+	return 0;
+}
+
+/*
+ * A killer with no memory for a list of its groups' ids knows the marks
+ * it set by a number of its own, kept above the flags in each group's
+ * flags word (nothing else looks there) and taken away with the mark.
+ */
+enum
+{
+	Killershift	= 8,
+	Killermax	= 1<<22,
+};
+
+static void
+clearkiller(int k)
+{
+	Prog *f;
+
+	for(f = isched.head; f != nil; f = f->next)
+		if(f->group != nil && (f->group->flags >> Killershift) == k)
+			f->group->flags &= (1<<Killershift)-1 & ~Pkilled;
+}
+
 /* Kill a cleanup domain, including groups made with NEWPGRP below it. */
 int
 killgrptree(Prog *p, char *msg)
 {
-	int i, n, *gids, *pids;
+	int i, n, k, pid, *gids, *pids;
 	Prog *f;
 	Progs *g;
+	static int killer;
 
 	g = p->group;
 	if(g == nil)
 		return 0;
+	/*
+	 * Wait, as killgrp does, while another killer is at work in the
+	 * tree: a mark then has one owner, who alone takes it away.  With
+	 * no wait, a Prog of a tree (or group) being killed wrote killtree
+	 * to its own ctl in one of the moments its killer let the VM go:
+	 * this listed the writer's tree, killed all of it but the writer
+	 * (the Prog running is never killed by its own kill) and cleared
+	 * the mark on the writer's group, the first killer's.  The writer
+	 * then spawned, and its children were in nobody's list.  Waiting,
+	 * the writer is one of the first killer's and is killed in its
+	 * write: what it does after is a killed Prog's, which cannot spawn.
+	 */
+	pid = p->pid;
+	while(grptreekilled(g)){
+		release();
+		acquire();
+		/* p, and its group, may be gone */
+		if((p = progpid(pid)) == nil || (g = p->group) == nil)
+			return 0;
+	}
 	/*
 	 * Scan the VM's flat Prog list rather than recursing through child groups:
 	 * an adversary can build a deep NEWPGRP chain, and cleanup must not turn
@@ -863,8 +1026,41 @@ killgrptree(Prog *p, char *msg)
 		if(grptreedescendant(f->group, g))
 			n++;
 	pids = malloc(2*n*sizeof(int));
-	if(pids == nil)
-		error(Enomem);
+	if(pids == nil){
+		/*
+		 * No memory for the list, as killgrp's: the tree is killed
+		 * anyway, the first of it not yet killed each time round.
+		 * It was an error, and the tree that could not be killed
+		 * was the one holding the memory. The groups are found by
+		 * their mark once the root's may have gone: by this
+		 * killer's, k.  They were found by any mark, and at the
+		 * end every mark in the VM was cleared: another killer's
+		 * groups, in a tree apart from this, were let go to spawn
+		 * and to leave while it still had only their old pids.
+		 */
+		if(++killer >= Killermax)
+			killer = 1;
+		k = killer;
+		for(f = isched.head; f != nil; f = f->next)
+			if(grptreedescendant(f->group, g))
+				f->group->flags |= Pkilled | (k << Killershift);
+		if(waserror()){
+			clearkiller(k);
+			nexterror();
+		}
+		for(i = 0; i < n; i++){
+			for(f = isched.head; f != nil; f = f->next)
+				if(f != currun() && f->group != nil &&
+				   (f->group->flags >> Killershift) == k && killable(f))
+					break;
+			if(f == nil)
+				break;
+			killprog(f, msg);
+		}
+		poperror();
+		clearkiller(k);
+		return 0;
+	}
 	gids = pids+n;
 	n = 0;
 	for(f = isched.head; f != nil; f = f->next)
@@ -1086,8 +1282,11 @@ schedmod(Module *m)
 	t = m->entryt;
 	if(t != nil && t->size > sizeof(Frame)){
 		fp = mallocz(t->size, 1);
-		if(fp == nil)
+		if(fp == nil){
+			/* p is ready to run: it goes, as in newstack */
+			killprog(p, exNomem);
 			error(exNomem);
+		}
 	}else{
 		memset(&f, 0, sizeof(f));
 		fp = &f;
@@ -1158,6 +1357,8 @@ void
 vmwatchdog(void *a)
 {
 	ulong ms;
+	Proc *o, *q;
+	char now[KNAMELEN];
 
 	USED(a);
 	for(;;){
@@ -1170,9 +1371,25 @@ vmwatchdog(void *a)
 		if(vmowner == nil)
 			print("vmwatchdog: VM token LOST %ludms ago (no owner, waiters queued) — last owner text=%s\n",
 				ms - vmownerms, vmownertext);
-		else
+		else{
+			/*
+			 * What the owner is doing now, if it is still a
+			 * proc: a kproc that ended holding the VM has been
+			 * freed, and its text was read through the pointer
+			 * kept here.
+			 */
+			o = vmowner;
+			kstrcpy(now, "gone", sizeof now);
+			lock(&procs.l);
+			for(q = procs.head; q != nil; q = q->next)
+				if(q == o){
+					kstrcpy(now, q->text, sizeof now);
+					break;
+				}
+			unlock(&procs.l);
 			print("vmwatchdog: VM token STUCK for %ludms: owner=%#p text=%s now=%s (waiters queued)\n",
-				ms - vmownerms, vmowner, vmownertext, vmowner->text);
+				ms - vmownerms, o, vmownertext, now);
+		}
 	}
 }
 
@@ -1231,12 +1448,19 @@ void
 release(void)
 {
 	Proc *p, **pq;
+	Prog *r;
 	int f;
 
 	vmclearowner();
 
-	if(up->type == Interp)
-		up->iprog = isave();
+	if(up->type == Interp){
+		r = isave();
+		lock(&up->rlock);
+		up->iprog = r;
+		if(r->kill != nil || (r->flags & Pkilled) != 0)
+			up->intpend = 1;
+		unlock(&up->rlock);
+	}
 	else
 		delrun(Prelease);
 
@@ -1426,12 +1650,17 @@ disfault(void *reg, char *msg)
 
 /*
  * A memory fault at this address is a Limbo nil dereference: Dis's nil
- * (H) is -1, and a field of a nil ref adt is a small offset from 0.
+ * (H) is -1, and a field of a nil ref adt is that plus the field's
+ * offset, which is whatever an operand's second displacement can carry:
+ * up to 65535.  No host maps anything there.  The rule was "below 512":
+ * a field further into a nil ref than that was "sys: segmentation
+ * violation", and from compiled code was not caught by the handler
+ * round it, since R.PC is put right only for a nil fault (jitfault).
  */
 int
 isnilfault(uintptr addr)
 {
-	return addr == ~(uintptr)0 || addr < 512;
+	return addr == ~(uintptr)0 || addr < 64*1024;
 }
 
 /*
@@ -1500,9 +1729,23 @@ vmachine(void *a)
 	startup();
 
 	while(waserror()) {
+		/*
+		 * An error out of the collector (execatidle, the busy pass
+		 * below: a type's free function raising) is no Prog's
+		 * exception. currun() is this proc's own up->prog then, with
+		 * no registers and a nil exval, and handler() faulted reading
+		 * them ("SYS: process dis faults" at handler+0x60, as
+		 * keyring's freeSK did when a sweep had freed its SigAlg
+		 * first). The collector's state is half-way through a block;
+		 * say what was raised and stop, as os/port/dis.c does.
+		 */
+		if(up->type != Interp)
+			panic("vmachine: error in the garbage collector (type %#x): %s",
+				up->type, up->env->errstr);
 		if(up->iprog != nil)
 			acquire();
-		if(handler(up->env->errstr) == 0) {
+		/* A ctl kill revokes the Prog; a catch-all cannot retain it. */
+		if((currun()->flags & Pkilled) != 0 || handler(up->env->errstr) == 0) {
 			propex(currun(), up->env->errstr);
 			progexit();
 		}

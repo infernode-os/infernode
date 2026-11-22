@@ -18,5 +18,8 @@ tool-result call_approval_headless_0_0:
   | role=veltro text=
   | 
   | msg 2
+  | role=veltro text=(denied without asking, as /tmp/veltro/.headless-approval-deny says to: write /dis/agentloop-probe.txt probe)
+  | 
+  | msg 3
   | role=veltro text=Write was handled.
   | 

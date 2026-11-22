@@ -423,12 +423,40 @@ newrxblock(void)
 static void
 replenish(Ctlr *c, Desc *d)
 {
-	while((d->b = newrxblock()) == nil){
+	Block *nb;
+
+	/*
+	 * The slot keeps what it had until there is a block to put in it:
+	 * resrcwait can raise, and recvproc's loop then comes round to this
+	 * slot again and must find a block there.
+	 */
+	while((nb = newrxblock()) == nil){
 		c->nnobuf++;
 		resrcwait("out of genet rx buffers");
 	}
+	d->b = nb;
 	cachedwbinvse(d->b->rp, Rbsz);
 	setdma(d, d->b->rp);
+}
+
+/*
+ * A receive descriptor's status word is the device's word, and its length
+ * field is 12 bits: up to 4095, in a buffer of Rbsz.  The frame is taken
+ * only if it is one whole good frame, at least an Ethernet header, no
+ * longer than the MAC was told to pass (Maxtu), and inside the room the
+ * Block has.  Otherwise -1, and the caller counts it bad.
+ */
+static long
+rxframelen(u32int s, long room)
+{
+	long len;
+
+	if((s & (DmaSOP|DmaEOP|DmaRxErrors)) != (DmaSOP|DmaEOP))
+		return -1;
+	len = (s & 0x0FFF0000) >> 16;
+	if(len < ETHERHDRSIZE || len > Maxtu || len > room)
+		return -1;
+	return len;
 }
 
 static int
@@ -451,6 +479,7 @@ recvproc(void *arg)
 	Desc *d;
 	Block *b;
 	u32int s;
+	long len;
 
 	while(waserror())
 		;
@@ -468,12 +497,13 @@ recvproc(void *arg)
 		coherence();
 		ctlr->rx->rp = (ctlr->rx->rp + 1) & 0xFFFF;
 		REG(ctlr->rx->regs[RxRP]) = ctlr->rx->rp;
-		if((s & (DmaSOP|DmaEOP|DmaRxErrors)) != (DmaSOP|DmaEOP)){
+		len = rxframelen(s, b->lim - b->rp);
+		if(len < 0){
 			ctlr->nrxbad++;
 			freeb(b);
 			continue;
 		}
-		b->wp += (s & 0x0FFF0000) >> 16;
+		b->wp += len;
 		ctlr->nrx++;
 		edev->nif.inpackets++;
 		etheriqb(edev, b);
@@ -973,8 +1003,24 @@ rxmode(Ether *edev, int prom)
 	}
 	setmdfaddr(ctlr, 0, edev->nif.bcast);
 	setmdfaddr(ctlr, 1, edev->ea);
-	for(i = 2, na = edev->nif.maddr; na != nil; na = na->next, i++)
-		setmdfaddr(ctlr, i, na->addr);
+	/*
+	 * the addresses that are joined, and no more of them than the
+	 * filter has places: this wrote a pair of registers for every
+	 * entry of the list, joined or not, and the list had no end, so
+	 * the entries after the fifteenth went into the registers after
+	 * the filter's, the receive ring's among them
+	 */
+	i = 2;
+	for(na = edev->nif.maddr; na != nil; na = na->next){
+		if(na->ref <= 0)
+			continue;
+		if(i >= 17){
+			REG(ctlr->regs[UmacMdfCtrl]) = 0;
+			umaccmd(ctlr, CmdProm, 0);
+			return;
+		}
+		setmdfaddr(ctlr, i++, na->addr);
+	}
 	/* the top i of the 17 filter-enable bits; the original shifts a negative int */
 	REG(ctlr->regs[UmacMdfCtrl]) = ((u32int)0xFFFF0000 >> i) & 0x1FFFF;
 	umaccmd(ctlr, 0, CmdProm);
@@ -1118,6 +1164,10 @@ genetifstat(Ether *edev, void *a, long n, ulong off)
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
+	if(waserror()){
+		free(p);
+		nexterror();
+	}
 	phy = ctlr->mii->curphy;
 	l = snprint(p, READSTR,
 		"genet rev %#ux at %#p irq %d,%d %s\n"
@@ -1133,6 +1183,7 @@ genetifstat(Ether *edev, void *a, long n, ulong off)
 		snprint(p+l, READSTR-l, "no phy\n");
 	n = readstr(off, a, n, p);
 	free(p);
+	poperror();
 	return n;
 }
 

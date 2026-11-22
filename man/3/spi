@@ -1,0 +1,39 @@
+.TH SPI 3
+.SH NAME
+spi \- SPI bus, as files
+.SH SYNOPSIS
+.nf
+.B bind -a #Q /dev
+
+.B /dev/spi0
+.B /dev/spi1
+.B /dev/spictl
+.fi
+.SH DESCRIPTION
+.I Spi
+is a polled master on the Raspberry Pi 5's header: MOSI GPIO 10, MISO 9,
+SCLK 11, chip selects 8 and 7.
+The pins become SPI's at the first open.
+.PP
+A write to
+.B spi0
+or
+.B spi1
+is one transfer of at most 8192 bytes with that chip select held low.
+SPI sends and receives at once: a read returns what came back during the
+last transfer.
+.PP
+.B Spictl
+takes
+.BI clock " hz" ,
+.BI mode " n"
+(0 to 3) and
+.BI loop " n" ,
+1 joining the block's output to its input inside the chip.
+Reading it returns those settings.
+.SH SOURCE
+.B /os/bcm2712/devspi.c
+.SH SEE ALSO
+.IR gpio (3),
+.IR i2c (3),
+.IR pwm (3)

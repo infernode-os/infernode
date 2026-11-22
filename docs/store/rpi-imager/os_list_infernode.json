@@ -33,6 +33,23 @@
       ],
       "architecture": "armv8",
       "init_format": "none"
+    },
+    {
+      "name": "InferNode 0.11.0 (Raspberry Pi 5)",
+      "description": "For the Raspberry Pi 5. Wi-Fi: put a wifi file on the card (see README.txt on it).",
+      "url": "https://github.com/infernode-os/infernode/releases/download/v0.11.0/infernode-0.11.0-rpi5.img.xz",
+      "icon": "https://raw.githubusercontent.com/infernode-os/infernode/master/docs/store/rpi-imager/infernode-40.svg",
+      "website": "https://www.infernode.io",
+      "release_date": "2026-11-19",
+      "extract_size": 1073741824,
+      "extract_sha256": "743d094cc1280ae7f11839bc1980821fa0ec34486945e747f830233250faa20b",
+      "image_download_size": 21054240,
+      "image_download_sha256": "69c02ae3847ee9b901c55db7fbea1d609dac87b3431174a4f29664bce5d23ad0",
+      "devices": [
+        "pi5-64bit"
+      ],
+      "architecture": "armv8",
+      "init_format": "none"
     }
   ]
 }

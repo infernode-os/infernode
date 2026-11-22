@@ -220,6 +220,8 @@ frdelete(f : ref Frame, p0 : int, p1 : int) : int
 		return 0;
 	if(p1 > f.nchars)
 		p1 = f.nchars;
+	if(f.wrapword)
+		return worddelete(f, p0, p1);
 	n0 = xfrfindbox(f, 0, 0, p0);
 	if(n0 == f.nbox)
 		berror("off end in frdelete");
@@ -405,7 +407,7 @@ frdrawsel0(f : ref Frame, pt : Point, p0 : int, p1 : int, back : ref Image, text
 		if(x > f.r.max.x)
 			x = f.r.max.x;
 		draw(f.b, (pt, (x, pt.y+f.font.height)), back, nil, pt);
-		if(b.nrune >= 0)
+		if(b.nrune >= 0 && !hanging(f, b))
 			graph->stringx(f.b, pt, f.font, ptr[0:nr], text);
 		pt.x += w;
 		p += nr;
@@ -679,6 +681,10 @@ frinsert(f : ref Frame, rp : string, l : int, p0 : int)
 	# text ran past the frame's end, which raised endofframe
 	if(f.maxlines <= 0){
 		f.lastlinefull = 1;
+		return;
+	}
+	if(f.wrapword){
+		wordinsert(f, rp[0:l], p0);
 		return;
 	}
 	n0 = xfrfindbox(f, 0, 0, p0);
@@ -1202,4 +1208,263 @@ xfrclean(f : ref Frame, pt : Point, n0 : int, n1 : int)	# look for mergeable box
 	f.lastlinefull = 0;
 	if(pt.y >= f.r.max.y)
 		f.lastlinefull = 1;
+}
+
+#
+# Word wrap (f.wrapword): a line breaks between words, before the first
+# that does not fit, and inside a word only if it is wider than the
+# frame. Blanks that do not fit hang at the line's end, one box each,
+# the first as wide as the room left and the rest none, so the next
+# line begins with a word, not a blank.
+#
+# The boxes are cut where the lines break: each fits where it is and
+# the one after a break does not, so frptofchar, frcharofpt, the
+# selection and every other walk of the boxes place them as laid out,
+# knowing nothing of words. A word may run across the boxes an
+# insertion makes, and whether it fits depends on what is before it,
+# so libframe's insert and delete, which move only the boxes whose
+# place changed, cannot do; word wrap lays the frame's text out again
+# whole, a screenful at most, and draws again from the line above the
+# change down.
+#
+
+isblank(c : int) : int
+{
+	return c == ' ';
+}
+
+# a blank hanging past the line's end: narrower than itself, and not
+# drawn (it would be drawn past the frame's edge, and shows nothing)
+hanging(f : ref Frame, b : ref Frbox) : int
+{
+	return f.wrapword && b.nrune == 1 && isblank(b.ptr[0]) && b.wid < charwidth(f.font, b.ptr[0]);
+}
+
+# the text of the frame, as it was inserted (less glyphs it has none of)
+frametext(f : ref Frame) : string
+{
+	s := "";
+	for(nb := 0; nb < f.nbox; nb++){
+		b := f.box[nb];
+		if(b.nrune < 0)
+			s[len s] = b.bc;
+		else
+			s += b.ptr;
+	}
+	return s;
+}
+
+wordbox(f : ref Frame, s : string, wid : int)
+{
+	if(f.nbox == f.nalloc)
+		xfrgrowbox(f, SLOP);
+	b := f.box[f.nbox++];
+	b.ptr = s;
+	b.nrune = len s;
+	b.wid = wid;
+	b.bc = 0;
+	b.minwid = 0;
+}
+
+# a rune's width, and the rune drawn for it
+glyph(f : ref Frame, c : int) : (int, int)
+{
+	w := charwidth(f.font, c);
+	if(w == 0){
+		c = f.noglyph;
+		w = charwidth(f.font, c);
+	}
+	return (w, c);
+}
+
+# s laid out from the frame's top as its boxes, as much as fits
+wordlayout(f : ref Frame, s : string)
+{
+	if(f.nbox)
+		xfrdelbox(f, 0, f.nbox-1);
+	f.nbox = 0;
+	f.nchars = 0;
+	maxx := f.r.max.x;
+	full := maxx - f.r.min.x;
+	pt := f.r.min;
+	i := 0;
+Lines:
+	while(i < len s && pt.y < f.r.max.y){
+		c := s[i];
+		if(c == '\n' || c == '\t'){
+			if(f.nbox == f.nalloc)
+				xfrgrowbox(f, SLOP);
+			b := f.box[f.nbox];
+			b.ptr = nil;
+			b.nrune = -1;
+			b.bc = c;
+			b.wid = 5000;
+			b.minwid = 0;
+			if(c == '\t')
+				b.minwid = charwidth(f.font, ' ');
+			pt = xfrcklinewrap(f, pt, b);
+			if(pt.y >= f.r.max.y)
+				break;
+			f.nbox++;
+			f.nchars++;
+			i++;
+			if(c == '\t')
+				pt.x += xfrnewwid(f, pt, b);
+			else
+				pt = xfradvance(f, pt, b);
+			continue;
+		}
+		# a run of text, to the next tab or newline: one line of it
+		# a box, its words placed and the line broken where they end
+		seg := "";
+		w := 0;
+		while(i < len s && s[i] != '\n' && s[i] != '\t'){
+			if(isblank(s[i])){
+				(cw, g) := glyph(f, s[i]);
+				if(pt.x+w+cw <= maxx){
+					seg[len seg] = g;
+					w += cw;
+					i++;
+					continue;
+				}
+				# blanks past the edge hang there
+				if(seg != nil)
+					wordbox(f, seg, w);
+				pt.x += w;
+				f.nchars += len seg;
+				seg = nil;
+				w = 0;
+				for(room := maxx-pt.x; i < len s && isblank(s[i]); room = 0){
+					wordbox(f, s[i:i+1], room);
+					pt.x += room;
+					f.nchars++;
+					i++;
+				}
+				continue;
+			}
+			# a word: [i, e)
+			e := i;
+			ww := 0;
+			word := "";
+			while(e < len s && !isblank(s[e]) && s[e] != '\n' && s[e] != '\t'){
+				(cw, g) := glyph(f, s[e]);
+				word[len word] = g;
+				ww += cw;
+				e++;
+			}
+			if(pt.x+w+ww <= maxx){
+				seg += word;
+				w += ww;
+				i = e;
+				continue;
+			}
+			if(ww > full){
+				# wider than the frame: as much as fits here
+				k := 0;
+				for(; k < len word; k++){
+					cw := charwidth(f.font, word[k]);
+					if(pt.x+w+cw > maxx)
+						break;
+					w += cw;
+				}
+				if(k == 0 && pt.x+w == f.r.min.x){
+					w += charwidth(f.font, word[0]);	# a rune wider than the frame
+					k = 1;
+				}
+				seg += word[0:k];
+				i += k;
+			}
+			# the line ends before what is left of the word
+			if(seg != nil)
+				wordbox(f, seg, w);
+			f.nchars += len seg;
+			seg = nil;
+			w = 0;
+			pt.x = f.r.min.x;
+			pt.y += f.font.height;
+			if(pt.y >= f.r.max.y)
+				break Lines;
+		}
+		if(seg != nil){
+			wordbox(f, seg, w);
+			f.nchars += len seg;
+			pt.x += w;
+		}
+	}
+	f.lastlinefull = pt.y >= f.r.max.y;
+	pt = frptofchar(f, f.nchars);
+	f.nlines = (pt.y-f.r.min.y)/f.font.height+(pt.x>f.r.min.x);
+}
+
+# the frame drawn again from the top of the line at y down
+worddraw(f : ref Frame, y : int)
+{
+	y -= f.font.height;	# a word may have gone back up a line
+	if(y < f.r.min.y)
+		y = f.r.min.y;
+	if(y < f.r.max.y)
+		draw(f.b, ((f.r.min.x, y), f.r.max), f.cols[BACK], nil, (0, 0));
+	pt := f.r.min;
+	for(nb := 0; nb < f.nbox; nb++){
+		b := f.box[nb];
+		pt = xfrcklinewrap(f, pt, b);
+		if(pt.y >= y && !f.noredraw && b.nrune > 0 && !hanging(f, b))
+			graph->stringx(f.b, pt, f.font, b.ptr, f.cols[TEXT]);
+		pt = xfradvance(f, pt, b);
+	}
+	if(f.p0 < f.p1)
+		frdrawsel0(f, frptofchar(f, f.p0), f.p0, f.p1, f.cols[HIGH], f.cols[HTEXT]);
+}
+
+wordinsert(f : ref Frame, s : string, p0 : int)
+{
+	if(f.p0 == f.p1)
+		frtick(f, frptofchar(f, f.p0), 0);
+	y := frptofchar(f, p0).y;
+	t := frametext(f);
+	wordlayout(f, t[0:p0] + s + t[p0:]);
+	f.modified = 1;
+	l := len s;
+	if(f.p0 >= p0)
+		f.p0 += l;
+	if(f.p0 > f.nchars)
+		f.p0 = f.nchars;
+	if(f.p1 >= p0)
+		f.p1 += l;
+	if(f.p1 > f.nchars)
+		f.p1 = f.nchars;
+	if(p0 <= f.nchars && (ny := frptofchar(f, p0).y) < y)
+		y = ny;
+	worddraw(f, y);
+	if(f.p0 == f.p1)
+		frtick(f, frptofchar(f, f.p0), 1);
+}
+
+worddelete(f : ref Frame, p0 : int, p1 : int) : int
+{
+	if(f.p0 == f.p1)
+		frtick(f, frptofchar(f, f.p0), 0);
+	y := frptofchar(f, p0).y;
+	n := f.nlines;
+	t := frametext(f);
+	wordlayout(f, t[0:p0] + t[p1:]);
+	f.modified = 1;
+	if(f.p1 > p1)
+		f.p1 -= p1-p0;
+	else if(f.p1 > p0)
+		f.p1 = p0;
+	if(f.p0 > p1)
+		f.p0 -= p1-p0;
+	else if(f.p0 > p0)
+		f.p0 = p0;
+	if(f.p0 > f.nchars)
+		f.p0 = f.nchars;
+	if(f.p1 > f.nchars)
+		f.p1 = f.nchars;
+	if(p0 <= f.nchars && (ny := frptofchar(f, p0).y) < y)
+		y = ny;
+	worddraw(f, y);
+	if(f.p0 == f.p1)
+		frtick(f, frptofchar(f, f.p0), 1);
+	return n - f.nlines;
 }

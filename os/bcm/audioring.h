@@ -10,12 +10,19 @@
  *
  * The engine plays the ring for ever, Nbuf buffers round, and at the end
  * of each interrupts (ringplayed). Nothing here is locked: the driver
- * calls ringplayed at interrupt time and the rest under its QLock.
+ * calls ringplayed and ringmove at interrupt time and the rest under its
+ * QLock, and holds a spin lock (ilock) across each, since the writer and
+ * the interrupt may be on different cores.
  */
 
 enum
 {
 	Nbuf	= 4,	/* the writer may run three buffers ahead */
+
+	/* what ringplayed says of the buffer the engine is now on */
+	Rplay	= 0,	/* written, or being written: play it */
+	Rsilence,	/* not written: silence it, a gap */
+	Rmove,		/* begun by a writer that has stopped: ringmove, then silence it, a gap */
 };
 
 typedef struct Ring Ring;
@@ -26,6 +33,7 @@ struct Ring
 	int	pbuf;		/* the buffer the engine is on: counted, not read back */
 	int	ahead;		/* how many buffers the writer may be in front of the engine */
 	int	writing;	/* the buffer the writer has begun and not finished, or -1 */
+	int	parked;		/* the writer has returned with writing part-filled */
 };
 
 /* all silent: the engine starts on buffer 0, and so does the writer */
@@ -39,6 +47,7 @@ ringreset(Ring *r)
 	r->wbuf = 0;
 	r->pbuf = 0;
 	r->writing = -1;
+	r->parked = 0;
 }
 
 /* buffers written and not yet played */
@@ -55,15 +64,25 @@ ringqueued(Ring *r)
 
 /*
  * The engine has finished pbuf: it is free, and the engine is on the
- * next. Returns 1 if that one was not written in time, which the driver
- * fills with silence: a gap is a gap, not the last buffer played twice.
+ * next. What the driver does with that one (Rplay, Rsilence, Rmove).
  *
- * Not if the writer has begun it. The writer fills a buffer in
- * microseconds and the engine plays one in tens of milliseconds, so a
- * buffer the writer is part way through when the engine reaches it is
- * finished well ahead of the engine's reading. Silenced, the start of
- * what the writer had written was lost: the first frames of a sound
- * begun just as the engine finished the buffer before.
+ * Not written in time: silence, so a gap is a gap, not the last buffer
+ * played twice.
+ *
+ * Begun by a writer still in its write: left alone. The writer fills a
+ * buffer in microseconds and the engine plays one in tens of
+ * milliseconds, so it is finished well ahead of the engine's reading.
+ * Silenced, the start of what it had written was lost: the first frames
+ * of a sound begun just as the engine finished the buffer before.
+ *
+ * Begun by a writer that has returned (parked): it may not be back for
+ * a second. Left alone, the engine played it once a lap -- the frames
+ * written, then what the rest of the buffer held from four buffers
+ * before -- and nothing counted it: a stalled writer was heard as bursts
+ * of stale sound (sdr/fm from a network mount, on the bench Pi 4,
+ * 2026-11-07), and audiostat missed a gap in four. Now what was written
+ * moves to the next buffer (ringmove), this one plays silence, and the
+ * writer carries on where it was.
  */
 static int
 ringplayed(Ring *r)
@@ -73,7 +92,37 @@ ringplayed(Ring *r)
 	done = r->pbuf;
 	r->pbuf = (done + 1) % Nbuf;
 	r->full[done] = 0;
-	return !r->full[r->pbuf] && r->pbuf != r->writing;
+	if(r->full[r->pbuf])
+		return Rplay;
+	if(r->pbuf == r->writing)
+		return r->parked ? Rmove : Rplay;
+	return Rsilence;
+}
+
+/*
+ * Rmove: the stopped writer's buffer becomes the one after the engine's.
+ * Nothing is queued (the engine has caught up with the writer), so that
+ * one is free. The driver copies what was written across before the
+ * writer can go on: the writer's offset in its buffer is unchanged.
+ */
+static void
+ringmove(Ring *r)
+{
+	r->writing = r->wbuf = (r->pbuf + 1) % Nbuf;
+}
+
+/* a write is returning: if it leaves a buffer part-filled, that buffer is parked */
+static void
+ringpark(Ring *r)
+{
+	r->parked = r->writing >= 0;
+}
+
+/* a write is beginning: the writer is back */
+static void
+ringunpark(Ring *r)
+{
+	r->parked = 0;
 }
 
 /*
@@ -133,5 +182,6 @@ ringfilled(Ring *r)
 {
 	r->full[r->wbuf] = 1;
 	r->writing = -1;
+	r->parked = 0;
 	r->wbuf = (r->wbuf + 1) % Nbuf;
 }

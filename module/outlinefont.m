@@ -65,6 +65,17 @@ OutlineFont: module {
 		ligatures:	fn(f: self ref Face, gids: array of int, feats: list of string): (array of int, array of int);
 		subst:	fn(f: self ref Face, feat: string, gid: int): int;
 		hasfeature:	fn(f: self ref Face, feat: string): int;
+		# substitute() shapes a run of glyphs with the features set,
+		# (tag, value) in order, a later setting of a tag replacing an
+		# earlier, value 0 off, 1 on, n an alternate's number: the
+		# single, alternate and ligature lookups of the features the
+		# script's default language system names (script an OpenType tag,
+		# "latn", or nil: DFLT's, else latn's; lang a language system's
+		# tag, "TRK ", or nil for the default), in lookup order.  key names
+		# the list (the plan is kept under it, script and lang).  The count is nil
+		# when each glyph returned is the one given there, else how
+		# many of the given glyphs each stands for.
+		substitute:	fn(f: self ref Face, gids: array of int, feats: list of (string, int), script, lang, key: string): (array of int, array of int);
 
 		# GPOS.  markanchor() places a combining mark on its base: the
 		# mark's origin relative to the base's, in font units, or ok 0

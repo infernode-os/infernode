@@ -21,7 +21,7 @@ plus the `ssl` line-encryption device:
    **ML-KEM-1024** instead (CNSA 2.0 strict mode; all nodes must agree).
    See [CRYPTO-MODERNIZATION.md §10](CRYPTO-MODERNIZATION.md).
 3. **Line encryption.** The 64-byte secret feeds the `ssl` device; the default
-   negotiated by `mount -k` / `styxlisten` is `aes_256_cbc` + `sha256`.
+   negotiated by `mount -k` / `styxlisten` is `aes_256_gcm`.
 4. **9P/Styx.** Everything above carries Styx (9P) — `sys->export` on the
    serving node, `sys->mount` on the connecting node.
 
@@ -33,8 +33,8 @@ headless LLM daemon (`serve-llm.sh`) and any node-to-node mount.
 | Asset | Kind | What it proves |
 |-------|------|----------------|
 | `tests/pqauth_test.b` | in-emu unit (auto-discovered by the runner) | the hybrid handshake itself: happy path (ed25519 + ML-DSA-65 signers), real-TCP encrypted channel, and the negatives (downgrade, tampered/malformed ML-KEM key) |
-| `tests/interop_test.b` | in-emu unit (auto-discovered) | end-to-end: real TCP + cert auth + PQ handshake + `aes_256_cbc` ssl + a real `export`/`mount` **file transfer**, across the full fast certificate range: ed25519, ML-DSA-65, ML-DSA-87, RSA-2048, **DSA-1024**, ElGamal-2048 |
-| `tests/cipher_matrix_test.b` | in-emu unit (auto-discovered) | every `ssl` line-encryption cipher (`aes_256_cbc`, `aes_128_cbc`, `ideacbc`, `ideaecb`) and MAC (`sha256`, `sha1`, `md5`, `md4`), plus the unencrypted `none` path, negotiated through a real `auth->server`/`auth->client` handshake and verified to round-trip a payload byte-for-byte |
+| `tests/interop_test.b` | in-emu unit (auto-discovered) | end-to-end: real TCP + cert auth + PQ handshake + `aes_256_gcm` ssl + a real `export`/`mount` **file transfer**, across the full fast certificate range: ed25519, ML-DSA-65, ML-DSA-87, RSA-2048, **DSA-1024**, ElGamal-2048 |
+| `tests/cipher_matrix_test.b` | in-emu unit (auto-discovered) | what `ssl` offers (`aes_256_gcm`, and `hmac_sha384` alone), plus the unencrypted `none` path, negotiated through a real `auth->server`/`auth->client` handshake and verified to round-trip a payload byte-for-byte; a MAC alone where the policy has the cipher, the old algorithms (`aes_256_cbc`, `sha256`) and two at once refused |
 | `tests/authneg_test.b` | in-emu unit (auto-discovered) | the trust + integrity layer must **fail closed**: untrusted signer rejected, expired certificate rejected, a cipher the server did not offer refused, and a one-byte tamper on the encrypted channel caught by the ssl record MAC |
 | `tests/crypto_props_test.b` | in-emu unit (auto-discovered) | protocol crypto guarantees: two handshakes with the same certs derive **different** 64-byte secrets (ephemeral key agreement / forward-secrecy proxy), a reflected `alpha**r0` is caught by the replay check, and a one-byte-corrupted certificate signature is rejected |
 | `tests/interrupt_test.b` | in-emu unit (auto-discovered) | interruptibility: an abrupt TCP disconnect **mid-handshake** makes the peer error cleanly (`hungup`), and **mid-transfer** makes the reader hit EOF with the partial data — no crash, no hang (timeout-guarded) |
@@ -124,7 +124,7 @@ guard.
 
 The keyring registers eight certificate signature algorithms
 (`libinterp/keyring.c:keyringmodinit`). Node-to-node STS auth was exercised
-with each, over a real TCP socket + `aes_256_cbc`/`sha256` ssl:
+with each, over a real TCP socket + `aes_256_gcm` ssl:
 
 | Signer cert | Class | Node-to-node auth | Notes |
 |-------------|-------|-------------------|-------|
@@ -134,8 +134,8 @@ with each, over a real TCP socket + `aes_256_cbc`/`sha256` ssl:
 | `elgamal` (2048) | classical | ✅ | 2048 selects precomputed RFC 3526 DH params |
 | `mldsa65`    | post-quantum (ML-DSA-65) | ✅ | |
 | `mldsa87`    | post-quantum (ML-DSA-87) | ✅ | |
-| `slhdsa192s` | post-quantum (SLH-DSA-SHAKE-192s) | ✅ | ~16 KB cert; ~9 s/sign |
-| `slhdsa256s` | post-quantum (SLH-DSA-SHAKE-256s) | ✅ over TCP | ~40 KB cert; ~8 s/sign; see deadlock note |
+| `slhdsa192s` | post-quantum (SLH-DSA-SHAKE-192s) | ✅ | ~22 KB cert; ~2 s/sign |
+| `slhdsa256s` | post-quantum (SLH-DSA-SHAKE-256s) | ✅ over TCP | ~40 KB cert; ~2 s/sign; see deadlock note |
 
 `tests/interop_test.b` auto-runs the six fast algorithms end-to-end. The two
 SLH-DSA variants are validated separately because their multi-second signing
@@ -171,6 +171,18 @@ nil, and `Keyring_genSK` propagates a nil key as a nil `SK` per its contract
 (size-agnostic signers such as ed25519/ML-DSA/SLH-DSA are unaffected — they
 legitimately accept `0`). The CLI (`auth/createsignerkey`) already validates
 `32..4096`, so this only hardens direct `genSK` callers.
+
+### Note: messages longer than 9999 bytes
+
+`Keyring->getmsg`/`sendmsg`, which the handshake is made of, count a message's
+length in four decimal digits. A message of 10000 bytes or more (an SLH-DSA
+certificate, 22 KB or 40 KB of text) has its length as five digits and a newline;
+`sendmsg` used to write five bytes of that six-byte header, which a lenient
+`getmsg` read as a count and a strict one (the present one) refused, so SLH-DSA
+certificates could not be exchanged at all for a time. The longest message is
+`Keyring->Maxmsg`, 49151 bytes; see keyring-getmsg(2). `tests/keyring_msg_test.b`
+runs `auth` between holders of ML-DSA-87, SLH-DSA-192s and SLH-DSA-256s
+certificates, and a login from signers with ML-DSA-87 and SLH-DSA-256s keys.
 
 ### Note: large SLH-DSA certs and the handshake's batch send
 
@@ -219,5 +231,5 @@ certificate algorithm and encrypted-channel throughput per `ssl` cipher
 environment-dependent. See `tests/bench/README.md`. The shape it reveals: the
 handshake is dominated by the shared DH-2048 + ML-KEM-768 key agreement (so
 ed25519/ML-DSA/RSA/DSA land within ~10% of each other), ElGamal verify is ~3×
-heavier, and SLH-DSA signing is in a different league (~9 s+, a conservative
+heavier, and SLH-DSA signing is in a different league (~2 s, a conservative
 backup not a default); line encryption costs ~7× vs plaintext with AES ≳ IDEA.

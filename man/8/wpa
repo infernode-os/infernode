@@ -32,7 +32,8 @@ opens a conversation on
 .IR interface ,
 connects it to ethernet type
 .BR 0x888e ,
-writes the RSN information element for WPA2-PSK with CCMP to the
+writes the RSN information element for WPA2-PSK with CCMP (pairwise and
+group) to the
 conversation's
 .B ctl
 file as
@@ -166,15 +167,26 @@ or
 for
 .I t
 so far.
-.B pairwise receive key installed
+.B pairwise receive key accepted
 and
 .B pairwise transmit key installed
 mean the handshake completed;
 .B group key \fIn\fP installed
 follows.
+A key is said to be installed when the radio's firmware has answered
+for it; the pairwise receive key is a write the driver takes and does
+nothing with (the radio has one pairwise key, which the transmit key's
+write sets), so it is only said to be accepted.
 .B bad MIC
 means a frame's integrity check did not match; one on a noisy link is
 unremarkable.
+A frame that is refused (this, a stale replay counter, a descriptor
+version not implemented, a frame cut short) is said once when the
+first of its kind comes, and after that with how many there have been,
+at intervals that double from twenty seconds to ten minutes: anyone in
+range can send such frames, and each was a line.
+The log is also held to 64K: when that much has been written, and
+standard error is a file that has kept it, the file is begun again.
 A wrong passphrase more often gives no diagnostic at all: the access
 point rejects the second message silently and the handshake stops,
 so a handshake that begins and never completes should be read as a
@@ -186,8 +198,20 @@ replaces it when the association keeps being granted and keeps carrying
 nothing.
 Both numbers climbing across two such lines is a supplicant still at
 work; neither climbing is one that has stopped.
+.PP
+A network in WPA/WPA2 mixed mode keys its group traffic with TKIP, and
+its access point refuses an element naming CCMP for the group with
+802.11 status 41, which the driver shows in
+.B ifstats
+as
+.BR "assocfail: 41" .
+.I Wpa
+then offers the element with TKIP as the group cipher (pairwise stays
+CCMP), says so in its log, and installs the group key as TKIP's 32
+bytes.
 .SH BUGS
-Only WPA2 personal with CCMP is implemented.
+Only WPA2 personal with CCMP pairwise is implemented; the group cipher
+may be CCMP or, on a mixed-mode network, TKIP.
 Key descriptor versions 2 (HMAC-SHA1) and 3 (AES-128-CMAC) are both
 handled; WPA1 and TKIP (version 1) are refused with a diagnostic naming
 what was asked for.

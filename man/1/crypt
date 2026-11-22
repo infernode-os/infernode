@@ -6,7 +6,7 @@ crypt, aescbc \- data encryption
 [
 .B -d
 ] [
-.BI -a " alg\fP\fR[\f5/\fP\fIalg\fP\fR]\fP"
+.BI -a " alg"
 ] [
 .BI -f " keyfile"
 ] [
@@ -18,7 +18,9 @@ crypt, aescbc \- data encryption
 .B auth/aescbc
 [
 .B -d
-] [
+[
+.B -c
+] ] [
 .B -e
 ] [
 .BI -f " keyfile"
@@ -36,14 +38,14 @@ option is given,
 decrypts the standard input instead, writing the clear text on standard output.
 The options are:
 .TP
-.BI -a " alg..."
-Specifies one or two algorithms, for encryption and/or digests.
-The algorithms are those supported by
-.IR ssl (3).
-If two algorithms are given, they should be separated by a slash
-.RB ( / )
-or space, following the conventions of
-.IR ssl (3).
+.BI -a " alg"
+Specifies the algorithm, one of those
+.IR ssl (3)
+supports:
+.B aes_256_gcm
+(the default) to encrypt and authenticate,
+.B hmac_sha384
+to authenticate alone.
 .TP
 .BI -f " keyfile"
 Read the encryption key from the given file, which obviously should be carefully protected.
@@ -64,23 +66,26 @@ is not otherwise supplied,
 prompts for it on
 .BR /dev/cons .
 There is no need to give algorithms when decrypting, because they are taken from the header.
-The default algorithm is
-.BR md5/ideacbc .
-It might be necessary to change that when using
-.I crypt
-for commercial purposes, as noted in
-.IR keyring-crypt (2).
+The key is made from it by PBKDF2 (RFC 8018, NIST SP 800-132) with
+HMAC-SHA-384, 200000 iterations, and a 32-byte salt chosen at random for each
+file; the header records the salt and the iterations.
+.PP
+The stream is a run of
+.IR ssl (3)
+records, each authenticated: a change anywhere in it is an error, but a stream
+cut at the end of a record is not detected.
 .PP
 .I Aescbc
 encrypts and decrypts using AES (Rijndael) in cypher
 block chaining (CBC) mode.
 It uses input and output formats compatible with Plan 9's
 .I aescbc
-command; it also
-accepts input in the format used by
-.IR keyfs (4)
-and Plan 9's
-.IR secstore .
+command:
+a 16-byte header, an initialisation vector, the data encrypted,
+and an HMAC-SHA1 of the encrypted data.
+The key is one SHA-1 of the password, as Plan 9's is;
+.I crypt
+is the command to prefer for new files.
 The
 .B -e
 option causes it to encrypt; the
@@ -88,6 +93,37 @@ option causes it to encrypt; the
 option to decrypt.
 The other options are just as for
 .IR crypt .
+.PP
+When decrypting,
+.I aescbc
+writes nothing until it has checked the whole input:
+input that is changed, cut short or under another key gives an error and no output.
+A file is read twice, once to check it and once to decrypt it;
+input that is not a file (a pipe) is held in memory until it has been checked,
+and refused if it is longer than 64 megabytes.
+.PP
+Before the format with the header there was one with none,
+used by Plan 9's
+.I secstore
+and by
+.IR keyfs (4)
+until its present format:
+an initialisation vector, then the data and sixteen
+.RB ` X 's
+encrypted, under the same key.
+.I Aescbc
+reads it only when given
+.B -c
+with
+.BR -d .
+That format is not authenticated:
+its sixteen bytes show that the key is right and the end is there,
+but whoever can change the file can change what it decrypts to
+without knowing the key,
+and can make such a file from one in the format with the header.
+Without
+.BR -c ,
+input that does not begin with the header is refused.
 .SH SOURCE
 .B /appl/cmd/crypt.b
 .br

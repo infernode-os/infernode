@@ -10,6 +10,9 @@ implement Osk;
 # (through /dev/kbdin, cons(3)), and it never takes the keyboard
 # itself -- it asks the window manager for the pointer only, and to be
 # docked ("dock bottom <height>"), which wm/wm and Lucifer honour.
+# With -s and no window manager (beside the login screen) it leaves
+# the pointer to the program it types for and is touched through
+# /dev/fingers alone.
 #
 # A key types when the finger LIFTS, the key under it then: a finger
 # that lands on the wrong key slides to the right one.  Words are
@@ -51,7 +54,7 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Display, Image, Font, Rect, Point, Pointer: import draw;
+	Display, Image, Font, Rect, Point, Pointer, Screen: import draw;
 include "wmclient.m";
 	wmclient: Wmclient;
 	Window: import wmclient;
@@ -107,6 +110,7 @@ stderr: ref Sys->FD;
 display: ref Display;
 win: ref Window;
 img: ref Image;			# the window's, nil while not on the screen
+ownscr: ref Screen;		# no window manager: a screen of its own over the display's
 theme: ref Lucitheme->Theme;
 
 # The keyboard's colours: a theme's roles, unless its file sets keys of
@@ -298,8 +302,12 @@ init(ctxt: ref Draw->Context, args: list of string)
 		ctxt = wmclient->makedrawcontext();
 	display = ctxt.display;
 	loadcolours();
-	if(icon != nil && icon->init(display) != nil)
+	if(icon == nil)
+		glypherr(sys->sprint("cannot load %s: %r", Icon->PATH));
+	else if((e := icon->init(display)) != nil){
+		glypherr(e);
 		icon = nil;
+	}
 
 	loadlayouts(first);
 	ignore = readlines(IGNORE);
@@ -324,7 +332,15 @@ init(ctxt: ref Draw->Context, args: list of string)
 	startserver(servefd);
 
 	win = wmclient->window(ctxt, "osk", Wmclient->Plain);
-	win.startinput("ptr" :: nil);	# never the keyboard: it types to whoever has it
+	# Never the keyboard: it types to whoever has it.  The pointer from
+	# a window manager, which shares it out; but the system's keyboard
+	# with none is beside a program that has the screen (the login
+	# screen), and /dev/pointer has one reader: whichever opened it
+	# first had every click and tap, and the login screen, opening it
+	# second, none.  That program's, then: touches come from
+	# /dev/fingers, which this reads whatever else it has.
+	if(ctxt.wm != nil || !sysmode)
+		win.startinput("ptr" :: nil);
 
 	if(sysmode){
 		want = 0;
@@ -615,6 +631,33 @@ place()
 	rowh = computerowh(sr);
 	pickfonts();
 	h := height();
+	if(win.ctxt.connfd == nil){
+		# No window manager (a login screen's).  A window of its own,
+		# only the strip, on a screen of its own over the display's:
+		# what draws the rest of the screen (wm/logon) is not covered,
+		# and draws its own window above the strip, the height status
+		# gives (wm/logon follows it).  The window wmclient would make
+		# is the whole screen, which hid what was there and was drawn
+		# over by it.
+		if(h == 0){
+			img = nil;
+			return;
+		}
+		r := Rect((sr.min.x, sr.max.y - h), sr.max);
+		if(img == nil || !img.r.eq(r)){
+			if(ownscr == nil)
+				ownscr = Screen.allocate(display.image, display.color(kc.board), 0);
+			if(ownscr != nil)
+				img = ownscr.newwindow(r, Draw->Refbackup, Draw->Nofill);
+			# drawn again once what shares the screen has made room
+			# (its old window freed paints its screen's fill here)
+			spawn timer(400, -1);
+			spawn timer(1200, -1);
+		}
+		geometry();
+		redraw();
+		return;
+	}
 	e := win.wmctl(sys->sprint("dock bottom %d", h));
 	dockok = e == nil;
 	if(h == 0){
@@ -659,7 +702,17 @@ pickfonts()
 	sfont = pickfont(rowh * 36 / 100, 0);
 }
 
-fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36};
+# Go's sizes, then DejaVu Sans's 48 (the phones' sizes: rows of 120
+# pixels on a phone's screen want labels of 54, and Go stops at 36,
+# which left them a third the height of the keys)
+fontsizes := array[] of {14, 16, 18, 20, 22, 24, 27, 28, 32, 36, 48};
+
+fontpath(size: int): string
+{
+	if(size > 36)
+		return sys->sprint("/fonts/combined/unicode.sans.%d.font", size);
+	return sys->sprint("/fonts/combined/go.%d.font", size);
+}
 
 pickfont(px, nil: int): ref Font
 {
@@ -667,7 +720,9 @@ pickfont(px, nil: int): ref Font
 	for(i := 0; i < len fontsizes; i++)
 		if(fontsizes[i] <= px)
 			best = fontsizes[i];
-	f := Font.open(display, sys->sprint("/fonts/combined/go.%d.font", best));
+	f := Font.open(display, fontpath(best));
+	if(f == nil && best > 36)
+		f = Font.open(display, fontpath(36));
 	if(f == nil)
 		f = Font.open(display, "*default*");
 	return f;
@@ -676,6 +731,17 @@ pickfont(px, nil: int): ref Font
 #
 # Drawing
 #
+
+# what is drawn shown; nothing while there is no window: a touch's
+# events, a long press's tick, a stroke's word and the suggester's
+# answer can all come after a keyboard attached has hidden it (img nil,
+# and Image.flush raised "nil Image": osk broke, and with it the phone's
+# only keyboard)
+flush()
+{
+	if(img != nil)
+		img.flush(Draw->Flushnow);
+}
 
 colour(c: int): ref Image
 {
@@ -695,14 +761,14 @@ redraw()
 	img.draw(handlerect, colour(kc.board), nil, (0, 0));
 	if(state == Handle){
 		drawhandle();
-		img.flush(Draw->Flushnow);
+		flush();
 		return;
 	}
 	drawstrip();
 	for(i := 0; i < len layer.rows; i++)
 		for(j := 0; j < len layer.rows[i]; j++)
 			drawkey(layer.rows[i][j], 0);
-	img.flush(Draw->Flushnow);
+	flush();
 }
 
 drawhandle()
@@ -718,10 +784,22 @@ glyph(name: string, r: Rect, col: int): int
 	if(icon == nil)
 		return 0;
 	(i, m, err) := icon->paint(name, r.dx(), col);
-	if(err != nil || i == nil)
+	if(err != nil || i == nil){
+		glypherr(err);
 		return 0;
+	}
 	img.draw(r, i, m, (0, 0));
 	return 1;
+}
+
+# Why a glyph (the handle's keyboard, shift, delete) is not drawn, said
+# once: the cause is the machine's as a rule (no /icons/ui on the card).
+glyphsaid := 0;
+glypherr(e: string)
+{
+	if(glyphsaid++)
+		return;
+	sys->fprint(stderr, "osk: no glyphs: %s\n", e);
 }
 
 keylabel(k: ref Lkey): (string, string)	# text, or glyph name
@@ -870,6 +948,8 @@ drawlongpress(t: ref Tch)
 
 lpindex(t: ref Tch, p: Point): int
 {
+	if(img == nil)		# hidden while held
+		return t.lpsel;
 	n := len t.lpalts;
 	w := rowh * 9 / 10;
 	x := t.key.r.min.x;
@@ -948,7 +1028,7 @@ drawtrail(a, b: Point)
 	if(r < 2)
 		r = 2;
 	img.line(a, b, Draw->Enddisc, Draw->Enddisc, r, colour(kc.auto), (0, 0));
-	img.flush(Draw->Flushnow);
+	flush();
 }
 
 #
@@ -1160,7 +1240,7 @@ touchdown(id: int, p: Point, ms: int): ref Tch
 		if(t.key != nil){
 			drawkey(t.key, 1);
 			drawpreview(t.key);
-			img.flush(Draw->Flushnow);
+			flush();
 			case t.key.kind {
 			Osklayout->Kchar =>
 				if(altsfor(t.key.c) != nil)
@@ -1189,7 +1269,7 @@ touchmove(t: ref Tch, p: Point)
 		if(i != t.lpsel){
 			t.lpsel = i;
 			drawlongpress(t);
-			img.flush(Draw->Flushnow);
+			flush();
 		}
 		t.last = p;
 		return;
@@ -1215,7 +1295,7 @@ touchmove(t: ref Tch, p: Point)
 				drawkey(k, 1);
 				drawpreview(k);
 			}
-			img.flush(Draw->Flushnow);
+			flush();
 		}
 	}
 	t.last = p;
@@ -1255,6 +1335,10 @@ touchup(t: ref Tch, p: Point)
 		return;
 	}
 	if(t.stroke){
+		# the trail drawn over the keys goes with the finger, whatever
+		# the stroke turns out to be (a word, delete's words, a hide,
+		# the key it ended on)
+		redraw();
 		strokeup(t);
 		return;
 	}
@@ -1403,7 +1487,7 @@ tick(g: int)
 			redraw();	# the preview goes
 			drawkey(t.key, 1);
 			drawlongpress(t);
-			img.flush(Draw->Flushnow);
+			flush();
 		Osklayout->Kdel =>
 			t.repeating++;
 			if(t.repeating > 12 && wlit == nil)
@@ -1878,7 +1962,7 @@ swipeword(c: array of ref Cand)
 		sugg[i-1] = c[i].word;
 	suggauto = -1;
 	drawstrip();
-	img.flush(Draw->Flushnow);
+	flush();
 }
 
 # a suggestion touched: it in place of the word typed (or swiped)
@@ -2021,7 +2105,7 @@ suggested(g: int, c: array of ref Cand, corr: string)
 		sugg[j++] = w;
 	}
 	drawstrip();
-	img.flush(Draw->Flushnow);
+	flush();
 }
 
 clearsugg()
@@ -2030,7 +2114,7 @@ clearsugg()
 	suggauto = -1;
 	if(img != nil && state == Shown){
 		drawstrip();
-		img.flush(Draw->Flushnow);
+		flush();
 	}
 }
 

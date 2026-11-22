@@ -24,16 +24,12 @@ user:
   | stream: done (1 chunks, 15 bytes)
   | step 1: waiting for LLM response...
   | step 1: LLM response 32 bytes
-  | llm: STOP:max_tokens
-  | The first half,
-  | 
+  | llm: STOP:max_tokens\nThe first half,\n
   | harness: reply reached the output limit
   | step 2: writing 128 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (1 chunks, 16 bytes)
   | step 2: waiting for LLM response...
   | step 2: LLM response 31 bytes
-  | llm: STOP:end_turn
-  |  and the second.
-  | 
+  | llm: STOP:end_turn\n and the second.\n
   | turn done stop=end_turn steps=2

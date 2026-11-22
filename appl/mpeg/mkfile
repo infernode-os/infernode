@@ -18,8 +18,10 @@ MODULES=\
 SYSMODULES=\
 	sys.m\
 	draw.m\
+	layers.m\
 	wmclient.m\
 	i420.m\
+	parread.m\
 
 DISBIN=$ROOT/dis/mpeg
 

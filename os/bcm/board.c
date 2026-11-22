@@ -27,6 +27,44 @@ boardname(void)
 }
 
 /*
+ * The board, as the firmware's revision code names it. The banner
+ * above is printed before the mailbox has been tried, so it can name
+ * only the SoC; boardprobe's line names the board. Asked once: the
+ * revision does not change while the machine runs.
+ */
+int
+boardtype(void)
+{
+	static int type = -2;
+	u32int v[1];
+
+	if(type != -2)
+		return type;
+	type = Btunknown;
+	v[0] = 0;
+	if(mboxprop(Taggetrev, v, 0, 1) == 0 && (v[0] & (1<<23)) != 0)
+		type = (v[0] >> 4) & 0xFF;
+	return type;
+}
+
+char*
+boardmodel(void)
+{
+	switch(boardtype()){
+	case Bt3b:	return "Raspberry Pi 3B";
+	case Btzerow:	return "Raspberry Pi Zero W";
+	case Bt3bplus:	return "Raspberry Pi 3B+";
+	case Bt3aplus:	return "Raspberry Pi 3A+";
+	case Bt4b:	return "Raspberry Pi 4B";
+	case Btzero2w:	return "Raspberry Pi Zero 2 W";
+	case Bt400:	return "Raspberry Pi 400";
+	case Bt5:	return "Raspberry Pi 5";
+	case Btunknown:	return "board unknown";
+	}
+	return "board not known to this kernel";
+}
+
+/*
  * Ask the firmware what board this is.  Cheap, and it is the first
  * confirmation that the mailbox round trip works at all -- worth having
  * before anything depends on the mailbox for something harder to debug.
@@ -41,6 +79,9 @@ boardprobe(void)
 	if(mboxprop(Taggetrev, v, 0, 1) == 0){
 		uartputstr("board rev ");
 		uartputx(v[0]);
+		uartputstr(" (");
+		uartputstr(boardmodel());
+		uartputstr(")");
 	}else{
 		uartputstr("board rev query FAILED");
 	}
@@ -115,6 +156,10 @@ boardioprobe(void)
 	 * taken while the low bank is all xalloc has. See dmamem.c.
 	 */
 	dmainit();
+#ifdef RP1GPIO
+	USED(f14, f15);
+	return;			/* the console's pins are RP1's: uartrp1.c */
+#endif
 
 	f14 = gpiogetfunc(14);
 	f15 = gpiogetfunc(15);
@@ -473,7 +518,10 @@ boardcmdline(void)
  * A whole whitespace-delimited word, so that "tryboot" cannot be
  * found inside "tryboot.img" or "notryboot".
  */
-static int
+#ifndef NVME0
+static
+#endif
+int
 cmdlineword(char *w)
 {
 	char *p, *q;
@@ -599,10 +647,16 @@ boardbootwatchdog(void)
 	}else{
 		if(cmdlineword("nowatchdog")){
 			uartputstr("wdog: not armed (nowatchdog on the command line)\n");
+#ifdef EARLYWDOG
+			pmwdogoff();	/* l.S armed it */
+#endif
 			return;
 		}
 		if(!boardcandidate() && !cmdlineword("bootwatchdog") && !cmdlineword("wdogtest")){
 			uartputstr("wdog: not armed (not a tryboot candidate)\n");
+#ifdef EARLYWDOG
+			pmwdogoff();
+#endif
 			return;
 		}
 
@@ -1139,6 +1193,26 @@ bcmintrprobe(void)
 void
 boardstartcpus(uintptr entry)
 {
+#ifdef PSCICORES
+	/*
+	 * A BCM2712's cores wait in the secure firmware, not on a spin
+	 * table, and start one CPU_ON at a time. The target is the MPIDR
+	 * affinity, which on a Cortex-A76 has the core in Aff1.
+	 */
+	register u64int x0 __asm__("x0"), x1 __asm__("x1"), x2 __asm__("x2"), x3 __asm__("x3");
+	int i;
+
+	for(i = 1; i < MAXMACH; i++){
+		x0 = 0xC4000003;	/* CPU_ON */
+		x1 = (u64int)i << 8;
+		x2 = entry;
+		x3 = 0;
+		__asm__ volatile("smc #0" : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3) : : "memory",
+			"x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17");
+		if((s64int)x0 != 0)
+			print("cpu%d: psci cpu_on: %lld\n", i, (s64int)x0);
+	}
+#else
 	uvlong *rel;
 	int i;
 
@@ -1160,6 +1234,7 @@ boardstartcpus(uintptr entry)
 		cachedwbse(rel, sizeof *rel);
 	}
 	__asm__ volatile("dsb sy; sev" ::: "memory");
+#endif
 }
 
 /* exclusives work from here (the MMU is on): the mailbox may lock */

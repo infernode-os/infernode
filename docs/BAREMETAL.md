@@ -13,7 +13,10 @@ It runs on three machines. Two are below; the third, the **Raspberry Pi
 2026-10-15: the card, gigabit Ethernet at line rate, both radios, the
 USB-A sockets, the 7" panel and all four cores -- and boots to the desktop
 under QEMU's `raspi4b`; [os/bcm2711/README.md](../os/bcm2711/README.md)
-says what was proved on the board and what has not been tried.
+says what was proved on the board and what has not been tried. A
+**Raspberry Pi 5** (`os/bcm2712`) runs too, on a board and on nothing
+else, since no emulator models one; [its README](../os/bcm2712/README.md)
+says how far.
 
 It also runs on 64-bit RISC-V: `os/riscv64` is the architecture, with
 QEMU's RISC-V `virt` (`os/riscvvirt`) and the PolarFire SoC of the
@@ -29,7 +32,7 @@ BeagleV-Fire (`os/mpfs`) as its boards, built and booted by
 | storage | SD card | virtio-blk (the *same card image*) |
 | display, input | HDMI/DSI; USB keyboard and mouse; touch | ramfb; virtio keyboard and tablet |
 | also | Bluetooth, GPIO, audio, A/B kernel update, boot watchdog | a real-time clock |
-| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has — or GICv3 (`gic-version=3`), what the Orin and the Pi 5 have |
+| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has — or GICv3 (`gic-version=3`), what the Orin has |
 
 This document is how to run it, what controls it, and where things are.
 It deliberately does not say *why* things are as they are; three other
@@ -425,6 +428,101 @@ half is not (`RAMLIMIT`). **Displays**: [below](#displays); the short
 version is that with the 7" panel attached a monitor belongs on HDMI0,
 the socket beside the USB-C.
 
+### And on a Raspberry Pi Zero 2 W
+
+The Zero 2 W (`rpizero2w`) is a BCM2837 with 512 MB, so it takes the
+3B+'s kernel, boot firmware and `config.txt` unchanged;
+`tools/mkpiimage.sh rpizero2w` makes its card. **Run on a board** (a
+Zero 2 W Rev 1.0, revision `902120`, 2026-11-21), booted by tryboot
+beside Raspberry Pi OS on its card:
+
+| what | the boot says |
+|---|---|
+| the board | `mbox: board rev … 902120 (Raspberry Pi Zero 2 W), ARM memory 448MB`, `now 1000 MHz` |
+| Wi-Fi | `init: radio: firmware brcmfmac43436-sdio loaded`, `init: wifi: authenticated to …`, an address by DHCP, the network console on it |
+| Bluetooth | `init: bt: 98:fe:54:…` with `firmware /n/dos/firmware/SYN43430B0.hcd` in the card's `bt` file; 3 Mbaud, inquiry finds devices |
+| the camera | a Camera Module 2 (NoIR): `init: camera: /mnt/video 410 308 i420 30`, `camsrv` status `sensor=imx219`, 30 frames a second |
+
+Not yet run: the HDMI output (no display attached; the firmware's
+656x416 without one), a device on the OTG port, HDMI audio (#1216; the
+board has no jack, and `audiopwm` refuses to start on it: the jack's
+pins, GPIO 40 and 41, are its camera's enable and its radio's power).
+
+What differs is the radio. A Zero 2 W has a CYW43436 or a CYW43436s,
+by when it was made; `cat '#l1/ether1/ifstats'` says which (`chip:
+0xa9a6 rev 2` the 43436, `rev 1` the 43436s). Init picks the Wi-Fi
+firmware by it (`brcmfmac43436-sdio.*` or `brcmfmac43436s-sdio.*`, the
+card has both); the card's `bt` file names the Bluetooth patch,
+`SYN43430B0.hcd` for the 43436 and `SYN43430A1.hcd` for the 43436s:
+
+    firmware /n/dos/firmware/SYN43430B0.hcd
+
+They are Synaptics's, not Cypress's, under two licences
+(`os/bcm/card/LICENCE.synaptics-wifi`, `-bt`), pinned by
+`tools/pi-firmware-manifest-zero2w.txt` and
+`tools/pi-btfw-manifest-zero2w.txt`. There is no Zero 2 W image in a
+release yet: the Bluetooth patches' terms are narrower than the Cypress
+licence the other cards rely on, and that is not decided.
+
+No Ethernet: the network is Wi-Fi, or a USB adapter on the OTG port
+(micro-USB, through an OTG adapter), which is the DWC2's root port with
+no hub between. A router in WPA/WPA2 mixed mode (a TKIP group cipher)
+is joined: `ip/wpa` offers TKIP for the group when the access point
+refuses CCMP (wpa(8)). The console is the mini-UART on header pins 8
+and 10 (GPIO 14 and 15), as on the 3B+.
+
+### Clock speed
+
+The ARM clock is set in `config.txt`, by the Raspberry Pi firmware's
+own options; nothing in InferNode changes it while the machine runs,
+and no other software is needed. The firmware brings the cores up at
+`arm_freq_min`; at boot the kernel asks it, through the mailbox, for
+the most it allows and takes that (`boardclock()`, `os/bcm/board.c`),
+and the console says what came of it:
+
+    mbox: ARM clock 600 MHz, max 1400, now 1400 MHz
+
+The last number is what the machine runs at from then on. The maximum
+is the board's rating unless `config.txt` says otherwise: 1400 MHz on a
+3B+, 1000 on a Zero 2 W, 1500 on a Pi 4 (1800 with `arm_boost=1` on a
+board that can, as the Pi 4's card has it).
+
+The options are the firmware's, documented by Raspberry Pi under
+config.txt, "Overclocking options": `arm_freq` (the maximum, lower to
+underclock, higher to overclock), `arm_freq_min`, `over_voltage`,
+`force_turbo` and `temp_limit` (where the firmware throttles, default
+85 C). Add them to the card's `config.txt`, for instance to run a 3B+
+at a Zero 2 W's clock:
+
+    arm_freq=1000
+
+or to overclock a Zero 2 W (with a heatsink; not every chip takes it):
+
+    arm_freq=1200
+    over_voltage=2
+
+Three things to keep:
+
+- **Make the same change in `tryboot.txt`.** After a tryboot reset the
+  firmware reads it instead of `config.txt` (above), so a candidate
+  kernel otherwise runs at another clock.
+- **Leave `core_freq` and `core_freq_min` as they are.** They are the
+  VPU's clock, not the ARM's, and the console's baud is divided from it
+  once at boot (above).
+- Some combinations of `force_turbo` and `over_voltage` set a bit in
+  the chip's OTP that cannot be cleared; the firmware's documentation
+  says which.
+
+The firmware still caps the clock when it is hot or the supply sags.
+`#P` says whether it has (`os/bcm/devarch.c`):
+
+    cat '#P/cputemp' '#P/maxtemp' '#P/throttled'
+
+`throttled` is the firmware's flag word and what it means: `ok`, or
+`under-voltage`, `arm-capped`, `throttled` and `soft-temp-limit`,
+now and `-since-boot`. A benchmark run with anything there but `ok`
+did not run at the clock asked for. The files are read-only.
+
 ### Displays
 
 The firmware decides what is a display, **once, at power-on**, and the
@@ -495,14 +593,17 @@ bench machine depending on what these say. All are optional.
 
 | file | format | effect |
 |-|-|-|
-| `rootpath` | lines: `local`, or `net tcp!host!port` | Where userspace comes from, applied top to bottom. `local` unions the card's `dis/ lib/ fonts/ icons/` *after* the kernel's recovery root and binds `usr/` writable over `/usr`. `net …` mounts a Styx server (**no authentication**) on `/n/remote` and does the same from there. Absent = `local`. |
+| `rootpath` | lines: `local`, `net tcp!host!port`, or `gefs part` | Where userspace comes from, applied top to bottom. `local` unions the card's `dis/ lib/ fonts/ icons/` *after* the kernel's recovery root and binds `usr/` writable over `/usr`. `net …` mounts a Styx server (**no authentication**) on `/n/remote` and does the same from there. `gefs nvme0p3` starts gefs(4) (in the kernel) on `#S/nvme0p3`, mounts it on `/n/gefs` (adm tree `/n/gefs.adm`, snapshots `/n/dump`) and does the same from there; fill it with `sh -n /n/dos/dis/disk/gefsroot nvme0p3`. The first source with a `usr/` has `/usr`. Absent = `local`. |
 | `skiplogon` | existence only | The desktop starts without `wm/logon`, factotum or secstore. Keys will not persist. Delete it for the login screen. |
+| `cnsamode` | existence only | CNSA 2.0 strict authentication: every authenticated connection (mount, `listen`, `cpu`, the cpu listener) uses ML-KEM-1024 instead of ML-KEM-768, as `CNSAMODE` does for the hosted emulator, so the board can be one of a CNSA-mode fleet. Every node must agree; a mixed pair fails, and the error says which side is in CNSA mode. Read straight after the card is mounted, before anything can authenticate; it throws the kernel's one-way switch (`cnsamode on` on `/dev/sysctl`) and sets `/env/cnsamode` for `createsignerkey` and `signer`. Absent = ML-KEM-768. See [CRYPTO-MODERNIZATION.md](CRYPTO-MODERNIZATION.md). |
+| `strictlink` | existence only | Strict linking: the kernel refuses to link a module that has no type digests (dis(6)) instead of checking it by its 32-bit signatures, as `emu -L` does. Everything on a card built from this tree has them; a module copied on from an older build must be rebuilt. Read after `cnsamode`; it writes `1` to `/dev/strictlink`, the kernel's one-way switch. Absent = modules without digests still link. |
 | `wifi` | `essid <name>` and `password <phrase>`, one per line; the value is the rest of the line | Join at boot, before anyone logs in. **The card is FAT: no permissions, and this is a passphrase in clear text.** Absent = the radio is left alone. |
 | `bt` | one `/net/bt` ctl line per line (`#` comments). Typically `firmware /n/dos/firmware/BCM4345C0.hcd`, `up`, `name …`, `pairable on`, `discoverable on`, `baud 3000000` | Bluetooth, via `bt9p` on `/dev/eia0`. `firmware` must precede `up`; `baud` follows it (115200 without it: about 94 kbit/s). Absent = no Bluetooth. See [BLUETOOTH.md](BLUETOOTH.md). |
 | `btkeys` | factotum key syntax | Where `bt9p` keeps link keys so pairings survive a reboot. |
+| `camera` | one `camsrv` ctl line per line (`#` comments). Typically `rotate 90` for a camera mounted on its side; also `focus`, `fps`, `mode`, `flip` | Pi 4, Pi 5, the 3B+ and the Zero 2 W (a kernel with `#V`; run on the Pi 4, Pi 5 and Zero 2 W): `camsrv` started at boot on `/mnt/video`, for every session, and the lines written to `/mnt/video/0/ctl`, so every reader gets the picture the right way up. The sensor is powered only while something reads. Absent = nothing started; `wm/camera` starts `camsrv` itself, unturned. See camsrv(4). |
 | `netconsole` | first line: empty, or a token; a later line `interface ether0` (recommended) | A shell on **TCP 17010**, section 7. With `interface`, only connections arriving at that interface's addresses are served; without it, every interface, Wi-Fi included. Absent = off. |
 | `cpulisten` | empty, or an address (`tcp!*!17030`) on the first line | The remote-desktop listener: `cpu(1)` from another InferNode runs programs here that draw on its screen, authenticated by certificate and encrypted (AES-256). Needs this machine's certificate in `usr/inferno/keyring/default`, or it refuses to start. Runs in the desktop's narrowed namespace, headless or not. Empty = `tcp!*!rstyx` (6668). Absent = off. See [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md). |
-| `usbquirks` | one line per USB pointer or keyboard that needs it: `vid:pid word…`, the IDs in hex as the boot log prints them (`0eef:0005`). Words: `swapxy`, `invertx`, `inverty` (a touchscreen mounted turned or mirrored), `boot` (ignore the report descriptor and use the boot protocol), `report` (a keyboard: read its reports by its descriptor even though it has a boot protocol — every key at once on an n-key-rollover board, not six), `ignore` (no driver at all) | How `mouseusb` and `kbdusb` treat that device. `mouseusb` reads every pointer's own report descriptor, so a mouse, a tablet and a touchscreen that calls itself a mouse all work without an entry (#927). `kbdusb` reads a keyboard with the boot protocol when it has one and by its report descriptor when it has not, so this is only for a boot keyboard whose reports are wanted. `kbdusb=report` on the kernel's command line does that for every keyboard. Absent = no exceptions. |
+| `usbquirks` | one line per USB pointer or keyboard that needs it: `vid:pid word…`, the IDs in hex as the boot log prints them (`0eef:0005`). Words: `swapxy`, `invertx`, `inverty` (a touchscreen mounted turned or mirrored), `boot` (ignore the report descriptor and use the boot protocol), `report` (a keyboard: read its reports by its descriptor even though it has a boot protocol — every key at once on an n-key-rollover board, not six), `touch` / `notouch` (a pointer is / is not a touch screen, whatever its descriptor suggests), `ignore` (no driver at all) | How `mouseusb` and `kbdusb` treat that device. `mouseusb` reads every pointer's own report descriptor, so a mouse, a tablet and a touchscreen that calls itself a mouse all work without an entry (#927). A touch screen — a digitizer that says it is one or reports fingers (put into multi-touch mode when it has a Device Mode feature), or an absolute pointer with one button and no wheel — gets the Pi panel's gestures, `touchgest(2)`: a finger held still is button 3 (the context menus), two dragged the wheel, and each finger goes to `/dev/fingers` for the keyboard on the screen. A tablet with a mouse's buttons and wheel (QEMU's `usb-tablet`) is a pointer; `touch` makes a panel that declares more buttons a touch screen, `notouch` a one-button tablet a plain pointer. `kbdusb` reads a keyboard with the boot protocol when it has one and by its report descriptor when it has not, so this is only for a boot keyboard whose reports are wanted. `kbdusb=report` on the kernel's command line does that for every keyboard. Absent = no exceptions. |
 | `firmware/` | | Radio firmware, as above. |
 | `infernode8.img`, `tryboot.img`, `tryboot.cmd` | | The kernel, a candidate, and the word `tryboot` — section 4. |
 
@@ -535,9 +636,9 @@ the secondary cores; the Dis VM, running `/osinit.dis`.
 **`osinit`** (`os/init/osinit.b`), in order: a few more self-checks (the
 kernel image's SHA-1, GPIO, every core ticking, a JIT stress run) → bind
 `#I #p #e #u #s #A` → loopback → **read the card's partition table, name
-the partitions to `#S`, start `dossrv`, mount `/n/dos`** → apply
+the partitions to `#S`, start `dossrv`, mount `/n/dos`** → `cnsamode` → `strictlink` → apply
 `rootpath` → hand the Wi-Fi firmware to the radio → an 8 MB memory
-filesystem on `/tmp` → `wifi` → `bt` → the touch panel → a kernel network
+filesystem on `/tmp` → `wifi` → `bt` → `camera` → the touch panel → a kernel network
 card, if there is one (virt) → *spawn* the USB bus walk (keyboard, mouse,
 Ethernet arrive when they arrive) → *spawn* the network console → tell
 the kernel `booted` → **`sh -l` on the serial console.**
@@ -630,7 +731,7 @@ Kernel devices (`#x`) and where they appear. "Pi" and "virt" say which
 kernel includes them (`os/<board>/devtab.c`).
 
 The ones that exist only in the native kernel have manual pages:
-`sd(3)`, `boot(3)`, `ether(3)`, `gpio(3)`, `bench(3)`, `touch(3)`, `camera(3)`; with
+`sd(3)`, `boot(3)`, `ether(3)`, `gpio(3)`, `bench(3)`, `touch(3)`, `camera(3)`, `i2c(3)`; with
 `eia(3)`, `audio(3)`, `cons(3)`, `pointer(3)` and `draw(3)` for the rest.
 `osinit(8)` is the boot sequence and the card's control files as a
 reference page, and `mkcard(10.1)` the image tools. (`man 3 gpio` inside
@@ -638,7 +739,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 
 | | where | files | |
 |-|-|-|-|
-| `#c` | `/dev` | `cons consctl sysctl hostowner keyboard time random notquiterandom memory memtags sysstat sysname user jit` … | both |
+| `#c` | `/dev` | `cons consctl sysctl hostowner keyboard time random notquiterandom memory memtags heaptypes sysstat sysname user jit` … | both |
 | `#S` | `/dev` | `sdcard` (the whole device), `sdctl`, and one file per named range | both |
 | `#B` | `/dev` | `bootimage` (the running kernel, byte for byte), `bootargs` | both |
 | `#x` | `/dev` | `busec` — microseconds, for timing things honestly | both |
@@ -653,22 +754,22 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#G` | `/dev/gpio/N/` | `ctl` (`function in\|out\|alt0-5`, `pull up\|down\|none`, `edge rising\|falling\|both\|none`), `level`, `event` (blocks for an edge; `<µs> <level>`) | Pi |
 | `#T` | `/dev` | `touch` — the DSI panel's raw buffer; `touch.dis` turns it into pointer events | Pi |
 | `#A` | `/dev` | `audio audioctl` — the 3.5 mm jack | Pi |
-| `#V` | `/dev/camera/` | `ctl` (`source`, `mode W H`, `fps N`, `stream on\|off`; read for the state), `modes`, `frame` (one frame an open, an uncompressed `image(6)`), `raw` (the same, Bayer samples). Only the simulated sensor so far: a test pattern, as a Camera Module 3 would deliver it | both |
+| `#V` | `/dev/unicam/` | `ctl` (`format W H`, `power on\|off`, `stream on\|off`; read for the state), `frame` (one raw frame an open): the camera receiver and nothing beyond it; on a Pi 5 also `port 0\|1` (the connector), and a read names the sensor's bus (`i2c i2cN`) | Pi 4, Pi 5, bcm2837 (run on the Zero 2 W) |
+| `#J` | `/dev` | `i2c0ctl`, `i2c0data`: the bus on the ribbon connectors (Pi 4, bcm2837); `i2cNctl`, `i2cNdata` for the header's i2c0 and i2c1 and the camera connectors' i2c4 and i2c6 (Pi 5) | Pi 4, Pi 5, bcm2837 (run on the Zero 2 W) |
 | `#X` | `/dev/vm` | `ctl`, and `N/run`, `N/status` for each Dis VM: `vm(3)` | both |
 | `#p #e #s #M #\| #D` | `/prog /env /chan` … | processes, environment, served names, mounts, pipes, TLS records | both |
 
-**The camera** (`os/port/devcam.c`, infernode-os/infernode#1005) has one
-source so far, `test`: a simulated sensor (`os/port/campattern.c`) that
-makes raw 10-bit RGGB frames in the IMX708's binned modes — colour bars
-and a grey band that moves down four rows a frame — which the device
-debayers like any other. No emulator models a Pi camera, so this is what
-the device and everything above it are tested against until the Camera
-Module 3's driver adds a `csi0` source beside it:
+**The camera** on a Pi 4 or 5 follows the rule that device protocols live
+outside the kernel. `#V` receives raw frames and `#J` is its I2C; all
+that is known about the Camera Modules 3 and 2 is in `camsrv(4)`, a Limbo
+program that serves the camera as a live video feed in `vid9p`'s schema,
+with `$Bayer`, built-in C, for the pixel loop Limbo cannot keep up with:
 
-    echo mode 640 480 > /dev/camera/ctl
-    echo stream on > /dev/camera/ctl
-    cat /dev/camera/frame > /tmp/shot.bit
-    echo stream off > /dev/camera/ctl
+    mount {camsrv} /mnt/video
+    wm/camera
+
+The sensor runs only while something reads the feed. `camsrv -t` is the
+same program over a simulated sensor, which needs no hardware.
 
 **`/dev/sdctl`** has one verb, `part <name> <startblock> <nblocks>`, which
 names a range of the device so that it appears as `/dev/<name>`; reading

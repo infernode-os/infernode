@@ -168,7 +168,6 @@ boardprobe(void)
  * from the first process, which is what lets certificate checks and
  * file times be tested without a time server in the loop.
  */
-extern ulong boottime;		/* ../port/devcons.c */
 
 ulong
 rtcseconds(void)
@@ -192,16 +191,14 @@ boardioprobe(void)
 	rnginit();
 
 	/*
-	 * Two clocks want telling, because this kernel has two: tod.c's,
-	 * in nanoseconds, and devcons.c's boottime, which is what
-	 * /dev/time and therefore date(1) read. Setting only the first
-	 * printed "time of day set" over a machine that then said 1970,
-	 * which the harness's date check caught.
+	 * tod.c's clock is the only one: /dev/time and date(1) read it.
+	 * There used to be a second, devcons.c's boottime, and setting
+	 * only tod's printed "time of day set" over a machine that then
+	 * said 1970, which the harness's date check caught.
 	 */
 	s = rtcseconds();
 	if(s != 0){
 		todset((vlong)s * 1000000000LL, 0, 0);
-		boottime = s - TK2SEC(MACHP(0)->ticks);
 		print("rtc:  PL031 says %lud seconds since the epoch; time of day set\n", s);
 	}else
 		print("rtc:  PL031 reads zero; time of day not set\n");

@@ -31,9 +31,10 @@
 #		minute (or twelve times secs + 120 seconds passed: -icount
 #		runs take many times their seconds)
 #	dead	the shell did not answer afterwards
-#	leaked	with -L, Progs left in VMs 1-3 ten seconds after every sysfuzz
-#		ended; without it they are noted on the pass line, with the
-#		console's ^T^Td to say which
+#	leaked	with -L, Progs beyond sysfuzz's three harness Progs (two
+#		scratch exporters and check's 20-second timer) left in VMs 1-3;
+#		without it they are noted on the pass line, with the console's
+#		^T^Td to say which
 #
 # A failed run keeps the console and the machine in
 # $ROOT/tmp/nativefuzz/fail/<seed>/; rerun it with -n 1 -s <seed>. The
@@ -275,7 +276,11 @@ def one(seed, a, card):
 			if not CRASH.search(bytes(c.buf[mark:])):
 				kind, why = "dead", "the shell did not answer"
 			raise StopIteration
-		left = re.findall(rb"vm ([1-9]) progs ([1-9][0-9]*)", bytes(c.buf[mark:]))
+		# setup() leaves two scratch exporters, and check()'s nonblocking
+		# timer lives for 20 seconds while this count is taken after 10.
+		# These three are the harness baseline, not failed epoch cleanup.
+		counts = re.findall(rb"vm ([1-9]) progs ([1-9][0-9]*)", bytes(c.buf[mark:]))
+		left = [(v, str(int(n)-3).encode()) for v, n in counts if int(n) > 3]
 		if left:
 			# Progs left behind: killed ones still in a 9P call to a
 			# server that will not answer (another of their epoch's,

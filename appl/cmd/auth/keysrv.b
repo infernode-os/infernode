@@ -16,10 +16,35 @@ include "keyring.m";
 
 include "security.m";
 	auth: Auth;
+	login: Login;
+
+include "audit.m";
+	audit: Audit;
 
 include "arg.m";
 
 keydb := "/mnt/keys";
+
+#
+# The file's protocol, version 2 (keysrv(4)).  A read gives a challenge,
+# fresh after every write:
+#	keysrv 2 <challenge: 32 bytes in hex>
+# and a write answers it:
+#	<proof> [<new secret>]
+# with, for the secret keyfs(4) holds (the SHA-256 of the password),
+#	PRK = HMAC-SHA-384(challenge, secret)
+#	proof = HKDF-Expand(PRK, "infernode keysrv 2 proof" || user, 48)
+#	key || nonce = HKDF-Expand(PRK, "infernode keysrv 2 new secret" || user, 44)
+#	new secret = AES-256-GCM(key, nonce, SHA-256 of the new password)
+# each in hex.  The proof was the hash of the stored secret, the same
+# every time: whoever was once sent it could send it again.  The new
+# secret came as typed and was stored so, which no login then matched.
+#
+Version: con "keysrv 2 ";
+Challen: con 32;
+Prooflen: con Keyring->SHA384dlen;
+Sealedlen: con Keyring->SHA256dlen + 16;
+Maxwrong: con 5;	# wrong proofs in one session, then no more are taken
 
 Keysrv: module
 {
@@ -28,7 +53,7 @@ Keysrv: module
 
 usage()
 {
-	sys->fprint(sys->fildes(2), "usage: keysrv\n");
+	sys->fprint(sys->fildes(2), "usage: keysrv [-k keyfile]\n");
 	raise "fail:usage";
 }
 
@@ -38,7 +63,10 @@ init(nil: ref Draw->Context, args: list of string)
 	if(sys->pctl(Sys->FORKNS|Sys->NEWPGRP, nil) < 0)
 		err(sys->sprint("can't fork name space: %r"));
 
-	keyfile := "/usr/"+user()+"/keyring/default";
+	# The signer's own key, so that a client can tell this is the
+	# signer's key server: with a user's key (the default was the
+	# invoking user's) any holder of a certificate looked the same.
+	keyfile := "/keydb/signerkey";
 
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
@@ -48,6 +76,8 @@ init(nil: ref Draw->Context, args: list of string)
 		case o {
 		'k' =>
 			keyfile = arg->arg();
+			if(keyfile == nil)
+				usage();
 		* =>
 			usage();
 		}
@@ -63,11 +93,19 @@ init(nil: ref Draw->Context, args: list of string)
 		err("can't load Auth");
 	auth->init();
 
+	login = load Login Login->PATH;
+	if(login == nil)
+		err("can't load Login");
+
+	audit = load Audit Audit->PATH;	# optional: the audit log
+	if(audit != nil)
+		audit->init();
+
 	ai := kr->readauthinfo(keyfile);
 	if(ai == nil)
 		err(sys->sprint("can't read server key file %s: %r", keyfile));
 
-	(fd, id_or_err) := auth->server("sha256 aes_256_cbc" :: nil, ai, sys->fildes(0), 0);
+	(fd, id_or_err) := auth->server("aes_256_gcm" :: nil, ai, sys->fildes(0), 0);
 	if(fd == nil)
 		err(sys->sprint("can't authenticate: %s", id_or_err));
 
@@ -105,25 +143,65 @@ user(): string
 	return string buf[0:n];	
 }
 
+auditlog(event, msg: string)
+{
+	if(audit != nil)
+		audit->log("keysrv", event, msg);
+}
+
+auditval(s: string): string
+{
+	if(audit == nil)
+		return "";
+	return audit->value(s);
+}
+
 worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 {
-	(keydir, secret, err) := getuser(user);
-	if(keydir == nil || secret == nil){
-		if(err == nil)
-			err = "no existing secret";		# can't change it remotely until set
-	}
-	(nil, hash) := hashkey(secret);
-	for(;;)alt{
+	# The certificate's name is a directory of keyfs here: one name,
+	# as logind takes (certificates were issued for x/../alice).
+	err := login->okname(user);
+	if(err != nil)
+		err = "bad user name: " + err;
+	chal := login->nonce();
+	wrong := 0;
+	# The stored secret, the proof wanted, the key a new secret comes
+	# under and the new secret are each zeroed when the request that
+	# read or made them has been answered: they stayed in the heap for
+	# as long as the session, and after.
+	w: list of array of byte;
+	for(;;){
+	for(; w != nil; w = tl w)
+		login->zero(hd w);
+	alt{
 	<-exitc =>
 		exit;
-	(nil, nil, nil, rc) := <-file.read =>
+	(offset, count, nil, rc) := <-file.read =>
 		if(rc == nil)
 			break;
+		if(err == nil){
+			# the user as it is now, not as it was when the session began
+			(keydir, secret, e) := getuser(user);
+			w = secret :: w;
+			if(e == nil && (keydir == nil || secret == nil))
+				e = "no existing secret";		# can't change it remotely until set
+			if(e != nil){
+				rc <-= (nil, e);
+				break;
+			}
+		}
 		if(err != nil){
 			rc <-= (nil, err);
 			break;
 		}
-		rc <-= (nil, nil);
+		b := array of byte (Version + hex(chal));
+		if(offset >= len b)
+			rc <-= (nil, nil);
+		else{
+			if(offset + count > len b)
+				count = len b - offset;
+			rc <-= (b[offset:offset+count], nil);
+		}
 	(nil, data, nil, wc) := <-file.write =>
 		if(wc == nil)
 			break;
@@ -131,37 +209,139 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 			wc <-= (0, err);
 			break;
 		}
-		for(i := 0; i < len data; i++)
-			if(data[i] == byte ' ')
-				break;
-		if(string data[0:i] != hash){
+		(nf, flds) := sys->tokenize(string data, " ");
+		if(nf < 1 || nf > 2 || len hd flds != 2*Prooflen){
+			wc <-= (0, "keysrv speaks version 2 (keysrv(4)); update passwd");
+			break;
+		}
+		proof := unhex(hd flds);
+		sealed: array of byte;
+		if(nf == 2)
+			sealed = unhex(hd tl flds);
+		if(proof == nil || (nf == 2 && (sealed == nil || len sealed != Sealedlen))){
+			wc <-= (0, "bad proof or secret");
+			break;
+		}
+
+		# A challenge answers one write.  A wrong proof is counted
+		# where logind counts wrong passwords (they are guesses at the
+		# same thing, and were unlimited here), and a session takes
+		# only so many.
+		c := chal;
+		chal = login->nonce();
+		(rem, terr) := login->charge("keysrv", user);
+		if(terr != nil){
+			sys->fprint(sys->fildes(2), "keysrv: throttle: %s\n", terr);
+			wc <-= (0, "key service unavailable");
+			break;
+		}
+		if(rem > 0){
+			auditlog("authlock", sys->sprint("user=%s reason=throttled remaining=%d", auditval(user), rem));
+			wc <-= (0, sys->sprint("refused: too many failed attempts; retry in %ds", rem));
+			break;
+		}
+		# the secret as it is now: one changed since the session began
+		# (by an operator, or by this session) is the one to prove
+		(keydir, secret, e) := getuser(user);
+		w = secret :: w;
+		if(e == nil && (keydir == nil || secret == nil))
+			e = "no existing secret";
+		if(e != nil){
+			wc <-= (0, e);
+			break;
+		}
+		(want, key) := answers(c, secret, user);
+		w = want :: key :: w;
+		if(!login->same(proof, want)){
+			auditlog("authfail", sys->sprint("user=%s reason=secret", auditval(user)));
+			if(++wrong >= Maxwrong)
+				err = "too many wrong secrets in this session";
 			wc <-= (0, "wrong secret");
 			break;
 		}
-		if(++i >= len data){
+		login->cleared("keysrv", user);
+		if(nf == 1){
 			wc <-= (0, nil);
 			break;
 		}
-		if(len data - i < 8){
+		newsecret := kr->aesgcmdecrypt(kr->aesgcmsetup(key[0:32], key[32:]), sealed[0:Keyring->SHA256dlen], array of byte Wraplabel, sealed[Keyring->SHA256dlen:]);
+		w = newsecret :: w;
+		if(newsecret == nil || len newsecret != Keyring->SHA256dlen){
 			wc <-= (0, "unacceptable secret");
 			break;
 		}
-		if(putsecret(keydir, data[i:]) < 0){
+		if(putsecret(keydir, newsecret) != len newsecret){
 			wc <-= (0, sys->sprint("can't update secret: %r"));
 			break;
 		}
+		auditlog("secretchange", sys->sprint("user=%s", auditval(user)));
 		wc <-= (len data, nil);
+	}
 	}
 }
 
-hashkey(a: array of byte): (array of byte, string)
+Prooflabel: con "infernode keysrv 2 proof";
+Wraplabel: con "infernode keysrv 2 new secret";
+
+# the proof of secret for challenge c, and the key and nonce a new
+# secret is sealed under
+answers(c, secret: array of byte, user: string): (array of byte, array of byte)
 {
-	hash := array[Keyring->SHA256dlen] of byte;
-	kr->sha256(a, len a, hash, nil);
+	prk := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(secret, len secret, c, prk, nil);
+	proof := expand(prk, array of byte (Prooflabel + user), Prooflen);
+	key := expand(prk, array of byte (Wraplabel + user), 32+12);
+	login->zero(prk);
+	return (proof, key);
+}
+
+# HKDF-Expand (RFC 5869 2.3) with HMAC-SHA-384: one block is enough
+expand(prk, info: array of byte, n: int): array of byte
+{
+	t := array[Keyring->SHA384dlen] of byte;
+	b := array[len info + 1] of byte;
+	b[0:] = info;
+	b[len info] = byte 1;
+	kr->hmac_sha384(b, len b, prk, t, nil);
+	# a copy: a slice left the rest of the block behind its result
+	r := array[n] of byte;
+	r[0:] = t[0:n];
+	login->zero(t);
+	return r;
+}
+
+hex(a: array of byte): string
+{
 	s := "";
-	for(i := 0; i < len hash; i++)
-		s += sys->sprint("%2.2ux", int hash[i]);
-	return (hash, s);
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%2.2ux", int a[i]);
+	return s;
+}
+
+unhex(s: string): array of byte
+{
+	if(len s % 2 != 0)
+		return nil;
+	a := array[len s/2] of byte;
+	for(i := 0; i < len a; i++){
+		h := hexval(s[2*i]);
+		l := hexval(s[2*i+1]);
+		if(h < 0 || l < 0)
+			return nil;
+		a[i] = byte (h<<4 | l);
+	}
+	return a;
+}
+
+hexval(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
 }
 
 getuser(id: string): (string, array of byte, string)

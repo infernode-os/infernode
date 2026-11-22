@@ -281,6 +281,155 @@ testWebfsClone(t: ref T)
 	t.assert(connid != "1" || connid == "1", "got valid id: " + connid);
 }
 
+# the connections webfs lists
+nconndirs(): int
+{
+	fd := sys->open(WEB, Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	n := 0;
+	for(;;){
+		(nd, d) := sys->dirread(fd);
+		if(nd <= 0)
+			break;
+		for(i := 0; i < nd; i++)
+			if(d[i].mode & Sys->DMDIR)
+				n++;
+	}
+	return n;
+}
+
+# a new connection's number, its clone file read to its end as cat reads it
+cloneall(): int
+{
+	fd := sys->open(WEB + "/clone", Sys->OREAD);
+	if(fd == nil)
+		return -1;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return -1;
+	id := int string buf[0:n];
+	while(sys->read(fd, buf, len buf) > 0)
+		;
+	return id;
+}
+
+# The read that finds the end of clone made a second connection, which
+# put out the oldest idle one: another client's, with its URL set.
+testCloneOnce(t: ref T)
+{
+	before := nconndirs();
+	if(before < 0)
+		t.skip("webfs not mounted");
+	id := cloneall();
+	t.assert(id > 0, "a connection from clone");
+	t.asserteq(nconndirs() - before, 1, "connections made by reading clone to its end");
+	id2 := cloneall();
+	t.asserteq(id2, id + 1, "the next connection's number");
+
+	# a connection is its number and no other: with more digits than
+	# an int holds, a name wrapped round to a connection that was
+	(ok, nil) := sys->stat(sys->sprint("%s/%d", WEB, id));
+	t.asserteq(ok, 0, "a connection is found by its number");
+	(ok, nil) = sys->stat(sys->sprint("%s/%bd", WEB, (big 1 << 32) + big id));
+	t.asserteq(ok, -1, "and not by its number plus 2^32");
+	(ok, nil) = sys->stat(sys->sprint("%s/%bd", WEB, (big 1 << 24) + big id));
+	t.asserteq(ok, -1, "nor plus 2^24");
+}
+
+# A connection's headers have a number.
+testHeaderLimit(t: ref T)
+{
+	id := cloneall();
+	if(id < 0)
+		t.skip("webfs not mounted");
+	fd := sys->open(sys->sprint("%s/%d/ctl", WEB, id), Sys->OWRITE);
+	if(fd == nil)
+		t.fatal(sys->sprint("open ctl: %r"));
+	taken := 0;
+	for(i := 0; i < 1000; i++){
+		if(sys->fprint(fd, "header X-Test-%d: v", i) < 0)
+			break;
+		taken++;
+	}
+	t.assert(taken >= 32 && taken < 1000, sys->sprint("headers taken before one is refused: %d", taken));
+	t.assert(sys->fprint(fd, "url http://127.0.0.1:1/") > 0, "the connection still takes a URL");
+}
+
+cloner(n: int, done: chan of int)
+{
+	made := 0;
+	for(i := 0; i < n; i++)
+		if(cloneall() > 0)
+			made++;
+	done <-= made;
+}
+
+lsloop(stop: chan of int, done: chan of int)
+{
+	n := 0;
+	for(;;){
+		alt{
+		<-stop =>
+			done <-= n;
+			return;
+		* =>
+			;
+		}
+		if(nconndirs() < 0){
+			<-stop;
+			done <-= -1;
+			return;
+		}
+		sys->stat(sys->sprint("%s/%d/ctl", WEB, n % 40 + 1));
+		n++;
+	}
+}
+
+deadline(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# Connections made and reaped by one process while another lists and
+# walks them: the walker met a slot of the pool not yet filled, or just
+# emptied, and died on it, and every walk after waited for ever.
+testCloneWhileListing(t: ref T)
+{
+	if(nconndirs() < 0)
+		t.skip("webfs not mounted");
+	stop := chan of int;
+	ldone := chan of int;
+	cdone := chan of int;
+	spawn lsloop(stop, ldone);
+	for(i := 0; i < 3; i++)
+		spawn cloner(400, cdone);
+	tc := chan[1] of int;
+	spawn deadline(tc, 120000);
+	made := 0;
+	for(i = 0; i < 3; i++){
+		alt{
+		n := <-cdone =>
+			made += n;
+		<-tc =>
+			t.fatal("webfs stopped answering while connections were made and listed");
+		}
+	}
+	stop <-= 1;
+	listed := -1;
+	alt{
+	listed = <-ldone =>
+		;
+	<-tc =>
+		t.fatal("a listing of webfs never returned");
+	}
+	t.asserteq(made, 1200, "connections made");
+	t.assert(listed > 0, sys->sprint("listings meanwhile: %d", listed));
+	t.assert(nconndirs() > 0, "webfs lists its connections afterwards");
+}
+
 # webfs itself, at a mount point of the test's own: not whatever is at
 # /mnt/web, where a plain file left in the tree looks like a server
 startwebfs()
@@ -348,6 +497,9 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("WebfsHttp", testWebfsHttp);
 	run("WebfsClone", testWebfsClone);
+	run("CloneOnce", testCloneOnce);
+	run("HeaderLimit", testHeaderLimit);
+	run("CloneWhileListing", testCloneWhileListing);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

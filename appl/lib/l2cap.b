@@ -81,9 +81,17 @@ lesignal(d: array of byte): list of ref Ev
 		if(len d < 12)
 			return nil;
 		r := array[2] of byte;
+		min := bthci->get2(d, 4);
+		max := bthci->get2(d, 6);
+		latency := bthci->get2(d, 8);
+		timeout := bthci->get2(d, 10);
+		if(!leparamsok(min, max, latency, timeout)){
+			bthci->put2(r, 0, 1);	# rejected: saying yes commits the caller to it
+			return ref Ev.Send(frame(Cidlesig, sigcmd(16r13, id, r))) :: nil;
+		}
 		bthci->put2(r, 0, 0);
 		return ref Ev.Send(frame(Cidlesig, sigcmd(16r13, id, r))) ::
-			ref Ev.Params(bthci->get2(d, 4), bthci->get2(d, 6), bthci->get2(d, 8), bthci->get2(d, 10)) :: nil;
+			ref Ev.Params(min, max, latency, timeout) :: nil;
 	16r01 or 16r13 =>
 		return nil;
 	}
@@ -125,6 +133,21 @@ fragment(handle: int, f: array of byte, aclmtu: int): list of ref Pkt
 # Links.
 #
 
+# Connection parameters a controller will take (Core 5 Vol 6 Part B 4.5.1,
+# Vol 4 Part E 7.8.18): the interval 7.5 ms to 4 s in units of 1.25 ms and
+# in order, the latency at most 499 events, the supervision timeout 100 ms
+# to 32 s in units of 10 ms and longer than (1+latency) intervals twice over.
+leparamsok(min, max, latency, timeout: int): int
+{
+	if(min < 6 || max > 3200 || min > max)
+		return 0;
+	if(latency > 499)
+		return 0;
+	if(timeout < 10 || timeout > 3200)
+		return 0;
+	return timeout*4 > (1+latency)*max;	# 10 ms units against 1.25 ms units, doubled
+}
+
 Link.new(handle: int): ref Link
 {
 	return ref Link(handle, nil, nil, Ciddyn, 1, nil, 0, 0);
@@ -158,11 +181,34 @@ remove(l: ref Link, c: ref Chan)
 
 newchan(l: ref Link, psm: int): ref Chan
 {
-	c := ref Chan(l.nextcid++, 0, psm, Closed, Defmtu, 0, 0, 0, 0, 0);
-	if(l.nextcid > 16rffff)
-		l.nextcid = Ciddyn;
+	# the counter comes round, over the life of a link, to CIDs still in use
+	cid := 0;
+	for(tries := 0; tries <= 16rffff; tries++){
+		cid = l.nextcid++;
+		if(l.nextcid > 16rffff)
+			l.nextcid = Ciddyn;
+		if(l.find(cid) == nil)
+			break;
+	}
+	c := ref Chan(cid, 0, psm, Closed, Defmtu, 0, 0, 0, 0, 0);
 	l.chans = c :: l.chans;
 	return c;
+}
+
+nchans(l: ref Link): int
+{
+	n := 0;
+	for(cl := l.chans; cl != nil; cl = tl cl)
+		n++;
+	return n;
+}
+
+finddcid(l: ref Link, dcid: int): ref Chan
+{
+	for(cl := l.chans; cl != nil; cl = tl cl)
+		if((hd cl).dcid == dcid && (hd cl).state != Closed)
+			return hd cl;
+	return nil;
 }
 
 ident(l: ref Link): int
@@ -335,6 +381,17 @@ command(l: ref Link, code, id: int, d: array of byte): list of ref Ev
 			bthci->put2(r, 4, Rnopsm);
 			return sig(Cconnrsp, id, r) :: nil;
 		}
+		#
+		# A link holds so many channels and no more, and one for each of
+		# the peer's CIDs: nothing here ever expires a channel its peer
+		# leaves half open, so without a bound one peer has the heap.
+		#
+		if(nchans(l) >= Maxchans || finddcid(l, dcid) != nil){
+			bthci->put2(r, 0, 0);
+			bthci->put2(r, 2, dcid);
+			bthci->put2(r, 4, Rnoresources);
+			return sig(Cconnrsp, id, r) :: nil;
+		}
 		c := newchan(l, psm);
 		c.dcid = dcid;
 		c.state = Config;
@@ -351,7 +408,12 @@ command(l: ref Link, code, id: int, d: array of byte): list of ref Ev
 		c := findident(l, id);
 		if(c == nil || c.state != Waitconn)
 			return nil;
+		# the response to OUR request names our CID; one that names another is not it
+		if(bthci->get2(d, 2) != c.scid)
+			return nil;
 		result := bthci->get2(d, 4);
+		if(result == Rok && bthci->get2(d, 0) < Ciddyn)
+			result = Rnoresources;	# "accepted" on a fixed CID is no channel
 		case result {
 		Rok =>
 			c.dcid = bthci->get2(d, 0);

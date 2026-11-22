@@ -19,6 +19,7 @@
 #include	"../port/error.h"
 
 #include	"ip.h"
+#include	"libsec.h"
 
 enum
 {
@@ -64,8 +65,10 @@ enum
 	MSL2		= 10,
 	MSPTICK		= 50,		/* Milliseconds per timer tick */
 	DEF_MSS		= 1460,		/* Default mean segment */
+	Minmss		= 216,		/* the least segment a peer's MSS option is taken to ask for */
 	DEF_MSS6	= 1280,		/* Default mean segment (min) for v6 */
 	DEF_RTT		= 500,		/* Default round trip */
+	MINRTO		= 200,		/* Least retransmission timeout (ms) */
 	DEF_KAT		= 120000,	/* Default time (ms) between keep alives */
 	TCP_LISTEN	= 0,		/* Listen connection */
 	TCP_CONNECT	= 1,		/* Outgoing connection */
@@ -186,6 +189,7 @@ struct	Tcp
 	u32int	seq;
 	u32int	ack;
 	uchar	flags;
+	uchar	update;	/* this packet has updated sender state */
 	ushort	ws;	/* window scale option (if not zero) */
 	u32int	wnd;
 	ushort	urg;
@@ -195,6 +199,9 @@ struct	Tcp
 	uchar	nsack;	/* SACK blocks to send with this ACK */
 	u32int	sackl[Nsack];	/* left edges */
 	u32int	sackr[Nsack];	/* right edges: the sequence number AFTER the block */
+	uchar	nrsack;	/* SACK blocks this segment brought (apart from nsack, so a
+			 * RST or reply made from it carries none) */
+	u32int	rsackr[Nsack];	/* their right edges */
 };
 
 /*
@@ -226,11 +233,13 @@ struct Tcpctl
 		u32int	wnd;		/* Tcp send window */
 		u32int	urg;		/* Urgent data pointer */
 		u32int	wl2;
-		int	scale;		/* how much to right shift window in xmitted packets */
+		u32int	wl1;		/* Seg.seq of last window update */
+		int	scale;		/* how much to left shift peer windows we receive */
 		/* to implement tahoe and reno TCP */
 		u32int	dupacks;	/* number of duplicate acks rcvd */
 		int	recovery;	/* loss recovery flag */
 		u32int	rxt;		/* right window marker for recovery */
+		u32int	sackhigh;	/* the highest right edge the peer has SACKed */
 	} snd;
 	struct {
 		u32int	nxt;		/* Receive pointer to next uchar slot */
@@ -238,13 +247,13 @@ struct Tcpctl
 		u32int	urg;		/* Urgent pointer */
 		int	blocked;
 		int	una;		/* unacked data segs */
-		int	scale;		/* how much to left shift window in rcved packets */
+		int	scale;		/* how much to right shift our transmitted window */
 	} rcv;
 	u32int	iss;			/* Initial sequence number */
 	int	sawwsopt;		/* true if we saw a wsopt on the incoming SYN */
 	u32int	cwind;			/* Congestion window */
-	int	scale;			/* desired snd.scale */
-	ushort	ssthresh;		/* Slow start threshold */
+	int	scale;			/* desired rcv.scale */
+	u32int	ssthresh;		/* Slow start threshold */
 	int	resent;			/* Bytes just resent */
 	int	irs;			/* Initial received squence */
 	ushort	mss;			/* Mean segment size */
@@ -479,7 +488,7 @@ tcpstate(Conv *c, char *state, int n)
 		c->rq ? qlen(c->rq) : 0,
 		c->wq ? qlen(c->wq) : 0,
 		s->srtt, s->mdev,
-		s->cwind, s->snd.wnd, s->rcv.scale, s->rcv.wnd, s->snd.scale,
+		s->cwind, s->snd.wnd, s->snd.scale, s->rcv.wnd, s->rcv.scale,
 		s->timer.start, s->timer.count, s->rerecv,
 		s->katimer.start, s->katimer.count);
 }
@@ -805,6 +814,8 @@ tcpmtu(Proto *tcp, uchar *addr, int version, int *scale)
 			*scale = HaveWS | 0;
 	} else
 		*scale = HaveWS | 0;
+	if(ifc != nil)
+		runlock(&ifc->rwl);
 
 	return mtu;
 }
@@ -996,7 +1007,7 @@ htontcp6(Tcp *tcph, Block *data, Tcp6hdr *ph, Tcpctl *tcb)
 	hnputl(h->tcpseq, tcph->seq);
 	hnputl(h->tcpack, tcph->ack);
 	hnputs(h->tcpflag, (hdrlen<<10) | tcph->flags);
-	hnputs(h->tcpwin, tcph->wnd>>(tcb != nil ? tcb->snd.scale : 0));
+	hnputs(h->tcpwin, tcph->wnd>>(tcb != nil ? tcb->rcv.scale : 0));
 	hnputs(h->tcpurg, tcph->urg);
 
 	if(tcph->flags & SYN){
@@ -1096,7 +1107,7 @@ htontcp4(Tcp *tcph, Block *data, Tcp4hdr *ph, Tcpctl *tcb)
 	hnputl(h->tcpseq, tcph->seq);
 	hnputl(h->tcpack, tcph->ack);
 	hnputs(h->tcpflag, (hdrlen<<10) | tcph->flags);
-	hnputs(h->tcpwin, tcph->wnd>>(tcb != nil ? tcb->snd.scale : 0));
+	hnputs(h->tcpwin, tcph->wnd>>(tcb != nil ? tcb->rcv.scale : 0));
 	hnputs(h->tcpurg, tcph->urg);
 
 	if(tcph->flags & SYN){
@@ -1143,6 +1154,19 @@ htontcp4(Tcp *tcph, Block *data, Tcp4hdr *ph, Tcpctl *tcb)
 	return data;
 }
 
+static int
+tcpoptlen(uchar *opt, int n)
+{
+	int len;
+
+	if(n < 2)
+		return 0;
+	len = opt[1];
+	if(len < 2 || len > n)
+		return 0;
+	return len;
+}
+
 int
 ntohtcp6(Tcp *tcph, Block **bpp)
 {
@@ -1150,7 +1174,7 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 	uchar *optr;
 	ushort hdrlen;
 	ushort optlen;
-	int n;
+	int n, i;
 
 	*bpp = pullupblock(*bpp, TCP6_PKT+TCP6_HDRSIZE);
 	if(*bpp == nil)
@@ -1168,18 +1192,21 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 	}
 
 	tcph->flags = h->tcpflag[1];
+	tcph->update = 0;
 	tcph->wnd = nhgets(h->tcpwin);
 	tcph->urg = nhgets(h->tcpurg);
 	tcph->mss = 0;
 	tcph->ws = 0;
 	tcph->sackok = 0;
 	tcph->nsack = 0;
+	tcph->nrsack = 0;
 	tcph->len = nhgets(h->ploadlen) - hdrlen;
 
 	*bpp = pullupblock(*bpp, hdrlen+TCP6_PKT);
 	if(*bpp == nil)
 		return -1;
 
+	h = (Tcp6hdr *)((*bpp)->rp);
 	optr = h->tcpopt;
 	n = hdrlen - TCP6_HDRSIZE;
 	while(n > 0 && *optr != EOLOPT) {
@@ -1188,8 +1215,8 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 			optr++;
 			continue;
 		}
-		optlen = optr[1];
-		if(optlen < 2 || optlen > n)
+		optlen = tcpoptlen(optr, n);
+		if(optlen == 0)
 			break;
 		switch(*optr) {
 		case MSSOPT:
@@ -1203,6 +1230,12 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 		case SACKOKOPT:
 			if(optlen == SACKOK_LENGTH)
 				tcph->sackok = 1;
+			break;
+		case SACKOPT:
+			/* what the peer holds above a hole (RFC 2018): its
+			 * right edges are what loss detection needs */
+			for(i = 2; i + 8 <= optlen && tcph->nrsack < Nsack; i += 8)
+				tcph->rsackr[tcph->nrsack++] = nhgetl(optr+i+4);
 			break;
 		}
 		n -= optlen;
@@ -1218,7 +1251,7 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 	uchar *optr;
 	ushort hdrlen;
 	ushort optlen;
-	int n;
+	int n, i;
 
 	*bpp = pullupblock(*bpp, TCP4_PKT+TCP4_HDRSIZE);
 	if(*bpp == nil)
@@ -1237,18 +1270,21 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 	}
 
 	tcph->flags = h->tcpflag[1];
+	tcph->update = 0;
 	tcph->wnd = nhgets(h->tcpwin);
 	tcph->urg = nhgets(h->tcpurg);
 	tcph->mss = 0;
 	tcph->ws = 0;
 	tcph->sackok = 0;
 	tcph->nsack = 0;
+	tcph->nrsack = 0;
 	tcph->len = nhgets(h->length) - (hdrlen + TCP4_PKT);
 
 	*bpp = pullupblock(*bpp, hdrlen+TCP4_PKT);
 	if(*bpp == nil)
 		return -1;
 
+	h = (Tcp4hdr *)((*bpp)->rp);
 	optr = h->tcpopt;
 	n = hdrlen - TCP4_HDRSIZE;
 	while(n > 0 && *optr != EOLOPT) {
@@ -1257,8 +1293,8 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 			optr++;
 			continue;
 		}
-		optlen = optr[1];
-		if(optlen < 2 || optlen > n)
+		optlen = tcpoptlen(optr, n);
+		if(optlen == 0)
 			break;
 		switch(*optr) {
 		case MSSOPT:
@@ -1273,6 +1309,12 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 			if(optlen == SACKOK_LENGTH)
 				tcph->sackok = 1;
 			break;
+		case SACKOPT:
+			/* what the peer holds above a hole (RFC 2018): its
+			 * right edges are what loss detection needs */
+			for(i = 2; i + 8 <= optlen && tcph->nrsack < Nsack; i += 8)
+				tcph->rsackr[tcph->nrsack++] = nhgetl(optr+i+4);
+			break;
 		}
 		n -= optlen;
 		optr += optlen;
@@ -1284,13 +1326,113 @@ ntohtcp4(Tcp *tcph, Block **bpp)
  *  For outgiing calls, generate an initial sequence
  *  number and put a SYN on the send queue
  */
+/*
+ * Initial sequence numbers (RFC 6528): a keyed hash of the connection's
+ * two ends, plus a clock.
+ *
+ * They were two draws from nrand, a linear congruential generator: its
+ * next output follows from its last, so whoever was given one sequence
+ * number (by connecting to any open port) knew the ones given to
+ * everyone after, which is what an off-path sender needs to forge a
+ * connection or write into one.  Hashed under a key nobody else has,
+ * one connection's number says nothing of another's; the clock keeps a
+ * pair of ends used again ahead of where it was.
+ *
+ * The key is the hardware generator's bytes, taken as hwrandom gives
+ * them and never waited for (the DRBG in random.c waits, and a machine
+ * with no generator must still have a network: see seedrand in
+ * devcons.c).  What the generator does not give is made up from nrand
+ * and the clock, which is no secret but no worse than what this
+ * replaces.
+ */
+static struct {
+	Lock	lk;
+	int	set;
+	uchar	key[32];
+} isn;
+
+static void
+isnkey(void)
+{
+	uchar k[sizeof isn.key];
+	uvlong t;
+	int i, n, got, try;
+
+	got = 0;
+	for(try = 0; try < 8 && got < sizeof k; try++){
+		n = hwrandom(k + got, sizeof k - got);
+		if(n < 0)
+			break;		/* no generator at all */
+		got += n;
+	}
+	for(i = got; i < sizeof k; i++)
+		k[i] = nrand(256);
+	t = fastticks(nil);
+	for(i = 0; i < 8; i++)
+		k[sizeof k - 1 - i] ^= t >> (8*i);
+	lock(&isn.lk);
+	if(!isn.set){
+		memmove(isn.key, k, sizeof isn.key);
+		isn.set = 1;
+	}
+	unlock(&isn.lk);
+	memset(k, 0, sizeof k);
+}
+
+static u32int
+tcpisn(uchar *laddr, ushort lport, uchar *raddr, ushort rport)
+{
+	uchar m[2*IPaddrlen + 4], d[SHA256dlen];
+	u32int h;
+
+	if(!isn.set)
+		isnkey();
+	memmove(m, laddr, IPaddrlen);
+	memmove(m + IPaddrlen, raddr, IPaddrlen);
+	m[2*IPaddrlen] = lport >> 8;
+	m[2*IPaddrlen + 1] = lport;
+	m[2*IPaddrlen + 2] = rport >> 8;
+	m[2*IPaddrlen + 3] = rport;
+	hmac_sha256(m, sizeof m, isn.key, sizeof isn.key, d, nil);
+	h = (u32int)d[0]<<24 | (u32int)d[1]<<16 | (u32int)d[2]<<8 | (u32int)d[3];
+	/* RFC 6528's M: a clock of four microseconds */
+	return h + (u32int)(fastticks2ns(fastticks(nil)) / 4000);
+}
+
+/*
+ * The segment size to send with, given the peer's MSS option (0 if it
+ * sent none) and ours.  Never more than ours; and never less than
+ * Minmss because the peer said so: a peer asking for one-byte segments
+ * had every byte sent in a packet of its own, and its out-of-order
+ * bytes each held a Block of ours.
+ */
+static int
+peermss(int theirs, int ours)
+{
+	if(theirs == 0 || theirs >= ours)
+		return ours;
+	if(theirs < Minmss)
+		theirs = Minmss;
+	if(theirs > ours)
+		theirs = ours;
+	return theirs;
+}
+
+/* is a reset's sequence number the one a reset must have? */
+static int
+rstexact(u32int seq, u32int nxt)
+{
+	return seq == nxt;
+}
+
 void
 tcpsndsyn(Conv *s, Tcpctl *tcb)
 {
-	tcb->iss = (nrand(1<<16)<<16)|nrand(1<<16);
+	tcb->iss = tcpisn(s->laddr, s->lport, s->raddr, s->rport);
 	tcb->rttseq = tcb->iss;
 	tcb->snd.wl2 = tcb->iss;
 	tcb->snd.una = tcb->iss;
+	tcb->snd.sackhigh = tcb->snd.una;	/* in this sequence space: 0 is half of them "after" una */
 	tcb->snd.ptr = tcb->rttseq;
 	tcb->snd.nxt = tcb->rttseq;
 	tcb->flgcnt++;
@@ -1524,8 +1666,7 @@ limbo(Conv *s, uchar *source, uchar *dest, Tcp *seg, int version)
 	tpriv = s->p->priv;
 	h = hashipa(source, seg->source);
 
-	for(l = &tpriv->lht[h]; *l != nil; l = &lp->next){
-		lp = *l;
+	for(l = &tpriv->lht[h]; (lp = *l) != nil; l = &lp->next){
 		if(lp->lport != seg->dest || lp->rport != seg->source || lp->version != version)
 			continue;
 		if(ipcmp(lp->raddr, source) != 0)
@@ -1535,21 +1676,19 @@ limbo(Conv *s, uchar *source, uchar *dest, Tcp *seg, int version)
 
 		/* each new SYN restarts the retransmits */
 		lp->irs = seg->seq;
+		lp->rexmits = 0;
 		break;
 	}
-	lp = *l;
-	if(lp == nil){
-		if(tpriv->nlimbo >= Maxlimbo && tpriv->lht[h]){
-			lp = tpriv->lht[h];
-			tpriv->lht[h] = lp->next;
-			lp->next = nil;
+	if((lp = *l) == nil){
+		if(tpriv->nlimbo >= Maxlimbo && (lp = tpriv->lht[h]) != nil){
+			if((tpriv->lht[h] = lp->next) == nil)
+				l = &tpriv->lht[h];
 		} else {
-			lp = malloc(sizeof(*lp));
-			if(lp == nil)
+			if((lp = malloc(sizeof(*lp))) == nil)
 				return;
 			tpriv->nlimbo++;
 		}
-		*l = lp;
+		lp->next = nil;
 		lp->version = version;
 		ipmove(lp->laddr, dest);
 		ipmove(lp->raddr, source);
@@ -1559,12 +1698,14 @@ limbo(Conv *s, uchar *source, uchar *dest, Tcp *seg, int version)
 		lp->rcvscale = seg->ws;
 		lp->sackok = seg->sackok;
 		lp->irs = seg->seq;
-		lp->iss = (nrand(1<<16)<<16)|nrand(1<<16);
+		lp->iss = tcpisn(dest, seg->dest, source, seg->source);
+		lp->rexmits = 0;
+		*l = lp;
 	}
 
 	if(sndsynack(s->p, lp) < 0){
-		*l = lp->next;
 		tpriv->nlimbo--;
+		*l = lp->next;
 		free(lp);
 	}
 }
@@ -1577,40 +1718,23 @@ limborexmit(Proto *tcp)
 {
 	Tcppriv *tpriv;
 	Limbo **l, *lp;
-	int h;
-	int seen;
 	ulong now;
+	int h;
 
 	tpriv = tcp->priv;
 
 	if(!canqlock(&tcp->ql))
 		return;
-	seen = 0;
 	now = NOW;
-	for(h = 0; h < NLHT && seen < tpriv->nlimbo; h++){
-		for(l = &tpriv->lht[h]; *l != nil && seen < tpriv->nlimbo; ){
-			lp = *l;
-			seen++;
-			if(now - lp->lastsend < (lp->rexmits+1)*SYNACK_RXTIMER)
-				continue;
-
-			/* time it out after 1 second */
-			if(++(lp->rexmits) > 5){
-				tpriv->nlimbo--;
-				*l = lp->next;
-				free(lp);
-				continue;
-			}
-
-			/* if we're being attacked, don't bother resending SYN ACK's */
-			if(tpriv->nlimbo > 100)
-				continue;
-
-			if(sndsynack(tcp, lp) < 0){
-				tpriv->nlimbo--;
-				*l = lp->next;
-				free(lp);
-				continue;
+	for(h = 0; h < NLHT; h++){
+		for(l = &tpriv->lht[h]; (lp = *l) != nil; ){
+			if(now - lp->lastsend >= (lp->rexmits+1)*SYNACK_RXTIMER){
+				if(++(lp->rexmits) > 5 || sndsynack(tcp, lp) < 0){
+					tpriv->nlimbo--;
+					*l = lp->next;
+					free(lp);
+					continue;
+				}
 			}
 
 			l = &lp->next;
@@ -1708,8 +1832,10 @@ tcpincoming(Conv *s, Tcp *segp, uchar *src, uchar *dst, uchar version)
 		return nil;
 
 	new = Fsnewcall(s, src, segp->source, dst, segp->dest, version);
-	if(new == nil)
+	if(new == nil){
+		free(lp);
 		return nil;
+	}
 
 	memmove(new->ptcl, s->ptcl, sizeof(Tcpctl));
 	tcb = (Tcpctl*)new->ptcl;
@@ -1731,14 +1857,14 @@ tcpincoming(Conv *s, Tcp *segp, uchar *src, uchar *dst, uchar version)
 	tcb->rttseq = tcb->iss;
 	tcb->snd.wl2 = tcb->iss;
 	tcb->snd.una = tcb->iss+1;
+	tcb->snd.sackhigh = tcb->snd.una;	/* in this sequence space: 0 is half of them "after" una */
 	tcb->snd.ptr = tcb->iss+1;
 	tcb->snd.nxt = tcb->iss+1;
 	tcb->flgcnt = 0;
 	tcb->flags |= SYNACK;
 
 	/* our sending max segment size cannot be bigger than what he asked for */
-	if(lp->mss != 0 && lp->mss < tcb->mss)
-		tcb->mss = lp->mss;
+	tcb->mss = peermss(lp->mss, tcb->mss);
 
 	/* he offered SACK and sndsynack accepted: describe our holes to him */
 	tcb->sackok = lp->sackok;
@@ -1747,7 +1873,7 @@ tcpincoming(Conv *s, Tcp *segp, uchar *src, uchar *dst, uchar version)
 	tcpsetscale(new, tcb, lp->rcvscale, lp->sndscale);
 
 	/* the congestion window always starts out as a single segment */
-	tcb->snd.wnd = segp->wnd;
+	tcb->snd.wnd = segp->wnd << tcb->snd.scale;
 	tcb->cwind = tcb->mss;
 
 	/* set initial round trip time */
@@ -1855,27 +1981,70 @@ update(Conv *s, Tcp *seg)
 	u32int acked;
 	u32int expand;
 	Tcppriv *tpriv;
+	int i, newsack;
 
 	tpriv = s->p->priv;
 	tcb = (Tcpctl*)s->ptcl;
-
-	/* if everything has been acked, force output(?) */
-	if(seq_gt(seg->ack, tcb->snd.nxt)) {
-		tcb->flags |= FORCE;
+	if(seg->update)
 		return;
+	seg->update = 1;
+	if((seg->flags & ACK) == 0)
+		return;
+
+	/* An ACK for data not yet sent must not change window or recovery state. */
+	if(seq_gt(seg->ack, tcb->snd.nxt))
+		return;
+	if(seq_lt(seg->ack, tcb->snd.una))
+		return;
+
+	/* RFC 793: accept a window update only from a newer segment/ACK pair. */
+	if(seq_gt(seg->seq, tcb->snd.wl1)
+	|| (seg->seq == tcb->snd.wl1
+	&& (seq_gt(seg->ack, tcb->snd.wl2)
+	|| (seg->ack == tcb->snd.wl2 && seg->wnd > tcb->snd.wnd)))){
+		tcb->snd.wl1 = seg->seq;
+		tcb->snd.wl2 = seg->ack;
+		tcb->snd.wnd = seg->wnd;
+		if(tcb->snd.wnd == 0){
+			tcb->snd.dupacks = 0;
+			tcb->snd.recovery = 0;
+		}
 	}
 
-	/* added by Dong Lin for fast retransmission */
+	/*
+	 *  A duplicate ACK (RFC 5681): the same ACK, no data, the same window.
+	 *  Or, as RFC 6675 counts them, an ACK at snd.una whose SACK blocks
+	 *  reach past any the peer has sent before: it holds new data above a
+	 *  hole, whether or not this segment carries data of its own.  Without
+	 *  this a peer that sends requests as it acknowledges (9P: every new
+	 *  Tread carries the ACK) never made a duplicate, and every loss waited
+	 *  for the retransmission timer: at 1% loss, 9 of 10 retransmissions.
+	 */
+	newsack = 0;
+	for(i = 0; i < seg->nrsack; i++)
+		if(seq_gt(seg->rsackr[i], tcb->snd.una) && seq_le(seg->rsackr[i], tcb->snd.nxt)
+		&& (seq_le(tcb->snd.sackhigh, tcb->snd.una) || seq_gt(seg->rsackr[i], tcb->snd.sackhigh))){
+			tcb->snd.sackhigh = seg->rsackr[i];
+			newsack = 1;
+		}
 	if(seg->ack == tcb->snd.una
 	&& tcb->snd.una != tcb->snd.nxt
-	&& seg->len == 0
-	&& seg->wnd == tcb->snd.wnd) {
+	&& tcb->snd.wnd != 0
+	&& (newsack || (seg->len == 0 && seg->wnd == tcb->snd.wnd))) {
 
-		/* this is a pure ack w/o window update */
 		netlog(s->p->f, Logtcprxmt, "dupack %lud ack %lud sndwnd %d advwin %d\n",
 			tcb->snd.dupacks, seg->ack, tcb->snd.wnd, seg->wnd);
 
-		if(++tcb->snd.dupacks == TCPREXMTTHRESH) {
+		/*
+		 *  Lost after three duplicates, or (RFC 6675's IsLost) once more
+		 *  than three segments' worth above it is SACKed: a receiver that
+		 *  coalesces what follows a hole SACKs it all in one or two ACKs,
+		 *  and three duplicates never came.
+		 */
+		++tcb->snd.dupacks;
+		if(!tcb->snd.recovery
+		&& (tcb->snd.dupacks >= TCPREXMTTHRESH
+		 || (newsack && tcb->snd.sackhigh - tcb->snd.una > (TCPREXMTTHRESH+1)*tcb->mss))) {
 			/*
 			 *  tahoe tcp rxt the packet, half sshthresh,
  			 *  and set cwnd to one packet
@@ -1887,15 +2056,6 @@ update(Conv *s, Tcp *seg)
 		} else {
 			/* do reno tcp here. */
 		}
-	}
-
-	/*
-	 *  update window
-	 */
-	if(seq_gt(seg->ack, tcb->snd.wl2)
-	|| (tcb->snd.wl2 == seg->ack && seg->wnd > tcb->snd.wnd)){
-		tcb->snd.wnd = seg->wnd;
-		tcb->snd.wl2 = seg->ack;
 	}
 
 	if(!seq_gt(seg->ack, tcb->snd.una)){
@@ -2020,6 +2180,14 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 	h6 = (Tcp6hdr*)(bp->rp);
 
 	if((h4->vihl&0xF0)==IP_VER4) {
+		if(BLEN(bp) < TCP4_PKT+TCP4_HDRSIZE){
+	Badhdr:
+			tpriv->stats[HlenErrs]++;
+			tpriv->stats[InErrs]++;
+			netlog(f, Logtcp, "bad tcp header\n");
+			freeblist(bp);
+			return;
+		}
 		version = V4;
 		length = nhgets(h4->length);
 		v4tov6(dest, h4->tcpdst);
@@ -2038,6 +2206,9 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 
 		hdrlen = ntohtcp4(&seg, &bp);
 		if(hdrlen < 0 || hdrlen > length){
+			/* ntohtcp4 freed the block where it failed; where it did not, it is still ours */
+			if(hdrlen >= 0)
+				freeblist(bp);
 			tpriv->stats[HlenErrs]++;
 			tpriv->stats[InErrs]++;
 			netlog(f, Logtcp, "bad tcp hdr len\n");
@@ -2055,10 +2226,14 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 		}
 	}
 	else {
-		int ttl = h6->ttl;
-		int proto = h6->proto;
+		int ttl, proto;
+
+		if(BLEN(bp) < TCP6_PKT+TCP6_HDRSIZE)
+			goto Badhdr;
 
 		version = V6;
+		ttl = h6->ttl;
+		proto = h6->proto;
 		length = nhgets(h6->ploadlen);
 		ipmove(dest, h6->tcpdst);
 		ipmove(source, h6->tcpsrc);
@@ -2080,6 +2255,8 @@ tcpiput(Proto *tcp, Ipifc*, Block *bp)
 
 		hdrlen = ntohtcp6(&seg, &bp);
 		if(hdrlen < 0 || hdrlen > length){
+			if(hdrlen >= 0)
+				freeblist(bp);
 			tpriv->stats[HlenErrs]++;
 			tpriv->stats[InErrs]++;
 			netlog(f, Logtcp, "bad tcp hdr len\n");
@@ -2151,7 +2328,7 @@ reset:
 	qunlock(&tcp->ql);
 
 	/* fix up window */
-	seg.wnd <<= tcb->rcv.scale;
+	seg.wnd <<= tcb->snd.scale;
 
 	/* every input packet in puts off the keep alive time out */
 	tcpsetkacounter(tcb);
@@ -2177,6 +2354,8 @@ reset:
 		if(seg.flags & SYN) {
 			procsyn(s, &seg);
 			if(seg.flags & ACK){
+				tcb->snd.wl1 = seg.seq;
+				tcb->snd.wl2 = seg.ack;
 				update(s, &seg);
 				tcpsynackrtt(s);
 				tcpsetstate(s, Established);
@@ -2254,10 +2433,12 @@ reset:
 	 */
 	if(seg.seq != tcb->rcv.nxt)
 	if(length != 0 || (seg.flags & (SYN|FIN))) {
+		/* update() can retransmit and consume FORCE; set it first so one
+		 * input segment cannot provoke a retransmit and a second ACK. */
+		tcb->flags |= FORCE;
 		update(s, &seg);
 		if(addreseq(tcb, tpriv, &seg, bp, length) < 0)
-			print("reseq %I.%d -> %I.%d\n", s->raddr, s->rport, s->laddr, s->lport);
-		tcb->flags |= FORCE;
+			netlog(f, Logtcp, "reseq %I.%d -> %I.%d\n", s->raddr, s->rport, s->laddr, s->lport);
 		goto output;
 	}
 
@@ -2267,11 +2448,25 @@ reset:
 	 */
 	for(;;) {
 		if(seg.flags & RST) {
-			if(tcb->state == Established) {
-				tpriv->stats[EstabResets]++;
-				if(tcb->rcv.nxt != seg.seq)
-					print("out of order RST rcvd: %I.%d -> %I.%d, rcv.nxt %lux seq %lux\n", s->raddr, s->rport, s->laddr, s->lport, tcb->rcv.nxt, seg.seq);
+			/*
+			 * RFC 5961 3.2.  A reset anywhere in the window closed
+			 * the connection, and the window is half a megabyte: a
+			 * sender who knows the two ends and not the sequence
+			 * number needed some eight thousand tries.  Only the
+			 * reset at exactly the next number expected is one;
+			 * any other in the window is answered with an ACK,
+			 * which tells a real peer where we are, and it will
+			 * send its reset again there.
+			 */
+			if(!rstexact(seg.seq, tcb->rcv.nxt)){
+				netlog(f, Logtcp, "RST not at rcv.nxt: %I.%d -> %I.%d, rcv.nxt %lux seq %lux\n",
+					s->raddr, s->rport, s->laddr, s->lport, tcb->rcv.nxt, seg.seq);
+				freeblist(bp);
+				tcb->flags |= FORCE;
+				goto output;
 			}
+			if(tcb->state == Established)
+				tpriv->stats[EstabResets]++;
 			localclose(s, Econrefused);
 			goto raise;
 		}
@@ -2286,8 +2481,12 @@ reset:
 					"bad seq in Syn_received");
 				goto raise;
 			}
+			tcb->snd.wl1 = seg.seq;
+			tcb->snd.wl2 = seg.ack;
+			tcb->snd.wnd = seg.wnd;
 			update(s, &seg);
 			tcpsetstate(s, Established);
+			break;
 		case Established:
 		case Close_wait:
 			update(s, &seg);
@@ -2533,18 +2732,32 @@ tcpoutput(Conv *s)
 		 * window probes to one
 		 */
 		if(tcb->snd.wnd == 0){
-			if(sent != 0) {
-				if((tcb->flags&FORCE) == 0)
-					break;
-//				tcb->snd.ptr = tcb->snd.una;
-			}
-			usable = 1;
+			/* A forced ACK is not a zero-window probe.  Only a retransmit
+			 * may put the oldest byte on the wire while the window is shut. */
+			if(sent != 0 && (tcb->flags&RETRAN) == 0)
+				usable = 0;
+			else
+				usable = 1;
 		}
 		else {
 			usable = tcb->cwind;
 			if(tcb->snd.wnd < usable)
 				usable = tcb->snd.wnd;
-			usable -= sent;
+			/*
+			 *  more in flight than the window allows: nothing
+			 *  more.  usable is unsigned, and the difference
+			 *  wrapped to 4G when the peer's right edge drew back
+			 *  even a byte (a scaled window is rounded down to its
+			 *  granularity, 8 bytes at scale 3, Linux's too): the
+			 *  sender then sent a full segment each time it could,
+			 *  hundreds of K past the window, all of it dropped by
+			 *  the receiver, and recovered a segment a round trip.
+			 *  A Pi 4's devssl over loopback ran at 1 MB/s.
+			 */
+			if(usable > sent)
+				usable -= sent;
+			else
+				usable = 0;
 		}
 		ssize = sndcnt-sent;
 		if(ssize && usable < 2)
@@ -2854,17 +3067,23 @@ void
 tcprxmit(Conv *s)
 {
 	Tcpctl *tcb;
+	u32int flight;
 
 	tcb = (Tcpctl*)s->ptcl;
 
+	/*
+	 *  Half what was in flight, at least two segments (RFC 5681 3.1).
+	 *  It was set to one segment: after any loss the window then grew
+	 *  by a segment a round trip from one, never doubling, and a link
+	 *  that loses now and then (WiFi) kept it a few segments wide.
+	 */
+	flight = tcb->snd.nxt - tcb->snd.una;
+	tcb->ssthresh = flight/2;
+	if(tcb->ssthresh < 2*tcb->mss)
+		tcb->ssthresh = 2*tcb->mss;
+
 	tcb->flags |= RETRAN|FORCE;
 	tcb->snd.ptr = tcb->snd.una;
-
-	/*
-	 *  We should be halving the slow start threshhold (down to one
-	 *  mss) but leaving it at mss seems to work well enough
-	 */
- 	tcb->ssthresh = tcb->mss;
 
 	/*
 	 *  pull window down to a single packet
@@ -2941,8 +3160,7 @@ procsyn(Conv *s, Tcp *seg)
 	tcb->irs = seg->seq;
 
 	/* our sending max segment size cannot be bigger than what he asked for */
-	if(seg->mss != 0 && seg->mss < tcb->mss)
-		tcb->mss = seg->mss;
+	tcb->mss = peermss(seg->mss, tcb->mss);
 
 	/*
 	 *  every SYN of ours offers SACK, so his SYN (or SYN ACK) carrying
@@ -3018,6 +3236,8 @@ sackblocks(Tcpctl *tcb, Tcp *seg)
 	seg->nsack = n;
 }
 
+static int reseqsaid;	/* when the queue's limit was last reported, in ms; 0 never */
+
 int
 addreseq(Tcpctl *tcb, Tcppriv *tpriv, Tcp *seg, Block *bp, ushort length)
 {
@@ -3050,16 +3270,16 @@ addreseq(Tcpctl *tcb, Tcppriv *tpriv, Tcp *seg, Block *bp, ushort length)
 	qmax = tcb->window;
 	nmax = (tcb->window + tcb->mss - 1) / tcb->mss;
 	if(tcb->reseqlen > qmax || tcb->nreseq > nmax){
-		print("resequence queue limit: %d bytes/%d packets (max %d/%d)\n",
-			tcb->reseqlen, tcb->nreseq, qmax, nmax);
-		i = 0;
-		for(rp1 = tcb->reseq; rp1 != nil; rp1 = rp1->next){
-	  		print("%#lux %#lux %#ux\n", rp1->seg.seq,
-	  			rp1->seg.ack, rp1->seg.flags);
-			if(i++ > 10){
-				print("...\n");
-				break;
-			}
+		/*
+		 * Said once a minute at most: the peer chooses how often
+		 * this happens, and a dozen lines on a serial console for
+		 * each was the peer writing the console.
+		 */
+		i = NOW;
+		if(reseqsaid == 0 || i - reseqsaid >= 60000){
+			reseqsaid = i | 1;
+			print("tcp: resequence queue limit: %d bytes/%d packets (max %d/%d)\n",
+				tcb->reseqlen, tcb->nreseq, qmax, nmax);
 		}
 
 		// delete entire reassembly queue; wait for retransmit.
@@ -3242,10 +3462,16 @@ tcpctl(Conv* c, char** f, int n)
 		return tcphangup(c);
 	if(n >= 1 && strcmp(f[0], "keepalive") == 0)
 		return tcpstartka(c, f, n);
-	if(n >= 1 && strcmp(f[0], "checksum") == 0)
+	if(n >= 1 && strcmp(f[0], "checksum") == 0){
+		if(n < 2)
+			return "insufficient arguments";
 		return tcpsetchecksum(c, f, n);
-	if(n >= 1 && strcmp(f[0], "tcpporthogdefense") == 0)
+	}
+	if(n >= 1 && strcmp(f[0], "tcpporthogdefense") == 0){
+		if(n < 2)
+			return "insufficient arguments";
 		return tcpporthogdefensectl(f[1]);
+	}
 	return "unknown control request";
 }
 
@@ -3261,6 +3487,7 @@ tcpstats(Proto *tcp, char *buf, int len)
 	e = p+len;
 	for(i = 0; i < Nstats; i++)
 		p = seprint(p, e, "%s: %lud\n", statnames[i], priv->stats[i]);
+	p = seprint(p, e, "InLimbo: %d\n", priv->nlimbo);
 	return p - buf;
 }
 
@@ -3318,9 +3545,16 @@ tcpsettimer(Tcpctl *tcb)
 	x = backoff(tcb->backoff) *
 		(tcb->mdev + (tcb->srtt>>LOGAGAIN) + MSPTICK) / MSPTICK;
 
-	/* bounded twixt 1/2 and 64 seconds */
-	if(x < 500/MSPTICK)
-		x = 500/MSPTICK;
+	/*
+	 * bounded twixt MINRTO and 64 seconds.  The floor was 1/2 second;
+	 * on a LAN, whose round trip is a millisecond, it was every
+	 * retransmission's whole cost, and a lost segment that nothing
+	 * follows (a 9P request alone, a reply's last segment) is recovered
+	 * only by this timer.  200 ms, as Linux's TCP_RTO_MIN; a long round
+	 * trip sets a longer timeout of itself.
+	 */
+	if(x < MINRTO/MSPTICK)
+		x = MINRTO/MSPTICK;
 	else if(x > (64000/MSPTICK))
 		x = 64000/MSPTICK;
 	tcb->timer.start = x;
@@ -3368,12 +3602,17 @@ tcpinit(Fs *fs)
 #endif
 
 void
-tcpsetscale(Conv *s, Tcpctl *tcb, ushort rcvscale, ushort sndscale)
+tcpsetscale(Conv *s, Tcpctl *tcb, ushort peerscale, ushort localscale)
 {
-	if(rcvscale){
-		tcb->rcv.scale = rcvscale & 0xff;
-		tcb->snd.scale = sndscale & 0xff;
-		tcb->window = QMAX<<tcb->snd.scale;
+	if(peerscale){
+		/*
+		 * The peer's option scales the windows it advertises, hence our
+		 * send window.  Our option scales the receive windows we put on
+		 * the wire.  These assignments were historically reversed.
+		 */
+		tcb->snd.scale = peerscale & 0xff;
+		tcb->rcv.scale = localscale & 0xff;
+		tcb->window = QMAX<<tcb->rcv.scale;
 		qsetlimit(s->rq, tcb->window);
 		qsetlimit(s->wq, TCPWQLIMIT);
 	} else {

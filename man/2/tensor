@@ -1,0 +1,133 @@
+.TH TENSOR 2
+.SH NAME
+tensor \- a convolutional network's arithmetic, natively
+.SH SYNOPSIS
+.EX
+include "tensor.m";
+tensor := load Tensor Tensor->PATH;
+
+None, Relu, Sigmoid, Silu: con iota;
+
+conv:      fn(in: array of byte, c, h, w: int,
+               wt: array of byte, oc, kh, kw, stride, pad, group: int,
+               bias: array of byte, act: int, out: array of byte);
+add:       fn(a, b, out: array of byte);
+act:       fn(in, out: array of byte, act: int);
+maxpool:   fn(in: array of byte, c, h, w, k, stride, pad: int, out: array of byte);
+up2:       fn(in: array of byte, c, h, w: int, out: array of byte);
+s2d:       fn(in: array of byte, c, h, w: int, out: array of byte);
+letterbox: fn(pix: array of byte, w, h: int, scale: real,
+               fill, bgr: int, out: array of byte, ow, oh: int);
+toreal:    fn(t: array of byte, out: array of real);
+fromreal:  fn(r: array of real, out: array of byte);
+kind:      fn(): string;
+.EE
+.SH DESCRIPTION
+.B $Tensor
+is built in, as
+.B $I420
+is: the arithmetic a network spends its time in, done natively, so a
+model can be run by a Limbo program
+.RB ( /dis/lib/visnet.dis ,
+for
+.IR visionfs (4))
+that decides everything else.
+It keeps nothing between calls.
+.PP
+A tensor is an array of byte holding 32-bit floats, little-endian:
+.I c
+planes of
+.I h
+rows of
+.IR w ,
+4-byte aligned (an array, or a slice of one at a multiple of 4).
+.PP
+.I Conv
+computes
+.I out
+.RI ( oc
+by
+.I oh
+by
+.IR ow ,
+.I oh
+being
+.RI ( h +2 pad - kh )/ stride +1
+and
+.I ow
+likewise) as the activation of the convolution of
+.I in
+by
+.I wt
+.RI ( oc
+by
+.IR c / group
+by
+.I kh
+by
+.IR kw )
+plus
+.I bias
+.RI ( oc );
+.I group
+is 1 or
+.I c
+(a depthwise convolution, with
+.I oc
+=
+.IR c ).
+.I Add
+adds two tensors of one length,
+.I act
+applies an activation,
+.I maxpool
+takes maxima over
+.I k
+by
+.I k
+(padded with minus infinity),
+.I up2
+doubles the rows and columns (nearest), and
+.I s2d
+moves each 2 by 2 cell's samples (0,0) (1,0) (0,1) (1,1) to four times
+the channels.
+.PP
+.I Letterbox
+makes a network's input, 3 by
+.I oh
+by
+.IR ow ,
+from a picture of
+.I w
+by
+.I h
+.B Draw->RGB24
+pixels (blue, green, red in memory): scaled by
+.I scale
+with bilinear interpolation into the top left corner, the rest
+.IR fill ,
+its channels red, green, blue, or blue, green, red if
+.IR bgr .
+.I Toreal
+and
+.I fromreal
+convert between a tensor and an array of real of as many elements.
+.I Kind
+says what the arithmetic was compiled as:
+.B neon
+on arm64,
+.B c
+elsewhere.
+.PP
+Each function checks every size against its arrays before it begins,
+raising
+.B "array bounds error"
+for any that does not fit, so none reads or writes outside them; and
+lets the VM's other programs run while it computes.
+.SH SOURCE
+.B /libinterp/tensor.c
+.SH SEE ALSO
+.IR visionfs (4)
+.SH BUGS
+32-bit floats only: on a Cortex-A72 8-bit arithmetic without a dot
+product instruction is slower.

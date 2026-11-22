@@ -1,0 +1,283 @@
+.TH GEFS 4
+.SH NAME
+gefs \- copy-on-write disk file system with snapshots
+.SH SYNOPSIS
+.B disk/gefs
+.B -r
+.I user
+.I file
+.PP
+.B disk/gefs
+.B -c
+.I file
+.PP
+.B mount -c {disk/gefs
+[
+.B -RS
+] [
+.BI -m " cachemb"
+]
+.IB file } " dir"
+.PP
+.B disk/gefs
+[
+.B -RS
+] [
+.BI -m " cachemb"
+] [
+.BI -M " aname" : dir
+] ...
+[
+.BI -W " journal"
+]
+.I file
+.SH DESCRIPTION
+.I Gefs
+is 9front's file system of that name, by Ori Bernstein, in Limbo.
+It keeps a disk as a forest of copy-on-write B\(*e trees, so that
+nothing on the disk is overwritten while it is in use:
+a power cut or a crash leaves the disk as it was at the last commit,
+and a block that comes back from the disk other than as it was written
+is found by its hash and refused rather than served.
+Any number of snapshots cost only the blocks that differ.
+The disk format is 9front's, byte for byte: a disk made by either
+is read and written by the other.
+.PP
+The
+.I file
+is usually a disk partition, such as
+.B #S/nvme0p3
+on the Raspberry Pi 5;
+it may be any file big enough.
+.B -r
+reams (makes) an empty file system on it, owned by
+.IR user ,
+and exits.
+.B -c
+checks it and exits, saying
+.B ok
+or
+.B "not ok"
+on the last line of a report on standard error;
+the exit status says the same.
+Otherwise
+.I gefs
+serves the file system with 9P on its standard input, for
+.IR mount (1),
+or, with
+.BR -M ,
+mounts it itself, once for each
+.BI -M " aname" : dir
+given, and returns.
+.PP
+Only one server may have a disk open: two would wreck it.
+.B -M
+is the way to have it on several directories at once, as 9front's
+posted service is mounted more than once;
+the attach name
+.I aname
+picks what is seen:
+.TF dump
+.TP
+.B main
+the file system (the default);
+.TP
+.B adm
+the users file,
+.BR /adm/users ,
+and the control files
+.B ctl
+and
+.BR status ;
+.TP
+.B dump
+every snapshot, by name, read only;
+.TP
+.I label
+the snapshot or fork of that name: read only, or writable if it is a fork.
+.PD
+.PP
+The user named at attach must be in
+.BR /adm/users ,
+whose lines are
+.IB id : name : leader : members\fR,
+as in 9front.
+A reamed disk has
+.BR adm ,
+.B none
+and
+.IR user .
+There is no authentication; the user is the attach's.
+.PP
+Writes are committed every five seconds, and by
+.B sync
+below.
+A commit has four steps with a device flush between each,
+.B flush
+on
+.IR sd (3)'s
+.B sdctl
+when the
+.I file
+is under
+.BR #S ,
+so that a drive's write cache cannot put them out of order.
+A commit that fails part way leaves the file system read only,
+and the disk as it was at the commit before.
+.PP
+Writing a line to
+.B ctl
+in the
+.B adm
+tree controls it; the write returns when the command is done:
+.TF "retain snap spec"
+.TP
+.B sync
+commit now.
+.TP
+.B halt
+commit and stop serving.
+.TP
+.B check
+check the file system as
+.B -c
+does, while it is in use;
+the write fails if the check does.
+.TP
+.B users
+read
+.B /adm/users
+again.
+.TP
+.BI snap " old new"
+make a read-only snapshot
+.I new
+of the tree
+.IR old .
+.TP
+.BI fork " old new"
+make a writable copy
+.I new
+of
+.IR old .
+.TP
+.BI delsnap " name"
+delete the snapshot
+.IR name ,
+giving back the blocks only it held.
+.TP
+.BI retain " snap spec"
+set how many of
+.IR snap 's
+automatic snapshots are kept:
+.I spec
+is a list of
+.IB count @ unit\fR,
+the unit being
+.BR m ,
+.B h
+or
+.B d
+(minutes, hours, days), and optionally a number before it,
+for one every so many
+.RB ( 12@2h );
+a count left out keeps them all, and 0 takes none;
+.B default
+restores the default,
+.BR "60@m 24@h @d" .
+.TP
+.BI usereserve " n"
+let writes use the reserve kept at the end of each arena (1) or not (0).
+.PD
+.PP
+The automatic snapshots are named
+.IB tree @ unit . date\fR,
+for instance
+.BR main@hour.2026.11.05_08:00:04 ,
+and are seen in
+.BR dump .
+Reading
+.B status
+reports the arenas, their space, the snapshots and their labels.
+.PP
+The options are:
+.TP
+.B -R
+read only.
+.TP
+.B -S
+anyone may attach to
+.BR adm .
+.TP
+.BI -m " cachemb"
+the size of the block cache, in megabytes (default 64).
+.TP
+.BI -W " journal"
+write every block written, and every device flush, to the file
+.IR journal ,
+for
+.B tests/host/gefs_crash_test.sh
+to make from it the disks a power cut could leave.
+It is not for use otherwise.
+.SH EXAMPLES
+Make a file system on the Pi 5's third NVMe partition,
+mount it, and take a snapshot:
+.IP
+.EX
+disk/gefs -r inferno '#S/nvme0p3'
+disk/gefs -M main:/n/gefs -M adm:/n/gefs.adm -M dump:/n/dump '#S/nvme0p3'
+echo snap main before-upgrade > /n/gefs.adm/ctl
+ls /n/dump
+.EE
+.PP
+Get a file back from an hour ago:
+.IP
+.EX
+cp /n/dump/main@hour.2026.11.05_08:00:04/lib/profile /n/gefs/lib/profile
+.EE
+.PP
+Put the card's userland on it and boot from it
+(see
+.IR osinit (8)'s
+.BR rootpath ):
+.IP
+.EX
+sh -n /n/dos/dis/disk/gefsroot -r nvme0p3
+echo 'gefs nvme0p3
+local' > /n/dos/rootpath
+.EE
+.PP
+.I Gefsroot
+takes a snapshot,
+.BI install. secondsR,
+then copies the card's
+.BR dis ,
+.BR lib ,
+.B fonts
+and
+.B icons
+whole (files the card no longer has go), and
+.B usr
+only when the disk has none.
+Run again to update; the next boot uses the new trees.
+.SH SOURCE
+.B /appl/cmd/disk/gefs
+.br
+.B /dis/disk/gefsroot
+.SH SEE ALSO
+.IR kfs (4),
+.IR sd (3),
+.IR osinit (8),
+.IR mount (1)
+.br
+.IR "GEFS, A Good Enough File System" ,
+Ori Bernstein, in 9front's
+.BR /sys/doc/gefs.ms .
+.SH BUGS
+One process serves everything in turn, where 9front's runs readers
+in parallel with the writer: a long read holds up the rest.
+.br
+There is no authentication.
+.br
+The firmware reads only FAT, so the kernel and its configuration stay on
+the card's boot partition; the rest of the system can live here.

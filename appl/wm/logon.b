@@ -43,6 +43,21 @@ implement WmLogon;
 # boot script -- which starts the desktop on success -- could not tell
 # a login from a login screen that had died before it drew.
 #
+# The interface.  The boot script may name the interfaces it can start,
+# and a file the choice is kept in:
+#
+#	wm/logon [-i file] [interface ...]
+#
+# With two or more, the form shows them under the field, the one the
+# file names chosen (the first if it names none of them); a click or
+# the up and down arrows choose another.  When the screen ends with a
+# login or a skip, the name chosen is written to the file, a line of
+# text, for the boot script to read and start.  This screen starts
+# nothing itself and knows nothing of what an interface is: which there
+# are and how each is started is the boot script's.  Ended any other
+# way, never shown (factotum already had keys), or with one interface
+# or none to offer, the file is left as it was.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -78,10 +93,27 @@ include "twofaslot.m";
 
 include "sh.m";
 
+include "arg.m";
+
+include "keyboard.m";
+
 WmLogon: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
+
+	# The unlock without its screen, as Enter on the password does it:
+	# the account's keys read from the secstore at addr into factotum,
+	# and factotum told to save there.  Returns (nil, nil) when both
+	# were done; (nil, why) when the keys were loaded and saving was not
+	# arranged; (why, nil) when nothing was unlocked.
+	unlock: fn(addr, pass: string): (string, string);
 };
+
+# where the account's secstore is
+SECSTORE: con "tcp!127.0.0.1!5356";
+secstoreaddr := SECSTORE;
+SENTINEL: con "/tmp/.secstore-unlocked";
+Minpass: con 8;	# characters in a new account's password
 
 BODYFONT: con "/fonts/combined/unicode.sans.14.font";
 SMALLFONT: con "/fonts/combined/unicode.sans.12.font";
@@ -93,6 +125,7 @@ FIELDW:   con 300;
 # keystroke after was "out of memory", printed on the console.
 MAXPW:    con 1024;
 PADDING:  con 16;
+ROOMY:	con 360;	# pixels the form needs to show the logo and the lines below
 
 # Login states
 STATE_LOGIN:		con 0;
@@ -105,6 +138,9 @@ STATE_FIDOPIN:		con 5;
 display_g: ref Display;
 top: ref Tk->Toplevel;
 logo_g: ref Image;	# cached brand image
+scr_g: ref Screen;	# the screen its window is on
+win_g: ref Image;	# its window: the screen less the keyboard's strip
+kbh := 0;		# the keyboard on the screen's strip, pixels (osk(1)'s status)
 
 # Password state
 passbuf: string;
@@ -123,12 +159,17 @@ escpending: int;
 outcome: string;
 SKIPPED: con "skipped";
 
+# The interfaces the boot script named, and the file the choice is kept in.
+interfaces: array of string;
+interfacefile: string;
+
 stderr: ref Sys->FD;
 
-init(ctxt: ref Draw->Context, nil: list of string)
+init(ctxt: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	stderr = sys->fildes(2);
+	args(argv);
 	draw = load Draw Draw->PATH;
 	tk = load Tk Tk->PATH;
 	bufio = load Bufio Bufio->PATH;
@@ -145,6 +186,13 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		if(display_g == nil)
 			giveup(sys->sprint("no display: %r"));
 	}
+
+	# The mark of an earlier boot's unlock says nothing of this one.  It
+	# is kept in /tmp, which outlives a boot, and was never removed: after
+	# one unlock, Keyring and Settings said "unlocked" at every boot
+	# after, a skipped login included.  It is made again below when this
+	# boot unlocks.
+	sys->remove(SENTINEL);
 
 	# If factotum was already started with secstore backing (e.g. headless
 	# mode with $SECSTORE_PASSWORD), skip the login screen entirely.
@@ -191,6 +239,12 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	pids := chan of int;
 	spawn kbdreader(kbdfd, kbdch, pids);
 	kbdpid := <-pids;
+	# the keyboard on the screen (osk(1), started by the boot for a
+	# touch screen): the form above its strip, the screen again when
+	# it goes
+	kbhch := chan of int;
+	spawn oskwatch(kbhch, pids);
+	oskpid := <-pids;
 	ptrpid := -1;
 	if(ptrfd != nil){
 		spawn ptrreader(ptrfd, ptrch, pids);
@@ -202,7 +256,11 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	# first version of this loop did exactly that and the desktop
 	# never started), so the loop's exit is a flag.
 	#
+	# Nothing in the loop should raise; if something does, that is not a
+	# login either, and the readers must still be killed: an exception
+	# left init with them reading the desktop's keyboard and pointer.
 	done := 0;
+	{
 	while(!done) alt {
 	k := <-kbdch =>
 		if(k < 0){
@@ -215,6 +273,12 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			escpending = 0;
 			passbuf = fieldtext();
 			done = handleenter();
+		Keyboard->Up or Keyboard->Down =>
+			# the field has no use for them: they choose the interface
+			if(k == Keyboard->Up)
+				nextinterface(-1);
+			else
+				nextinterface(1);
 		27 =>	# Escape
 			passbuf = fieldtext();
 			done = handleescape();
@@ -227,7 +291,17 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		}
 	p := <-ptrch =>
 		tk->pointer(top, *p);
+		# a click on an interface must not take the keys from the field
+		if(state != STATE_LOGIN_FAILED)
+			tk->cmd(top, "focus .f.pw");
 		tk->cmd(top, "update");
+	h := <-kbhch =>
+		relayout(h);
+	}
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "logon: %s\n", e);
+		outcome = "internal error: " + e;
 	}
 
 	# The readers are blocked in read; left alone they would go on
@@ -235,11 +309,83 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	# Killed BEFORE the raise below, on every path: a raise leaves
 	# init at once and would otherwise leave them running.
 	kill(kbdpid);
+	kill(oskpid);
 	if(ptrpid >= 0)
 		kill(ptrpid);
 
+	if(outcome == nil || outcome == SKIPPED)
+		saveinterface();
 	if(outcome != nil)
 		raise "fail:" + outcome;
+}
+
+usage()
+{
+	sys->fprint(stderr, "usage: wm/logon [-i file] [interface ...]\n");
+	raise "fail:usage";
+}
+
+args(argv: list of string)
+{
+	arg := load Arg Arg->PATH;
+	if(arg == nil)
+		return;
+	arg->init(argv);
+	while((o := arg->opt()) != 0)
+		case o {
+		'i' =>	interfacefile = arg->earg();
+		* =>	usage();
+		}
+	l := arg->argv();
+	interfaces = array[len l] of string;
+	for(i := 0; l != nil; l = tl l)
+		interfaces[i++] = hd l;
+}
+
+# The interface the form shows chosen.
+choseninterface(): string
+{
+	if(len interfaces == 0)
+		return nil;
+	if(top != nil && len interfaces > 1){
+		v := tk->cmd(top, "variable interface");
+		for(i := 0; i < len interfaces; i++)
+			if(interfaces[i] == v)
+				return v;
+	}
+	# the one kept, if it is still one of them
+	if(interfacefile != nil && (kept := rf(interfacefile)) != nil)
+		for(i := 0; i < len interfaces; i++)
+			if(interfaces[i] == kept)
+				return kept;
+	return interfaces[0];
+}
+
+# The next interface (d 1) or the one before (d -1), round.
+nextinterface(d: int)
+{
+	n := len interfaces;
+	if(n < 2 || top == nil)
+		return;
+	cur := choseninterface();
+	i := 0;
+	while(i < n && interfaces[i] != cur)
+		i++;
+	i = (i + d + n) % n;
+	tk->cmd(top, ".f.iface.s" + string i + " invoke");
+	tk->cmd(top, "update");
+}
+
+# Only when there was a choice to make: one interface offered (a phone's)
+# is not one chosen, and leaves the file as it was.
+saveinterface()
+{
+	if(interfacefile == nil || len interfaces < 2)
+		return;
+	s := choseninterface();
+	fd := sys->create(interfacefile, Sys->OWRITE, 8r644);
+	if(fd == nil || sys->fprint(fd, "%s\n", s) < 0)
+		sys->fprint(stderr, "logon: cannot keep the interface in %s: %r\n", interfacefile);
 }
 
 # Fail before the input loop ever ran: nothing to kill, nothing on
@@ -256,13 +402,25 @@ kbdreader(fd: ref Sys->FD, out: chan of int, pids: chan of int)
 {
 	pids <-= sys->pctl(0, nil);
 	buf := array[64] of byte;
+	nb := 0;
 	for(;;){
-		n := sys->read(fd, buf, len buf);
+		n := sys->read(fd, buf[nb:], len buf - nb);
 		if(n <= 0)
 			break;
-		s := string buf[0:n];
+		nb += n;
+		# Whole runes only: the bytes of one cut by the end of a read
+		# wait for the rest.  (Each read was converted alone, and the
+		# two halves of a character came out as two that are none.)
+		k := sys->utfbytes(buf, nb);
+		if(k == 0 && nb >= Sys->UTFmax)
+			k = nb;	# not the start of anything
+		s := string buf[0:k];
 		for(i := 0; i < len s; i++)
 			out <-= s[i];
+		rest := array[nb - k] of byte;
+		rest[0:] = buf[k:nb];
+		buf[0:] = rest;
+		nb -= k;
 	}
 	out <-= -1;
 }
@@ -285,6 +443,71 @@ ptrreader(fd: ref Sys->FD, out: chan of ref Pointer, pids: chan of int)
 		y := int hd f; f = tl f;
 		b := int hd f;
 		out <-= ref Pointer(b, Point(x, y), 0);
+	}
+}
+
+# where the form goes: the screen above the keyboard's strip
+formr(): Rect
+{
+	r := display_g.image.r;
+	if(kbh > 0 && kbh < r.dy())
+		r.max.y -= kbh;
+	return r;
+}
+
+# The keyboard's strip changed: the form's window made again above it.
+relayout(h: int)
+{
+	if(h == kbh || scr_g == nil || top == nil)
+		return;
+	kbh = h;
+	win := scr_g.newwindow(formr(), Draw->Refbackup, Draw->Nofill);
+	if(win == nil)
+		return;
+	win_g = win;
+	top.screenr = win.r;
+	if(tk->putimage(top, ".", win, nil) != nil)
+		return;
+	tk->cmd(top, ". configure -width " + string win.r.dx() + " -height " + string win.r.dy());
+	redraw();
+}
+
+# osk's status, followed: a read after the first waits for a change.
+# Sends the strip's height (0 when hidden) whenever it changes.  osk
+# may mount its files a moment after this starts.
+oskwatch(out: chan of int, pids: chan of int)
+{
+	pids <-= sys->pctl(0, nil);
+	fd: ref Sys->FD;
+	for(i := 0; i < 40 && fd == nil; i++){
+		fd = sys->open("/mnt/osk/status", Sys->OREAD);
+		if(fd == nil)
+			sys->sleep(250);
+	}
+	if(fd == nil)
+		return;
+	buf := array[512] of byte;
+	last := -1;
+	for(;;){
+		n := sys->pread(fd, buf, len buf, big 0);
+		if(n <= 0)
+			return;
+		(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+		st := "";
+		h := 0;
+		for(; lines != nil; lines = tl lines){
+			(nf, f) := sys->tokenize(hd lines, " ");
+			if(nf == 2 && hd f == "state")
+				st = hd tl f;
+			else if(nf == 2 && hd f == "height")
+				h = int hd tl f;
+		}
+		if(st == "hidden")
+			h = 0;
+		if(h != last){
+			last = h;
+			out <-= h;
+		}
 	}
 }
 
@@ -320,6 +543,14 @@ handleenter(): int
 	STATE_SETUP_PASS =>
 		if(passbuf == nil || passbuf == "") {
 			statusmsg = "Password required";
+			redraw();
+			return 0;
+		}
+		# SP 800-63B 5.1.1.2: eight characters at least.  The store
+		# is guessed at offline by whoever takes the disk.
+		if(len passbuf < Minpass) {
+			statusmsg = sys->sprint("The password must be at least %d characters", Minpass);
+			passbuf = "";
 			redraw();
 			return 0;
 		}
@@ -395,8 +626,7 @@ handleenter(): int
 		rerr := connectfactotum(savedloginpass, passbuf, "");
 		passbuf = "";
 		if(rerr == nil) {
-			enablesecstoresave(savedloginpass);
-			createsecstoresentinel();
+			unlocked(savedloginpass);
 			savedloginpass = "";
 			finishunlock();
 			return 1;
@@ -414,8 +644,7 @@ handleenter(): int
 		redraw();
 		ferr := connectfactotum(savedloginpass, "", fidopin);
 		if(ferr == nil) {
-			enablesecstoresave(savedloginpass);
-			createsecstoresentinel();
+			unlocked(savedloginpass);
 			savedloginpass = "";
 			finishunlock();
 			return 1;
@@ -510,14 +739,16 @@ buildform(): int
 	if(scr == nil)
 		return 0;
 	di.draw(di.r, scr.fill, nil, scr.fill.r.min);
-	win := scr.newwindow(di.r, Draw->Refbackup, bg);
+	win := scr.newwindow(formr(), Draw->Refbackup, bg);
 	if(win == nil)
 		return 0;
+	scr_g = scr;
+	win_g = win;
 
 	top = tk->toplevel(display_g, "-bd 0 -bg " + tkcol(bg));
 	if(top == nil)
 		return 0;
-	top.screenr = di.r;
+	top.screenr = win.r;
 	e := tk->putimage(top, ".", win, nil);
 	if(e != nil){
 		sys->fprint(stderr, "logon: tk window: %s\n", e);
@@ -536,7 +767,7 @@ buildform(): int
 	smallf := fontopt(SMALLFONT);
 
 	cmds := array[] of {
-		". configure -width " + string di.r.dx() + " -height " + string di.r.dy(),
+		". configure -width " + string win.r.dx() + " -height " + string win.r.dy(),
 		"pack propagate . 0",
 		"frame .f -bd 0 -bg " + tkcol(bg),
 		"label .f.prompt -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf,
@@ -552,6 +783,10 @@ buildform(): int
 			+ " -text {Keys and secrets will not be available.}",
 		"label .f.warn2 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf
 			+ " -text {AI integration may not work.}",
+		"frame .f.iface -bd 0 -bg " + tkcol(bg),
+		"label .f.iface.l -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf
+			+ " -text {Interface:}",
+		"pack .f.iface.l -side left -padx 6",
 		"frame .b -bd 0 -bg " + tkcol(bg),
 		"label .b.version -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
 		"label .b.copy -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
@@ -577,6 +812,22 @@ buildform(): int
 		tk->putimage(top, "logo", logo_g, nil);
 		tk->cmd(top, "label .f.logo -bd 0 -image logo -bg " + tkcol(bg));
 	}
+	# The interfaces, one beside the other, the one to start chosen.
+	if(len interfaces > 1){
+		chosen := choseninterface();
+		for(si := 0; si < len interfaces; si++){
+			w := ".f.iface.s" + string si;
+			tk->cmd(top, "radiobutton " + w + " -variable interface"
+				+ " -value " + tk->quote(interfaces[si])
+				+ " -text " + tk->quote(interfaces[si])
+				+ " -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(text)
+				+ " -activebackground " + tkcol(bg) + " -activeforeground " + tkcol(accent)
+				+ " -selectcolor " + tkcol(accent) + bodyf);
+			tk->cmd(top, "pack " + w + " -side left -padx 6");
+			if(interfaces[si] == chosen)
+				tk->cmd(top, w + " invoke");
+		}
+	}
 	# There is no window manager to say so: this window has the keyboard.
 	tk->cmd(top, "focus -global 1");
 
@@ -597,11 +848,19 @@ redraw()
 	if(top == nil)
 		return;
 
-	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2"}; w != nil; w = tl w)
+	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2", ".f.iface"}; w != nil; w = tl w)
 		tk->cmd(top, "pack forget " + hd w);
 
-	if(logo_g != nil)
+	# Above a keyboard on a small screen (the Pi's 800x480 panel) the
+	# logo and the lines along the bottom go: the password field is
+	# what must show.
+	roomy := win_g == nil || win_g.r.dy() >= ROOMY;
+	if(logo_g != nil && roomy)
 		tk->cmd(top, "pack .f.logo -side top -pady " + string PADDING);
+	if(roomy)
+		tk->cmd(top, "pack .b -side bottom -pady " + string PADDING + " -before .f");
+	else
+		tk->cmd(top, "pack forget .b");
 
 	if(state == STATE_LOGIN_FAILED) {
 		# Failed state: show error and choices, no password field
@@ -642,6 +901,9 @@ redraw()
 			tk->cmd(top, "pack .f.status -side top -pady " + string PADDING);
 		tk->cmd(top, "focus .f.pw");
 	}
+	# whatever the state: a skip starts the interface chosen too
+	if(len interfaces > 1)
+		tk->cmd(top, "pack .f.iface -side top -pady " + string PADDING);
 	tk->cmd(top, "update");
 }
 
@@ -659,10 +921,8 @@ dosetupandunlock(pass: string): string
 	redraw();
 
 	err = connectfactotum(pass, "", "");
-	if(err == nil) {
-		enablesecstoresave(pass);
-		createsecstoresentinel();
-	}
+	if(err == nil)
+		unlocked(pass);
 
 	pass = "";
 
@@ -682,9 +942,9 @@ accountis2fa(): int
 	if(ts == nil)
 		return 0;
 	ts->init();
-	u := rf("/dev/user");
+	u := username();
 	if(u == nil)
-		u = "inferno";
+		return 0;
 	return ts->is2fa(u);
 }
 
@@ -712,10 +972,8 @@ dounlock(): int
 	err := connectfactotum(passbuf, "", "");
 
 	# Establish secstore save-back path so future keys persist
-	if(err == nil) {
-		enablesecstoresave(passbuf);
-		createsecstoresentinel();
-	}
+	if(err == nil)
+		unlocked(passbuf);
 
 	passbuf = "";	# zero password
 
@@ -732,9 +990,52 @@ dounlock(): int
 # Create sentinel so other apps can detect secstore is active
 createsecstoresentinel()
 {
-	fd := sys->create("/tmp/.secstore-unlocked", Sys->OWRITE, 8r644);
+	fd := sys->create(SENTINEL, Sys->OWRITE, 8r644);
 	if(fd != nil)
 		sys->fprint(fd, "1");
+}
+
+# The keys are in factotum: have it save to the secstore from here on,
+# and leave the mark.  If saving cannot be arranged the user is told,
+# for long enough to read: the keys are loaded all the same.
+unlocked(pass: string): string
+{
+	serr := enablesecstoresave(pass);
+	createsecstoresentinel();
+	if(serr != nil && top != nil){
+		statusmsg = "Unlocked. Keys added now will not be saved: " + serr;
+		redraw();
+		sys->sleep(3000);
+	}
+	return serr;
+}
+
+unlock(addr, pass: string): (string, string)
+{
+	if(sys == nil){
+		sys = load Sys Sys->PATH;
+		stderr = sys->fildes(2);
+		kr = load Keyring Keyring->PATH;
+		secstore = load Secstore Secstore->PATH;
+		factotum = load Factotum Factotum->PATH;
+	}
+	if(addr != nil)
+		secstoreaddr = addr;
+	sys->remove(SENTINEL);
+	err := connectfactotum(pass, "", "");
+	if(err != nil)
+		return (err, nil);
+	return (nil, unlocked(pass));
+}
+
+# The user this is, or nil.  It was "inferno" when /dev/user could not
+# be read: another account's name, unlocked or made without a word.
+username(): string
+{
+	u := rf("/dev/user");
+	if(u == nil)
+		sys->fprint(stderr, "logon: cannot read /dev/user: %r\n");
+	return u;
 }
 
 # Post-unlock status. logon exits right after this and its last drawn frame
@@ -792,30 +1093,61 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 		return "factotum module not loaded";
 	factotum->init();
 
-	user := rf("/dev/user");
+	user := username();
 	if(user == nil)
-		user = "inferno";
+		return "cannot tell who the user is (/dev/user)";
 
 	pwhash := secstore->mkseckey(pass);
 	pwhash2 := secstore->mkseckey2(pass);
 	rootkey := secstore->mkfilekey3(user, pass);
-	filekey := secstore->mkfilekey2(pass);
-	legacykey := secstore->mkfilekey(pass);
+	pwhash4 := secstore->mkseckey4(rootkey);
 
-	(conn, nil, diag) := secstore->connect2("tcp!127.0.0.1!5356", user, pwhash, pwhash2);
+	# Whatever the server sends, the answer is a string for the screen:
+	# an exception here went up through the input loop and out of init.
+	err: string;
+	{
+		err = connectfactotum1(user, recoverypass, fidopin,
+			pwhash, pwhash2, pwhash4, rootkey);
+	} exception e {
+	"*" =>
+		err = "secstore: " + e;
+	}
+	# the keys made from the password are done with, however it went
+	secstore->erasekey(pwhash);
+	secstore->erasekey(pwhash2);
+	secstore->erasekey(pwhash4);
+	secstore->erasekey(rootkey);
+	return err;
+}
+
+connectfactotum1(user, recoverypass, fidopin: string,
+	pwhash, pwhash2, pwhash4, rootkey: array of byte): string
+{
+	# version 4 of the exchange; an account at an older version is
+	# moved to it by this login (secstore(2))
+	(conn, nil, diag) := secstore->connect4(secstoreaddr, user, pwhash, pwhash2, pwhash4);
 	if(conn == nil) {
 		if(diag != nil)
 			return "secstore: " + diag;
 		return sys->sprint("secstore: %r");
 	}
 
-	file := secstore->getfile(conn, "factotum", 0);
+	(file, absent, ferr) := secstore->fetch(conn, "factotum", 0);
 	secstore->bye(conn);
 
-	if(file == nil) {
-		sys->fprint(stderr, "logon: secstore has no factotum file for %s (new account or read failure)\n", user);
+	# An account with nothing stored yet has no file, and the server says
+	# so.  A file that could not be read is another matter: it was taken
+	# for the same, the login "succeeded" with no keys, and the next key
+	# added was saved over the file that had not been read.  It is a
+	# failed unlock, and nothing is saved over what was not read.
+	if(absent) {
+		sys->fprint(stderr, "logon: secstore has no factotum file for %s (a new account)\n", user);
 		return nil;
 	}
+	if(ferr != nil)
+		return "secstore: cannot read the keys: " + ferr;
+	if(len file == 0)
+		return "secstore: the key file is empty (damaged); remove it with auth/secstore d factotum to start again";
 
 	# 2FA accounts encrypt the factotum blob under a data key wrapped in
 	# YubiKey/recovery key-slots; legacy password-only accounts have no slots
@@ -833,14 +1165,23 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 		(dk, unlockerr) := twofaslot->unlock(user, rootkey, recoverypass, fidopin);	# touch + (FIDO PIN if UV)
 		if(dk != nil){
 			plaintext = secstore->decrypt3(file, dk, nil, nil);
-			current2fadkhex = tohex(dk);	# retain DK so save-back stays DK-encrypted (no downgrade)
+			if(plaintext != nil){
+				current2fadkhex = tohex(dk);	# retain DK so save-back stays DK-encrypted (no downgrade)
+				# the vault has been read under the data key: from
+				# now nothing under the password alone is the vault
+				twofaslot->markenrolled(user);
+			}
 		}
-		# Fall back to the password path if the blob is still password-encrypted
-		# — a legacy/un-migrated blob during an incomplete enroll/disable. A
-		# fully migrated 2FA blob will NOT decrypt under the password, so strong
-		# mode is preserved when the key is simply absent.
-		if(plaintext == nil)
-			plaintext = secstore->decrypt3(file, rootkey, filekey, legacykey);
+		# A vault still under the password is taken only while the
+		# second factor is being enrolled or disabled (twofaslot's
+		# state: an enrolment or a disable that stopped part way, or an
+		# account whose vault has never yet been read under its data
+		# key).  It was taken whenever it decrypted: whoever had the
+		# password could store a vault of their own under it, and it
+		# was loaded with no second factor.
+		st := twofaslot->state(user);
+		if(plaintext == nil && (st == "enrolling" || st == "disabling"))
+			plaintext = secstore->decrypt3(file, rootkey, nil, nil);
 		if(plaintext == nil){
 			if(recoverypass == ""){
 				# NEEDRECOVERY tells logon to prompt for the recovery passphrase.
@@ -853,9 +1194,14 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 			return "recovery passphrase did not unlock";
 		}
 	}else{
-		plaintext = secstore->decrypt3(file, rootkey, filekey, legacykey);
-		if(plaintext == nil)
+		# the format written, and no other (secstore(2)): an older
+		# file is moved by auth/secstore m, with the password
+		plaintext = secstore->decrypt3(file, rootkey, nil, nil);
+		if(plaintext == nil){
+			if(!secstore->iscurrent(file))
+				return "the keys are in an old format: move them with auth/secstore m factotum";
 			return "wrong password";
+		}
 	}
 
 	# Parse key lines and add to running factotum
@@ -872,8 +1218,11 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 		if(lines[i] == '\n') {
 			if(len line > 4 && line[0:4] == "key ") {
 				b := array of byte line;
-				sys->write(fd, b, len b);
-				nloaded++;
+				if(sys->write(fd, b, len b) == len b)
+					nloaded++;
+				else
+					sys->fprint(stderr, "logon: factotum refused a key: %r\n");
+				secstore->erasekey(b);
 			}
 			line = "";
 		} else
@@ -881,94 +1230,16 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 	}
 	if(len line > 4 && line[0:4] == "key ") {
 		b := array of byte line;
-		sys->write(fd, b, len b);
-		nloaded++;
+		if(sys->write(fd, b, len b) == len b)
+			nloaded++;
+		else
+			sys->fprint(stderr, "logon: factotum refused a key: %r\n");
+		secstore->erasekey(b);
 	}
 
 	sys->fprint(stderr, "logon: loaded %d keys from secstore\n", nloaded);
 
-	# The password just authenticated against the stored PAK verifier, so it is
-	# safe to (re)derive and upgrade a legacy verifier to secstore3. Best-effort.
-	migratepak(user, pass);
 	return nil;
-}
-
-#
-# Opportunistically upgrade the local secstore PAK verifier to secstore3 after a
-# verified login. The verifier is a one-way function of (user, password), so a
-# successful login is proof we can recompute it under the stronger suite; the
-# factotum blob and 2fa key-slots are keyed independently and are untouched.
-#
-# Best-effort: this must NEVER disturb the login that already succeeded, so any
-# error just logs and returns. Idempotent (skips if already secstore3), and it
-# stages to a temp file it reads back and validates before swapping, so a bad or
-# short write can never destroy the working verifier.
-#
-migratepak(user, pass: string)
-{
-	if(secstore == nil || user == nil || user == "")
-		return;
-	pakpath := "/usr/inferno/secstore/" + user + "/PAK";
-
-	rfd := sys->open(pakpath, Sys->OREAD);
-	if(rfd == nil)
-		return;			# no local PAK (e.g. remote store) — nothing to do
-	buf := array[4096] of byte;
-	n := sys->read(rfd, buf, len buf);
-	rfd = nil;
-	if(n <= 0)
-		return;
-	(curver, nil) := secstore->parseverifier(string buf[0:n]);
-	if(curver == "secstore3")
-		return;			# already migrated
-
-	pwhash2 := secstore->mkseckey2(pass);
-	hexHi := secstore->mkverifier(user, "secstore3", pwhash2);
-	secstore->erasekey(pwhash2);
-	content := array of byte (secstore->formatverifier("secstore3", hexHi) + "\n");
-
-	tmppath := pakpath + ".new";
-	wfd := sys->create(tmppath, Sys->OWRITE, 8r600);
-	if(wfd == nil){
-		sys->fprint(stderr, "logon: PAK migrate: create %s: %r\n", tmppath);
-		return;
-	}
-	if(sys->write(wfd, content, len content) != len content){
-		sys->fprint(stderr, "logon: PAK migrate: write %s: %r\n", tmppath);
-		wfd = nil;
-		sys->remove(tmppath);
-		return;
-	}
-	wfd = nil;
-
-	# Validate the staged file parses as secstore3 before committing.
-	vfd := sys->open(tmppath, Sys->OREAD);
-	if(vfd == nil){
-		sys->remove(tmppath);
-		return;
-	}
-	vn := sys->read(vfd, buf, len buf);
-	vfd = nil;
-	(nver, nil) := secstore->parseverifier(string buf[0:vn]);
-	if(nver != "secstore3"){
-		sys->fprint(stderr, "logon: PAK migrate: staged verifier failed validation; leaving legacy PAK in place\n");
-		sys->remove(tmppath);
-		return;
-	}
-
-	# Commit: replace PAK with the validated staged file.
-	if(sys->remove(pakpath) < 0){
-		sys->fprint(stderr, "logon: PAK migrate: cannot remove old PAK: %r\n");
-		sys->remove(tmppath);
-		return;
-	}
-	d := sys->nulldir;
-	d.name = "PAK";
-	if(sys->wstat(tmppath, d) < 0){
-		sys->fprint(stderr, "logon: PAK migrate: rename failed: %r — recover with 'secstore-setup -u %s -V secstore3' (the .new file holds the new verifier)\n", user);
-		return;
-	}
-	sys->fprint(stderr, "logon: upgraded secstore PAK verifier to secstore3 for %s\n", user);
 }
 
 createsecstoreacct(pass: string): string
@@ -977,9 +1248,9 @@ createsecstoreacct(pass: string): string
 		return "secstore module not loaded";
 	secstore->init();
 
-	user := rf("/dev/user");
+	user := username();
 	if(user == nil)
-		user = "inferno";
+		return "cannot tell who the user is (/dev/user)";
 
 	storedir := "/usr/inferno/secstore";
 	userdir := storedir + "/" + user;
@@ -996,15 +1267,29 @@ createsecstoreacct(pass: string): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	pwhash2 := secstore->mkseckey2(pass);
-	hexHi := secstore->mkverifier(user, "secstore3", pwhash2);
+	# version 4's verifier: from the file key's root, so that a guess
+	# costs as much against it as against the files (secstore(2))
+	rootkey := secstore->mkfilekey3(user, pass);
+	pwhash4 := secstore->mkseckey4(rootkey);
+	secstore->erasekey(rootkey);
+	hexHi := secstore->mkverifier(user, "secstore4", pwhash4);
+	secstore->erasekey(pwhash4);
+	if(hexHi == nil)
+		return "can't make the verifier";
 
 	pakpath := userdir + "/PAK";
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", pakpath);
-	b := array of byte secstore->formatverifier("secstore3", hexHi);
-	sys->write(fd, b, len b);
+	# all of it or no account: a verifier cut short is an account nobody
+	# can log in to, and the write's result was not looked at
+	b := array of byte (secstore->formatverifier("secstore4", hexHi) + "\n");
+	if(sys->write(fd, b, len b) != len b){
+		e := sys->sprint("can't write %s: %r", pakpath);
+		fd = nil;
+		sys->remove(pakpath);
+		return e;
+	}
 	fd = nil;
 
 	sys->fprint(stderr, "logon: secstore account created for %s\n", user);
@@ -1026,27 +1311,64 @@ tohex(a: array of byte): string
 	return s;
 }
 
-enablesecstoresave(pass: string)
+#
+# Returns nil, or why factotum will not be saving.
+#
+# The line is "secstore addr user password [datakey]", which factotum
+# splits at blanks: a password with a blank in it reached factotum as
+# its first word, every save was then a failed login at the server, and
+# the account locked itself out.  Such a password goes quoted (as %q
+# writes it) under the verb secstoreq, which splits as the shell does; a
+# factotum that does not know the verb refuses the line, and saving is
+# then off rather than wrong.
+#
+enablesecstoresave(pass: string): string
 {
-	user := rf("/dev/user");
+	user := username();
 	if(user == nil)
-		user = "inferno";
+		return "cannot tell who the user is (/dev/user)";
 
 	# For a 2FA account, hand factotum the data key so its save-back stays
 	# DK-encrypted (auth still uses the password). Ordinary accounts pass no
 	# DK and factotum encrypts under the password-derived root key as before.
-	cmd := "secstore tcp!127.0.0.1!5356 " + user + " " + pass;
-	if(current2fadkhex != "")
+	cmd: string;
+	if(needsquote(pass))
+		cmd = sys->sprint("secstoreq %s %s %q", secstoreaddr, user, pass);
+	else
+		cmd = "secstore " + secstoreaddr + " " + user + " " + pass;
+	dk := current2fadkhex != "";
+	if(dk)
 		cmd += " " + current2fadkhex;
+	current2fadkhex = "";
 	fd := sys->open("/mnt/factotum/ctl", Sys->OWRITE);
 	if(fd == nil)
-		return;
+		return sys->sprint("cannot open factotum: %r");
 	b := array of byte cmd;
-	sys->write(fd, b, len b);
-	if(current2fadkhex != "")
+	for(i := 0; i < len cmd; i++)
+		cmd[i] = 0;
+	n := sys->write(fd, b, len b);
+	e := sys->sprint("%r");
+	secstore->erasekey(b);
+	if(n != len b){
+		sys->fprint(stderr, "logon: secstore save-back not enabled: %s\n", e);
+		if(needsquote(pass))
+			return "this factotum does not take a password with a blank in it (" + e + ")";
+		return e;
+	}
+	if(dk)
 		sys->fprint(stderr, "logon: secstore save-back enabled (DK-encrypted)\n");
 	else
 		sys->fprint(stderr, "logon: secstore save-back enabled\n");
+	return nil;
+}
+
+# a password factotum's split at blanks would not leave whole
+needsquote(pass: string): int
+{
+	for(i := 0; i < len pass; i++)
+		if(pass[i] == ' ' || pass[i] == '\t')
+			return 1;
+	return 0;
 }
 
 # Check if factotum already has keys (e.g. loaded via -S -P in profile)
@@ -1062,9 +1384,9 @@ factotumhaskeys(): int
 
 secstoreacctexists(): int
 {
-	user := rf("/dev/user");
+	user := username();
 	if(user == nil)
-		user = "inferno";
+		return 0;
 	(ok, nil) := sys->stat("/usr/inferno/secstore/" + user + "/PAK");
 	return ok >= 0;
 }

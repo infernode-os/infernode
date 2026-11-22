@@ -62,8 +62,9 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->print("FACGRANT %s: /mnt/factotum HIDDEN\n", mode);
 
 	# Granted only with a credentialed tool and no exec, which could
-	# read the key out and hand it anywhere.
-	want := mode == "with" || mode == "vision";
+	# read the key out and hand it anywhere. vision holds no credential
+	# (it reaches only /mnt/vision, no cloud API: #1086), so not with it.
+	want := mode == "with";
 	if((ok >= 0) != want) {
 		sys->print("FACGRANT %s: FAIL /mnt/factotum should be %s\n", mode, hidden(want));
 		raise "fail:facgrant";

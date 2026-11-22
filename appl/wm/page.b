@@ -89,6 +89,8 @@ rot := 0;
 scale := 0;		# from -z, else the fit
 fit := Sheetview->Fitnone;
 lastsheet := -1;	# where a turn to the last page goes, on a part changed
+stream := 0;		# -s: standard input a stream of documents
+docc: chan of array of byte;	# the next one, from streamer
 
 init(ctxt: ref Draw->Context, argv: list of string)
 {
@@ -101,13 +103,14 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	arg := load Arg Arg->PATH;
 	arg->init(argv);
-	arg->setusage("page [-r quarters] [-w | -f | -z percent] [file ...]");
+	arg->setusage("page [-s] [-r quarters] [-w | -f | -z percent] [file ...]");
 	while((c := arg->opt()) != 0)
 		case c {
 		'r' =>	rot = int arg->earg();
 		'w' =>	fit = Sheetview->Fitwidth;
 		'f' =>	fit = Sheetview->Fitpage;
 		'z' =>	scale = int arg->earg();
+		's' =>	stream = 1;
 		* =>	arg->usage();
 		}
 	files := arg->argv();
@@ -128,7 +131,24 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	# the parts: the files named, or standard input
 	l: list of ref Part;
-	if(files == nil){
+	if(stream && files != nil){
+		sys->fprint(stderr, "page: -s reads standard input, not files\n");
+		raise "fail:usage";
+	}
+	docc = chan of array of byte;
+	if(stream){
+		# a document a line holding only a form feed ends: the first
+		# shown now, each after it in its place as it comes
+		in := sys->fildes(0);
+		(data, more) := readdoc(in);
+		if(data == nil){
+			sys->fprint(stderr, "page: nothing on standard input\n");
+			raise "fail:empty";
+		}
+		l = ref Part("stdin", data, docreg->kind(nil, data), nil, 0) :: nil;
+		if(more)
+			spawn streamer(in, docc);
+	}else if(files == nil){
 		data := readall(sys->fildes(0));
 		if(data == nil){
 			sys->fprint(stderr, "page: nothing on standard input\n");
@@ -218,6 +238,20 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		tk->pointer(top, *p);
 	e := <-evc =>
 		handle(e);
+	d := <-docc =>
+		# the next document of the stream, in the last one's place
+		p := parts[0];
+		if((k := docreg->kind(nil, d)) != nil)
+			p.kind = k;
+		p.data = d;
+		n := 0;
+		if(p.v != nil){
+			n = p.v.sheetat(p.v.org.y);
+			p.v.close();
+			p.v = nil;
+		}
+		cur = -1;
+		show(0, n);
 	a := <-act =>
 		(nil, t) := sys->tokenize(a, " ");
 		if(t == nil)
@@ -785,6 +819,49 @@ head(f: string): array of byte
 	if(n <= 0)
 		return nil;
 	return b[0:n];
+}
+
+# A document of a stream, to a line holding only a form feed (not
+# kept) or the end: (it, whether more may follow)
+readdoc(fd: ref Sys->FD): (array of byte, int)
+{
+	d := array[0] of byte;
+	line := array[0] of byte;
+	b := array[1] of byte;
+	for(;;){
+		if(sys->read(fd, b, 1) != 1){
+			d = cat(d, line);
+			if(len d == 0)
+				return (nil, 0);
+			return (d, 0);
+		}
+		line = cat(line, b);
+		if(b[0] != byte '\n')
+			continue;
+		if(len line == 2 && line[0] == byte '\f')
+			return (d, 1);
+		d = cat(d, line);
+		line = array[0] of byte;
+	}
+}
+
+cat(a, b: array of byte): array of byte
+{
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
+}
+
+streamer(fd: ref Sys->FD, c: chan of array of byte)
+{
+	for(;;){
+		(d, more) := readdoc(fd);
+		if(d != nil)
+			c <-= d;
+		if(!more)
+			return;
+	}
 }
 
 readall(fd: ref Sys->FD): array of byte

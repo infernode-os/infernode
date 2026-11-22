@@ -5,6 +5,14 @@
 #include "runt.h"
 #include "raise.h"
 
+/*
+ * A Limbo int is a word holding a 32-bit value, sign-extended, and the
+ * VM's own arithmetic keeps it so.  These added, subtracted and
+ * multiplied whole words: past 2^31 the result was a word no int is,
+ * which printed as one number, compared as another, and was a third as
+ * a big under the interpreter.  Each result is narrowed.
+ */
+
 void
 Point_add(void *fp)
 {
@@ -14,8 +22,8 @@ Point_add(void *fp)
 	f = fp;
 
 	ret = f->ret;
-	ret->x = f->p.x + f->q.x;
-	ret->y = f->p.y + f->q.y;
+	ret->x = (int)(f->p.x + f->q.x);
+	ret->y = (int)(f->p.y + f->q.y);
 }
 
 void
@@ -27,8 +35,8 @@ Point_sub(void *fp)
 	f = fp;
 
 	ret = f->ret;
-	ret->x = f->p.x - f->q.x;
-	ret->y = f->p.y - f->q.y;
+	ret->x = (int)(f->p.x - f->q.x);
+	ret->y = (int)(f->p.y - f->q.y);
 }
 
 void
@@ -40,8 +48,8 @@ Point_mul(void *fp)
 	f = fp;
 
 	ret = f->ret;
-	ret->x = f->p.x * f->i;
-	ret->y = f->p.y * f->i;
+	ret->x = (int)(f->p.x * f->i);
+	ret->y = (int)(f->p.y * f->i);
 }
 
 void
@@ -55,8 +63,14 @@ Point_div(void *fp)
 	if(f->i == 0)
 		error(exZdiv);
 	ret = f->ret;
-	ret->x = f->p.x / f->i;
-	ret->y = f->p.y / f->i;
+	if(f->i == -1){
+		/* (the most negative int over -1 traps where an int is a word) */
+		ret->x = (int)(0 - (UWORD)f->p.x);
+		ret->y = (int)(0 - (UWORD)f->p.y);
+		return;
+	}
+	ret->x = (int)(f->p.x / f->i);
+	ret->y = (int)(f->p.y / f->i);
 }
 
 void
@@ -233,11 +247,11 @@ Rect_addpt(void *fp)
 
 	ret = f->ret;
 	n = f->p.x;
-	ret->min.x = f->r.min.x + n;
-	ret->max.x = f->r.max.x + n;
+	ret->min.x = (int)(f->r.min.x + n);
+	ret->max.x = (int)(f->r.max.x + n);
 	n = f->p.y;
-	ret->min.y = f->r.min.y + n;
-	ret->max.y = f->r.max.y + n;
+	ret->min.y = (int)(f->r.min.y + n);
+	ret->max.y = (int)(f->r.max.y + n);
 }
 
 void
@@ -251,11 +265,11 @@ Rect_subpt(void *fp)
 
 	ret = f->ret;
 	n = f->p.x;
-	ret->min.x = f->r.min.x - n;
-	ret->max.x = f->r.max.x - n;
+	ret->min.x = (int)(f->r.min.x - n);
+	ret->max.x = (int)(f->r.max.x - n);
 	n = f->p.y;
-	ret->min.y = f->r.min.y - n;
-	ret->max.y = f->r.max.y - n;
+	ret->min.y = (int)(f->r.min.y - n);
+	ret->max.y = (int)(f->r.max.y - n);
 }
 
 void
@@ -269,10 +283,10 @@ Rect_inset(void *fp)
 
 	ret = f->ret;
 	n = f->n;
-	ret->min.x = f->r.min.x + n;
-	ret->min.y = f->r.min.y + n;
-	ret->max.x = f->r.max.x - n;
-	ret->max.y = f->r.max.y - n;
+	ret->min.x = (int)(f->r.min.x + n);
+	ret->min.y = (int)(f->r.min.y + n);
+	ret->max.x = (int)(f->r.max.x - n);
+	ret->max.y = (int)(f->r.max.y - n);
 }
 
 void
@@ -282,7 +296,7 @@ Rect_dx(void *fp)
 
 	f = fp;
 
-	*f->ret = f->r.max.x-f->r.min.x;
+	*f->ret = (int)(f->r.max.x-f->r.min.x);
 }
 
 void
@@ -292,7 +306,7 @@ Rect_dy(void *fp)
 
 	f = fp;
 
-	*f->ret = f->r.max.y-f->r.min.y;
+	*f->ret = (int)(f->r.max.y-f->r.min.y);
 }
 
 void
@@ -304,6 +318,6 @@ Rect_size(void *fp)
 	f = fp;
 
 	ret = f->ret;
-	ret->x = f->r.max.x-f->r.min.x;
-	ret->y = f->r.max.y-f->r.min.y;
+	ret->x = (int)(f->r.max.x-f->r.min.x);
+	ret->y = (int)(f->r.max.y-f->r.min.y);
 }

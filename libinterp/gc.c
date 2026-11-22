@@ -166,21 +166,33 @@ marklist(Type *t, void *vw)
 	Heap *h;
 
 	USED(t);
+
+	/*
+	 * The whole list at once, as markarray does an array, charged to
+	 * the quantum. It stopped when the quantum ran out and left the
+	 * next cell propagator, to be taken up when the sweep reached it;
+	 * but a list made by prepending has its cells below its head,
+	 * behind the sweep, so a list went one quantum's cells a traversal
+	 * and an epoch took as many traversals as the longest list has
+	 * quanta: with wm/osk's lexicon in the heap, some 57.
+	 *
+	 * A cell already the mutator's colour has been marked, or was made
+	 * this epoch by cons(), which marks the tail it is given; a list
+	 * does not change after, so the rest is seen to and the walk stops.
+	 */
 	l = vw;
 	markheap(l->t, l->data);
-	while(visit > 0) {
+	for(;;) {
 		l = l->tail;
 		if(l == H)
 			return;
 		h = D2H(l);
-		Setmark(h);
+		if(h->color == mutator)
+			return;
+		gce--;
+		h->color = mutator;
 		markheap(l->t, l->data);
 		visit--;
-	}
-	l = l->tail;
-	if(l != H) {
-		D2H(l)->color = propagator;
-		nprop = 1;
 	}
 }
 
@@ -297,6 +309,57 @@ domflag(Heap *h)
 		abort();
 }
 
+/*
+ * What the last whole traversal found propagator, by type: an epoch ends
+ * only at a traversal that finds none, so whatever is here traversal
+ * after traversal is what keeps the epoch from ending.  Read through
+ * /dev/heaptypes (heapaudit.c).  A diagnostic, kept for one VM's
+ * collector at a time.
+ */
+enum { Ngcprop = 16 };
+Type*	gcproptype[Ngcprop];
+ulong	gcpropn[Ngcprop];
+ulong	gcproptot, gcpropother;
+static Type*	curproptype[Ngcprop];
+static ulong	curpropn[Ngcprop];
+static ulong	curproptot, curpropother;
+
+static void
+propnote(Type *t)
+{
+	int i;
+
+	curproptot++;
+	for(i = 0; i < Ngcprop; i++){
+		if(curproptype[i] == t){
+			curpropn[i]++;
+			return;
+		}
+		if(curproptype[i] == nil){
+			curproptype[i] = t;
+			curpropn[i] = 1;
+			return;
+		}
+	}
+	curpropother++;
+}
+
+static void
+propdone(void)
+{
+	int i;
+
+	for(i = 0; i < Ngcprop; i++){
+		gcproptype[i] = curproptype[i];
+		gcpropn[i] = curpropn[i];
+		curproptype[i] = nil;
+		curpropn[i] = 0;
+	}
+	gcproptot = curproptot;
+	gcpropother = curpropother;
+	curproptot = curpropother = 0;
+}
+
 void
 rungc(Prog *p)
 {
@@ -335,6 +398,7 @@ rungc(Prog *p)
 			t = h->t;
 			if(h->color == propagator) {
 				gce--;
+				propnote(t);
 				h->color = mutator;
 				if(t != nil)
 					t->mark(t, H2D(void*, h));
@@ -374,6 +438,7 @@ rungc(Prog *p)
 
 	if(base != nil)		/* Completed this iteration ? */
 		return;
+	propdone();
 	if(nprop == 0) {	/* Completed the epoch ? */
 		gcepochs++;
 		gccolor++;

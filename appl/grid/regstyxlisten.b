@@ -320,7 +320,7 @@ readfile(f: string): string
 
 getalgs(): list of string
 {
-	return "aes_256_cbc" :: "sha256" :: nil;
+	return "aes_256_gcm" :: nil;
 }
 
 stderr(): ref Sys->FD

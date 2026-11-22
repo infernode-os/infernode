@@ -1,5 +1,5 @@
 tool=git
 	description='Git repository access via git/fs at /mnt/git'
-	authorities='reads_fs writes_fs'
+	authorities='reads_fs writes_fs dials_net'
 	irreversible='writes_fs'
-	notes='Read goes through /mnt/git. The WRITE path runs in a worker that retained the UNRESTRICTED namespace (spawned before restriction) — durable host mutation is reachable regardless of caps.paths. High-trust.'
+	notes='Read goes through /mnt/git. The WRITE path runs in a worker that retained the UNRESTRICTED namespace (spawned before restriction) — durable host mutation is reachable regardless of caps.paths. push and fetch dial the remote named in .git/config from that worker, whatever caps.network says, and push sends the factotum key for the remote (service=git) with the commits: what the agent can add, it can send. High-trust.'

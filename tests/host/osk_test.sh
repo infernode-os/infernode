@@ -72,6 +72,40 @@ check rollover ab "two fingers down at once type in the order they landed"
 check mouse z "a mouse's click types"
 check echo q "a finger's tap, its pointer press read first, types once"
 check swipe hello "a stroke through a word's letters types it"
+# the keys after the swipe as they were before it: no trail left on them
+if command -v python3 >/dev/null; then
+	same=$(python3 - "$ROOT" "$T" <<'PY'
+import sys, os
+root, T = sys.argv[1], sys.argv[2]
+sys.path.insert(0, os.path.join(root, 'tools'))
+import p9img2png as P
+d = os.path.join(root, T)
+try:
+    a = P.load(os.path.join(d, 'keys.before.img'))
+    b = P.load(os.path.join(d, 'keys.after.img'))
+except Exception as e:
+    print('none', e); sys.exit(0)
+ks = [l.split() for l in open(os.path.join(d, 'qwerty.keys')) if len(l.split()) == 5]
+y0 = min(int(k[2]) for k in ks); y1 = max(int(k[4]) for k in ks)
+x0 = min(int(k[1]) for k in ks); x1 = max(int(k[3]) for k in ks)
+n = diff = 0
+for y in range(y0, y1, 2):
+    for x in range(x0, x1, 2):
+        n += 1
+        if a.px(x, y) != b.px(x, y):
+            diff += 1
+print(diff, n)
+PY
+)
+	set -- $same
+	if [ "${1:-none}" = none ]; then
+		fail "the keys before and after the swipe were not captured: $same"
+	elif [ "$1" -eq 0 ]; then
+		pass "the swipe's trail goes when the finger lifts"
+	else
+		fail "the swipe's trail left on the keys: $1 of $2 points changed"
+	fi
+fi
 check symbols 42 "the symbols"
 check plain teh "plain: nothing put right"
 got=$(out dvorak)

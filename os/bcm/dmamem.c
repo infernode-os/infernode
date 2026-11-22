@@ -105,8 +105,13 @@ void
 dmainit(void)
 {
 	uintptr hightop;
+#ifdef RAMDISCOVER
+	uintptr base;
+	uvlong size, more;
+	int i;
+#endif
 
-	hightop = mmuhightop();
+	hightop = mmulowtop();
 	if(hightop <= DMATOP){
 		print("mem:  every address is within the DMA masters' reach; no arena\n");
 		return;
@@ -122,6 +127,16 @@ dmainit(void)
 
 	xhole(DMATOP, hightop - DMATOP);
 	conf.npage += (hightop - DMATOP) / BY2PG;
+#ifdef RAMDISCOVER
+	more = 0;
+	for(i = 0; (size = mmubank(i, &base)) != 0; i++){
+		xhole(base, size);
+		conf.npage += size / BY2PG;
+		more += size;
+	}
+	if(more != 0)
+		print("mem:  %lludMB above 4GB added\n", more >> 20);
+#endif
 
 	/*
 	 * And from now on the kernel's own memory comes from up there

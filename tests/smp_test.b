@@ -257,6 +257,161 @@ withcode(code: int, v: array of byte): array of byte
 	return r;
 }
 
+# a pairing taken as far as the encrypted link, the peer having said it
+# will distribute the keys in kd
+toencrypted(kd: int): ref Pairing
+{
+	ia := le("A1A2A3A4A5A6");
+	ra := le("C1C2C3C4C5C6");
+	mrand := le("00112233445566778899aabbccddeeff");
+	srand := le("ffeeddccbbaa99887766554433221100");
+	tk := array[16] of { * => byte 0 };
+	p := Pairing.new(0, ia, 1, ra, mrand);
+	req := sendof(hd p.start());
+	pres := array[] of { byte Smp->Cpairrsp, byte Smp->IOkeyboardonly, byte 0, byte Smp->Abonding, byte 16, byte 0, byte kd };
+	p.recv(pres);
+	p.recv(withcode(Smp->Cconfirm, smp->c1(tk, srand, req[0:7], pres[0:7], 0, ia, 1, ra)));
+	p.recv(withcode(Smp->Crandom, srand));
+	p.encrypted();
+	return p;
+}
+
+failreason(evs: list of ref Ev): int
+{
+	for(; evs != nil; evs = tl evs)
+		pick e := hd evs {
+		Failed =>	return e.reason;
+		}
+	return -1;
+}
+
+npaired(evs: list of ref Ev): int
+{
+	n := 0;
+	for(; evs != nil; evs = tl evs)
+		pick e := hd evs {
+		Paired =>	n++;
+		}
+	return n;
+}
+
+#
+# The key is sixteen bytes or the pairing is refused.
+#
+testKeySize(t: ref T)
+{
+	sizes := array[] of {(0, Smp->Fenckeysize), (6, Smp->Fenckeysize), (7, Smp->Fenckeysize), (15, Smp->Fenckeysize),
+		(17, Smp->Finvalidparams), (255, Smp->Finvalidparams)};
+	for(i := 0; i < len sizes; i++){
+		(ks, want) := sizes[i];
+		p := Pairing.new(0, le("A1A2A3A4A5A6"), 1, le("C1C2C3C4C5C6"), le("00112233445566778899aabbccddeeff"));
+		p.start();
+		pres := array[] of { byte Smp->Cpairrsp, byte Smp->IOkeyboardonly, byte 0, byte Smp->Abonding, byte ks, byte 0, byte Smp->Kenc };
+		evs := p.recv(pres);
+		t.asserteq(failreason(evs), want, sys->sprint("a key size of %d is refused", ks));
+		t.asserteq(p.state, Smp->Failed, sys->sprint("and the pairing with it (size %d)", ks));
+	}
+}
+
+#
+# Pairing Failed ends a pairing in progress; it does not undo one that is
+# done, or fail one that has not begun.
+#
+testLateFailure(t: ref T)
+{
+	p := Pairing.new(0, le("A1A2A3A4A5A6"), 1, le("C1C2C3C4C5C6"), le("00112233445566778899aabbccddeeff"));
+	bye := array[] of { byte Smp->Cfailed, byte Smp->Funspecified };
+	t.asserteq(len p.recv(bye), 0, "a failure before pairing began says nothing");
+	t.asserteq(p.state, Smp->Idle, "and changes nothing");
+
+	p = toencrypted(0);	# nothing to distribute: done at once
+	t.asserteq(p.state, Smp->Done, "a pairing with no keys to come is done when the link encrypts");
+	t.asserteq(len p.recv(bye), 0, "a failure after it is done says nothing");
+	t.asserteq(p.state, Smp->Done, "and the pairing stays done");
+
+	p = Pairing.new(0, le("A1A2A3A4A5A6"), 1, le("C1C2C3C4C5C6"), le("00112233445566778899aabbccddeeff"));
+	p.start();
+	t.asserteq(failreason(p.recv(bye)), Smp->Funspecified, "a failure during pairing fails it");
+	t.asserteq(len p.recv(bye), 0, "once");
+}
+
+#
+# What a pairing keeps is its own: the reader's buffer, used again for the
+# next packet, does not change it.
+#
+testOwnCopies(t: ref T)
+{
+	ia := le("A1A2A3A4A5A6");
+	ra := le("C1C2C3C4C5C6");
+	mrand := le("00112233445566778899aabbccddeeff");
+	srand := le("ffeeddccbbaa99887766554433221100");
+	tk := array[16] of { * => byte 0 };
+	p := Pairing.new(0, ia, 1, ra, mrand);
+	req := sendof(hd p.start());
+	pres := array[] of { byte Smp->Cpairrsp, byte Smp->IOkeyboardonly, byte 0, byte Smp->Abonding, byte 16, byte 0, byte Smp->Kenc };
+	p.recv(pres);
+
+	buf := array[17] of byte;	# one buffer for every packet, as a reader has
+	buf[0:] = withcode(Smp->Cconfirm, smp->c1(tk, srand, req[0:7], pres[0:7], 0, ia, 1, ra));
+	p.recv(buf);
+	buf[0:] = withcode(Smp->Crandom, srand);
+	evs := p.recv(buf);
+	t.asserteq(failreason(evs), -1, "the confirm kept is the confirm sent, though its buffer now holds the random");
+	t.asserteq(p.state, Smp->Waitencrypt, "and the pairing goes on to encrypt");
+
+	p.encrypted();
+	ltk := le("0123456789abcdef0123456789abcdef");
+	buf[0:] = withcode(Smp->Cencinfo, ltk);
+	p.recv(buf);
+	mid := array[11] of byte;
+	mid[0] = byte Smp->Cmasterid;
+	for(i := 1; i < 11; i++)
+		mid[i] = byte i;
+	for(i = 0; i < len buf; i++)
+		buf[i] = byte 16rEE;	# the reader's next packet
+	evs = p.recv(mid);
+	t.asserteq(npaired(evs), 1, "the keys are distributed");
+	pick e := hd evs {
+	Paired =>
+		t.assertseq(hex(e.keys.ltk), hex(ltk), "and the LTK is the one sent, not what the buffer held after");
+	}
+}
+
+#
+# Half a key is no key; an identity is a public or static address.
+#
+testDistribution(t: ref T)
+{
+	p := toencrypted(Smp->Kenc);
+	mid := array[11] of byte;
+	mid[0] = byte Smp->Cmasterid;
+	for(i := 1; i < 11; i++)
+		mid[i] = byte i;
+	evs := p.recv(mid);
+	t.asserteq(npaired(evs), 0, "a master identification with no key before it pairs nothing");
+	t.asserteq(failreason(evs), Smp->Finvalidparams, "and fails the pairing");
+
+	ida := array[8] of byte;
+	ida[0] = byte Smp->Cidaddr;
+	ida[2:] = le("C1C2C3C4C5C6");
+
+	p = toencrypted(Smp->Kid);
+	ida[1] = byte 2;
+	t.asserteq(failreason(p.recv(ida)), Smp->Finvalidparams, "an address type that is neither public nor random is refused");
+
+	p = toencrypted(Smp->Kid);
+	ida[1] = byte 1; ida[7] = byte 16r40;	# a random address that is not static
+	t.asserteq(failreason(p.recv(ida)), Smp->Finvalidparams, "a random address that is not static is no identity");
+
+	p = toencrypted(Smp->Kid);
+	ida[1] = byte 1; ida[7] = byte 16rC6;
+	t.asserteq(npaired(p.recv(ida)), 1, "a static random address is");
+
+	p = toencrypted(Smp->Kid);
+	ida[1] = byte 0; ida[7] = byte 16r40;
+	t.asserteq(npaired(p.recv(ida)), 1, "and a public one, whatever its top bits");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -274,6 +429,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Vectors", testVectors);
 	run("Pairing", testPairing);
 	run("Refusals", testRefusals);
+	run("KeySize", testKeySize);
+	run("LateFailure", testLateFailure);
+	run("OwnCopies", testOwnCopies);
+	run("Distribution", testDistribution);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

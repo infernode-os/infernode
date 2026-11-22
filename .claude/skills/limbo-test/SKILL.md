@@ -36,6 +36,15 @@ the end) is in CLAUDE.md's Testing System section. Then **add the target to
 `TARG=` in `tests/mkfile`**.
 
 Conventions the docs used to omit:
+- **A refusal is not a failure:** when a test talks to a server we do
+  not run and it answers no -- an HTTP 4xx/5xx, a rate limit, a challenge
+  page, an exhausted quota -- call `t.refused(why)` with what it answered,
+  never a failing assert. It reports `--- REFUSED:`, is counted apart, and
+  fails nothing. Our own code failing (a bad parse, a broken handshake, a
+  reply we cannot read) is still FAIL. Before debugging a failure that
+  involved a remote, read what the remote answered: a soak's "TLS failures"
+  were example.com's 403s to handshakes that had succeeded. A test that
+  gates a soak or CI is better against a server we control.
 - **Suite skip:** if the environment a whole module needs is absent, `raise
   "skip:<reason>"` from `init()` — the runner counts it SKIP. A bare
   `raise "fail:..."` counts as FAIL.

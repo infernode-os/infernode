@@ -11,3 +11,13 @@ updates:
       codeql-action:
         patterns:
           - "github/codeql-action*"
+
+  - package-ecosystem: "pip"
+    directory: "/tools/claude-gate"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "pip"
+    directory: "/tools/codex-gate"
+    schedule:
+      interval: "weekly"

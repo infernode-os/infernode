@@ -45,6 +45,10 @@ ToolFind: module {
 MAX_RESULTS: con 100;
 MAX_DEPTH:   con 20;
 MAX_DIRS:    con 2000;   # max directories opened per search — safety valve for huge trees
+MAX_ENTRIES: con 200000; # max names looked at per search, however few directories hold them
+
+# What a search has done, by index into its counters
+NDIRS, NSKIPPED, NENTRIES, NDEEP: con iota;
 OPEN_TIMEOUT: con 500;  # ms — skip directories that block longer than this
 
 init(): string
@@ -81,7 +85,10 @@ doc(): string
 		"  Find /dis/wm -name *.dis\n" +
 		"  Find / -name *tetris*\n" +
 		"  Find *_test.b /tests\n\n" +
-		"Returns list of matching file paths (max 100 results, max 2000 directories).";
+		"-iname matches without regard to case.  With no path, the current\n" +
+		"directory is searched.\n" +
+		"Returns list of matching file paths (max 100 results, max 2000 directories),\n" +
+		"and says when the search stopped before it had looked everywhere.";
 }
 
 schema(): string
@@ -135,8 +142,11 @@ exec(args: string): string
 	pattern := "";
 	basepath := ".";
 
-	# Detect Unix-style: scan for -name flag
+	# Detect Unix-style: scan for -name flag.  Any other option was
+	# passed over and its argument taken for the path ("-type f"
+	# searched a directory f), and -iname matched case as -name does.
 	nameflag := 0;
+	icase := 0;
 	patharg := "";
 	patarg := "";
 	for(a := argv; a != nil; a = tl a) {
@@ -146,10 +156,16 @@ exec(args: string): string
 			nameflag = 0;
 		} else if(tok == "-name" || tok == "-iname") {
 			nameflag = 1;
+			if(tok == "-iname")
+				icase = 1;
+		} else if(isoption(tok)) {
+			return "error: find does not take " + tok + ": usage: Find <pattern> [path], or Find [path] -name <pattern>";
 		} else if(len tok > 0 && tok[0] != '-') {
 			patharg = tok;
 		}
 	}
+	if(nameflag)
+		return "error: -name needs a pattern after it";
 	if(patarg != "") {
 		# Unix-style found
 		pattern = patarg;
@@ -189,10 +205,31 @@ exec(args: string): string
 	# pattern has no *, ? or [, treat it as a substring by wrapping in *...*.
 	if(pattern != "" && !hasglobmeta(pattern))
 		pattern = "*" + pattern + "*";
+	if(icase)
+		pattern = str->tolower(pattern);
 
-	# dirc[0] tracks directories opened across the entire recursive search.
-	# Passed by reference (array) so all recursive calls share one counter.
-	dirc := array[1] of {* => 0};
+	# With no path the current directory is searched, by its own name:
+	# as "." each name was joined to the dot (".lib"), so nothing below
+	# the first level was ever opened or found.
+	if(basepath == ".") {
+		dfd := sys->open(".", Sys->OREAD);
+		if(dfd != nil)
+			basepath = sys->fd2path(dfd);
+		if(basepath == nil || basepath == "")
+			basepath = "/";
+	}
+	# What cannot be searched is not "no matches".
+	(bok, bd) := sys->stat(basepath);
+	if(bok < 0)
+		return sys->sprint("error: cannot search %s: %r", basepath);
+	if(!(bd.mode & Sys->DMDIR))
+		return "error: " + basepath + " is not a directory: give the directory to search in";
+
+	# dirc counts across the entire recursive search: directories opened,
+	# directories that would not open, names looked at, and whether a
+	# directory was too deep to enter.  Passed by reference (array) so
+	# all recursive calls share the counters.
+	dirc := array[4] of {* => 0};
 
 	# Collect results
 	results: list of string;
@@ -200,11 +237,28 @@ exec(args: string): string
 	truncated := 0;
 
 	# Search recursively
-	(results, count, truncated) = searchdir(basepath, pattern, 0, dirc);
+	(results, count, truncated) = searchdir(basepath, pattern, icase, 0, dirc);
+
+	# How the search fell short, if it did.  (It was always "truncated
+	# at 100 results", whatever had stopped it; a directory that would
+	# not open, or was too deep, was passed over unsaid.)
+	short := "";
+	if(dirc[NDIRS] >= MAX_DIRS || dirc[NENTRIES] >= MAX_ENTRIES)
+		short = sys->sprint("the search stopped after %d directories; the rest were not searched", dirc[NDIRS]);
+	if(dirc[NDEEP]) {
+		if(short != "")
+			short += "; ";
+		short += sys->sprint("directories more than %d deep were not entered", MAX_DEPTH);
+	}
+	if(dirc[NSKIPPED] > 0) {
+		if(short != "")
+			short += "; ";
+		short += sys->sprint("%d directories could not be opened", dirc[NSKIPPED]);
+	}
 
 	if(count == 0) {
-		if(truncated)
-			return sys->sprint("no matches found (search stopped after %d directories)", dirc[0]);
+		if(short != "")
+			return "no matches found (" + short + ")";
 		return "no matches found";
 	}
 
@@ -216,8 +270,10 @@ exec(args: string): string
 		result += hd r;
 	}
 
-	if(truncated)
-		result += sys->sprint("\n... (truncated at %d results, %d directories searched)", MAX_RESULTS, dirc[0]);
+	if(count >= MAX_RESULTS && truncated)
+		result += sys->sprint("\n... (stopped at %d results; there may be more)", count);
+	if(short != "")
+		result += "\n... (" + short + ")";
 
 	return sys->sprint("%d matches:\n%s", count, result);
 }
@@ -230,22 +286,26 @@ exec(args: string): string
 # found even when the very first subdirectory of /foo exhausts MAX_DIRS.
 # (Previous DFS approach: recurse into subdir immediately → MAX_DIRS hit →
 # early return → root-level files never checked.)
-searchdir(path, pattern: string, depth: int, dirc: array of int): (list of string, int, int)
+searchdir(path, pattern: string, icase, depth: int, dirc: array of int): (list of string, int, int)
 {
 	results: list of string;
 	count := 0;
 	truncated := 0;
 
-	if(depth > MAX_DEPTH)
+	if(depth > MAX_DEPTH) {
+		dirc[NDEEP] = 1;
 		return (nil, 0, 0);
+	}
 
-	if(dirc[0] >= MAX_DIRS)
+	if(dirc[NDIRS] >= MAX_DIRS || dirc[NENTRIES] >= MAX_ENTRIES)
 		return (nil, 0, 1);
 
 	fd := opentimeout(path, Sys->OREAD, OPEN_TIMEOUT);
-	if(fd == nil)
+	if(fd == nil) {
+		dirc[NSKIPPED]++;
 		return (nil, 0, 0);
-	dirc[0]++;
+	}
+	dirc[NDIRS]++;
 
 	# Pass 1: read all entries, match files immediately, collect subdir paths.
 	# Subdirs are deferred so ALL files at this level are checked first.
@@ -262,19 +322,28 @@ searchdir(path, pattern: string, depth: int, dirc: array of int): (list of strin
 			d := dir[i];
 			name := d.name;
 
-			if(name == "." || name == "..")
+			# A name is one name of this directory: a server that
+			# gives an empty one raised an exception here, and one
+			# with a slash in it steered the search elsewhere.
+			if(name == "" || name == "." || name == ".." || hasslash(name))
 				continue;
 
+			# One directory may hold any number of names.
+			if(++dirc[NENTRIES] > MAX_ENTRIES) {
+				done = 1;
+				truncated = 1;
+				continue;
+			}
+
 			fullpath := path + "/" + name;
-			if(path == "." || path == "/")
-				fullpath = path + name;
-			if(path == "/" && name[0] != '/')
-				fullpath = "/" + name;
 			if(len path > 0 && path[len path - 1] == '/')
 				fullpath = path + name;
 
 			# Match all entries (files AND dirs) against pattern
-			if(filepat->match(pattern, name)) {
+			mname := name;
+			if(icase)
+				mname = str->tolower(name);
+			if(filepat->match(pattern, mname)) {
 				if(count >= MAX_RESULTS) {
 					done = 1;
 					truncated = 1;
@@ -294,11 +363,11 @@ searchdir(path, pattern: string, depth: int, dirc: array of int): (list of strin
 
 	# Pass 2: recurse into collected subdirs (only after all files matched above)
 	for(s := subdirs; s != nil && !truncated; s = tl s) {
-		if(dirc[0] >= MAX_DIRS) {
+		if(dirc[NDIRS] >= MAX_DIRS) {
 			truncated = 1;
 			break;
 		}
-		(subresults, subcount, subtrunc) := searchdir(hd s, pattern, depth + 1, dirc);
+		(subresults, subcount, subtrunc) := searchdir(hd s, pattern, icase, depth + 1, dirc);
 		for(; subresults != nil; subresults = tl subresults)
 			results = hd subresults :: results;
 		count += subcount;
@@ -328,9 +397,28 @@ opentimeout(path: string, mode: int, ms: int): ref Sys->FD
 		fd := <-result =>
 			return fd;
 		<-timeout =>
-			sys->fprint(sys->fildes(2), "find: timeout open %s (skipping)\n", path);
-			return nil;
+			return nil;	# counted by the caller, and said in the answer
 	}
+}
+
+# -type, -maxdepth, -print: a dash and letters (a pattern may begin with a
+# dash, but has something else in it)
+isoption(s: string): int
+{
+	if(len s < 2 || s[0] != '-')
+		return 0;
+	for(i := 1; i < len s; i++)
+		if(!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z')))
+			return 0;
+	return 1;
+}
+
+hasslash(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '/')
+			return 1;
+	return 0;
 }
 
 tryopen(path: string, mode: int, result: chan of ref Sys->FD)

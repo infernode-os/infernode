@@ -149,6 +149,8 @@ oscmd(char **args, int nice, char *dir, int *fd)
 		close(fd0[1]);
 		close(fd1[0]);
 		close(fd2[0]);
+		/* the child has exited, having failed to exec: not waited for, it stayed, a zombie for each */
+		waitpid(pid, nil, 0);
 		free(t);
 		up->genbuf[n] = 0;
 		if(Debug)

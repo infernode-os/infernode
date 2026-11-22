@@ -1,5 +1,7 @@
 # Inferno Namespace Formal Verification Results
 
+> **Review note (2026-11-06).** The isolation assertions in these models cannot fail: mount tables are disjoint bytes by construction. Conclusion 2 below ("The C implementation follows the design") is not something a Promela model can show; only the CBMC `pgrpcpy` harness looks at the C. See `../README.md`, Known Limitations.
+
 **Date**: 2026-01-13
 **Verifier**: SPIN 6.5.2
 **Status**: ✅ ALL PROPERTIES VERIFIED

@@ -101,9 +101,10 @@ Type*	TScreen;
 Type*	TDisplay;
 Type*	TPath;
 
-Draw_Image*	allocdrawimage(DDisplay*, Draw_Rect, ulong, Image*, int, int);
-Draw_Image*	color(DDisplay*, ulong);
-Draw_Screen	*mkdrawscreen(Screen*, Draw_Display*);
+static DImage*	newdimage(void);
+static Draw_Image*	filldimage(DImage*, Image*, Draw_Screen*, Draw_Display*, void*);
+static void	allocdrawimage(Draw_Image**, DDisplay*, Draw_Rect, ulong, int, int);
+static void	color(Draw_Image**, DDisplay*, ulong);
 
 char		deffontname[] = "*default*";
 void		refreshslave(Display*);
@@ -118,6 +119,10 @@ drawmodinit(void)
 	TScreen = dtype(freedrawscreen, sizeof(DScreen), screenmap, sizeof(screenmap));
 	TDisplay = dtype(freedrawdisplay, sizeof(DDisplay), displaymap, sizeof(displaymap));
 	TPath = dtype(freeheap, sizeof(Draw_Path), pathmap, sizeof(pathmap));
+	heapaudittype("Display", &TDisplay);
+	heapaudittype("Font", &TFont);
+	heapaudittype("Image", &TImage);
+	heapaudittype("Screen", &TScreen);
 	builtinmod("$Draw", Drawmodtab, Drawmodlen);
 }
 
@@ -317,10 +322,11 @@ Display_allocate(void *fp)
 	Subfont *df;
 	Display *display;
 	DDisplay *dd;
+	DImage *di[5];
 	Heap *h;
-	Draw_Rect r;
 	DRef *dr;
 	Cache *c;
+	int i;
 
 	f = fp;
 	destroy(*f->ret);
@@ -333,21 +339,39 @@ Display_allocate(void *fp)
 	dev = string2c(f->dev);
 	if(dev[0] == 0)
 		dev = 0;
-	display = initdisplay(dev, dev, nil);	/* TO DO: win, error */
-	if(display == 0)
-		return;
+
+	/*
+	 * The Display's cell and its five images' first: heap() raises
+	 * when the heap is full, and initdisplay returns holding the
+	 * display's lock.  They were made after it, so a full heap left
+	 * the program a Display whose lock nobody would ever release,
+	 * which closedisplay then waited for in whoever freed it.  All
+	 * six before the result is set: one refused leaves those before
+	 * it to the collector (a cell with nothing in it frees as
+	 * nothing), and the caller with no Display, not half of one.
+	 */
+	h = heap(TDisplay);
+	dd = H2D(DDisplay*, h);
+	for(i = 0; i < nelem(di); i++)
+		di[i] = newdimage();
+	*f->ret = &dd->drawdisplay;
+	dd->drawdisplay.image = &di[0]->drawimage;
+	dd->drawdisplay.black = &di[1]->drawimage;
+	dd->drawdisplay.white = &di[2]->drawimage;
+	dd->drawdisplay.opaque = &di[3]->drawimage;
+	dd->drawdisplay.transparent = &di[4]->drawimage;
 
 	dr = malloc(sizeof(DRef));
-	if(dr == nil)
-		return;
-	h = heap(TDisplay);
-	if(h == H){
-		closedisplay(display);
+	display = nil;
+	if(dr != nil)
+		display = initdisplay(dev, dev, nil);	/* TO DO: win, error */
+	if(display == nil){
+		free(dr);
+		*f->ret = H;
+		destroy(&dd->drawdisplay);
 		return;
 	}
-	dd = H2D(DDisplay*, h);
 	dd->display = display;
-	*f->ret = &dd->drawdisplay;
 	dd->dref = dr;
 	display->limbo = dr;
 	dr->display = display;
@@ -366,13 +390,11 @@ Display_allocate(void *fp)
 		}
 	}
 
-	R2R(r, display->image->r);
-	dd->drawdisplay.image = allocdrawimage(dd, r, display->image->chan, display->image, 0, 0);
-	R2R(r, display->white->r);
-	dd->drawdisplay.black = allocdrawimage(dd, r, display->black->chan, display->black, 1, 0);
-	dd->drawdisplay.white = allocdrawimage(dd, r, display->white->chan, display->white, 1, 0);
-	dd->drawdisplay.opaque = allocdrawimage(dd, r, display->opaque->chan, display->opaque, 1, 0);
-	dd->drawdisplay.transparent = allocdrawimage(dd, r, display->transparent->chan, display->transparent, 1, 0);
+	filldimage(di[0], display->image, H, &dd->drawdisplay, nil);
+	filldimage(di[1], display->black, H, &dd->drawdisplay, nil);
+	filldimage(di[2], display->white, H, &dd->drawdisplay, nil);
+	filldimage(di[3], display->opaque, H, &dd->drawdisplay, nil);
+	filldimage(di[4], display->transparent, H, &dd->drawdisplay, nil);
 
 	/* don't call unlockdisplay because the qlock was left up by initdisplay */
 	libqunlock(display->qlock);
@@ -383,7 +405,10 @@ Display_getwindow(void *fp)
 {
 	F_Display_getwindow *f;
 	Display *disp;
-	int locked;
+	DDisplay *dd;
+	DScreen *ds;
+	DImage *di, *dsi;
+	int locked, n;
 	Image *image;
 	Screen *screen;
 	char *wn;
@@ -397,41 +422,78 @@ Display_getwindow(void *fp)
 	f->ret->t1 = H;
 	destroy(r);
 	disp = checkdisplay(f->d);
+	dd = (DDisplay*)f->d;
+	/*
+	 * Given a Screen and Image to attach again, gengetwindow frees
+	 * what they hold and makes others; the two given were handed
+	 * back still holding what had been freed, and using or dropping
+	 * them used it again.  Nothing asks for that form: it is refused.
+	 */
+	if(f->image != H || f->screen != H)
+		error(exInval);
 	if(f->winname == H)
 		wn = "/dev/winname";
 	else
 		wn = string2c(f->winname);
-	if(f->image == H)
-		image = nil;
-	else
-		image = checkimage(f->image);
-	if(f->screen == H)
-		screen = nil;
-	else
-		screen = checkscreen(f->screen);
-	locked = lockdisplay(disp);
-	if(gengetwindow(disp, wn, &image, &screen, f->backup) < 0){
-		/* TO DO: eliminate f->image and f->screen's references to Image and Screen */
-		goto Return;
-	}
-	if(screen != nil){
-		if(f->screen != H){
-			f->ret->t0 = f->screen;
-			D2H(f->screen)->ref++;
-		}else
-			f->ret->t0 = mkdrawscreen(screen, f->d);
-	}
-	if(image != nil){
-		if(f->image != H){
-			f->ret->t1 = f->image;
-			D2H(f->image)->ref++;
-		}else
-			f->ret->t1 = mkdrawimage(image, f->ret->t0, f->d, nil);
-	}
 
-Return:
+	/*
+	 * The cells first: heap() raises when the heap is full, and did
+	 * with the display locked.  All three before the result is set,
+	 * as Display_allocate.
+	 */
+	ds = H2D(DScreen*, heap(TScreen));
+	dsi = newdimage();
+	di = newdimage();
+	f->ret->t0 = &ds->drawscreen;
+	ds->drawscreen.image = &dsi->drawimage;
+	f->ret->t1 = &di->drawimage;
+
+	image = nil;
+	screen = nil;
+	locked = lockdisplay(disp);
+	n = gengetwindow(disp, wn, &image, &screen, f->backup);
+	if(n < 0 && screen != nil){
+		/* a screen was made and the window on it was not */
+		freeimage(screen->image);
+		freescreen(screen);
+		screen = nil;
+	}
 	if(locked)
 		unlockdisplay(disp);
+
+	if(n < 0 || image == nil || screen == nil){
+		f->ret->t0 = H;
+		f->ret->t1 = H;
+		destroy(&ds->drawscreen);
+		destroy(&di->drawimage);
+		/*
+		 * With no window to name, the image is the display's own.
+		 * It was given a second Draw->Image, and dropping that one
+		 * freed the image under the Display, which freed it again.
+		 */
+		if(n >= 0 && image != nil && image == disp->image && dd->drawdisplay.image != H){
+			f->ret->t1 = dd->drawdisplay.image;
+			D2H(f->ret->t1)->ref++;
+		}
+		return;
+	}
+
+	/*
+	 * The screen is filled with the display's white, which is the
+	 * Display's to free: its own Draw->Image, not another on it.
+	 */
+	filldimage(dsi, screen->image, H, f->d, nil);
+	ds->screen = screen;
+	if(screen->fill == disp->white && dd->drawdisplay.white != H){
+		ds->drawscreen.fill = dd->drawdisplay.white;
+		D2H(ds->drawscreen.fill)->ref++;
+	}
+	ds->drawscreen.display = f->d;
+	D2H(f->d)->ref++;
+	ds->drawscreen.id = screen->id;
+	ds->dref = disp->limbo;
+	ds->dref->ref++;
+	filldimage(di, image, &ds->drawscreen, f->d, nil);
 }
 
 void
@@ -458,8 +520,15 @@ display_dec(void *v)
 
 	d = dr->display;
 	locked = lockdisplay(d);
-	font_close(d->defaultfont);
-	subfont_close(d->defaultsubfont);
+	/*
+	 * A display made when there was no room for the default font's
+	 * image has neither; closing the nil one faulted, and this is
+	 * most often the collector's sweep, where a fault ends emu.
+	 */
+	if(d->defaultfont != nil)
+		font_close(d->defaultfont);
+	if(d->defaultsubfont != nil)
+		subfont_close(d->defaultsubfont);
 	if(locked)
 		unlockdisplay(d);
 	freeallsubfonts(d);
@@ -484,6 +553,8 @@ freedrawdisplay(Heap *h, int swept)
 	}
 	/* we've now released dd->image etc.; make sure they're not freed again */
 	d = dd->display;
+	if(d == nil)	/* Display_allocate did not get as far as a display */
+		return;
 	d->image = nil;
 	d->white = nil;
 	d->black = nil;
@@ -497,17 +568,12 @@ void
 Display_color(void *fp)
 {
 	F_Display_color *f;
-	Display *d;
-	int locked;
 
 	f = fp;
 	destroy(*f->ret);
 	*f->ret = H;
-	d = checkdisplay(f->d);
-	locked = lockdisplay(d);
-	*f->ret = color((DDisplay*)f->d, f->color);
-	if(locked)
-		unlockdisplay(d);
+	checkdisplay(f->d);
+	color(f->ret, (DDisplay*)f->d, f->color);
 }
 
 void
@@ -699,6 +765,8 @@ drawsplinepoly(void *fp, int smooth, int op)
 	f = fp;
 	d = checkimage(f->dst);
 	s = checkimage(f->src);
+	if(f->p == H)
+		error(exNilref);
 	if(d->display != s->display|| f->radius < 0)
 		return;
 	pp = cvtpoints((Draw_Point*)f->p->data, f->p->len);
@@ -828,6 +896,8 @@ drawfillsplinepoly(void *fp, int smooth, int op)
 	f = fp;
 	d = checkimage(f->dst);
 	s = checkimage(f->src);
+	if(f->p == H)
+		error(exNilref);
 	if(d->display != s->display)
 		return;
 	pp = cvtpoints((Draw_Point*)f->p->data, f->p->len);
@@ -1049,7 +1119,7 @@ static void
 drawpath(Draw_Image *dst, Draw_Path *p, int stroke, int wind, REAL width, int cap, int join, Draw_Image *src, Draw_Point sp, int op)
 {
 	Image *d, *s;
-	int locked;
+	int locked, w;
 
 	d = checkimage(dst);
 	s = checkimage(src);
@@ -1059,9 +1129,16 @@ drawpath(Draw_Image *dst, Draw_Path *p, int stroke, int wind, REAL width, int ca
 		error(exBounds);
 	if(d->display != s->display)
 		return;
+	/*
+	 * fixcoord raises for a width out of range: before the display
+	 * is locked, not after, when the lock was left held for good.
+	 */
+	w = 0;
+	if(stroke)
+		w = fixcoord(width);
 	locked = lockdisplay(d->display);
 	if(stroke)
-		_strokepath(d, p->data->data, p->n, fixcoord(width), cap, join, 4*Pathunit, s, IPOINT(sp), op);
+		_strokepath(d, p->data->data, p->n, w, cap, join, 4*Pathunit, s, IPOINT(sp), op);
 	else
 		_fillpath(d, p->data->data, p->n, wind, s, IPOINT(sp), op);
 	checkflush(dst);
@@ -1230,6 +1307,11 @@ drawtext(void *fp, int op)
 	int locked;
 
 	f = fp;
+	/*
+	 * Where nothing is drawn the text ends where it began: the
+	 * result was whatever the C stack held, an address among it.
+	 */
+	pt = IPOINT(f->p);
 	if(f->dst == H || f->src == H)
 		goto Return;
 	if(f->font == H || f->str == H)
@@ -1239,7 +1321,7 @@ drawtext(void *fp, int op)
 	s = checkimage(f->src);
 	font = checkfont(f->font);
 	if(d->display!=s->display || d->display!=font->display)
-		return;
+		goto Return;
 	locked = lockdisplay(d->display);
 	if(str->len >= 0)
 		pt = stringnop(d, IPOINT(f->p), s, IPOINT(f->sp), font, str->Sascii, str->len, op);
@@ -1278,6 +1360,7 @@ drawtextbg(void *fp, int op)
 	int locked;
 
 	f = fp;
+	pt = IPOINT(f->p);	/* as drawtext */
 	if(f->dst == H || f->src == H)
 		goto Return;
 	if(f->font == H || f->str == H)
@@ -1287,8 +1370,9 @@ drawtextbg(void *fp, int op)
 	s = checkimage(f->src);
 	bg = checkimage(f->bg);
 	font = checkfont(f->font);
-	if(d->display!=s->display || d->display!=font->display)
-		return;
+	/* bg too: its id was sent to dst's display, where it is another image's */
+	if(d->display!=s->display || d->display!=font->display || d->display!=bg->display)
+		goto Return;
 	locked = lockdisplay(d->display);
 	if(str->len >= 0)
 		pt = stringnbgop(d, IPOINT(f->p), s, IPOINT(f->sp), font, str->Sascii, str->len, bg, IPOINT(f->bgp), op);
@@ -1345,16 +1429,12 @@ void
 Display_newimage(void *fp)
 {
 	F_Display_newimage *f;
-	Display *d;
-	int locked;
 
 	f = fp;
-	d = checkdisplay(f->d);
+	checkdisplay(f->d);
 	destroy(*f->ret);
 	*f->ret = H;
-	locked = lockdisplay(d);
-	*f->ret = allocdrawimage((DDisplay*)f->d, f->r, f->chans.desc,
-				nil, f->repl, f->color);
+	allocdrawimage(f->ret, (DDisplay*)f->d, f->r, f->chans.desc, f->repl, f->color);
 	if(*f->ret == H){
 		char err[ERRMAX];
 		Image *si;	/* the display's screen image: an Image, not a Memimage, so chan is read from the right place */
@@ -1367,8 +1447,6 @@ Display_newimage(void *fp)
 			f->chans.desc, f->repl, f->color,
 			si != nil ? si->chan : 0, err);
 	}
-	if(locked)
-		unlockdisplay(d);
 }
 
 void
@@ -1377,19 +1455,25 @@ Display_colormix(void *fp)
 	F_Display_colormix *f;
 	Display *disp;
 	Image *i;
+	DImage *di;
 	int locked;
 
 	f = fp;
 	destroy(*f->ret);
 	*f->ret = H;
 	disp = checkdisplay(f->d);
+	di = newdimage();	/* before the image, which would be lost if this raised */
+	*f->ret = &di->drawimage;
 	locked = lockdisplay(disp);
 	i = allocimagemix(disp, f->c1, f->c2);
 	if(locked)
 		unlockdisplay(disp);
-	if(i == nil)		/* the display has gone: a remote one hung up, say */
+	if(i == nil){		/* the display has gone: a remote one hung up, say */
+		*f->ret = H;
+		destroy(&di->drawimage);
 		return;
-	*f->ret = mkdrawimage(i, H, f->d, nil);
+	}
+	filldimage(di, i, H, f->d, nil);
 }
 
 void
@@ -1403,6 +1487,8 @@ Image_readpixels(void *fp)
 	f = fp;
 	R2R(r, f->r);
 	i = checkimage(f->src);
+	if(f->data == H)
+		error(exNilref);
 	locked = lockdisplay(i->display);
 	*f->ret = unloadimage(i, r, f->data->data, f->data->len);
 	if(locked)
@@ -1420,6 +1506,8 @@ Image_writepixels(void *fp)
 	f = fp;
 	R2R(r, f->r);
 	i = checkimage(f->dst);
+	if(f->data == H)
+		error(exNilref);
 	locked = lockdisplay(i->display);
 	*f->ret = loadimage(i, r, f->data->data, f->data->len);
 	checkflush(f->dst);
@@ -1481,6 +1569,7 @@ void
 Display_open(void *fp)
 {
 	Image *i;
+	DImage *di;
 	Display *disp;
 	F_Display_open *f;
 
@@ -1490,10 +1579,15 @@ Display_open(void *fp)
 	disp = lookupdisplay(f->d);
 	if(disp == nil)
 		return;
+	di = newdimage();	/* before the image, which would be lost if this raised */
+	*f->ret = &di->drawimage;
 	i = display_open(disp, string2c(f->name));
-	if(i == nil)
+	if(i == nil){
+		*f->ret = H;
+		destroy(&di->drawimage);
 		return;
-	*f->ret = allocdrawimage((DDisplay*)f->d, DRECT(i->r), i->chan, i, 0, 0);
+	}
+	filldimage(di, i, H, f->d, nil);
 }
 
 void
@@ -1502,28 +1596,29 @@ Display_namedimage(void *fp)
 	F_Display_namedimage *f;
 	Display *d;
 	Image *i;
-	Draw_Image *di;
+	DImage *di;
+	char *name;
 	int locked;
 
 	f = fp;
 	destroy(*f->ret);
 	*f->ret = H;
 	d = checkdisplay(f->d);
+	name = string2c(f->name);	/* which may raise: before the lock */
+	di = newdimage();	/* before the image, which would be lost if this raised */
+	*f->ret = &di->drawimage;
 	locked = lockdisplay(d);
-	i = namedimage(d, string2c(f->name));
+	i = namedimage(d, name);
 	if(locked)
 		unlockdisplay(d);
-	if(i == nil)
+	if(i == nil){
+		*f->ret = H;
+		destroy(&di->drawimage);
 		return;
-	di =  allocdrawimage((DDisplay*)f->d, DRECT(i->r), i->chan, i, i->repl, 0);
-	*f->ret = di;
-	if(di == H){
-		locked = lockdisplay(d);
-		freeimage(i);
-		if(locked)
-			unlockdisplay(d);
-	}else{
-		di->iname = f->name;
+	}
+	filldimage(di, i, H, f->d, nil);
+	if(f->name != H){
+		di->drawimage.iname = f->name;
 		D2H(f->name)->ref++;
 	}
 }
@@ -1532,10 +1627,10 @@ void
 Display_readimage(void *fp)
 {
 	Image *i;
+	DImage *di;
 	Display *disp;
 	F_Display_readimage *f;
 	Sys_FD *fd;
-	int locked;
 
 	f = fp;
 	destroy(*f->ret);
@@ -1544,16 +1639,15 @@ Display_readimage(void *fp)
 	if(fd == H)
 		return;
 	disp = checkdisplay(f->d);
+	di = newdimage();	/* before the image, which would be lost if this raised */
+	*f->ret = &di->drawimage;
 	i = readimage(disp, fd->fd, 1);
-	if(i == nil)
+	if(i == nil){
+		*f->ret = H;
+		destroy(&di->drawimage);
 		return;
-	*f->ret = allocdrawimage((DDisplay*)f->d, DRECT(i->r), i->chan, i, 0, 0);
-	if(*f->ret == H){
-		locked = lockdisplay(disp);
-		freeimage(i);
-		if(locked)
-			unlockdisplay(disp);
 	}
+	filldimage(di, i, H, f->d, nil);
 }
 
 void
@@ -1574,81 +1668,46 @@ Display_writeimage(void *fp)
 	*f->ret = writeimage(fd->fd, i, 1);	/* TO DO: dolock? */
 }
 
-Draw_Screen*
-mkdrawscreen(Screen *s, Draw_Display *display)
-{
-	Heap *h;
-	DScreen *ds;
-	Draw_Image *dimage, *dfill;
-
-	dimage = mkdrawimage(s->image, H, display, nil);
-	dfill = mkdrawimage(s->fill, H, display, nil);
-	h = heap(TScreen);
-	if(h == H)
-		return nil;
-	ds = H2D(DScreen*, h);
-	ds->screen = s;
-	ds->drawscreen.fill = dfill;
-	D2H(dfill)->ref++;
-	ds->drawscreen.image = dimage;
-	D2H(dimage)->ref++;
-	ds->drawscreen.display = dimage->display;
-	D2H(dimage->display)->ref++;
-	ds->drawscreen.id = s->id;
-	ds->dref = s->display->limbo;
-	ds->dref->ref++;
-	return &ds->drawscreen;
-}
-
-static DScreen*
-allocdrawscreen(Draw_Image *dimage, Draw_Image *dfill, int public)
-{
-	Heap *h;
-	Screen *s;
-	DScreen *ds;
-	Image *image, *fill;
-
-	image = ((DImage*)dimage)->image;
-	fill = ((DImage*)dfill)->image;
-	s = allocscreen(image, fill, public);
-	if(s == 0)
-		return nil;
-	h = heap(TScreen);
-	if(h == H)
-		return nil;
-	ds = H2D(DScreen*, h);
-	ds->screen = s;
-	ds->drawscreen.fill = dfill;
-	D2H(dfill)->ref++;
-	ds->drawscreen.image = dimage;
-	D2H(dimage)->ref++;
-	ds->drawscreen.display = dimage->display;
-	D2H(dimage->display)->ref++;
-	ds->drawscreen.id = s->id;
-	ds->dref = image->display->limbo;
-	ds->dref->ref++;
-	return ds;
-}
-
 void
 Screen_allocate(void *fp)
 {
 	F_Screen_allocate *f;
 	DScreen *ds;
-	Image *image;
+	Screen *s;
+	Image *image, *fill;
 	int locked;
 
 	f = fp;
 	destroy(*f->ret);
 	*f->ret = H;
 	image = checkimage(f->image);
-	checkimage(f->fill);
+	fill = checkimage(f->fill);
+	/*
+	 * The cell before the screen: heap() raises when the heap is
+	 * full, and did so after the screen was made, with the display
+	 * locked.
+	 */
+	ds = H2D(DScreen*, heap(TScreen));
+	*f->ret = &ds->drawscreen;
 	locked = lockdisplay(image->display);
-	ds = allocdrawscreen(f->image, f->fill, f->public);
-	if(ds != nil)
-		*f->ret = &ds->drawscreen;
+	s = allocscreen(image, fill, f->public);
 	if(locked)
 		unlockdisplay(image->display);
+	if(s == nil){
+		*f->ret = H;
+		destroy(&ds->drawscreen);
+		return;
+	}
+	ds->screen = s;
+	ds->drawscreen.fill = f->fill;
+	D2H(f->fill)->ref++;
+	ds->drawscreen.image = f->image;
+	D2H(f->image)->ref++;
+	ds->drawscreen.display = f->image->display;
+	D2H(f->image->display)->ref++;
+	ds->drawscreen.id = s->id;
+	ds->dref = image->display->limbo;
+	ds->dref->ref++;
 }
 
 void
@@ -1665,16 +1724,18 @@ Display_publicscreen(void *fp)
 	destroy(*f->ret);
 	*f->ret = H;
 	disp = checkdisplay(f->d);
+	h = heap(TScreen);	/* before the screen, as Screen_allocate */
+	ds = H2D(DScreen*, h);
+	*f->ret = &ds->drawscreen;
 	locked = lockdisplay(disp);
 	s = publicscreen(disp, f->id, disp->image->chan);
 	if(locked)
 		unlockdisplay(disp);
-	if(s == nil)
+	if(s == nil){
+		*f->ret = H;
+		destroy(&ds->drawscreen);
 		return;
-	h = heap(TScreen);
-	if(h == H)
-		return;
-	ds = H2D(DScreen*, h);
+	}
 	ds->screen = s;
 	ds->drawscreen.fill = H;
 	ds->drawscreen.image =H;
@@ -1683,7 +1744,6 @@ Display_publicscreen(void *fp)
 	D2H(f->d)->ref++;
 	ds->dref = disp->limbo;
 	ds->dref->ref++;
-	*f->ret = &ds->drawscreen;
 }
 
 void
@@ -1701,11 +1761,8 @@ freedrawscreen(Heap *h, int swept)
 		destroy(ds->drawscreen.display);
 	}
 	s = lookupscreen(&ds->drawscreen);
-	if(s == nil){
-		if(!swept)
-			freeptrs(ds, TScreen);
+	if(s == nil)	/* a cell no screen was put in; its pointers went above */
 		return;
-	}
 	disp = s->display;
 	locked = lockdisplay(disp);
 	freescreen(s);
@@ -1715,15 +1772,39 @@ freedrawscreen(Heap *h, int swept)
 	/* screen header will be freed by caller */
 }
 
+/*
+ * A Draw->Font's cell, made before the font it is to hold: heap()
+ * raises when the heap is full, and a font opened by then was lost.
+ */
+static DFont*
+newdfont(void)
+{
+	return H2D(DFont*, heap(TFont));
+}
+
+static void
+filldfont(DFont *dfont, Font *font, String *name, Draw_Display *d, Display *disp)
+{
+	dfont->font = font;
+	dfont->drawfont.name = name;
+	if(name != H)	/* a font may be built with no name: nil is the empty string */
+		D2H(name)->ref++;
+	dfont->drawfont.height = font->height;
+	dfont->drawfont.ascent = font->ascent;
+	dfont->drawfont.display = d;
+	D2H(d)->ref++;
+	dfont->dref = disp->limbo;
+	dfont->dref->ref++;
+}
+
 void
 Font_build(void *fp)
 {
 	F_Font_build *f;
 	Font *font;
 	DFont *dfont;
-	Heap *h;
 	char buf[128];
-	char *name, *data;
+	char *name, *data, *desc;
 	Subfont *df;
 	Display *disp;
 	int locked;
@@ -1733,45 +1814,46 @@ Font_build(void *fp)
 	*f->ret = H;
 	disp = checkdisplay(f->d);
 
+	dfont = newdfont();
+	*f->ret = &dfont->drawfont;
 	name = string2c(f->name);
 	font = font_open(disp, name);
 	if(font == nil) {
+		data = nil;
+		desc = nil;
 		if(strcmp(name, deffontname) == 0) {
+			/* a display made with no room for the default font has none */
 			df = disp->defaultsubfont;
-			sprint(buf, "%d %d\n0 %d\t%s\n",
-				df->height, df->ascent, df->n-1, name);
-			data = buf;
+			if(df != nil){
+				snprint(buf, sizeof buf, "%d %d\n0 %d\t%s\n",
+					df->height, df->ascent, df->n-1, name);
+				data = buf;
+			}
 		}
 		else
-		if(f->desc == H)
-			return;
-		else
-			data = string2c(f->desc);
+		if(f->desc != H){
+			/*
+			 * buildfont cuts its description up in place, and
+			 * string2c gives the caller's own String: a copy.
+			 */
+			desc = strdup(string2c(f->desc));
+			data = desc;
+		}
 
-		locked = lockdisplay(disp);
-		font = buildfont(disp, data, name);
-		if(locked)
-			unlockdisplay(disp);
-		if(font == nil)
+		if(data != nil){
+			locked = lockdisplay(disp);
+			font = buildfont(disp, data, name);
+			if(locked)
+				unlockdisplay(disp);
+		}
+		free(desc);
+		if(font == nil){
+			*f->ret = H;
+			destroy(&dfont->drawfont);
 			return;
+		}
 	}
-
-	h = heap(TFont);
-	if(h == H)
-		return;
-
-	dfont = H2D(DFont*, h);
-	dfont->font = font;
-	dfont->drawfont.name = f->name;
-	D2H(f->name)->ref++;
-	dfont->drawfont.height = font->height;
-	dfont->drawfont.ascent = font->ascent;
-	dfont->drawfont.display = f->d;
-	D2H(f->d)->ref++;
-	dfont->dref = disp->limbo;
-	dfont->dref->ref++;
-
-	*f->ret = &dfont->drawfont;
+	filldfont(dfont, font, f->name, f->d, disp);
 }
 
 Font*
@@ -1898,7 +1980,6 @@ freesubfont(Subfont *sf)
 void
 Font_open(void *fp)
 {
-	Heap *h;
 	Font *font;
 	Display *disp;
 	DFont *df;
@@ -1910,25 +1991,15 @@ Font_open(void *fp)
 	*f->ret = H;
 	disp = checkdisplay(f->d);
 
-	font = font_open(disp, string2c(f->name));
-	if(font == 0)
-		return;
-
-	h = heap(TFont);
-	if(h == H)
-		return;
-
-	df = H2D(DFont*, h);
-	df->font = font;
-	df->drawfont.name = f->name;
-	D2H(f->name)->ref++;
-	df->drawfont.height = font->height;
-	df->drawfont.ascent = font->ascent;
-	df->drawfont.display = f->d;
-	D2H(f->d)->ref++;
-	df->dref = disp->limbo;
-	df->dref->ref++;
+	df = newdfont();
 	*f->ret = &df->drawfont;
+	font = font_open(disp, string2c(f->name));
+	if(font == 0){
+		*f->ret = H;
+		destroy(&df->drawfont);
+		return;
+	}
+	filldfont(df, font, f->name, f->d, disp);
 }
 
 void
@@ -1981,6 +2052,8 @@ freedrawfont(Heap*h, int swept)
 		destroy(d->name);
 		destroy(d->display);
 	}
+	if(f == nil)	/* a cell no font was put in */
+		return;
 	font_close(f);
 	display_dec(((DFont*)d)->dref);
 }
@@ -2029,23 +2102,18 @@ void
 Display_rgb(void *fp)
 {
 	ulong c;
-	Display *disp;
 	F_Display_rgb *f;
-	int locked;
 	void *r;
 
 	f = fp;
 	r = *f->ret;
 	*f->ret = H;
 	destroy(r);
-	disp = checkdisplay(f->d);
+	checkdisplay(f->d);
 
 	c = ((f->r&255)<<24)|((f->g&255)<<16)|((f->b&255)<<8)|0xFF;
 
-	locked = lockdisplay(disp);
-	*f->ret = color((DDisplay*)f->d, c);
-	if(locked)
-		unlockdisplay(disp);
+	color(f->ret, (DDisplay*)f->d, c);
 }
 
 void
@@ -2121,11 +2189,14 @@ Draw_bytesperline(void *fp)
 	F_Draw_bytesperline *f;
 
 	f = fp;
+	/* libdraw aborts on a depth no image has, and emu went with it */
+	if(f->d <= 0 || f->d > 32)
+		error(exInval);
 	*f->ret = bytesperline(IRECT(f->r), f->d);
 }
 
-Draw_Image*
-color(DDisplay *dd, ulong color)
+static void
+color(Draw_Image **ret, DDisplay *dd, ulong color)
 {
 	int c;
 	Draw_Rect r;
@@ -2135,32 +2206,29 @@ color(DDisplay *dd, ulong color)
 	r.max.x = 1;
 	r.max.y = 1;
 	c = (color&0xff) == 0xff ? RGB24: RGBA32;
-	return allocdrawimage(dd, r, c, nil, 1, color);
+	allocdrawimage(ret, dd, r, c, 1, color);
 }
 
-Draw_Image*
-mkdrawimage(Image *i, Draw_Screen *screen, Draw_Display *display, void *ref)
+/*
+ * A Draw->Image is made in two steps: its cell, then the image to put
+ * in it.  heap() raises when the heap is full, and it was called once
+ * the image had been made, often with the display locked: the image
+ * was lost, and on a remote display the lock was held for good, so
+ * every other user of the display waited for ever.  The cell comes
+ * first, and its maker puts it in its result, where the collector can
+ * see it, before the display is asked for anything (which lets other
+ * Progs run); if the display refuses, the result is nil again and the
+ * cell, with no image in it, frees as nothing.
+ */
+static DImage*
+newdimage(void)
 {
-	Heap *h;
-	DImage *di;
+	return H2D(DImage*, heap(TImage));
+}
 
-	/*
-	 * No image, no Draw->Image. Every allocation below can fail once
-	 * the display has gone -- a remote /dev/draw whose connection hung
-	 * up (cpu(1) from a desktop, then the desktop closes) fails every
-	 * request -- and a caller that forgets to check hands nil in here.
-	 * On the bare-metal kernel page zero is mapped, so i->r would not
-	 * fault: it read kernel text as a pointer and the dereference of
-	 * that took the machine down (Display_colormix, 2026-09-29).
-	 */
-	if(i == nil)
-		return H;
-
-	h = heap(TImage);
-	if(h == H)
-		return H;
-
-	di = H2D(DImage*, h);
+static Draw_Image*
+filldimage(DImage *di, Image *i, Draw_Screen *screen, Draw_Display *display, void *ref)
+{
 	di->image = i;
 	di->drawimage.screen = screen;
 	if(screen != H)
@@ -2181,11 +2249,30 @@ mkdrawimage(Image *i, Draw_Screen *screen, Draw_Display *display, void *ref)
 	return &di->drawimage;
 }
 
+Draw_Image*
+mkdrawimage(Image *i, Draw_Screen *screen, Draw_Display *display, void *ref)
+{
+	/*
+	 * No image, no Draw->Image. Every allocation below can fail once
+	 * the display has gone -- a remote /dev/draw whose connection hung
+	 * up (cpu(1) from a desktop, then the desktop closes) fails every
+	 * request -- and a caller that forgets to check hands nil in here.
+	 * On the bare-metal kernel page zero is mapped, so i->r would not
+	 * fault: it read kernel text as a pointer and the dereference of
+	 * that took the machine down (Display_colormix, 2026-09-29).
+	 */
+	if(i == nil)
+		return H;
+
+	return filldimage(newdimage(), i, screen, display, ref);
+}
+
 void
 Screen_newwindow(void *fp)
 {
 	F_Screen_newwindow *f;
 	Image *i;
+	DImage *di;
 	Screen *s;
 	Rectangle r;
 	int locked;
@@ -2202,14 +2289,18 @@ Screen_newwindow(void *fp)
 	*f->ret = H;
 	destroy(v);
 
+	di = newdimage();	/* before the window, which would be lost if this raised */
+	*f->ret = &di->drawimage;
 	locked = lockdisplay(s->display);
 	i = allocwindow(s, r, f->backing, f->color);
 	if(locked)
 		unlockdisplay(s->display);
-	if(i == nil)
+	if(i == nil){
+		*f->ret = H;
+		destroy(&di->drawimage);
 		return;
-
-	*f->ret = mkdrawimage(i, f->screen, f->screen->display, 0);
+	}
+	filldimage(di, i, f->screen, f->screen->display, 0);
 }
 
 static
@@ -2222,6 +2313,8 @@ screentopbot(Draw_Screen *screen, Array *array, void (*topbot)(Image **, int))
 	int i, n, locked;
 
 	s = checkscreen(screen);
+	if(array == H)
+		error(exNilref);
 	di = (Draw_Image**)array->data;
 	ip = malloc(array->len * sizeof(Image*));
 	if(ip == nil)
@@ -2341,45 +2434,35 @@ Image_bottom(void *fp)
 		unlockdisplay(i->display);
 }
 
-Draw_Image*
-allocdrawimage(DDisplay *ddisplay, Draw_Rect r, ulong chan, Image *iimage, int repl, int color)
+/*
+ * A new image on the display, in *ret (the caller's result, so the
+ * collector sees the cell while the display is asked); H if the
+ * display refuses it.  It takes the display's lock itself: its
+ * callers held it across the call, heap() and all.
+ */
+static void
+allocdrawimage(Draw_Image **ret, DDisplay *ddisplay, Draw_Rect r, ulong chan, int repl, int color)
 {
-	Heap *h;
 	DImage *di;
 	Rectangle rr;
 	Image *image;
+	Display *d;
+	int locked;
 
-	image = iimage;
-	if(iimage == nil){
-		R2R(rr, r);
-		image = allocimage(ddisplay->display, rr, chan, repl, color);
-		if(image == nil)
-			return H;
+	di = newdimage();
+	*ret = &di->drawimage;
+	d = ddisplay->display;
+	R2R(rr, r);
+	locked = lockdisplay(d);
+	image = allocimage(d, rr, chan, repl, color);
+	if(locked)
+		unlockdisplay(d);
+	if(image == nil){
+		*ret = H;
+		destroy(&di->drawimage);
+		return;
 	}
-
-	h = heap(TImage);
-	if(h == H){
-		if(iimage == nil)
-			freeimage(image);
-		return H;
-	}
-
-	di = H2D(DImage*, h);
-	di->drawimage.r = r;
-	R2R(di->drawimage.clipr, image->clipr);
-	di->drawimage.chans.desc = chan;
-	di->drawimage.depth = chantodepth(chan);
-	di->drawimage.repl = repl;
-	di->drawimage.display = (Draw_Display*)ddisplay;
-	D2H(di->drawimage.display)->ref++;
-	di->drawimage.screen = H;
-	di->dref = ddisplay->display->limbo;
-	di->dref->ref++;
-	di->image = image;
-	di->refreshptr = 0;
-	di->flush = 1;
-
-	return &di->drawimage;
+	filldimage(di, image, H, (Draw_Display*)ddisplay, nil);
 }
 
 /*
@@ -2533,10 +2616,14 @@ doflush(Display *d)
 			acquire();
 		kgerrstr(err, sizeof err);
 		if(_drawdebug || strcmp(err, "screen id in use") != 0 && strcmp(err, exImage) != 0){
-			print("flushimage fail: (%d not %d) d=%lux: %s\nbuffer: ", m, n, (ulong)d, err);
-			for(tp = d->buf; tp < d->bufp; tp++)
-				print("%.2x ", (int)*tp);
-			print("\n");
+			print("flushimage fail: (%d not %d) d=%lux: %s\n", m, n, (ulong)d, err);
+			/* the message itself, up to 8000 bytes of it as hex, only when asked */
+			if(_drawdebug){
+				print("buffer: ");
+				for(tp = d->buf; tp < d->bufp; tp++)
+					print("%.2x ", (int)*tp);
+				print("\n");
+			}
 		}
 		d->bufp = d->buf;	/* might as well; chance of continuing */
 		return -1;
@@ -2652,6 +2739,22 @@ bufimage(Display *d, int n)
 	d->bufp += n;
 	/* return with buffer locked */
 	return p;
+}
+
+uchar*
+_bufimageop(Display *d, int n, Drawop op)
+{
+	uchar *a;
+
+	if(op != SoverD){
+		a = bufimage(d, 2+n);
+		if(a == nil)
+			return nil;
+		a[0] = 'O';
+		a[1] = op;
+		return a+2;
+	}
+	return bufimage(d, n);
 }
 
 void

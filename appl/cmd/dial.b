@@ -25,7 +25,7 @@ badmodule(p: string)
 # namespace traffic to every on-path observer.  Plaintext remains available
 # explicitly with -A; the authenticated default provides both confidentiality
 # and integrity.
-DEFAULTALG := "aes_256_cbc sha256";
+DEFAULTALG := "aes_256_gcm";
 
 verbose := 0;
 

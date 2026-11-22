@@ -27,6 +27,7 @@ enum {
 	Maxmedia = 32,
 	Nself = Maxmedia*5,
 	NHASH = (1<<6),
+	Maxmulti = 32,		/* multicast groups one conversation may join */
 	NCACHE = 256,
 	QMAX = 64*1024-1,
 };
@@ -71,7 +72,13 @@ struct Ipmcast
 };
 
 /* quick hash for ip addresses */
-#define hashipa(a) ( ( ((a)[IPaddrlen-2]<<8) | (a)[IPaddrlen-1] )%NHASH )
+/*
+ * (The last byte and the one before it shifted left by eight came to
+ * the last byte's low six bits alone, the shifted byte being a
+ * multiple of NHASH: addresses a caller chose to end alike all went
+ * on one chain, which every received packet walks.)
+ */
+#define hashipa(a) ( ( (((a)[IPaddrlen-3]*31 + (a)[IPaddrlen-2])*31) + (a)[IPaddrlen-1] )%NHASH )
 
 static char tifc[] = "ifc ";
 
@@ -149,13 +156,23 @@ ipifcbind(Conv *c, char **argv, int argc)
 		wunlock(&ifc->rwl);
 		return "interface already bound";	
 	}
+	ifc->m = &unboundmedium;
+	ifc->arg = nil;
+	wunlock(&ifc->rwl);
 	if(waserror()){
+		wlock(&ifc->rwl);
+		ifc->m = nil;
+		ifc->arg = nil;
 		wunlock(&ifc->rwl);
 		nexterror();
 	}
 
-	/* do medium specific binding */
+	/* A medium bind can walk /net; do not hold the interface lock while
+	 * namespace services may themselves be reading /net/ipifc. */
 	(*m->bind)(ifc, argc, argv);
+	poperror();
+
+	wlock(&ifc->rwl);
 
 	/* set the bound device name */
 	if(argc > 2)
@@ -185,11 +202,11 @@ ipifcbind(Conv *c, char **argv, int argc)
 
 	/* reopen all the queues closed by a previous unbind */
 	qreopen(c->rq);
+	qreopen(c->wq);		/* unbind closes it with the others; left closed, data written after a rebind went nowhere */
 	qreopen(c->eq);
 	qreopen(c->sq);
 
 	wunlock(&ifc->rwl);
-	poperror();
 
 	return nil;
 }
@@ -202,11 +219,19 @@ static char*
 ipifcunbind(Ipifc *ifc)
 {
 	char *err;
+	Medium *m;
 
 	wlock(&ifc->rwl);
 	if(waserror()){
 		wunlock(&ifc->rwl);
 		nexterror();
+	}
+
+	m = ifc->m;
+	if(m == nil || m == &unboundmedium){
+		wunlock(&ifc->rwl);
+		poperror();
+		return "interface not bound";
 	}
 
 	/* disassociate logical interfaces before zeroing medium state */
@@ -216,9 +241,18 @@ ipifcunbind(Ipifc *ifc)
 			error(err);
 	}
 
-	/* disassociate device */
-	if(ifc->m != nil && ifc->m->unbind)
-		(*ifc->m->unbind)(ifc);
+	/* Medium teardown can wait for readers that walk /net.  Publish a
+	 * non-operational placeholder, drop the lock, and always reacquire it
+	 * before changing the interface's remaining state. */
+	if(m->unbind != nil){
+		ifc->m = &unboundmedium;
+		wunlock(&ifc->rwl);
+		if(!waserror()){
+			(*m->unbind)(ifc);
+			poperror();
+		}
+		wlock(&ifc->rwl);
+	}
 	memset(ifc->dev, 0, sizeof(ifc->dev));
 	ifc->arg = nil;
 	ifc->reassemble = 0;
@@ -230,7 +264,7 @@ ipifcunbind(Ipifc *ifc)
 
 	/* publish route/conversation teardown only after fallible cleanup */
 	ifc->ifcid++;
-	if(ifc->m != nil && ifc->m->unbindonclose == 0)
+	if(m->unbindonclose == 0)
 		ifc->conv->inuse--;
 	ifc->m = nil;
 	wunlock(&ifc->rwl);
@@ -254,6 +288,7 @@ ipifcstate(Conv *c, char *state, int n)
 
 	ifc = (Ipifc*)c->ptcl;
 
+	rlock(&ifc->rwl);
 	m = snprint(state, n, sfixedformat,
 		ifc->dev, ifc->maxtu, ifc->sendra6, ifc->recvra6,
 		ifc->rp.mflag, ifc->rp.oflag, ifc->rp.maxraint,
@@ -261,7 +296,6 @@ ipifcstate(Conv *c, char *state, int n)
 		ifc->rp.rxmitra, ifc->rp.ttl, ifc->rp.routerlt,
 		ifc->in, ifc->out, ifc->inerr, ifc->outerr);
 
-	rlock(&ifc->rwl);
 	for(lifc = ifc->lifc; lifc && n > m; lifc = lifc->next)
 		m += snprint(state+m, n - m, slineformat,
 			lifc->local, lifc->mask, lifc->remote,
@@ -403,6 +437,7 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 
 	if(ifc->m == nil)
 		return "ipifc not yet bound to device";
+	mtu = -1;	/* none given */
 
 	f = ifc->conv->p->f;
 
@@ -417,8 +452,6 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 		/* fall through */
 	case 5:
 		mtu = strtoul(argv[4], 0, 0);
-		if(mtu >= ifc->m->mintu && mtu <= ifc->m->maxtu)
-			ifc->maxtu = mtu;
 		/* fall through */
 	case 4:
 		parseip(ip, argv[1]);
@@ -445,6 +478,18 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 	if(isv4(ip))
 		tentative = 0;
 	wlock(&ifc->rwl);
+	/*
+	 * Bound, as seen with the lock held: an unbind lets the lock go
+	 * with its placeholder medium in place and then sets none at all,
+	 * and an address added in between was left on an interface with no
+	 * device, its routes still drawing packets.
+	 */
+	if(ifc->m == nil || ifc->m == &unboundmedium){
+		wunlock(&ifc->rwl);
+		return "ipifc not yet bound to device";
+	}
+	if(mtu >= ifc->m->mintu && mtu <= ifc->m->maxtu)
+		ifc->maxtu = mtu;
 	if(waserror()){
 		wunlock(&ifc->rwl);
 		nexterror();
@@ -997,7 +1042,7 @@ iplinkfree(Iplink *p)
 
 	l = &freeiplink;
 	for(np = *l; np; np = *l){
-		if(np->expire > now){
+		if((long)(now - np->expire) >= 0){
 			*l = np->next;
 			free(np);
 			continue;
@@ -1016,7 +1061,7 @@ ipselffree(Ipself *p)
 
 	l = &freeipself;
 	for(np = *l; np; np = *l){
-		if(np->expire > now){
+		if((long)(now - np->expire) >= 0){
 			*l = np->next;
 			free(np);
 			continue;
@@ -1154,14 +1199,29 @@ int
 iptentative(Fs *f, uchar *addr)
 {
  	Ipself *p;
+	Iplink *link;
+	int t;
 
-	p = f->self->hash[hashipa(addr)];
-	for(; p; p = p->next){
+	/*
+	 * Under the table's lock, as everything that changes it is.  An
+	 * address is in the table before its first link is and after its
+	 * last one has gone, and a link's logical interface is freed as
+	 * soon as its links are unlinked: read without the lock, a packet
+	 * for an address being added or removed followed a nil pointer or
+	 * read a freed interface.
+	 */
+	t = 0;
+	qlock(&f->self->ql);
+	for(p = f->self->hash[hashipa(addr)]; p; p = p->next){
 		if(ipcmp(addr, p->a) == 0) {
-			return p->link->lifc->tentative;
+			link = p->link;
+			if(link != nil && link->lifc != nil)
+				t = link->lifc->tentative;
+			break;
 		}
 	}
-	return 0;
+	qunlock(&f->self->ql);
+	return t;
 }
 
 /*
@@ -1190,8 +1250,8 @@ ipforme(Fs *f, uchar *addr)
 }
 
 /*
- *  find the ifc on same net as the remote system.  If none,
- *  return nil.
+ *  find the ifc on same net as the remote system.
+ *  returns the read-locked ifc, otherwise nil.
  */
 Ipifc*
 findipifc(Fs *f, uchar *remote, int type)
@@ -1199,10 +1259,13 @@ findipifc(Fs *f, uchar *remote, int type)
 	Ipifc *ifc, *x;
 	Iplifc *lifc;
 	Conv **cp, **e;
+	uchar xifcid;
 	uchar gnet[IPaddrlen];
 	uchar xmask[IPaddrlen];
 
-	x = nil; memset(xmask, 0, IPaddrlen);
+	x = nil;
+	xifcid = 0;
+	memset(xmask, 0, IPaddrlen);
 
 	/* find most specific match */
 	e = &f->ipifc->conv[f->ipifc->nc];
@@ -1211,19 +1274,25 @@ findipifc(Fs *f, uchar *remote, int type)
 			continue;
 
 		ifc = (Ipifc*)(*cp)->ptcl;
+		rlock(&ifc->rwl);
 
 		for(lifc = ifc->lifc; lifc; lifc = lifc->next){
 			maskip(remote, lifc->mask, gnet);
 			if(ipcmp(gnet, lifc->net) == 0){
 				if(x == nil || ipcmp(lifc->mask, xmask) > 0){
 					x = ifc;
+					xifcid = ifc->ifcid;
 					ipmove(xmask, lifc->mask);
 				}
 			}
 		}
+		runlock(&ifc->rwl);
 	}
-	if(x != nil)
-		return x;
+	if(x != nil && canrlock(&x->rwl)){
+		if(x->ifcid == xifcid)
+			return x;
+		runlock(&x->rwl);
+	}
 
 	/* for now for broadcast and multicast, just use first interface */
 	if(type & (Rbcast|Rmulti)){
@@ -1231,8 +1300,10 @@ findipifc(Fs *f, uchar *remote, int type)
 			if(*cp == 0)
 				continue;
 			ifc = (Ipifc*)(*cp)->ptcl;
+			rlock(&ifc->rwl);
 			if(ifc->lifc != nil)
 				return ifc;
+			runlock(&ifc->rwl);
 		}
 	}
 		
@@ -1290,16 +1361,22 @@ findprimaryipv6(Fs *f, uchar *local)
 		if(*cp == 0)
 			continue;
 		ifc = (Ipifc*)(*cp)->ptcl;
+		/* its addresses are freed under its lock: one being changed is passed over */
+		if(!canrlock(&ifc->rwl))
+			continue;
 		for(lifc = ifc->lifc; lifc; lifc = lifc->next){
 			atypel = v6addrtype(lifc->local);
 			if(atypel > atype)
 			if(v6addrcurr(lifc)) {
 				ipmove(local, lifc->local);
 				atype = atypel;
-				if(atype == globalv6)
+				if(atype == globalv6){
+					runlock(&ifc->rwl);
 					return;
+				}
 			}
 		}
+		runlock(&ifc->rwl);
 	}
 }
 
@@ -1319,10 +1396,14 @@ findprimaryipv4(Fs *f, uchar *local)
 		if(*cp == 0)
 			continue;
 		ifc = (Ipifc*)(*cp)->ptcl;
+		if(!canrlock(&ifc->rwl))
+			continue;
 		if((lifc = ifc->lifc) != nil){
 			ipmove(local, lifc->local);
+			runlock(&ifc->rwl);
 			return;
 		}
+		runlock(&ifc->rwl);
 	}
 }
 
@@ -1347,8 +1428,13 @@ findlocalip(Fs *f, uchar *local, uchar *remote)
 	r = v6lookup(f, remote, nil);
  	version = (memcmp(remote, v4prefix, IPv4off) == 0) ? V4 : V6;
 	
-	if(r != nil){
-		ifc = r->ifc;
+	/*
+	 * The route's interface, held while its addresses are read: they
+	 * are freed under its lock, and a connect beside a remove walked a
+	 * list that was being taken apart.  One being changed this moment
+	 * is passed over for the first address there is, as with no route.
+	 */
+	if(r != nil && (ifc = r->ifc) != nil && canrlock(&ifc->rwl)){
 		if(r->type & Rv4)
 			v4tov6(gate, r->v4.gate);
 		else {
@@ -1363,6 +1449,7 @@ findlocalip(Fs *f, uchar *local, uchar *remote)
 				maskip(gate, lifc->mask, gnet);
 				if(ipcmp(gnet, lifc->net) == 0){
 					ipmove(local, lifc->local);
+					runlock(&ifc->rwl);
 					goto out;
 				}
 			}
@@ -1380,12 +1467,15 @@ findlocalip(Fs *f, uchar *local, uchar *remote)
 						break;
 				}
 			}
-			if(atype > unspecifiedv6)
+			if(atype > unspecifiedv6){
+				runlock(&ifc->rwl);
 				goto out;
+			}
 			break;
 		default:
 			panic("findlocalip: version %d", version);
 		}
+		runlock(&ifc->rwl);
 	}
 
 	switch(version){
@@ -1536,13 +1626,25 @@ ipifcaddmulti(Conv *c, uchar *ma, uchar *ia)
 	Conv **p;
 	Ipmulti *multi, **l;
 	Fs *f;
+	int n;
 
 	f = c->p->f;
 	
-	for(l = &c->multi; *l; l = &(*l)->next)
+	n = 0;
+	for(l = &c->multi; *l; l = &(*l)->next){
 		if(ipcmp(ma, (*l)->ma) == 0)
 		if(ipcmp(ia, (*l)->ia) == 0)
 			return;		/* it's already there */
+		n++;
+	}
+	/*
+	 * Each group is an entry in the table every received packet is
+	 * looked up in, a route, and a filter in the hardware: a
+	 * conversation has as many as a program has use for, not as many
+	 * as it can ask for.
+	 */
+	if(n >= Maxmulti)
+		error("too many multicast groups for one conversation");
 
 	multi = *l = smalloc(sizeof(*multi));
 	ipmove(multi->ma, ma);
@@ -1645,10 +1747,9 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 			if(*cp == nil)
 				continue;
 			nifc = (Ipifc*)(*cp)->ptcl;
-			if(nifc == ifc)
+			if(nifc == ifc || !canrlock(&nifc->rwl))
 				continue;
-	
-			rlock(&nifc->rwl);
+
 			m = nifc->m;
 			if(m == nil || m->addmulti == nil) {
 				runlock(&nifc->rwl);
@@ -1663,7 +1764,7 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 				if(ipcmp(net, lifc->remote) == 0) { /* add solicited-node multicast address */
 					ipv62smcast(net, ip);
 					addselfcache(f, nifc, lifc, net, Rmulti);
-					arpenter(f, V6, ip, nifc->mac, 6, 0);
+					arpenter(f, V6, ip, nifc->mac, 6, 0, nil);
 					//(*m->addmulti)(nifc, net, ip);
 					break;
 				}
@@ -1678,10 +1779,9 @@ ipifcregisterproxy(Fs *f, Ipifc *ifc, uchar *ip)
 			if(*cp == nil)
 				continue;
 			nifc = (Ipifc*)(*cp)->ptcl;
-			if(nifc == ifc)
+			if(nifc == ifc || !canrlock(&nifc->rwl))
 				continue;
-	
-			rlock(&nifc->rwl);
+
 			m = nifc->m;
 			if(m == nil || m->areg == nil){
 				runlock(&nifc->rwl);
@@ -1732,6 +1832,7 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 	uchar	prefix[IPaddrlen];
 	int	plen = 64;
 	Iplifc	lifc;
+	Medium	*m;
 	char	addr[40], preflen[6];
 	char	*params[3];
 
@@ -1769,10 +1870,13 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 	)
 		return Ebadarg;
 
-	if(ifc->m->pref2addr!=nil)
-		(*ifc->m->pref2addr)(prefix, ifc->mac);
-	else
+	/* The ctl file is valid before a medium is bound.  Snapshot m before
+	 * testing it: an unbound "addpref6" must be an error, not a nil
+	 * dereference, and teardown must not change the callback we invoke. */
+	m = ifc->m;
+	if(m == nil || m->pref2addr == nil)
 		return Ebadarg;
+	(*m->pref2addr)(prefix, ifc->mac);
 	
 	sprint(addr, "%I", prefix);
 	sprint(preflen, "/%d", plen);
@@ -1782,4 +1886,3 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 
 	return ipifcadd(ifc, params, 3, 0, &lifc);
 }
-

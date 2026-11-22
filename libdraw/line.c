@@ -12,9 +12,7 @@ lineop(Image *dst, Point p0, Point p1, int end0, int end1, int radius, Image *sr
 {
 	uchar *a;
 
-	_setdrawop(dst->display, op);
-
-	a = bufimage(dst->display, 1+4+2*4+2*4+4+4+4+4+2*4);
+	a = _bufimageop(dst->display, 1+4+2*4+2*4+4+4+4+4+2*4, op);
 	if(a == 0){
 		_drawprint(2, "image line: %r\n");
 		return;

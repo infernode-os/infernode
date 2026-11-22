@@ -2069,3 +2069,4 @@ struct F_IPint_xor
 #define Keyring_DESbsize 8
 #define Keyring_IDEAbsize 8
 #define Keyring_BFbsize 8
+#define Keyring_Maxmsg 49151

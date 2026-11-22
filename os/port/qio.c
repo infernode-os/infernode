@@ -279,6 +279,10 @@ trimblock(Block *bp, int offset, int len)
 	ulong l;
 	Block *nb, *startb;
 
+	if(offset < 0 || len < 0){
+		freeblist(bp);
+		return nil;
+	}
 	QDEBUG checkb(bp, "trimblock 1");
 	if(blocklen(bp) < offset+len) {
 		freeblist(bp);
@@ -514,6 +518,9 @@ qconsume(Queue *q, void *vp, int len)
 		if(b == 0){
 			q->state |= Qstarve;
 			iunlock(&q->l);
+			/* (the empty blocks passed on the way here were dropped unfreed) */
+			if(tofree != nil)
+				freeblist(tofree);
 			return -1;
 		}
 		QDEBUG checkb(b, "qconsume 1");
@@ -629,9 +636,10 @@ qpassnolim(Queue *q, Block *b)
 	ilock(&q->l);
 
 	if(q->state & Qclosed){
-		freeblist(b);
+		len = BALLOC(b);	/* before it is freed: it was read after */
 		iunlock(&q->l);
-		return BALLOC(b);
+		freeblist(b);
+		return len;
 	}
 
 	/* add buffer to queue */
@@ -950,10 +958,17 @@ Block*
 mem2bl(uchar *p, int len)
 {
 	int n;
-	Block *b, *first, **l;
+	Block *b, *last;
+	/*
+	 * volatile: the list grows after waserror() and the handler frees
+	 * it.  It was reached through a pointer to a plain local, which
+	 * clang took for the nil it was at waserror(): when allocb raised
+	 * part way through a long write, the blocks already made were kept.
+	 */
+	Block *volatile first;
 
 	first = nil;
-	l = &first;
+	last = nil;
 	if(waserror()){
 		freeblist(first);
 		nexterror();
@@ -963,13 +978,17 @@ mem2bl(uchar *p, int len)
 		if(n > Maxatomic)
 			n = Maxatomic;
 
-		*l = b = allocb(n);
+		b = allocb(n);
+		if(last == nil)
+			first = b;
+		else
+			last->next = b;
+		last = b;
 		setmalloctag(b, getcallerpc(&p));
 		memmove(b->wp, p, n);
 		b->wp += n;
 		p += n;
 		len -= n;
-		l = &b->next;
 	} while(len > 0);
 	poperror();
 
@@ -1054,7 +1073,21 @@ qbread(Queue *q, int len)
 	if(n > len){
 		if((q->state&Qmsg) == 0){
 			n -= len;
+			/*
+			 * allocb raises when there is no memory, and the
+			 * queue's lock is held here: the reader's handler
+			 * lets go of rlock alone, so the queue stayed locked
+			 * for good and the block taken off it was lost. A
+			 * program can run the pool short. The block goes
+			 * back whole and the lock is let go first.
+			 */
+			if(waserror()){
+				qputback(q, nb);
+				iunlock(&q->l);
+				nexterror();
+			}
 			b = allocb(n);
+			poperror();
 			memmove(b->wp, nb->rp+len, n);
 			b->wp += n;
 			qputback(q, b);
@@ -1172,6 +1205,7 @@ ulong noblockcnt;
 long
 qbwrite(Queue *q, Block *b)
 {
+	void (*bypass)(void*, Block*);
 	int n, dowakeup;
 	/*
 	 * The handler frees the block unless it has been queued, and
@@ -1188,8 +1222,8 @@ qbwrite(Queue *q, Block *b)
 
 	n = BLEN(b);
 
-	if(q->bypass){
-		(*q->bypass)(q->arg, b);
+	if((bypass = q->bypass) != nil){
+		(*bypass)(q->arg, b);
 		return n;
 	}
 	cb.b = b;
@@ -1209,6 +1243,25 @@ qbwrite(Queue *q, Block *b)
 	if(q->state & Qclosed){
 		iunlock(&q->l);
 		error(q->err);
+	}
+
+	/*
+	 * Do not allocate another queue entry after an interrupted writer has
+	 * already filled the queue.  Flow control normally happens after the
+	 * Block is queued so that a note cannot make a protocol write partial;
+	 * a caller that retries such a write used to add another Block before
+	 * sleeping again and could grow the queue without bound.  The writer
+	 * lock serializes this preflight with every other producer.
+	 */
+	while(q->len >= q->limit && q->noblock == 0){
+		q->state |= Qflow;
+		iunlock(&q->l);
+		sleep(&q->wr, qnotfull, q);
+		ilock(&q->l);
+		if(q->state & Qclosed){
+			iunlock(&q->l);
+			error(q->err);
+		}
 	}
 
 	/* if nonblocking, don't queue over the limit */
@@ -1323,6 +1376,7 @@ qwrite(Queue *q, void *vp, int len)
 int
 qiwrite(Queue *q, void *vp, int len)
 {
+	void (*bypass)(void*, Block*);
 	int n, sofar, dowakeup;
 	Block *b;
 	uchar *p = vp;
@@ -1341,9 +1395,20 @@ qiwrite(Queue *q, void *vp, int len)
 		memmove(b->wp, p+sofar, n);
 		b->wp += n;
 
+		if((bypass = q->bypass) != nil){
+			sofar += n;
+			(*bypass)(q->arg, b);
+			continue;
+		}
+
 		ilock(&q->l);
 
 		QDEBUG checkb(b, "qiwrite");
+		if((q->state & Qclosed) != 0 || q->len >= q->limit){
+			iunlock(&q->l);
+			freeb(b);
+			break;
+		}
 		if(q->bfirst)
 			q->blast->next = b;
 		else
@@ -1398,7 +1463,7 @@ qclose(Queue *q)
 	ilock(&q->l);
 	q->state |= Qclosed;
 	q->state &= ~(Qflow|Qstarve);
-	strcpy(q->err, Ehungup);
+	kstrcpy(q->err, Ehungup, sizeof q->err);
 	bfirst = q->bfirst;
 	q->bfirst = 0;
 	q->len = 0;
@@ -1425,7 +1490,7 @@ qhangup(Queue *q, char *msg)
 	ilock(&q->l);
 	q->state |= Qclosed;
 	if(msg == 0 || *msg == 0)
-		strcpy(q->err, Ehungup);
+		kstrcpy(q->err, Ehungup, sizeof q->err);
 	else{
 		strncpy(q->err, msg, ERRMAX-1);
 		q->err[ERRMAX-1] = 0;

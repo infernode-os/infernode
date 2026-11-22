@@ -70,6 +70,12 @@ as in
 .IR rio ;
 any button but 3 cancels it.
 A click that does not move chooses nothing from the menu.
+Otherwise the cursor is that of the window under the pointer, as its
+program last asked
+.RB ( cursor ,
+as Tk's
+.B cursor
+command sends it), or the arrow.
 .SS Control Interface
 .I Wm
 provides a control interface to programs running inside it

@@ -249,9 +249,13 @@ trapUSR1(int signo)
         return;
     if(up->type != Interp)      /* Used to unblock pending I/O */
         return;
-    if(up->intwait == 0)        /* Not posted so its a sync error */
-        disfault(nil, Eintr);	/* Should never happen */
-    
+    /*
+     * As emu/Linux/os.c has it. If intwait is already 0, osleave gave
+     * up waiting for this signal and cleared it itself (proc.c): the
+     * signal is late, not "a sync error". This called disfault(nil,
+     * Eintr) for it, from a signal handler, and disfault with no
+     * Prog to blame ends the emulator, saying nothing.
+     */
     up->intwait = 0;		/* Clear it so the proc can continue */
 }
 

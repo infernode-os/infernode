@@ -224,15 +224,27 @@ parseCaps(dir: string): ref Caps
 			c.writepaths = appendstr(c.writepaths, p);
 	}
 
+	# The role decides which rules apply (role=toplevel, role=child).  One
+	# that is neither matched no rule: "chlid" with no nodevs was reported
+	# with no violation at all.  It is refused, as tools9p refuses it.
 	role := readScalar(dir + "/meta/role");
+	if(role != "" && role != "toplevel" && role != "child")
+		fatal(sys->sprint("%s/meta/role: unknown role %s (toplevel or child)", dir, mquote(role)));
 	if(role != "")
 		c.role = role;
 	x := readScalar(dir + "/meta/xenith");
 	if(x == "1")
 		c.xenith = 1;
+	# An activity's writable grants are staged, so its number takes
+	# findings away: one that is no number read as activity 0.
 	a := readScalar(dir + "/meta/actid");
-	if(a != "")
+	if(a != "") {
+		neg := len a > 1 && a[0] == '-';
+		for(ai := neg; ai < len a; ai++)
+			if(a[ai] < '0' || a[ai] > '9')
+				fatal(sys->sprint("%s/meta/actid: %s is not a number", dir, mquote(a)));
 		c.actid = int a;
+	}
 	n := readScalar(dir + "/meta/nodevs");
 	if(n == "set" || n == "unset") {
 		c.nodevs = n;
@@ -331,6 +343,15 @@ loadTools(names: list of string): list of ref ToolInfo
 
 loadOneTool(name: string): ref ToolInfo
 {
+	# A tool's manifest is the file of its name in AUTHORITIES_DIR.  A
+	# name with a slash, or beginning with a dot, named a file anywhere:
+	# a caps whose tools line pointed at a manifest of its own choosing
+	# was reported with that manifest's authorities (none).
+	if(name == "" || name[0] == '.')
+		fatal(sys->sprint("tool %s: not a tool's name", mquote(name)));
+	for(ni := 0; ni < len name; ni++)
+		if(name[ni] == '/')
+			fatal(sys->sprint("tool %s: not a tool's name", mquote(name)));
 	path := AUTHORITIES_DIR + "/" + name;
 	db := Db.open(path);
 	if(db == nil) {
@@ -489,6 +510,14 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 			if(!contains(inv.auths, "sends_llm"))
 				inv.auths = "sends_llm" :: inv.auths;
 			inv.sources = ("sends_llm", "via path " + p) :: inv.sources;
+		}
+		# A video feed may be a live camera: reading it sees the room the
+		# machine is in (camsrv(4), infernode-os/infernode#1005). A grant
+		# above /mnt/video reaches it as well.
+		if(pathwithin("/mnt/video", p) || pathwithin(p, "/mnt/video")) {
+			if(!contains(inv.auths, "reads_video"))
+				inv.auths = "reads_video" :: inv.auths;
+			inv.sources = ("reads_video", "via path " + p) :: inv.sources;
 		}
 		if(pathwithin("/mnt/mcp", p)) {
 			if(!contains(inv.auths, "calls_mcp"))
@@ -649,11 +678,13 @@ pathwithin(grant, want: string): int
 
 loadRules(): list of ref Rule
 {
+	# A report with no violations says the rules found none.  With no
+	# rules, or one that could not be read, that was said all the same:
+	# an empty rules directory made every configuration clean.  Nothing
+	# is reported that was not checked.
 	fd := sys->open(RULES_DIR, Sys->OREAD);
-	if(fd == nil) {
-		sys->fprint(sys->fildes(2), "nsaudit: cannot open %s: %r\n", RULES_DIR);
-		return nil;
-	}
+	if(fd == nil)
+		fatal(sys->sprint("cannot open %s: %r: no rule was checked", RULES_DIR));
 	out: list of ref Rule;
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
@@ -664,10 +695,13 @@ loadRules(): list of ref Rule
 			if(name[0] == '.' || name[0] == '#')
 				continue;
 			r := loadOneRule(RULES_DIR + "/" + name);
-			if(r != nil)
-				out = r :: out;
+			if(r == nil)
+				fatal(sys->sprint("%s/%s is not a rule: not every rule was checked", RULES_DIR, name));
+			out = r :: out;
 		}
 	}
+	if(out == nil)
+		fatal(sys->sprint("%s holds no rules: nothing was checked", RULES_DIR));
 	return out;
 }
 
@@ -681,7 +715,10 @@ loadOneRule(path: string): ref Rule
 		return nil;
 	r := ref Rule;
 	r.name = e.findfirst("rule");
-	r.severity = e.findfirst("severity");
+	# compared in lower case: a rule of severity High counted for nothing
+	r.severity = lower(e.findfirst("severity"));
+	if(r.name == "" || (r.severity != "high" && r.severity != "medium" && r.severity != "info"))
+		return nil;
 	r.require = splitws(e.findfirst("require"));
 	r.andone = splitws(e.findfirst("andone"));
 	r.message = e.findfirst("message");
@@ -792,7 +829,7 @@ runReport(inv: ref Inventory, rules: list of ref Rule)
 				tag = " [ephemeral]";
 			else if(messageProposalGrant(p))
 				tag = " [proposal; trusted approval required]";
-			else if(inv.caps.actid >= 0 && pathwithin("/n/local", p))
+			else if(inv.caps.actid >= 0 && contains(inv.caps.writepaths, p))
 				tag = sys->sprint(" [cowfs actid=%d]", inv.caps.actid);
 			else
 				tag = " [DURABLE]";
@@ -939,6 +976,15 @@ runDiff(dirA, dirB: string)
 # reads attr=value files. It is the stable machine interface.
 #
 
+lower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
 mquote(s: string): string
 {
 	# Quote a value for ndb. If it contains whitespace or quotes, wrap
@@ -958,8 +1004,8 @@ mquote(s: string): string
 		c := s[j];
 		if(c == '\'')
 			r += "''";
-		else if(c == '\n')
-			r += " ";
+		else if(c == '\n' || c == '\t' || c == '\r')
+			r += " ";	# a field ends at a tab, a record at a newline
 		else
 			r[len r] = c;
 	}
@@ -971,7 +1017,7 @@ runReportMachine(stdout: ref Sys->FD, inv: ref Inventory, rules: list of ref Rul
 {
 	c := inv.caps;
 	sys->fprint(stdout, "nsaudit=caps\tdir=%s\trole=%s\tnodevs=%s\tnodevs_status=%s\tactid=%d\txenith=%d\n",
-		mquote(c.dir), c.role, c.nodevs, c.nodevsstatus, c.actid, c.xenith);
+		mquote(c.dir), mquote(c.role), c.nodevs, c.nodevsstatus, c.actid, c.xenith);
 
 	for(al := inv.auths; al != nil; al = tl al)
 		sys->fprint(stdout, "authority=%s\n", hd al);
@@ -986,8 +1032,8 @@ runReportMachine(stdout: ref Sys->FD, inv: ref Inventory, rules: list of ref Rul
 			tag = "ephemeral";
 		else if(messageProposalGrant(p))
 			tag = "proposal";
-		else if(c.actid >= 0 && pathwithin("/n/local", p))
-			tag = "cowfs";
+		else if(c.actid >= 0 && contains(c.writepaths, p))
+			tag = "cowfs";	# as writes_fs_durable has it: every staged grant
 		sys->fprint(stdout, "writes_fs=%s\treversibility=%s\n",
 			mquote(p), tag);
 	}

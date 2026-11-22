@@ -1,4 +1,4 @@
-# The Raspberry Pi firmware's configuration for InferNode on a Pi 3B+.
+# The Raspberry Pi firmware's configuration for InferNode on a Pi 3B+ (and a Zero 2 W: the same card).
 # What each line is for: docs/BAREMETAL.md, section 4.
 arm_64bit=1
 enable_uart=1

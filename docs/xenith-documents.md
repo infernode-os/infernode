@@ -48,7 +48,9 @@ Two kinds of file:
   Zerox'd twin say) or `doc/ctl` is written `refresh`. **Live** makes
   it a preview, as Typst's is: set again a moment (600 ms) after
   each edit in any window on the file, and at once if the text changed
-  while it was not live. In the document's window `Live` turns that on
+  while it was not live. Get in a window on the file (the file changed
+  outside Xenith, by an agent say) is such an edit: the text read
+  again, all of it, is set. In the document's window `Live` turns that on
   and off; in a window showing the text it does so for every window
   showing the file's document, or, if none does, opens one below it,
   live. `doc/ctl` takes `live` and `nolive` too. A document opens not

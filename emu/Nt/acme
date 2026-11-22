@@ -48,7 +48,6 @@ mod
 	math
 	srv	srv
 	keyring
-	crypt
 	ipints
 
 port

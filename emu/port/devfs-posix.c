@@ -970,7 +970,7 @@ fsdirconv(Chan *c, char *path, char *name, struct stat *s, uchar *va, int nb, in
 		d.gid = u->name;
 	d.muid = "";
 	d.qid = fsqid(s);
-	d.mode = (d.qid.type<<24)|(s->st_mode&0777);
+	d.mode = ((ulong)d.qid.type<<24)|(s->st_mode&0777);
 	d.atime = s->st_atime;
 	d.mtime = s->st_mtime;
 	d.length = s->st_size;

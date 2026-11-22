@@ -31,6 +31,8 @@ include "bufio.m";
 	bufio: Bufio;
 include "web/wordbreak.m";
 	wordbreak: Wordbreak;
+include "web/hyphen.m";
+	hyphen: Hyphen;
 include "imagefile.m";
 	readsvg: RImagefile;
 	imageremap: Imageremap;
@@ -63,6 +65,7 @@ init(d: ref Display): string
 	style = load Style Style->PATH;
 	fonts = load Fonts Fonts->PATH;
 	wordbreak = load Wordbreak Wordbreak->PATH;	# (without it, Thai breaks only at spaces)
+	hyphen = load Hyphen Hyphen->PATH;	# (without it, hyphens: auto is manual)
 	bidi = load Bidi Bidi->PATH;
 	if(bidi != nil && bidi->init() != nil)
 		bidi = nil;
@@ -2536,6 +2539,12 @@ isbfc(b: ref Box): int
 		return 1;
 	if(st.overflowx != Style->Ovisible || st.overflowy != Style->Ovisible)
 		return 1;
+	# layout or paint containment makes an independent formatting
+	# context (Contain 2 §3.2, 3.4), and a query container has layout
+	# containment: Bootstrap's .bd-toc, container-type: inline-size,
+	# kept its button's margin (Charon let it through, 8px short)
+	if(st.contain & (Style->CTlayout | Style->CTpaint) || st.cqtype != 0)
+		return 1;
 	case st.display {
 	Style->Dflowroot or Style->Dtablecell or Style->Dtablecaption or Style->Dinlineblock =>
 		return 1;
@@ -2660,6 +2669,7 @@ Memo: adt {
 	h:	int;
 	r1, r2:	Margin;
 	r3:	int;
+	tf, ef:	real;	# the fraction its top was below its y, and its bottom below y+h (topfrac, endfrac)
 	abs:	list of ref Abs;	# the absolutely positioned boxes it left pending
 	hgen:	int;		# the layout hc is from
 	hc:	list of ref Hmemo;	# heights it came out at, newest first, for measuring
@@ -2684,7 +2694,22 @@ Hmemo: adt {
 	h:	int;
 	r1, r2:	Margin;
 	r3:	int;
+	tf, ef:	real;
 };
+
+# Fractions of a pixel between blocks, as Chromium keeps them (to 1/64
+# px) and rounds only to paint: a box's true top is topfrac below the y
+# it is given (its caller sets it just before layblock, which takes it),
+# and layblock leaves in endfrac how far its true bottom is below y+h.
+# A box whose height is its content's continues its lines or children
+# from the fraction; one whose height is given passes it through.  Each
+# box is then as tall as the difference of its rounded true edges: three
+# paragraphs of 69.6px are 209px, not 210 (Rust's book), and nothing
+# between two boxes is left a pixel apart or overlapping.
+topfrac := 0.0;
+endfrac := 0.0;
+inlinestart := 0.0;	# where layinline's first line's true top is below its y
+inlineend := 0.0;	# where its last line's true bottom is below its height
 Nhmemo: con 4;
 nmemo := 0;
 abseq := 0;	# Abs records made, for knowing those a layout leaves
@@ -2721,9 +2746,12 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 {
 	if(fc != nil || pcthbox != nil || b.subcw != nil || b.subrh != nil)
 		return layblock1(l, b, cbw, cbh, fc, ox, oy);
+	tf := topfrac;
 	(flags, imph) := memokey(b);
 	if((m := memoof(b)) != nil && m.gen == laygen && m.w == b.w && m.cbw == cbw && m.cbh == cbh &&
-	   m.ox == ox && m.oy == oy && m.flags == flags && m.imph == imph && m.pcth == pcth) {
+	   m.ox == ox && m.oy == oy && m.flags == flags && m.imph == imph && m.pcth == pcth && m.tf == tf) {
+		topfrac = 0.0;
+		endfrac = m.ef;
 		b.h = m.h;
 		for(a := m.abs; a != nil; a = tl a) {
 			x := ref *hd a;
@@ -2737,7 +2765,9 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		for(hl := m.hc; hl != nil; hl = tl hl) {
 			e := hd hl;
 			if(e.w == b.w && e.cbw == cbw && e.cbh == cbh && e.ox == ox && e.oy == oy &&
-			   e.flags == flags && e.imph == imph && e.pcth == pcth) {
+			   e.flags == flags && e.imph == imph && e.pcth == pcth && e.tf == tf) {
+				topfrac = 0.0;
+				endfrac = e.ef;
 				b.h = e.h;
 				return (e.r1, e.r2, e.r3);
 			}
@@ -2765,6 +2795,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	(m.gen, m.w, m.cbw, m.cbh, m.ox, m.oy, m.flags, m.imph, m.pcth) = (laygen, b.w, cbw, cbh, ox, oy, flags, imph, pcth);
 	m.h = b.h;
 	(m.r1, m.r2, m.r3) = (r1, r2, r3);
+	(m.tf, m.ef) = (tf, endfrac);
 	m.abs = abs;
 	if(measuring)
 		m.gen = -1;
@@ -2773,7 +2804,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		m.hgen = laygen;
 		m.hc = nil;
 	}
-	e := ref Hmemo(b.w, cbw, cbh, ox, oy, flags, imph, pcth, b.h, r1, r2, r3);
+	e := ref Hmemo(b.w, cbw, cbh, ox, oy, flags, imph, pcth, b.h, r1, r2, r3, tf, endfrac);
 	nl: list of ref Hmemo;
 	n := 1;
 	for(ol := m.hc; ol != nil && n < Nhmemo; ol = tl ol) {
@@ -2793,6 +2824,9 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 
 layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margin, Margin, int)
 {
+	tf := topfrac;
+	topfrac = 0.0;
+	endfrac = tf;	# a box whose height is not its content's passes the fraction through
 	case b.kind {
 	Kreplaced =>
 		h := specheight(b, cbh);
@@ -2857,8 +2891,12 @@ layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Marg
 	bot := mval(b.mb);
 	contenth := 0;
 	empty := 0;
+	ef := tf;	# where the content's true bottom is below its rounded height
 	if(haslines(b)) {
+		inlinestart = tf;
 		contenth = layinline(l, b, cw, ch, fc, ox, oy);
+		inlinestart = 0.0;
+		ef = inlineend;
 		if(len b.lines > 0)
 			passtop = passbot = 0;
 		else {
@@ -2873,6 +2911,7 @@ layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Marg
 		pending := Margin(0, 0);
 		pendingclear := 0;	# the pending margins are an empty cleared box's: they end in this box (§8.3.1)
 		cury := 0;
+		cfrac := tf;	# how far below cury the content's true bottom so far is
 		adjoining := passtop;	# still at the top, margins adjoin ours
 		# margin-trim: the first in-flow child's start margin and the
 		# last's end margin, what collapses with them included, are
@@ -2989,7 +3028,12 @@ layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Marg
 					k.x = lx - ox + k.ml;
 				}
 			}
+			if(cleared)
+				cfrac = 0.0;	# at the clearance, a whole pixel
+			topfrac = cfrac;
 			(kt, kb, kempty) := layblock(l, k, cw, ch, fc, ox + k.x, oy + b.bt + b.pt + ky);
+			topfrac = 0.0;
+			kef := endfrac;
 			if(trimtop) {
 				kt = Margin(0, 0);
 				if(kempty)
@@ -3034,6 +3078,7 @@ layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Marg
 			if(cleared)
 				k.y = b.bt + b.pt + ky;	# at the clearance, whatever its margins collapsed to (nested-clearance-new-formatting-context)
 			cury = k.y - b.bt - b.pt + k.h;
+			cfrac = kef;
 			pending = kb;
 			pendingclear = 0;
 			relative(k, cw, ch);
@@ -3061,12 +3106,15 @@ layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Marg
 		} else
 			cury += msum(pending);
 		contenth = cury;
+		ef = cfrac;
 	}
 	if(bfc) {
 		# a formatting context's height takes in its floats
 		fb := floatbottom(fc) - b.bt - b.pt;
-		if(fb > contenth)
+		if(fb > contenth) {
 			contenth = fb;
+			ef = tf;
+		}
 		if(contenth > 0)
 			empty = 0;
 	}
@@ -3106,6 +3154,11 @@ layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Marg
 		b.h = hauto;
 	if(empty && b.h != 0)
 		empty = 0;
+	# its height its content's: its bottom where the content's true one is
+	if(sh < 0 && b.h == contenth + vextra(b) && ef > -0.5 && ef < 0.5)
+		endfrac = ef;
+	else
+		endfrac = tf;
 	positioned(l, b);
 	return (top, bot, empty);
 }
@@ -9516,6 +9569,23 @@ intrinsic1(b: ref Box): (int, int)
 					kmn -= tr;
 					kmx -= tr;
 				}
+				# an auto minimum takes the item's minimum contribution,
+				# as laying the grid out does: its min-width where it has
+				# one, and a scroll container's automatic minimum is zero
+				# (§6.6).  Bootstrap's docs: .bd-content { min-width: 1px }
+				# beside the page's contents in a 4fr 1fr grid, itself in
+				# 1fr 5fr; a 1399px line of code took the grid's
+				# min-content past the row and the sidebar was 4px wide
+				if(span == 1 && cols[a0].lo.kind == Tauto && k.st.width.kind == Style->Lauto && !issubgrid(k, 1)) {
+					if(k.st.minwidth.kind == Style->Lpx || k.st.minwidth.kind == Style->Lcalc) {
+						m := specw(k, k.st.minwidth, -1);
+						if(m < hextra(k))
+							m = hextra(k);
+						if(m + mgs(k) < kmn)
+							kmn = m + mgs(k);
+					} else if(k.st.minwidth.kind == Style->Lauto && isscroller(k))
+						kmn = mgs(k) + hextra(k);
+				}
 				spreadspan(cols, cmn, cmx, a0, a0 + span, kmn, kmx, gap);
 				c = (a0 + span) % len cols;
 			}
@@ -10168,7 +10238,17 @@ lbbreak(a, b: int): int
 		if(cb == Bidi->LBJT)
 			return 0;
 	}
+	# an em dash (B2, which lbclass takes for AL): a break before it and
+	# after it (LB31), none between two (LB17); "anyone—human" was one
+	# word, and Bootstrap's lead took a line more than Chromium's
+	if(isb2(a) || isb2(b))
+		return !(isb2(a) && isb2(b));
 	return lbideo(ca) || lbideo(cb);
+}
+
+isb2(c: int): int
+{
+	return c == 16r2014 || c == 16r2E3A || c == 16r2E3B;
 }
 
 # an SVG viewBox attribute's four numbers, or nil
@@ -10528,6 +10608,12 @@ textsegs(b: ref Box, st: ref St, fc: ref Typeface, lang: string, space0: int): l
 	ls := st.letterspacing;
 	if(collapsesp)
 		s = segbreaks(s, keepnl, cjklang(lang));
+	# hyphens: auto: a soft hyphen where the language's patterns allow
+	# a break in a word, as a browser does with a known language
+	# (not under line-break: anywhere, which applies none: Text 3 §5.3,
+	# line-break-anywhere-002)
+	if(st.hyphens == 2 && st.breakall != 2 && hyphen != nil && lang != nil && lang != Nolang && hyphen->known(lang))
+		s = hyphen->hyphenate(s, lang);
 	# Thai: between the words a dictionary finds (UAX #14 SA)
 	thai: array of byte;
 	if(wordbreak != nil && st.keepall != 2)
@@ -10975,6 +11061,7 @@ Ifc: adt {
 	strut:	int;		# the block's own line height, for float bands
 	ch:	int;		# b's content height if definite, else -1: for floats' percentages
 	slack:	real;		# how far its lines may reach past cw and fit: fitslack
+	frac:	real;		# how far the next line's top is below y, its fraction: lines' heights summed unrounded
 };
 
 # Set ln's edges from the floats beside the line at f.y.
@@ -11041,6 +11128,7 @@ movedown(f: ref Ifc, ln: ref Ln): int
 	if(n < 0)
 		return 0;
 	f.y = n - f.oy;
+	f.frac = 0.0;
 	linestart(f, ln);
 	return 1;
 }
@@ -11055,7 +11143,9 @@ placepending(f: ref Ifc, ln: ref Ln)
 # text-wrap: balance (Text 4 §6.3): the lines are broken at a width
 # cut back as far as it can be without one more line, so that they
 # come out about equal; each run of lines between forced breaks is
-# balanced on its own.  The cut is found by bisection, the block laid
+# balanced on its own, and only a run of six lines or fewer (the spec
+# lets a UA limit it, and Chromium's limit is six: seven-line runs are
+# broken as they come).  The cut is found by bisection, the block laid
 # out again each time: what a trial lays out (floats, pending
 # absolutes) is put back before the next, and the lines are still
 # aligned in their full width.
@@ -11063,28 +11153,34 @@ balancing: int;			# a block is being balanced
 balancecuts: array of int;	# the cut per forced-break group, nil when none applies
 balancegroup: int;		# the group of the line being laid
 balancecount: array of int;	# lines laid per group, nil when not counting
-Maxgroups: con 64;		# forced-break groups balanced at most
+Maxgroups: con 64;		# forced-break groups counted at most
+Maxbalance: con 6;		# lines balanced at most (Chromium's)
 
 layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 {
+	s0 := inlinestart;	# each layout of it (balancing lays it out several times) starts there
 	if(balancing) {
 		# a block inside the one being balanced (an inline-block's):
 		# laid out plainly, its lines not counted
 		(ocuts, ogroup, ocount) := (balancecuts, balancegroup, balancecount);
 		balancecuts = nil;
 		balancecount = nil;
+		inlinestart = s0;
 		h := layinline1(l, b, cw, ch, fc, ox, oy);
 		(balancecuts, balancegroup, balancecount) = (ocuts, ogroup, ocount);
 		return h;
 	}
-	if(b.st.textwrap != 1 || cw <= 0)
+	if(b.st.textwrap != 1 || cw <= 0) {
+		inlinestart = s0;
 		return layinline1(l, b, cw, ch, fc, ox, oy);
+	}
 	balancing = 1;
 	(fleft, fright) := (fc.left, fc.right);
 	pending := l.pending;
 	balancecuts = nil;
 	balancecount = array[Maxgroups] of {* => 0};
 	balancegroup = 0;
+	inlinestart = s0;
 	layinline1(l, b, cw, ch, fc, ox, oy);
 	want := balancecount;
 	ngroups := balancegroup + 1;
@@ -11092,7 +11188,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 		ngroups = Maxgroups;
 	cuts := array[ngroups] of {* => 0};
 	for(g := 0; g < ngroups; g++) {
-		if(want[g] < 2)
+		if(want[g] < 2 || want[g] > Maxbalance)
 			continue;
 		lo := 0;
 		hi := cw;
@@ -11104,6 +11200,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			balancegroup = 0;
 			(fc.left, fc.right) = (fleft, fright);
 			l.pending = pending;
+			inlinestart = s0;
 			layinline1(l, b, cw, ch, fc, ox, oy);
 			if(balancecount[g] == want[g])
 				lo = mid;
@@ -11117,6 +11214,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	balancegroup = 0;
 	(fc.left, fc.right) = (fleft, fright);
 	l.pending = pending;
+	inlinestart = s0;
 	h := layinline1(l, b, cw, ch, fc, ox, oy);
 	balancing = 0;
 	balancecuts = nil;
@@ -11140,7 +11238,8 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	autospacepass(items);
 	st := b.st;
 	lines: list of ref Line;
-	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch, fitslack(b, cw));
+	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch, fitslack(b, cw), inlinestart);
+	inlinestart = 0.0;
 	x0 := b.bl + b.pl;
 	para := 0;
 	joinruns(items);
@@ -11243,7 +11342,10 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			}
 			while(!ln.content && ln.x + it.w > real ln.avail + rmax(0.01, f.slack) && movedown(f, ln))
 				;
-			if(!ln.content && ln.x + it.w > real ln.avail && (it.box.st.anywhere || keptall(it)) && len it.text > 1 && !it.nowrap) {
+			# (with the slack the breaking above has: a box shrunk to its
+			# text fits it; rustdoc's Option<T>, 86.4px in an inline-block
+			# of 86 under overflow-wrap: anywhere, was split before >)
+			if(!ln.content && ln.x + it.w > real ln.avail + rmax(0.01, f.slack) && (it.box.st.anywhere || keptall(it)) && len it.text > 1 && !it.nowrap) {
 				# (keep-all is relaxed to normal breaking when the line
 				# has no other opportunity, as browsers do: overflow-wrap-normal-keep-all-001)
 				# overflow-wrap: break the word where it must, if the
@@ -11367,14 +11469,32 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 		lines = tl lines;
 	}
 	b.lines = a;
+	inlineend = f.frac;
 	return f.y - b.bt - b.pt;
 }
+
+finishh := -1.0;	# the height finish gave its line, unrounded; -1 where it is no sum of text's
 
 endline(f: ref Ifc, ln: ref Ln, x0, first, forced: int): ref Line
 {
 	if(balancecount != nil && balancegroup < len balancecount)
 		balancecount[balancegroup]++;
 	line := finish(f.l, f.b, ln, f.y, x0, first, forced);
+	# a line's height in fractions of a pixel (16px text at 1.6 is
+	# 25.6): the next line goes where they add up to, rounded, as
+	# Chromium keeps the fraction to 1/64 px; rounded a line at a time,
+	# seven lines were 182px where Chromium's are 179, and a long page
+	# drifted down a line in each few screens (Python's documentation)
+	if(finishh >= 0.0) {
+		end := real f.y + f.frac + finishh;
+		ny := ir(end);
+		if(ny > f.y) {
+			line.h = ny - f.y;
+			f.frac = end - real ny;
+		} else
+			f.frac = 0.0;
+	} else
+		f.frac = 0.0;
 	f.y += line.h;
 	for(bl := ln.below; bl != nil; bl = tl bl)
 		(hd bl).sy = f.y;
@@ -11854,6 +11974,7 @@ lineheight(st: ref St, f: ref Typeface): real
 # align vertically (baselines, line-height) and horizontally.
 finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 {
+	finishh = -1.0;
 	# trailing collapsible white space hangs; so does preserved
 	# white space at the end of a line (white-space: pre-wrap), which
 	# keeps its width but takes no part in alignment (Text 3 §4.1.3)
@@ -11958,15 +12079,28 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			below = d + shift;
 	}
 	h := ir(above + below);
+	finishh = above + below;	# its height unrounded, for endline
+	for(i = 0; i < len frags; i++)
+		if(frags[i].kind == Fatomic) {
+			# a box on it (an inline-block): its edges are whole pixels,
+			# and the fraction its baseline makes of the line is none
+			# of Chromium's (ECMA-262's contents, 27px lines with a
+			# toggle in each, were 28px each)
+			finishh = -1.0;
+			break;
+		}
 	if(markerline(b, frags)) {
 		h = 0;	# shiftmarkers puts the marker at the next block's first baseline
 		above = 0.0;
+		finishh = -1.0;
 	}
 	# top- and bottom-aligned things may make the line taller
 	for(sl := subtrees; sl != nil; sl = tl sl) {
 		(nil, sa, sd) := hd sl;
-		if(ir(sa + sd) > h)
+		if(ir(sa + sd) > h) {
 			h = ir(sa + sd);
+			finishh = -1.0;
+		}
 	}
 	base := ir(above);
 	line := ref Line(y, h, y + base, frags, nil);
@@ -13047,13 +13181,13 @@ face(st: ref St): ref Typeface
 	return f;
 }
 
-# The OpenType features a style sets (Fonts 4 �7.2): font-variant's,
+# The OpenType features a style sets (Fonts 4 §7.2): font-variant's,
 # then font-feature-settings', a later setting of a tag winning
 fontfeats(st: ref St): list of (string, int)
 {
 	r: list of (string, int);
 	# letters spaced apart, by letter-spacing or justification between
-	# them, are not joined by the optional ligatures (Text 3 �8.2, �7.3);
+	# them, are not joined by the optional ligatures (Text 3 §8.2, §7.3);
 	# font-feature-settings may still turn one on
 	if(spaced(st))
 		r = ("calt", 0) :: ("hlig", 0) :: ("dlig", 0) :: ("clig", 0) :: ("liga", 0) :: nil;
@@ -13081,7 +13215,7 @@ optlig(t: string): int
 
 # font-variant-alternates' functions, through the values
 # @font-feature-values gives their names for the style's families
-# (Fonts 4 �6.8); a name none defines sets nothing
+# (Fonts 4 §6.8); a name none defines sets nothing
 altfeats(st: ref St): list of (string, int)
 {
 	r: list of (string, int);

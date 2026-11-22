@@ -128,7 +128,7 @@ The profile detects the variable and starts factotum with secstore backing (`-S 
 
 ### Secstore Status Detection
 
-After successful unlock, `wm/logon` creates a sentinel file at `/tmp/.secstore-unlocked`. Other apps (Keyring, Settings) check this file to display persistence status:
+Keyring and Settings read factotum's `secstore` file (`/mnt/factotum/secstore`, factotum(4)), which says where a key added now is saved, to display persistence status. (They used to ask whether `/tmp/.secstore-unlocked`, which `wm/logon` creates after an unlock, existed: a file anything can make.)
 - **Keyring**: "Keys persist to secstore" or "Keys are in-memory only (login was skipped)"
 - **Settings**: "Key persistence: active" or "Key persistence: inactive (login skipped)"
 

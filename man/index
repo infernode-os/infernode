@@ -537,7 +537,6 @@
 1	/man/8/ping
 1	/man/8/plumber
 1	/man/8/rdbgsrv
-1	/man/8/register
 1	/man/8/rstyxd
 1	/man/8/shutdown
 1	/man/8/srv
@@ -1274,7 +1273,6 @@
 2	/man/8/ping
 2	/man/8/plumber
 2	/man/8/rdbgsrv
-2	/man/8/register
 2	/man/8/rstyxd
 2	/man/8/srv
 2	/man/8/styxchat
@@ -1517,9 +1515,7 @@
 3	/man/8/init
 3	/man/8/kfscmd
 3	/man/8/logind
-3	/man/8/manufacture
 3	/man/8/ping
-3	/man/8/register
 3	/man/8/rstyxd
 3	/man/8/shutdown
 3	/man/8/srv
@@ -1949,7 +1945,6 @@
 6	/man/8/logind
 6	/man/8/mkfs
 6	/man/8/plumber
-6	/man/8/register
 6	/man/8/rstyxd
 6	/man/8/srv
 60	/man/1/charon
@@ -2146,12 +2141,10 @@
 8	/man/8/init
 8	/man/8/kfscmd
 8	/man/8/logind
-8	/man/8/manufacture
 8	/man/8/mkfs
 8	/man/8/ping
 8	/man/8/plumber
 8	/man/8/rdbgsrv
-8	/man/8/register
 8	/man/8/rstyxd
 8	/man/8/shutdown
 8	/man/8/signer
@@ -2664,12 +2657,10 @@ a	/man/8/httpd
 a	/man/8/init
 a	/man/8/kfscmd
 a	/man/8/logind
-a	/man/8/manufacture
 a	/man/8/mkfs
 a	/man/8/ping
 a	/man/8/plumber
 a	/man/8/rdbgsrv
-a	/man/8/register
 a	/man/8/rstyxd
 a	/man/8/shutdown
 a	/man/8/signer
@@ -2887,7 +2878,6 @@ accept	/man/3/cmd
 accept	/man/3/ip
 accept	/man/4/ftpfs
 accept	/man/4/keysrv
-accept	/man/8/register
 accept	/man/8/signer
 acceptable	/man/1/sh-arg
 acceptable	/man/1/sh-expr
@@ -3196,7 +3186,6 @@ acting	/man/3/ip
 acting	/man/4/keyfs
 acting	/man/6/keys
 acting	/man/8/createsignerkey
-acting	/man/8/register
 acting	/man/8/signer
 acting	/man/9/1copyright
 action	/man/1/acme
@@ -3797,7 +3786,6 @@ after	/man/6/sexprs
 after	/man/8/changelogin
 after	/man/8/create
 after	/man/8/cs
-after	/man/8/register
 after	/man/8/signer
 ag	/man/2/keyring-crypt
 again	/man/1/acme
@@ -3843,7 +3831,6 @@ agent	/man/1/bind
 agent	/man/2/factotum
 agent	/man/4/import
 agent	/man/5/0intro
-agent	/man/8/register
 agent	/man/8/signer
 aggregate	/man/1/mk
 aggregate	/man/10/mk
@@ -4773,12 +4760,10 @@ also	/man/8/getauthinfo
 also	/man/8/init
 also	/man/8/kfscmd
 also	/man/8/logind
-also	/man/8/manufacture
 also	/man/8/mkfs
 also	/man/8/ping
 also	/man/8/plumber
 also	/man/8/rdbgsrv
-also	/man/8/register
 also	/man/8/rstyxd
 also	/man/8/shutdown
 also	/man/8/signer
@@ -5217,7 +5202,6 @@ an	/man/8/logind
 an	/man/8/mkfs
 an	/man/8/ping
 an	/man/8/plumber
-an	/man/8/register
 an	/man/8/signer
 an	/man/8/styxchat
 an	/man/8/svc
@@ -5613,7 +5597,6 @@ and	/man/8/mkfs
 and	/man/8/ping
 and	/man/8/plumber
 and	/man/8/rdbgsrv
-and	/man/8/register
 and	/man/8/rstyxd
 and	/man/8/signer
 and	/man/8/srv
@@ -6263,12 +6246,10 @@ appl	/man/8/httpd
 appl	/man/8/init
 appl	/man/8/kfscmd
 appl	/man/8/logind
-appl	/man/8/manufacture
 appl	/man/8/mkfs
 appl	/man/8/ping
 appl	/man/8/plumber
 appl	/man/8/rdbgsrv
-appl	/man/8/register
 appl	/man/8/rstyxd
 appl	/man/8/shutdown
 appl	/man/8/signer
@@ -6863,7 +6844,6 @@ are	/man/8/logind
 are	/man/8/mkfs
 are	/man/8/ping
 are	/man/8/plumber
-are	/man/8/register
 are	/man/8/rstyxd
 are	/man/8/signer
 are	/man/8/srv
@@ -7522,7 +7502,6 @@ as	/man/8/logind
 as	/man/8/mkfs
 as	/man/8/plumber
 as	/man/8/rdbgsrv
-as	/man/8/register
 as	/man/8/rstyxd
 as	/man/8/shutdown
 as	/man/8/signer
@@ -7945,7 +7924,6 @@ at	/man/8/httpd
 at	/man/8/mkfs
 at	/man/8/ping
 at	/man/8/rdbgsrv
-at	/man/8/register
 at	/man/8/srv
 at	/man/8/svc
 ata	/man/3/sd
@@ -8250,7 +8228,6 @@ authenticated	/man/4/import
 authenticated	/man/4/keysrv
 authenticated	/man/4/registry
 authenticated	/man/8/getauthinfo
-authenticated	/man/8/register
 authenticates	/man/2/keyring-0intro
 authenticates	/man/2/security-auth
 authenticates	/man/4/keysrv
@@ -8885,12 +8862,10 @@ b	/man/8/httpd
 b	/man/8/init
 b	/man/8/kfscmd
 b	/man/8/logind
-b	/man/8/manufacture
 b	/man/8/mkfs
 b	/man/8/ping
 b	/man/8/plumber
 b	/man/8/rdbgsrv
-b	/man/8/register
 b	/man/8/rstyxd
 b	/man/8/shutdown
 b	/man/8/signer
@@ -8931,7 +8906,6 @@ back	/man/4/ftpfs
 back	/man/5/0intro
 back	/man/6/colour
 back	/man/6/sbl
-back	/man/8/register
 background	/man/1/cprof
 background	/man/1/sh
 background	/man/2/draw-display
@@ -9053,7 +9027,6 @@ based	/man/6/auth
 based	/man/6/ndb
 based	/man/6/utf
 based	/man/8/applylog
-based	/man/8/register
 based	/man/8/rstyxd
 baseline	/man/2/draw-font
 baseline	/man/2/imagefile
@@ -9402,7 +9375,6 @@ be	/man/8/kfscmd
 be	/man/8/logind
 be	/man/8/mkfs
 be	/man/8/rdbgsrv
-be	/man/8/register
 be	/man/8/rstyxd
 be	/man/8/shutdown
 be	/man/8/signer
@@ -9545,7 +9517,6 @@ been	/man/6/sexprs
 been	/man/8/changelogin
 been	/man/8/create
 been	/man/8/getauthinfo
-been	/man/8/register
 been	/man/8/svc
 been	/man/9/0intro
 been	/man/9/1copyright
@@ -10171,7 +10142,6 @@ bi	/man/8/dns
 bi	/man/8/getauthinfo
 bi	/man/8/httpd
 bi	/man/8/kfscmd
-bi	/man/8/manufacture
 bi	/man/8/mkfs
 bi	/man/8/ping
 bi	/man/8/plumber
@@ -10405,7 +10375,6 @@ bit	/man/6/keyboard
 bit	/man/6/sexprs
 bit	/man/6/utf
 bit	/man/8/rdbgsrv
-bit	/man/8/register
 bit	/man/8/signer
 bit	/man/8/styxchat
 bit16sz	/man/10/styx
@@ -10419,7 +10388,6 @@ bitmap	/man/4/namespace
 bitmask	/man/1/sh-std
 bitmask	/man/2/sh
 bitmask	/man/2/tk
-bitmask	/man/8/register
 bits	/man/1/auplay
 bits	/man/1/chmod
 bits	/man/10/ar
@@ -10524,7 +10492,6 @@ blen	/man/10/allocb
 blending	/man/3/draw
 blinded	/man/2/keyring-0intro
 blinded	/man/2/security-0intro
-blinded	/man/8/register
 blinded	/man/8/signer
 blinding	/man/2/keyring-0intro
 blinding	/man/8/signer
@@ -10850,8 +10817,6 @@ box	/man/1/wm
 box	/man/2/keyring-0intro
 box	/man/2/pop3
 box	/man/2/security-0intro
-box	/man/8/manufacture
-box	/man/8/register
 box	/man/8/signer
 boxed	/man/2/sys-byte2char
 boxes	/man/2/security-0intro
@@ -11541,7 +11506,6 @@ bundled	/man/1/fs
 bundled	/man/2/styxservers
 burden	/man/1/charon
 burgundy	/man/10/odbc
-burn	/man/8/manufacture
 bus	/man/10/dmainit
 bus	/man/10/intrenable
 bus	/man/10/plan9.ini
@@ -12047,12 +12011,10 @@ by	/man/8/httpd
 by	/man/8/init
 by	/man/8/kfscmd
 by	/man/8/logind
-by	/man/8/manufacture
 by	/man/8/mkfs
 by	/man/8/ping
 by	/man/8/plumber
 by	/man/8/rdbgsrv
-by	/man/8/register
 by	/man/8/rstyxd
 by	/man/8/signer
 by	/man/8/srv
@@ -12558,7 +12520,6 @@ call	/man/5/version
 call	/man/5/walk
 call	/man/6/colour
 call	/man/8/cs
-call	/man/8/register
 call	/man/8/rstyxd
 call	/man/8/signer
 call	/man/8/srv
@@ -12676,7 +12637,6 @@ caller	/man/2/styxservers
 caller	/man/2/sys-dial
 caller	/man/2/timers
 caller	/man/4/import
-caller	/man/8/register
 caller	/man/8/rstyxd
 caller	/man/8/signer
 caller	/man/8/svc
@@ -12971,7 +12931,6 @@ can	/man/8/httpd
 can	/man/8/kfscmd
 can	/man/8/logind
 can	/man/8/plumber
-can	/man/8/register
 can	/man/8/rstyxd
 can	/man/8/signer
 can	/man/8/styxchat
@@ -13418,7 +13377,6 @@ certificate	/man/8/changelogin
 certificate	/man/8/createsignerkey
 certificate	/man/8/getauthinfo
 certificate	/man/8/logind
-certificate	/man/8/register
 certificate	/man/8/signer
 certificates	/man/1/charon
 certificates	/man/2/keyring-0intro
@@ -13430,7 +13388,6 @@ certificates	/man/4/namespace
 certificates	/man/8/createsignerkey
 certificates	/man/8/getauthinfo
 certificates	/man/8/logind
-certificates	/man/8/register
 certificates	/man/8/signer
 certificates	/man/8/svc
 certification	/man/2/keyring-0intro
@@ -14245,7 +14202,6 @@ client	/man/8/cs
 client	/man/8/getauthinfo
 client	/man/8/httpd
 client	/man/8/logind
-client	/man/8/register
 client	/man/8/rstyxd
 client	/man/8/signer
 client	/man/8/styxchat
@@ -14511,7 +14467,6 @@ cmd	/man/8/getauthinfo
 cmd	/man/8/init
 cmd	/man/8/kfscmd
 cmd	/man/8/logind
-cmd	/man/8/manufacture
 cmd	/man/8/mkfs
 cmd	/man/8/ping
 cmd	/man/8/plumber
@@ -14814,9 +14769,7 @@ command	/man/8/applylog
 command	/man/8/getauthinfo
 command	/man/8/init
 command	/man/8/kfscmd
-command	/man/8/manufacture
 command	/man/8/mkfs
-command	/man/8/register
 command	/man/8/rstyxd
 command	/man/8/srv
 command	/man/8/styxchat
@@ -14952,7 +14905,6 @@ communicate	/man/2/security-0intro
 communicate	/man/2/sys-dial
 communicate	/man/2/sys-file2chan
 communicate	/man/8/logind
-communicate	/man/8/register
 communicated	/man/10/styxserver
 communicated	/man/2/sys-stat
 communicates	/man/2/security-login
@@ -15152,7 +15104,6 @@ completion	/man/1/prof
 completion	/man/1/sh
 completion	/man/2/complete
 completion	/man/8/applylog
-completion	/man/8/register
 complex	/man/1/acme
 complex	/man/10/devattach
 complex	/man/10/error
@@ -15427,7 +15378,6 @@ configured	/man/3/prog
 configured	/man/3/root
 configured	/man/3/sign
 configured	/man/6/audio
-configured	/man/8/register
 configured	/man/8/srv
 configures	/man/10/plan9.ini
 configuring	/man/10/qio
@@ -15574,7 +15524,6 @@ connects	/man/2/security-0intro
 connects	/man/2/security-login
 connects	/man/3/draw
 connects	/man/4/ftpfs
-connects	/man/8/register
 connfd	/man/10/styxserver
 connfd	/man/2/draw-context
 cons	/man/1/cd
@@ -15773,7 +15722,6 @@ constraints	/man/2/sys-fversion
 construct	/man/2/keyring-0intro
 construct	/man/3/prog
 construct	/man/6/namespace
-construct	/man/8/register
 constructed	/man/1/listen
 constructed	/man/2/asn1
 constructed	/man/2/stringinttab
@@ -16184,7 +16132,6 @@ contents	/man/8/kfscmd
 contents	/man/8/logind
 contents	/man/8/plumber
 contents	/man/8/rdbgsrv
-contents	/man/8/register
 context	/man/1/acme
 context	/man/1/acme-misc
 context	/man/1/fs
@@ -16570,7 +16517,6 @@ conveyed	/man/2/keyring-0intro
 conveyed	/man/2/plumbmsg
 conveys	/man/2/draw-0intro
 conveys	/man/2/sexprs
-convinced	/man/8/register
 convinced	/man/8/signer
 convm2d	/man/10/dev
 convm2d	/man/10/styx
@@ -16738,7 +16684,6 @@ correct	/man/2/dis
 correct	/man/2/security-0intro
 correct	/man/5/remove
 correct	/man/6/image
-correct	/man/8/register
 corrected	/man/6/colour
 correcting	/man/3/dbg
 correction	/man/6/colour
@@ -16957,7 +16902,6 @@ counterpart	/man/8/getauthinfo
 counterparts	/man/1/sh-string
 counterparts	/man/1/units
 countersigned	/man/8/signer
-countersigner	/man/8/register
 countersigner	/man/8/signer
 countersigner	/man/8/srv
 counting	/man/1/fc
@@ -17318,7 +17262,6 @@ cs	/man/6/attrdb
 cs	/man/6/ndb
 cs	/man/8/cs
 cs	/man/8/dns
-cs	/man/8/register
 cs	/man/8/srv
 cs	/man/8/svc
 csfile	/man/2/convcs
@@ -17952,7 +17895,6 @@ db	/man/2/pop3
 db	/man/2/smtp
 db	/man/2/sys-dial
 db	/man/8/cs
-db	/man/8/register
 db1	/man/2/attrdb
 db2	/man/2/attrdb
 dbentry	/man/2/attrdb
@@ -18329,12 +18271,10 @@ default	/man/8/getauthinfo
 default	/man/8/httpd
 default	/man/8/init
 default	/man/8/kfscmd
-default	/man/8/manufacture
 default	/man/8/mkfs
 default	/man/8/ping
 default	/man/8/plumber
 default	/man/8/rdbgsrv
-default	/man/8/register
 default	/man/8/rstyxd
 default	/man/8/srv
 default	/man/8/styxchat
@@ -18505,7 +18445,6 @@ definition	/man/2/xml
 definition	/man/5/attach
 definition	/man/6/image
 definition	/man/6/sexprs
-definition	/man/8/register
 definition	/man/8/styxchat
 definitions	/man/1/acme-misc
 definitions	/man/1/limbo
@@ -18641,7 +18580,6 @@ delivered	/man/1/acme
 delivered	/man/2/timers
 delivered	/man/3/cons
 delivered	/man/3/ip
-delivered	/man/8/register
 delivers	/man/1/sendmail
 delivers	/man/2/draw-context
 delivery	/man/2/smtp
@@ -19285,12 +19223,10 @@ description	/man/8/httpd
 description	/man/8/init
 description	/man/8/kfscmd
 description	/man/8/logind
-description	/man/8/manufacture
 description	/man/8/mkfs
 description	/man/8/ping
 description	/man/8/plumber
 description	/man/8/rdbgsrv
-description	/man/8/register
 description	/man/8/rstyxd
 description	/man/8/shutdown
 description	/man/8/signer
@@ -19745,7 +19681,6 @@ device	/man/8/format
 device	/man/8/init
 device	/man/8/logind
 device	/man/8/rdbgsrv
-device	/man/8/register
 devicefile	/man/4/dossrv
 devices	/man/1/0intro
 devices	/man/1/charon
@@ -20669,7 +20604,6 @@ display	/man/6/font
 display	/man/6/image
 display	/man/6/man
 display	/man/6/sexprs
-display	/man/8/register
 display	/man/8/styxchat
 displayed	/man/1/acme
 displayed	/man/1/charon
@@ -20704,7 +20638,6 @@ displays	/man/2/volume
 displays	/man/3/draw
 displays	/man/6/colour
 displays	/man/8/getauthinfo
-displays	/man/8/register
 displays	/man/8/signer
 dispose	/man/2/command
 disrupt	/man/2/security-0intro
@@ -22570,10 +22503,7 @@ emuargs	/man/8/init
 emuinit	/man/1/emu
 emuinit	/man/10/conf
 emuinit	/man/8/init
-emulate	/man/8/manufacture
 emulated	/man/10/print
-emulates	/man/8/manufacture
-emulating	/man/8/register
 emulation	/man/1/emu
 emulation	/man/3/cons
 emulation	/man/3/ip
@@ -24169,7 +24099,6 @@ example	/man/8/cs
 example	/man/8/format
 example	/man/8/getauthinfo
 example	/man/8/rdbgsrv
-example	/man/8/register
 example	/man/8/signer
 example	/man/8/srv
 examples	/man/1/acme
@@ -24837,7 +24766,6 @@ explicitly	/man/5/0intro
 explicitly	/man/6/sbl
 explicitly	/man/6/sexprs
 explicitly	/man/8/applylog
-explicitly	/man/8/register
 explicitly	/man/9/1copyright
 expm1	/man/2/math-elem
 expmod	/man/2/keyring-ipint
@@ -26173,11 +26101,9 @@ file	/man/8/httpd
 file	/man/8/init
 file	/man/8/kfscmd
 file	/man/8/logind
-file	/man/8/manufacture
 file	/man/8/mkfs
 file	/man/8/plumber
 file	/man/8/rdbgsrv
-file	/man/8/register
 file	/man/8/rstyxd
 file	/man/8/signer
 file	/man/8/srv
@@ -26427,11 +26353,9 @@ files	/man/8/httpd
 files	/man/8/init
 files	/man/8/kfscmd
 files	/man/8/logind
-files	/man/8/manufacture
 files	/man/8/mkfs
 files	/man/8/plumber
 files	/man/8/rdbgsrv
-files	/man/8/register
 files	/man/8/rstyxd
 files	/man/8/shutdown
 files	/man/8/signer
@@ -27841,7 +27765,6 @@ for	/man/8/mkfs
 for	/man/8/ping
 for	/man/8/plumber
 for	/man/8/rdbgsrv
-for	/man/8/register
 for	/man/8/signer
 for	/man/8/srv
 for	/man/8/styxchat
@@ -27981,7 +27904,6 @@ form	/man/8/cs
 form	/man/8/dns
 form	/man/8/init
 form	/man/8/plumber
-form	/man/8/register
 form	/man/8/rstyxd
 form	/man/8/styxchat
 formally	/man/1/acme
@@ -29887,7 +29809,6 @@ graphical	/man/2/draw-display
 graphical	/man/3/draw
 graphical	/man/4/cpu
 graphical	/man/6/man
-graphical	/man/8/register
 graphically	/man/1/cprof
 graphically	/man/8/signer
 graphics	/man/1/emu
@@ -30403,7 +30324,6 @@ has	/man/8/init
 has	/man/8/ping
 has	/man/8/plumber
 has	/man/8/rdbgsrv
-has	/man/8/register
 has	/man/8/signer
 has	/man/8/srv
 has	/man/8/styxchat
@@ -31039,7 +30959,6 @@ host	/man/8/init
 host	/man/8/logind
 host	/man/8/ping
 host	/man/8/rdbgsrv
-host	/man/8/register
 host	/man/8/signer
 host	/man/8/svc
 hosted	/man/1/0intro
@@ -31153,7 +31072,6 @@ huge	/man/2/math-linalg
 human	/man/2/keyring-0intro
 human	/man/2/sexprs
 human	/man/6/colour
-human	/man/8/register
 human	/man/8/signer
 hume	/man/1/mk
 hume	/man/10/mk
@@ -31523,12 +31441,10 @@ i	/man/8/httpd
 i	/man/8/init
 i	/man/8/kfscmd
 i	/man/8/logind
-i	/man/8/manufacture
 i	/man/8/mkfs
 i	/man/8/ping
 i	/man/8/plumber
 i	/man/8/rdbgsrv
-i	/man/8/register
 i	/man/8/rstyxd
 i	/man/8/shutdown
 i	/man/8/signer
@@ -31693,8 +31609,6 @@ id	/man/5/open
 id	/man/6/sbl
 id	/man/8/create
 id	/man/8/logind
-id	/man/8/manufacture
-id	/man/8/register
 id	/man/8/signer
 idea	/man/1/acme
 idea	/man/10/plan9.ini
@@ -31819,7 +31733,6 @@ identity	/man/3/cmd
 identity	/man/6/keys
 identity	/man/6/translate
 identity	/man/8/logind
-identity	/man/8/register
 identity	/man/8/rstyxd
 identity	/man/8/signer
 idiomatic	/man/2/command
@@ -32181,7 +32094,6 @@ if	/man/8/kfscmd
 if	/man/8/mkfs
 if	/man/8/ping
 if	/man/8/plumber
-if	/man/8/register
 if	/man/8/shutdown
 if	/man/8/signer
 if	/man/8/srv
@@ -32954,12 +32866,10 @@ in	/man/8/httpd
 in	/man/8/init
 in	/man/8/kfscmd
 in	/man/8/logind
-in	/man/8/manufacture
 in	/man/8/mkfs
 in	/man/8/ping
 in	/man/8/plumber
 in	/man/8/rdbgsrv
-in	/man/8/register
 in	/man/8/rstyxd
 in	/man/8/signer
 in	/man/8/srv
@@ -33382,7 +33292,6 @@ independent	/man/5/stat
 independent	/man/6/dis
 independent	/man/6/image
 independent	/man/6/utf
-independent	/man/8/register
 independent	/man/8/signer
 independently	/man/1/sh
 independently	/man/10/allocb
@@ -33947,7 +33856,6 @@ initialises	/man/2/diskblocks
 initialises	/man/2/rand
 initialises	/man/2/sys-fversion
 initialises	/man/8/format
-initialises	/man/8/manufacture
 initialises	/man/8/signer
 initialising	/man/10/dev
 initialising	/man/2/convcs
@@ -34344,7 +34252,6 @@ instead	/man/8/create
 instead	/man/8/cs
 instead	/man/8/init
 instead	/man/8/mkfs
-instead	/man/8/register
 instead	/man/8/svc
 institute	/man/1/sum
 instituted	/man/2/keyring-0intro
@@ -34643,7 +34550,6 @@ intended	/man/3/ip
 intended	/man/4/registry
 intended	/man/6/login
 intended	/man/8/rdbgsrv
-intended	/man/8/register
 intends	/man/10/kproc
 intensities	/man/2/draw-display
 intensities	/man/6/colour
@@ -34684,7 +34590,6 @@ interactively	/man/1/units
 interactively	/man/1/wm
 interactively	/man/10/plan9.ini
 interacts	/man/2/factotum
-interacts	/man/8/register
 interapplication	/man/8/plumber
 intercepted	/man/2/keyring-0intro
 interest	/man/4/9srvfs
@@ -35103,7 +35008,6 @@ into	/man/8/create
 into	/man/8/cs
 into	/man/8/format
 into	/man/8/init
-into	/man/8/manufacture
 into	/man/8/mkfs
 into	/man/8/rstyxd
 into	/man/8/styxchat
@@ -35501,7 +35405,6 @@ ip	/man/8/logind
 ip	/man/8/mkfs
 ip	/man/8/ping
 ip	/man/8/rdbgsrv
-ip	/man/8/register
 ip	/man/8/styxchat
 ip	/man/9/1copyright
 ipa2h	/man/2/srv
@@ -35899,12 +35802,10 @@ ir	/man/8/httpd
 ir	/man/8/init
 ir	/man/8/kfscmd
 ir	/man/8/logind
-ir	/man/8/manufacture
 ir	/man/8/mkfs
 ir	/man/8/ping
 ir	/man/8/plumber
 ir	/man/8/rdbgsrv
-ir	/man/8/register
 ir	/man/8/rstyxd
 ir	/man/8/shutdown
 ir	/man/8/signer
@@ -36282,12 +36183,10 @@ is	/man/8/httpd
 is	/man/8/init
 is	/man/8/kfscmd
 is	/man/8/logind
-is	/man/8/manufacture
 is	/man/8/mkfs
 is	/man/8/ping
 is	/man/8/plumber
 is	/man/8/rdbgsrv
-is	/man/8/register
 is	/man/8/rstyxd
 is	/man/8/signer
 is	/man/8/srv
@@ -36638,7 +36537,6 @@ it	/man/8/mkfs
 it	/man/8/ping
 it	/man/8/plumber
 it	/man/8/rdbgsrv
-it	/man/8/register
 it	/man/8/rstyxd
 it	/man/8/shutdown
 it	/man/8/signer
@@ -37562,7 +37460,6 @@ l	/man/8/format
 l	/man/8/httpd
 l	/man/8/kfscmd
 l	/man/8/ping
-l	/man/8/register
 l	/man/8/styxchat
 l1	/man/3/indir
 l2a1157	/man/10/plan9.ini
@@ -37758,7 +37655,6 @@ later	/man/6/auth
 later	/man/6/login
 later	/man/8/changelogin
 later	/man/8/getauthinfo
-later	/man/8/register
 later	/man/8/styxchat
 latex	/man/2/stringinttab
 latexbook	/man/2/stringinttab
@@ -39976,7 +39872,6 @@ machine	/man/8/applylog
 machine	/man/8/create
 machine	/man/8/getauthinfo
 machine	/man/8/mkfs
-machine	/man/8/register
 machine	/man/8/signer
 machines	/man/1/0intro
 machines	/man/10/plan9.ini
@@ -40375,10 +40270,7 @@ manual	/man/6/ndb
 manual	/man/6/utf
 manual	/man/7/0intro
 manual	/man/8/0intro
-manufacture	/man/8/manufacture
-manufacture	/man/8/register
 manufacturer	/man/3/sd
-manufacturer	/man/8/manufacture
 many	/man/1/0intro
 many	/man/1/acme
 many	/man/1/charon
@@ -40528,7 +40420,6 @@ mask	/man/3/ip
 mask	/man/6/dis
 mask	/man/6/ndb
 mask	/man/8/rdbgsrv
-mask	/man/8/register
 mask	/man/8/signer
 maskable	/man/10/splhi
 masked	/man/1/mkdir
@@ -40970,7 +40861,6 @@ mechanism	/man/2/sys-open
 mechanism	/man/2/sys-self
 mechanism	/man/3/pipe
 mechanism	/man/3/prog
-mechanism	/man/8/register
 mechanism	/man/8/signer
 mechanisms	/man/10/lock
 mechanisms	/man/2/0intro
@@ -41103,7 +40993,6 @@ memory	/man/8/0intro
 memory	/man/8/init
 memory	/man/8/kfscmd
 memory	/man/8/rdbgsrv
-memory	/man/8/register
 memset	/man/10/memory
 memshow	/man/2/prof
 memsize	/man/6/dis
@@ -42556,7 +42445,6 @@ must	/man/8/changelogin
 must	/man/8/cs
 must	/man/8/getauthinfo
 must	/man/8/rdbgsrv
-must	/man/8/register
 must	/man/8/svc
 mustcompile	/man/2/dis
 mustcompile	/man/6/dis
@@ -42573,8 +42461,6 @@ mux	/man/2/draw-context
 mux	/man/2/draw-pointer
 mux	/man/2/keyring-0intro
 mux	/man/2/volume
-mux	/man/8/manufacture
-mux	/man/8/register
 mv	/man/1/cp
 mv	/man/1/mv
 mv	/man/4/ftpfs
@@ -43109,12 +42995,10 @@ name	/man/8/httpd
 name	/man/8/init
 name	/man/8/kfscmd
 name	/man/8/logind
-name	/man/8/manufacture
 name	/man/8/mkfs
 name	/man/8/ping
 name	/man/8/plumber
 name	/man/8/rdbgsrv
-name	/man/8/register
 name	/man/8/rstyxd
 name	/man/8/shutdown
 name	/man/8/signer
@@ -43182,7 +43066,6 @@ named	/man/4/registry
 named	/man/6/man
 named	/man/8/format
 named	/man/8/getauthinfo
-named	/man/8/register
 named	/man/8/styxchat
 namedimage	/man/2/draw-display
 namedimage	/man/2/draw-image
@@ -43535,7 +43418,6 @@ needed	/man/5/0intro
 needed	/man/5/clunk
 needed	/man/5/flush
 needed	/man/8/kfscmd
-needed	/man/8/register
 needfile	/man/10/styxserver
 needlessly	/man/10/dev
 needs	/man/1/acme
@@ -44319,7 +44201,6 @@ no	/man/8/mkfs
 no	/man/8/ping
 no	/man/8/plumber
 no	/man/8/rdbgsrv
-no	/man/8/register
 no	/man/8/styxchat
 no	/man/9/1copyright
 noaddr	/man/2/ip
@@ -44459,7 +44340,6 @@ non	/man/6/sexprs
 non	/man/6/utf
 non	/man/8/create
 non	/man/8/kfscmd
-non	/man/8/register
 non	/man/8/srv
 non	/man/9/1copyright
 nonassoc	/man/1/yacc
@@ -44613,7 +44493,6 @@ normally	/man/6/utf
 normally	/man/8/cs
 normally	/man/8/dns
 normally	/man/8/logind
-normally	/man/8/manufacture
 normally	/man/8/plumber
 normally	/man/8/rstyxd
 normally	/man/8/srv
@@ -45242,7 +45121,6 @@ number	/man/6/sbl
 number	/man/6/users
 number	/man/8/applylog
 number	/man/8/kfscmd
-number	/man/8/manufacture
 number	/man/8/ping
 number	/man/8/rstyxd
 numbered	/man/1/Mail
@@ -45327,8 +45205,6 @@ numsize	/man/10/readnum
 nuova	/man/9/1copyright
 nvfs	/man/3/root
 nvfs	/man/4/namespace
-nvfs	/man/8/manufacture
-nvfs	/man/8/register
 nvr	/man/10/plan9.ini
 nw	/man/1/cp
 nwname	/man/10/styx
@@ -45462,7 +45338,6 @@ obtain	/man/2/sys-self
 obtain	/man/6/keys
 obtain	/man/6/sbl
 obtain	/man/8/getauthinfo
-obtain	/man/8/register
 obtain	/man/8/svc
 obtained	/man/1/charon
 obtained	/man/1/date
@@ -45492,13 +45367,11 @@ obtained	/man/4/lockfs
 obtained	/man/8/getauthinfo
 obtaining	/man/10/odbc
 obtaining	/man/2/security-0intro
-obtaining	/man/8/register
 obtains	/man/2/daytime
 obtains	/man/2/lock
 obtains	/man/2/security-0intro
 obtains	/man/2/styxservers
 obtains	/man/4/lockfs
-obtains	/man/8/register
 obvious	/man/1/Mail
 obvious	/man/1/charon
 obvious	/man/2/dis
@@ -45968,12 +45841,10 @@ of	/man/8/httpd
 of	/man/8/init
 of	/man/8/kfscmd
 of	/man/8/logind
-of	/man/8/manufacture
 of	/man/8/mkfs
 of	/man/8/ping
 of	/man/8/plumber
 of	/man/8/rdbgsrv
-of	/man/8/register
 of	/man/8/rstyxd
 of	/man/8/signer
 of	/man/8/srv
@@ -46456,7 +46327,6 @@ on	/man/8/mkfs
 on	/man/8/ping
 on	/man/8/plumber
 on	/man/8/rdbgsrv
-on	/man/8/register
 on	/man/8/rstyxd
 on	/man/8/signer
 on	/man/8/srv
@@ -46517,7 +46387,6 @@ once	/man/6/image
 once	/man/6/keys
 once	/man/8/cs
 once	/man/8/rdbgsrv
-once	/man/8/register
 once	/man/8/srv
 once	/man/8/svc
 one	/man/1/0intro
@@ -46897,7 +46766,6 @@ only	/man/8/httpd
 only	/man/8/kfscmd
 only	/man/8/mkfs
 only	/man/8/ping
-only	/man/8/register
 only	/man/8/svc
 only	/man/9/1copyright
 onodetype	/man/2/w3c-xpointers
@@ -47800,7 +47668,6 @@ or	/man/8/getauthinfo
 or	/man/8/init
 or	/man/8/mkfs
 or	/man/8/plumber
-or	/man/8/register
 or	/man/8/rstyxd
 or	/man/8/shutdown
 or	/man/8/signer
@@ -49368,7 +49235,6 @@ party	/man/2/keyring-auth
 party	/man/2/security-0intro
 party	/man/3/ip
 party	/man/6/login
-party	/man/8/register
 party	/man/9/1copyright
 pass	/man/1/fs
 pass	/man/1/p
@@ -49896,7 +49762,6 @@ performed	/man/2/styxservers
 performed	/man/2/sys-fversion
 performed	/man/3/draw
 performed	/man/4/lockfs
-performed	/man/8/register
 performs	/man/1/gzip
 performs	/man/1/sh-expr
 performs	/man/1/sh-std
@@ -50051,7 +49916,6 @@ pg	/man/6/keyboard
 pgrp	/man/2/debug
 pgrp	/man/3/prog
 pgrps	/man/2/sys-0intro
-phases	/man/8/register
 phi	/man/1/mc
 phi	/man/2/draw-image
 phi	/man/3/draw
@@ -51196,7 +51060,6 @@ pp	/man/8/mkfs
 pp	/man/8/ping
 pp	/man/8/plumber
 pp	/man/8/rdbgsrv
-pp	/man/8/register
 pp	/man/8/rstyxd
 pp	/man/8/shutdown
 pp	/man/8/signer
@@ -51523,7 +51386,6 @@ previously	/man/6/sbl
 previously	/man/8/createsignerkey
 previously	/man/8/format
 previously	/man/8/getauthinfo
-previously	/man/8/register
 previously	/man/8/signer
 prf	/man/1/cprof
 prf	/man/2/prof
@@ -51951,7 +51813,6 @@ process	/man/5/flush
 process	/man/5/open
 process	/man/6/login
 process	/man/8/cs
-process	/man/8/register
 processed	/man/1/charon
 processed	/man/1/man
 processed	/man/1/mk
@@ -53281,7 +53142,6 @@ random	/man/3/cons
 random	/man/4/acme
 random	/man/6/auth
 random	/man/6/login
-random	/man/8/register
 random	/man/8/signer
 randombuf	/man/2/security-random
 randomint	/man/2/security-random
@@ -53977,7 +53837,6 @@ real	/man/3/cmd
 real	/man/3/fs
 real	/man/6/dis
 real	/man/6/sbl
-real	/man/8/manufacture
 real32	/man/2/math-export
 reality	/man/1/charon
 realloc	/man/10/malloc
@@ -54076,7 +53935,6 @@ received	/man/3/prog
 received	/man/5/flush
 received	/man/5/version
 received	/man/6/auth
-received	/man/8/register
 received	/man/8/styxmon
 receiver	/man/2/security-0intro
 receives	/man/1/acme
@@ -54614,8 +54472,6 @@ register	/man/3/dbg
 register	/man/4/cpu
 register	/man/4/registry
 register	/man/6/dis
-register	/man/8/manufacture
-register	/man/8/register
 register	/man/8/signer
 registered	/man/1/grid-register
 registered	/man/1/passwd
@@ -55145,7 +55001,6 @@ reports	/man/10/styx
 reports	/man/2/complete
 reports	/man/3/cons
 reports	/man/5/read
-repository	/man/8/register
 repository	/man/8/signer
 represent	/man/1/acme
 represent	/man/1/fs
@@ -56649,8 +56504,6 @@ role	/man/6/login
 rollback	/man/10/odbc
 rolled	/man/1/0intro
 rom	/man/3/sd
-rom	/man/8/manufacture
-rom	/man/8/register
 roman	/man/1/grep
 roman	/man/6/man
 rook	/man/6/keyboard
@@ -56890,8 +56743,6 @@ rstyxd	/man/8/svc
 rt	/man/1/emu
 rt	/man/2/dis
 rt	/man/3/sign
-rtc	/man/8/manufacture
-rtcid	/man/8/manufacture
 rtl8139	/man/10/plan9.ini
 rts	/man/3/eia
 rule	/man/1/acme
@@ -57068,7 +56919,6 @@ running	/man/6/plumbing
 running	/man/8/createsignerkey
 running	/man/8/dns
 running	/man/8/rdbgsrv
-running	/man/8/register
 running	/man/8/signer
 running	/man/8/svc
 runpipeline	/man/1/stack
@@ -57098,7 +56948,6 @@ runs	/man/3/ip
 runs	/man/4/dbfs
 runs	/man/6/keys
 runs	/man/8/getauthinfo
-runs	/man/8/register
 runs	/man/8/svc
 runsbuiltin	/man/2/sh
 runt	/man/2/sys-byte2char
@@ -57379,7 +57228,6 @@ s	/man/8/mkfs
 s	/man/8/ping
 s	/man/8/plumber
 s	/man/8/rdbgsrv
-s	/man/8/register
 s	/man/8/rstyxd
 s	/man/8/signer
 s	/man/8/srv
@@ -57562,7 +57410,6 @@ same	/man/8/create
 same	/man/8/cs
 same	/man/8/getauthinfo
 same	/man/8/rdbgsrv
-same	/man/8/register
 same	/man/8/shutdown
 same	/man/8/signer
 same	/man/8/styxchat
@@ -57617,7 +57464,6 @@ saved	/man/10/intrenable
 saved	/man/2/bufio-chanfill
 saved	/man/2/prof
 saved	/man/3/dbg
-saved	/man/8/register
 saves	/man/10/qio
 saves	/man/3/ip
 saves	/man/8/signer
@@ -57998,7 +57844,6 @@ secure	/man/3/ssl
 secure	/man/6/login
 secure	/man/8/getauthinfo
 secure	/man/8/logind
-secure	/man/8/register
 secure	/man/8/signer
 secured	/man/3/sign
 securely	/man/2/keyring-0intro
@@ -58373,12 +58218,10 @@ see	/man/8/httpd
 see	/man/8/init
 see	/man/8/kfscmd
 see	/man/8/logind
-see	/man/8/manufacture
 see	/man/8/mkfs
 see	/man/8/ping
 see	/man/8/plumber
 see	/man/8/rdbgsrv
-see	/man/8/register
 see	/man/8/rstyxd
 see	/man/8/shutdown
 see	/man/8/signer
@@ -58697,7 +58540,6 @@ sent	/man/5/version
 sent	/man/6/login
 sent	/man/8/httpd
 sent	/man/8/plumber
-sent	/man/8/register
 sent	/man/8/signer
 sent	/man/8/styxchat
 sent	/man/8/styxmon
@@ -58888,7 +58730,6 @@ serial	/man/3/dbg
 serial	/man/3/eia
 serial	/man/3/ip
 serial	/man/4/export
-serial	/man/8/manufacture
 serial	/man/8/rdbgsrv
 serial0	/man/10/plan9.ini
 serialise	/man/10/qlock
@@ -59155,7 +58996,6 @@ services	/man/8/0intro
 services	/man/8/cs
 services	/man/8/getauthinfo
 services	/man/8/httpd
-services	/man/8/register
 services	/man/8/rstyxd
 services	/man/8/srv
 services	/man/8/svc
@@ -59329,8 +59169,6 @@ set	/man/8/createsignerkey
 set	/man/8/format
 set	/man/8/getauthinfo
 set	/man/8/httpd
-set	/man/8/manufacture
-set	/man/8/register
 set	/man/8/signer
 set	/man/8/srv
 setalpha	/man/2/draw-0intro
@@ -59491,7 +59329,6 @@ several	/man/6/attrdb
 several	/man/6/dis
 several	/man/6/keyboard
 several	/man/8/rdbgsrv
-several	/man/8/register
 several	/man/8/svc
 severity	/man/1/sh-test
 sexp	/man/1/sh-sexprs
@@ -59887,12 +59724,10 @@ sh	/man/8/httpd
 sh	/man/8/init
 sh	/man/8/kfscmd
 sh	/man/8/logind
-sh	/man/8/manufacture
 sh	/man/8/mkfs
 sh	/man/8/ping
 sh	/man/8/plumber
 sh	/man/8/rdbgsrv
-sh	/man/8/register
 sh	/man/8/rstyxd
 sh	/man/8/shutdown
 sh	/man/8/signer
@@ -60224,7 +60059,6 @@ shown	/man/4/cpu
 shown	/man/4/kfs
 shown	/man/6/sexprs
 shown	/man/8/create
-shown	/man/8/register
 showprogress	/man/1/charon
 shows	/man/1/cprof
 shows	/man/1/deb
@@ -60310,7 +60144,6 @@ sign	/man/3/sign
 sign	/man/6/keyboard
 sign	/man/6/keys
 sign	/man/6/sbl
-sign	/man/8/register
 signal	/man/10/dev
 signal	/man/10/intrenable
 signal	/man/3/eia
@@ -60375,7 +60208,6 @@ signer	/man/8/createsignerkey
 signer	/man/8/cs
 signer	/man/8/getauthinfo
 signer	/man/8/logind
-signer	/man/8/register
 signer	/man/8/signer
 signer	/man/8/srv
 signer	/man/8/svc
@@ -60421,7 +60253,6 @@ signing	/man/6/sexprs
 signing	/man/8/changelogin
 signing	/man/8/getauthinfo
 signing	/man/8/logind
-signing	/man/8/register
 signing	/man/8/signer
 signing	/man/8/svc
 signof	/man/10/dynld
@@ -60475,7 +60306,6 @@ similar	/man/4/dossrv
 similar	/man/4/registry
 similar	/man/6/sbl
 similar	/man/6/sexprs
-similar	/man/8/register
 similarly	/man/1/acme
 similarly	/man/1/diff
 similarly	/man/1/sh-tk
@@ -60731,7 +60561,6 @@ site	/man/4/ftpfs
 site	/man/6/ndb
 site	/man/8/cs
 site	/man/8/getauthinfo
-site	/man/8/register
 site	/man/8/svc
 situation	/man/1/charon
 situation	/man/5/0intro
@@ -61582,12 +61411,10 @@ source	/man/8/httpd
 source	/man/8/init
 source	/man/8/kfscmd
 source	/man/8/logind
-source	/man/8/manufacture
 source	/man/8/mkfs
 source	/man/8/ping
 source	/man/8/plumber
 source	/man/8/rdbgsrv
-source	/man/8/register
 source	/man/8/rstyxd
 source	/man/8/shutdown
 source	/man/8/signer
@@ -62891,7 +62718,6 @@ step	/man/2/security-0intro
 step	/man/2/sys-0intro
 step	/man/2/w3c-xpointers
 step	/man/3/prog
-step	/man/8/register
 stepexp	/man/2/debug
 stepout	/man/2/debug
 stepover	/man/2/debug
@@ -63332,7 +63158,6 @@ string	/man/6/sbl
 string	/man/6/sexprs
 string	/man/8/changelogin
 string	/man/8/logind
-string	/man/8/manufacture
 string	/man/8/rstyxd
 string	/man/8/styxchat
 string1	/man/1/tr
@@ -63938,7 +63763,6 @@ successful	/man/5/stat
 successful	/man/5/version
 successful	/man/5/walk
 successful	/man/8/applylog
-successful	/man/8/register
 successful	/man/8/rstyxd
 successful	/man/8/styxchat
 successfully	/man/1/mkdir
@@ -64792,12 +64616,10 @@ synopsis	/man/8/httpd
 synopsis	/man/8/init
 synopsis	/man/8/kfscmd
 synopsis	/man/8/logind
-synopsis	/man/8/manufacture
 synopsis	/man/8/mkfs
 synopsis	/man/8/ping
 synopsis	/man/8/plumber
 synopsis	/man/8/rdbgsrv
-synopsis	/man/8/register
 synopsis	/man/8/rstyxd
 synopsis	/man/8/shutdown
 synopsis	/man/8/signer
@@ -65677,7 +65499,6 @@ tedious	/man/2/styxservers
 tee	/man/1/tee
 tel	/man/6/attrdb
 telephone	/man/2/keyring-0intro
-telephone	/man/8/register
 telephone	/man/8/signer
 telephones	/man/2/security-0intro
 telephony	/man/10/kproc
@@ -65699,7 +65520,6 @@ tells	/man/2/draw-image
 tells	/man/2/security-auth
 tells	/man/2/venti
 tells	/man/2/wmlib
-tells	/man/8/register
 telnet	/man/1/telnet
 temp	/man/10/plan9.ini
 tempfile	/man/2/diskblocks
@@ -65949,7 +65769,6 @@ textual	/man/4/acme
 textual	/man/5/0intro
 textual	/man/6/image
 textual	/man/6/utf
-textual	/man/8/register
 textual	/man/8/styxchat
 textually	/man/1/acme
 textually	/man/2/ip
@@ -66034,11 +65853,9 @@ tf	/man/8/dns
 tf	/man/8/getauthinfo
 tf	/man/8/httpd
 tf	/man/8/logind
-tf	/man/8/manufacture
 tf	/man/8/mkfs
 tf	/man/8/plumber
 tf	/man/8/rdbgsrv
-tf	/man/8/register
 tf	/man/8/rstyxd
 tf	/man/8/signer
 tf	/man/8/svc
@@ -66428,12 +66245,10 @@ th	/man/8/httpd
 th	/man/8/init
 th	/man/8/kfscmd
 th	/man/8/logind
-th	/man/8/manufacture
 th	/man/8/mkfs
 th	/man/8/ping
 th	/man/8/plumber
 th	/man/8/rdbgsrv
-th	/man/8/register
 th	/man/8/rstyxd
 th	/man/8/shutdown
 th	/man/8/signer
@@ -66845,12 +66660,10 @@ that	/man/8/getauthinfo
 that	/man/8/httpd
 that	/man/8/kfscmd
 that	/man/8/logind
-that	/man/8/manufacture
 that	/man/8/mkfs
 that	/man/8/ping
 that	/man/8/plumber
 that	/man/8/rdbgsrv
-that	/man/8/register
 that	/man/8/rstyxd
 that	/man/8/signer
 that	/man/8/srv
@@ -67235,12 +67048,10 @@ the	/man/8/httpd
 the	/man/8/init
 the	/man/8/kfscmd
 the	/man/8/logind
-the	/man/8/manufacture
 the	/man/8/mkfs
 the	/man/8/ping
 the	/man/8/plumber
 the	/man/8/rdbgsrv
-the	/man/8/register
 the	/man/8/rstyxd
 the	/man/8/shutdown
 the	/man/8/signer
@@ -67501,7 +67312,6 @@ then	/man/8/getauthinfo
 then	/man/8/mkfs
 then	/man/8/plumber
 then	/man/8/rdbgsrv
-then	/man/8/register
 then	/man/8/signer
 then	/man/8/srv
 then	/man/8/styxchat
@@ -67644,7 +67454,6 @@ there	/man/8/applylog
 there	/man/8/createsignerkey
 there	/man/8/cs
 there	/man/8/getauthinfo
-there	/man/8/register
 thereby	/man/1/acme
 thereby	/man/10/kproc
 thereby	/man/3/srv
@@ -68055,7 +67864,6 @@ this	/man/8/format
 this	/man/8/kfscmd
 this	/man/8/logind
 this	/man/8/mkfs
-this	/man/8/register
 this	/man/8/srv
 this	/man/8/styxchat
 this	/man/9/0intro
@@ -68863,12 +68671,10 @@ to	/man/8/httpd
 to	/man/8/init
 to	/man/8/kfscmd
 to	/man/8/logind
-to	/man/8/manufacture
 to	/man/8/mkfs
 to	/man/8/ping
 to	/man/8/plumber
 to	/man/8/rdbgsrv
-to	/man/8/register
 to	/man/8/rstyxd
 to	/man/8/signer
 to	/man/8/srv
@@ -68991,8 +68797,6 @@ top	/man/3/ssl
 top	/man/5/0intro
 top	/man/6/dis
 top	/man/6/font
-top	/man/8/manufacture
-top	/man/8/register
 top	/man/8/signer
 topconfig	/man/2/tkclient
 topen	/man/10/styx
@@ -69218,12 +69022,10 @@ tp	/man/8/getauthinfo
 tp	/man/8/httpd
 tp	/man/8/kfscmd
 tp	/man/8/logind
-tp	/man/8/manufacture
 tp	/man/8/mkfs
 tp	/man/8/ping
 tp	/man/8/plumber
 tp	/man/8/rdbgsrv
-tp	/man/8/register
 tp	/man/8/rstyxd
 tp	/man/8/signer
 tp	/man/8/svc
@@ -70280,7 +70082,6 @@ unavailable	/man/10/malloc
 unavailable	/man/10/qlock
 unaware	/man/2/sys-0intro
 unbind	/man/3/ip
-unblind	/man/8/register
 unblinded	/man/8/signer
 unblock	/man/1/dd
 unblocked	/man/3/prog
@@ -70745,7 +70546,6 @@ unsuitable	/man/10/allocb
 unsup	/man/3/dbg
 unsupported	/man/3/dbg
 untapped	/man/2/security-0intro
-untapped	/man/8/register
 untask	/man/1/wm
 until	/man/1/deb
 until	/man/1/emu
@@ -71164,7 +70964,6 @@ use	/man/8/kfscmd
 use	/man/8/mkfs
 use	/man/8/plumber
 use	/man/8/rdbgsrv
-use	/man/8/register
 use	/man/8/rstyxd
 use	/man/8/styxchat
 use	/man/9/1copyright
@@ -71355,9 +71154,7 @@ used	/man/8/httpd
 used	/man/8/init
 used	/man/8/kfscmd
 used	/man/8/logind
-used	/man/8/manufacture
 used	/man/8/mkfs
-used	/man/8/register
 used	/man/8/rstyxd
 used	/man/8/srv
 used	/man/8/svc
@@ -71493,7 +71290,6 @@ user	/man/8/getauthinfo
 user	/man/8/httpd
 user	/man/8/kfscmd
 user	/man/8/plumber
-user	/man/8/register
 user	/man/8/rstyxd
 user	/man/8/signer
 user	/man/8/svc
@@ -72019,7 +71815,6 @@ validity	/man/2/styxservers
 validity	/man/2/sys-byte2char
 validlt	/man/2/ip
 validly	/man/10/styx
-validly	/man/8/register
 value	/man/1/acme
 value	/man/1/charon
 value	/man/1/cprof
@@ -72483,7 +72278,6 @@ verify	/man/2/sys-open
 verify	/man/6/auth
 verify	/man/6/keys
 verify	/man/8/createsignerkey
-verify	/man/8/register
 verify	/man/8/signer
 verifying	/man/2/security-0intro
 vers	/man/10/newchan
@@ -72724,7 +72518,6 @@ void	/man/10/styxserver
 void	/man/10/xalloc
 void	/man/6/colour
 volatile	/man/4/namespace
-volatile	/man/8/register
 voldn	/man/2/volume
 volume	/man/1/0intro
 volume	/man/1/acme
@@ -72984,7 +72777,6 @@ was	/man/6/sbl
 was	/man/8/applylog
 was	/man/8/create
 was	/man/8/kfscmd
-was	/man/8/register
 was	/man/8/signer
 was	/man/9/1copyright
 waserror	/man/10/error
@@ -73678,7 +73470,6 @@ which	/man/8/kfscmd
 which	/man/8/logind
 which	/man/8/ping
 which	/man/8/plumber
-which	/man/8/register
 which	/man/8/rstyxd
 which	/man/8/srv
 which	/man/8/styxmon
@@ -74440,12 +74231,10 @@ with	/man/8/getauthinfo
 with	/man/8/httpd
 with	/man/8/kfscmd
 with	/man/8/logind
-with	/man/8/manufacture
 with	/man/8/mkfs
 with	/man/8/ping
 with	/man/8/plumber
 with	/man/8/rdbgsrv
-with	/man/8/register
 with	/man/8/rstyxd
 with	/man/8/signer
 with	/man/8/srv
@@ -74774,7 +74563,6 @@ would	/man/5/error
 would	/man/6/colour
 would	/man/8/applylog
 would	/man/8/create
-would	/man/8/manufacture
 would	/man/8/styxchat
 wp	/man/10/allocb
 wqid	/man/10/styx

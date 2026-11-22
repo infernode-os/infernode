@@ -27,7 +27,6 @@ osinit osinit
 ping ping
 plumber plumber
 rdbgsrv rdbgsrv
-register register
 dsagen rsagen
 rsagen rsagen
 rstyxd rstyxd

@@ -1954,11 +1954,11 @@ finishshade()
 				mx = m[i];
 		}
 		if(mx < 40){
-			shadenote = sprintnote("refused:dark=%d", mx);	# above black at its brightest
+			shadenote = sys->sprint("refused:dark=%d", mx);	# above black at its brightest
 			return;
 		}
 		if(mx > 1023-Black-60){
-			shadenote = sprintnote("refused:clipped=%d", mx);
+			shadenote = sys->sprint("refused:clipped=%d", mx);
 			return;
 		}
 		for(i = 0; i < n; i++){
@@ -1972,16 +1972,11 @@ finishshade()
 	}
 	e := saveshade(t);
 	shadetab = t;
-	shadenote = sprintnote("learnt:darkest=%d%%", lo*100/1024);	# of the brightest
+	shadenote = sys->sprint("learnt:darkest=%d%%", lo*100/1024);	# of the brightest
 	if(e != nil){
 		sys->fprint(sys->fildes(2), "camsrv: shade: %s\n", e);
 		shadenote += ",notsaved";
 	}
-}
-
-sprintnote(f: string, v: int): string
-{
-	return sys->sprint(f, v);
 }
 
 saveshade(t: array of int): string

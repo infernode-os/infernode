@@ -9,6 +9,7 @@
 #include "isa.h"
 #include "runt.h"
 #include "raise.h"
+#include "kernel.h"
 #include "flowif.h"
 #include "flowmod.h"
 
@@ -131,4 +132,53 @@ Flow_sweep(void *fp)
 	if(((uintptr)f->out->data & 7) != 0)
 		error(exBounds);
 	*f->ret = flowsweep(t, f->now, (Flowent*)f->out->data, f->out->len/sizeof(Flowent));
+}
+
+/*
+ * The loop that moves frames, for the flows already judged. The VM is
+ * let go for each read and write, as Sys->read and Sys->write let it
+ * go, and held for the table, which other Limbo threads share.
+ */
+void
+Flow_run(void *fp)
+{
+	F_Flow_run *f;
+	Flowtab *t;
+	Flowent *e;
+	Flowkey k;
+	uchar *buf;
+	long n;
+	int i, dir, blen;
+
+	f = fp;
+	table(f->tab);
+	if(f->buf == H)
+		error(exNilref);
+	buf = f->buf->data;
+	blen = f->buf->len;
+	for(i = 0; i < f->max; i++){
+		release();
+		n = kread(f->in, buf, blen);
+		acquire();
+		if(n <= 0){
+			*f->ret = -1;
+			return;
+		}
+		if(flowkey(buf, n, &k, &dir) != Kok){
+			*f->ret = n;
+			return;
+		}
+		t = table(f->tab);	/* again: it was anyone's while the VM was let go */
+		e = flowlookup(t, &k, dir, n, f->now);
+		if(e == nil || (e->verdict != Fpass && e->verdict != Fdrop)){
+			*f->ret = n;
+			return;
+		}
+		if(e->verdict == Fpass){
+			release();
+			kwrite(f->out, buf, n);
+			acquire();
+		}
+	}
+	*f->ret = 0;
 }

@@ -2322,6 +2322,22 @@ hasaddress(ifcno: string): int
 	return 0;
 }
 
+# an interface's first address, from its status's lines after the
+# first ("\t192.168.1.153 /120 ..."), or "none"
+ifcaddr(ifcno: string): string
+{
+	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
+	(nil, lines) := sys->tokenize(st, "\n");
+	if(lines == nil)
+		return "none";
+	for(lines = tl lines; lines != nil; lines = tl lines){
+		(n, w) := sys->tokenize(hd lines, " \t");
+		if(n >= 1)
+			return hd w;
+	}
+	return "none";
+}
+
 associated(): int
 {
 	(st, nil) := slurp("/net/ether1/ifstats");
@@ -2456,8 +2472,13 @@ wifiaddr(): string
 		while(!wifidhcp(ifcno))
 			sys->sleep(30*1000);
 	}
-	(ndb, nil) := slurp("/net/ndb");
-	sys->print("init: wifi: %s\n", ndb);
+	#
+	# The interface's own address, from its status. This printed
+	# /net/ndb, which is the last DHCP client's: on a board with
+	# Ethernet too it said the wired address (a Pi 5: "ip=192.168.1.100"
+	# for a radio given 192.168.1.153).
+	#
+	sys->print("init: wifi: address %s\n", ifcaddr(ifcno));
 	return ifcno;
 }
 

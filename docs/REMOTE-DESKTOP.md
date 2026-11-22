@@ -121,7 +121,7 @@ it boots:
 
 ```
 etherusb: DHCP gave 192.168.1.50 mask 255.255.255.0
-init: wifi: ip=192.168.4.23 ipmask=255.255.255.0 ipgw=192.168.4.1
+init: wifi: address 192.168.4.23
 ```
 
 The first is the wired port, the second the Wi-Fi. Your router's list

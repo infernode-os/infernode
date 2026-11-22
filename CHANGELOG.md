@@ -18,6 +18,54 @@ All notable changes to InferNode are documented in this file.
   `os_list_infernode.json` has a Pi 5 item (`pi5-64bit`) beside the
   3B+ and 4B.
 
+### Security
+
+- **The security review's second round: what the first left, closed.**
+  The fixes and their tests are in `CLAUDE.md`'s table. What is not
+  compatible with 0.11.0:
+  - **One 9P library.** `Ninep` (`ninep.b`, `9p.m`) is gone: it was
+    Styx under another name, and only tests loaded it. Styx takes its
+    names: `Styx->MAXRPC` is `DEFMSIZE`, `Styx->MAXFDATA` is
+    `DEFIOUNIT`; `Styx->write` and `PATHV1` are gone.
+  - **Plan 9's authentication is removed.** p9sk1 needs DES, which went
+    in 0.11.0, so it could run nowhere: `auth9`, `oldauth`, factotum's
+    `p9any` and `crypt.m` are gone, factotum refuses those protocols
+    with the reason, and `import`, and `9export` without `-A`, stop
+    with a message.
+  - **Ciphers removed from Keyring:** the DES, IDEA, Blowfish and MD4
+    functions, with `idea(1)` and `netkey(1)`. A certificate whose hash
+    is `md4` is refused. RC4 stays for old PDFs.
+  - **Keys.** An RSA key with an even modulus or an exponent past 256
+    bits is refused. In CNSA mode a key file that is not the mode's
+    authenticates nobody, and both ends need this build.
+  - **Listeners.** `listen -M` and `styxlisten -M` are usage errors
+    (nothing is mixed now that the client's choice is confirmed); `-A`
+    with `-a` is refused; `listen -A` forks its name space.
+  - **Daemons removed:** `bootpd`, `tftpd`, `rip`, `virgild`, with
+    tftp(2), virgil(2) and ether(2). None could be run safely and
+    nothing used them.
+  - **Registry:** a `persist` service expires a day after its owner
+    last wrote it (`-t 0` keeps it); services, attributes and filters
+    are counted and bounded.
+  - **Time:** `ip/sntp` and the native boot's SNTP will not step a
+    clock already set by more than a day (`sntp -m`).
+  - **Mail:** the IMAP password is not sent to a guessed `smtp.` host:
+    give a `service=smtp` key or name the host. `Imap->Mailbox`'s
+    `uidvalidity` is a big.
+  - **Payments:** `x402->authorize` withdraws a request not approved in
+    its wait and returns an error; an RPC URL is https, or http to the
+    loopback; `Ethrpc`'s receipt functions, which had no caller, are
+    gone.
+  - **Feeds:** hostplumb takes `host=` messages only from hosts named
+    with `-h`; vision(4)'s session files belong to whoever made the
+    session; GDL 90 ids for addresses that are not ICAO's are
+    `kind.hex`; a GGA whose quality is outside 1 to 8 is no fix; an sdg
+    session ends at 2^60 packets.
+  - **wikifs:** a page keeps 10000 versions and 16MB of history at
+    most; titles httpd would not serve by name are refused.
+  - **ftpfs:** a mount ends in errors after `-t` seconds of silence
+    (120).
+
 ## [0.11.0] - 2026-11-19
 
 ### Added

@@ -48,3 +48,4 @@ styx svc
 svc svc
 wpa wpa
 timesync timesync
+sdgsrv sdgsrv

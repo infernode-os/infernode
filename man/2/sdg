@@ -132,8 +132,21 @@ A flushed request is kept until its
 arrives, so a reply that comes first is still delivered, as 9P allows.
 Under a handshake flood the server answers with a cookie, which
 .B relay
-uses at once.
+uses at once, three times in one connection attempt; after that a
+cookie is kept for the next try, which comes at the tries' own pace
+(anyone on the path who has the server's public key can send a cookie).
+Of the responses to one try, eight are looked at.
+.PP
+A session is not rekeyed: the protocol has no rekey, and its keys last
+as long as the mount.
+A mount made again is a new handshake with new keys.
+A session that has sent or received 2^60 packets sends and takes no
+more.
+The responder's session index is not covered by the handshake's hash:
+one on the path who changes it gets a session that carries nothing, as
+it would by dropping the packets.
 .SH SOURCE
 .B /appl/lib/sdg.b
 .SH SEE ALSO
-.IR brick (1)
+.IR brick (1),
+.IR sdgsrv (8)

@@ -70,6 +70,22 @@ All notable changes to InferNode are documented in this file.
     most; titles httpd would not serve by name are refused.
   - **ftpfs:** a mount ends in errors after `-t` seconds of silence
     (120).
+  - **Exports:** `sys->export` refuses a flag bit no flag has (it was
+    ignored); `Sys->EXPREADONLY` makes an export refuse every change,
+    and `post -r` posts a directory with it; `post` refuses a spec that
+    begins with `-`.
+  - **Revocation lists:** a CRL is consulted only for what its own
+    issuer issued, and must be signed by that issuer. A chain that
+    failed only because of another CA's CRL now verifies; an unsigned
+    CRL in `/lib/crls` refuses its issuer's paths where it revoked by
+    name; httpd's `-A` takes an intermediate's CRL.
+  - **The agent's vision tool** is given the models and one session of
+    its own, not `/mnt/vision`: no `ctl`, no `clone`, no other session.
+  - **Faster again on x86-64:** AES and GHASH use the processor's AES
+    and PCLMULQDQ instructions where it has them (AES-256-GCM in the
+    emulator from 71 to 2770 MB/s here); the constant-time C runs
+    elsewhere, and on Windows. Ed25519 keys and signatures are made in
+    constant time; signatures are unchanged.
 
 ## [0.11.0] - 2026-11-19
 

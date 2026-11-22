@@ -25,7 +25,6 @@ acme/dis/win.dis
 acme/dis/winm.dis
 dis/2fa.dis
 dis/9660srv.dis
-dis/9cpu.dis
 dis/9export.dis
 dis/9win.dis
 dis/acme.dis
@@ -1336,3 +1335,6 @@ dis/tests/feed_flush_test.dis
 dis/tests/cnsa_auth_test.dis
 dis/tests/keyring_noresult_test.dis
 dis/tests/keyring_rsapub_test.dis
+dis/tests/file2chan_close_test.dis
+dis/tests/export_readonly_test.dis
+dis/tests/vision_capability_test.dis

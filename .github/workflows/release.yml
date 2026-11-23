@@ -1654,6 +1654,10 @@ jobs:
       shell: pwsh
       run: |
         $version = ("${{ github.ref_name }}" -replace '^v','') -replace '/','-'
+        # A manual run on a branch has no version; give it a numeric one, as
+        # emu\Nt\build-launcher.ps1 reads "InferNode N.N" from version.h for
+        # the launchers' VERSIONINFO and fails on "InferNode fix-...".
+        if ("${{ github.ref_type }}" -ne "tag") { $version = "0.0.0-$version" }
         echo "version=$version" >> $env:GITHUB_OUTPUT
 
     - name: Install build dependencies (win_bison via choco)

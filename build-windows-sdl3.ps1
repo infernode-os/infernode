@@ -523,3 +523,8 @@ if (Test-Path $emuPath) {
 }
 
 Write-Host ""
+
+# Explicit exit, as build-windows-amd64.ps1 does: otherwise the last native
+# command's $LASTEXITCODE (a launcher build reported above as only a warning,
+# or cl/link warnings) leaks out as the script's own and fails CI.
+if (Test-Path "$ROOT\emu\Nt\o.emu.exe") { exit 0 } else { exit 1 }

@@ -53,7 +53,7 @@ static char nullstring[] = "";
 /*
  * A wstat leaves mode, atime and mtime alone by sending ~0 in their
  * 32 bits. Where ulong is wider than that, keep it ~0 in the whole
- * ulong, or the ~0 and ~0UL tests that look for it never match.
+ * ulong, or the ~0 and ~(ulong)0 tests that look for it never match.
  */
 static ulong
 gbit32dontcare(uchar *p)
@@ -62,7 +62,7 @@ gbit32dontcare(uchar *p)
 
 	v = GBIT32(p);
 	if(v == 0xFFFFFFFFUL)
-		return ~0UL;
+		return ~(ulong)0;	/* not ~0UL: an unsigned long is 32 bits on Windows (LLP64) */
 	return v;
 }
 

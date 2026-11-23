@@ -72,7 +72,7 @@ struct Mntalloc
 	int	nrpcfree;
 	int	nrpcused;
 	ulong	id;
-	ulong	tagmask[NMASK];
+	u32int	tagmask[NMASK];	/* 32 tags a word, whatever a ulong is */
 }mntalloc;
 
 static char Enofit[] = "request does not fit the server's message size";
@@ -1426,15 +1426,15 @@ static int
 alloctag(void)
 {
 	int i, j;
-	ulong v;
+	u32int v;
 
 	for(i = 0; i < NMASK; i++){
 		v = mntalloc.tagmask[i];
-		if(v == ~0UL)
+		if(v == ~(u32int)0)
 			continue;
 		for(j = 0; j < 1<<TAGSHIFT; j++)
-			if((v & (1<<j)) == 0){
-				mntalloc.tagmask[i] |= 1<<j;
+			if((v & ((u32int)1<<j)) == 0){
+				mntalloc.tagmask[i] |= (u32int)1<<j;
 				return (i<<TAGSHIFT) + j;
 			}
 	}
@@ -1445,7 +1445,7 @@ alloctag(void)
 static void
 freetag(int t)
 {
-	mntalloc.tagmask[t>>TAGSHIFT] &= ~(1<<(t&TAGMASK));
+	mntalloc.tagmask[t>>TAGSHIFT] &= ~((u32int)1<<(t&TAGMASK));
 }
 
 Mntrpc*

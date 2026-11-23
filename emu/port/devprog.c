@@ -398,7 +398,7 @@ progwstat(Chan *c, uchar *db, int n)
 		release();
 		error(Eshortstat);
 	}
-	if(d.mode != ~0UL)
+	if(d.mode != ~(ulong)0)
 		o->pgrp->progmode = d.mode&0777;
 	release();
 	return n;

@@ -18,6 +18,17 @@ All notable changes to InferNode are documented in this file.
   `os_list_infernode.json` has a Pi 5 item (`pi5-64bit`) beside the
   3B+ and 4B.
 
+### Security
+
+- **`pctl(NEWNS)`: a relative ".." left the new root.** sys-pctl(2) makes
+  the current directory the root of the new name space. `/..` was held
+  there, but the new dot was a clone that kept the name dot had before,
+  with the mount points crossed on the way to it, so `../x` opened a file
+  of the directory above the root, `create` made one there, and
+  `chdir("..")` went there, with or without `NODEVS`. The new dot now has
+  a name of its own, as the new root has, in the hosted and the native
+  kernel. `pwd` after `pctl(NEWNS)` is `/`. `tests/newns_root_test.b`.
+
 ## [0.11.0] - 2026-11-19
 
 ### Added

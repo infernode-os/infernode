@@ -109,9 +109,13 @@ function Build {
     $lines += "powershell -NoProfile -ExecutionPolicy Bypass -File build-windows-amd64.ps1"
     $lines += "exit /b %ERRORLEVEL%"
     $lines | Set-Content -Path $cmdf -Encoding ASCII
+    Remove-Item -Force "$SRC\emu\Nt\o.emu.exe" -ErrorAction SilentlyContinue
     $p = Start-Process -FilePath cmd.exe -ArgumentList "/c", "`"$cmdf`"" -NoNewWindow -Wait -PassThru `
         -RedirectStandardOutput $log -RedirectStandardError "$log.err"
-    if ($p.ExitCode -ne 0 -or -not (Test-Path "$SRC\emu\Nt\o.emu.exe")) {
+    # The build script ends by building the Dis tree, which this copy
+    # (the C alone) has no appl for; the emulator it built before then
+    # is what is wanted, and it runs against the tree's own dis\.
+    if (-not (Test-Path "$SRC\emu\Nt\o.emu.exe")) {
         Get-Content $log -Tail 30
         throw "sanemu: build failed: $log"
     }

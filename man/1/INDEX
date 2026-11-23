@@ -59,7 +59,6 @@ grid-register grid-register
 register grid-register
 gunzip gzip
 gzip gzip
-idea idea
 keyboard keyboard
 broke kill
 kill kill
@@ -95,7 +94,6 @@ mk mk
 mkdir mkdir
 mprof mprof
 mv mv
-netkey netkey
 netstat netstat
 ns ns
 nsbuild nsbuild
@@ -237,3 +235,6 @@ vision vision
 vision/detect vision
 vision/draw vision
 vision/crop vision
+i420 i420
+topng topng
+tojpg topng

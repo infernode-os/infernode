@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Windows JIT regression suite — catches the two classes of JIT crash
+    Windows JIT regression suite - catches the two classes of JIT crash
     fixed in 2026-05-14.
 
 .DESCRIPTION
@@ -23,7 +23,7 @@
          scripts, reintroduces the bug.
 
     Each test runs a minimal JIT scenario that exercises the bug-prone
-    path and checks the exit code. cdb is NOT required — exit code is
+    path and checks the exit code. cdb is NOT required - exit code is
     sufficient to detect the regression. If a crash NTSTATUS comes back,
     the test fails with the decoded code.
 
@@ -72,7 +72,7 @@ function Test-JitCommand {
 
     Write-Host "TEST: $Name" -ForegroundColor Cyan
 
-    # Run o.emu with timeout — JIT tests must not hang on a daemon kproc.
+    # Run o.emu with timeout - JIT tests must not hang on a daemon kproc.
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "$Bundle\o.emu.exe"
     $psi.Arguments = "-c1 -r `"$Bundle`" sh -c `"$Cmd`""
@@ -141,14 +141,17 @@ function Test-JitCommand {
     }
 }
 
-# ── Preconditions ──────────────────────────────────────────────
+# -- Preconditions ----------------------------------------------
 if (-not (Test-Path "$Bundle\o.emu.exe")) {
     Write-Host "FAIL: no o.emu.exe at $Bundle. Run build-dev-bundle.ps1 first." -ForegroundColor Red
     exit 1
 }
 
-# Kill any stale emu from previous runs.
-Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Stop-Process -Force
+# Kill any stale emu from previous runs of this bundle.
+# Only this tree's emulators: a machine-wide Stop-Process -Name o.emu also
+# killed other checkouts' runs and a user's running InferNode (it was
+# the "intermittent" release smoke failure: exit 1, no output).
+Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$((Resolve-Path $Bundle).Path)\*" } | Stop-Process -Force
 
 Write-Host ""
 Write-Host "=== Windows JIT regression tests ===" -ForegroundColor Yellow
@@ -156,7 +159,7 @@ Write-Host "Bundle:  $Bundle"
 Write-Host "Timeout: ${TimeoutSec}s per test"
 Write-Host ""
 
-# ── INFR-46 regression: SEH unwind through JIT frames ──────────
+# -- INFR-46 regression: SEH unwind through JIT frames ----------
 #
 # `error()` -> `nexterror()` -> `longjmp()`. On Windows x64, longjmp
 # invokes `RtlUnwind`, which walks SEH frames between setjmp and
@@ -177,7 +180,7 @@ Test-JitCommand `
     -Cmd "load std; mount -ac {mntgen} /n >[2] /dev/null; echo OK" `
     -ExpectStdout "OK"
 
-# ── INFR-69 regression: Srv runtime frame layout ───────────────
+# -- INFR-69 regression: Srv runtime frame layout ---------------
 #
 # `srv->iph2a(name)` is the Limbo runtime entry point for hostname
 # resolution. If the JIT-resolvable Type for iph2a has the wrong
@@ -192,21 +195,21 @@ Test-JitCommand `
     -Cmd "load std; ndb/cs >[2] /dev/null & sleep 1; echo cs-ok" `
     -ExpectStdout "cs-ok"
 
-# ── General JIT smoke: trivial echo ────────────────────────────
+# -- General JIT smoke: trivial echo ----------------------------
 # Catches gross JIT init / vmachine breakage.
 Test-JitCommand `
     -Name "JIT smoke: trivial echo" `
     -Cmd "echo jit-ok" `
     -ExpectStdout "jit-ok"
 
-# ── JIT spawn: error path inside spawned proc ──────────────────
+# -- JIT spawn: error path inside spawned proc ------------------
 # Spawn + error() exercised the original SEH walk most reliably.
 Test-JitCommand `
     -Name "JIT spawn + error in child" `
     -Cmd "spawn { load /dis/nonexistent-NEVER-EXISTS.dis >[2] /dev/null }; sleep 1; echo spawn-ok" `
     -ExpectStdout "spawn-ok"
 
-# ── JIT compile of every std module ────────────────────────────
+# -- JIT compile of every std module ----------------------------
 # `load std` JIT-compiles ~15 modules. If the JIT codegen for any one
 # of them is broken (rel8 overflow, bad macret, etc.) this fails.
 Test-JitCommand `
@@ -214,8 +217,8 @@ Test-JitCommand `
     -Cmd "load std; load expr; load arg; load csv; load regex; echo loads-ok" `
     -ExpectStdout "loads-ok"
 
-# ── Cleanup ────────────────────────────────────────────────────
-Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Stop-Process -Force
+# -- Cleanup ----------------------------------------------------
+Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$((Resolve-Path $Bundle).Path)\*" } | Stop-Process -Force
 
 Write-Host ""
 Write-Host "=== Summary ===" -ForegroundColor Yellow

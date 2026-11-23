@@ -470,6 +470,15 @@ take(void)
 	s = (ushort*)u.buf[u.busy];
 	for(e = s + (ulong)u.w*u.h; s < e; s++)
 		*s >>= 6;
+	/*
+	 * And written back now. The shift leaves the frame's lines dirty in
+	 * the cache; RP1 then writes a new frame into this buffer, and the
+	 * write-back above, the next time it is taken, put the old frame's
+	 * dirty lines over the new one: runs of an earlier picture 32
+	 * samples a line long, which camsrv showed as short coloured dashes
+	 * (a Camera Module 2 on a Pi 5, the test video changing scene).
+	 */
+	cachedwbse(u.buf[u.busy], (ulong)u.w*2*u.h);
 }
 
 static int

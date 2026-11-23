@@ -153,23 +153,138 @@ extractheader(body, field: string): string
 	return "";
 }
 
+# The header lines of body, each with its continuation lines, as
+# (start, end) offsets: end is past the line's newline.
+headerlines(body: string): list of (int, int)
+{
+	out: list of (int, int);
+	start := 0;
+	while(start < len body) {
+		i := start;
+		while(i < len body && body[i] != '\n')
+			i++;
+		line := body[start:i];
+		if(len line > 0 && line[len line - 1] == '\r')
+			line = line[0:len line - 1];
+		if(line == "")
+			break;	# the header section has ended
+		if(i < len body)
+			i++;
+		# continuation lines begin with a blank
+		while(i < len body && (body[i] == ' ' || body[i] == '\t')) {
+			while(i < len body && body[i] != '\n')
+				i++;
+			if(i < len body)
+				i++;
+		}
+		out = (start, i) :: out;
+		start = i;
+	}
+	rev: list of (int, int);
+	for(; out != nil; out = tl out)
+		rev = hd out :: rev;
+	return rev;
+}
+
+isfield(h, field: string): int
+{
+	return len h >= len field && str->tolower(h[0:len field]) == str->tolower(field);
+}
+
+headerall(body, field: string): string
+{
+	ensureloaded();
+	all := "";
+	for(l := headerlines(body); l != nil; l = tl l) {
+		(s, e) := hd l;
+		h := body[s:e];
+		if(!isfield(h, field))
+			continue;
+		v := "";
+		for(i := len field; i < len h; i++)
+			if(h[i] != '\r' && h[i] != '\n')
+				v[len v] = h[i];
+		if(all != "")
+			all += ", ";
+		all += v;
+	}
+	return all;
+}
+
+dropheader(body, field: string): string
+{
+	ensureloaded();
+	out := "";
+	last := 0;
+	for(l := headerlines(body); l != nil; l = tl l) {
+		(s, e) := hd l;
+		if(isfield(body[s:e], field)) {
+			out += body[last:s];
+			last = e;
+		}
+	}
+	return out + body[last:];
+}
+
+# An address list is split at its commas, but not at one inside a
+# quoted name ("Doe, John" <j@x>), angle brackets or a comment: split
+# at every comma, a name with one was two recipients, neither the
+# address.
 parseaddrlist(s: string): list of string
 {
 	out: list of string;
 	start := 0;
+	inq := 0;
+	depth := 0;	# of ( )
+	angle := 0;
 	for(i := 0; i < len s; i++) {
-		if(s[i] == ',') {
-			out = trimaddr(s[start:i]) :: out;
-			start = i + 1;
+		c := s[i];
+		if(inq) {
+			if(c == '\\' && i + 1 < len s)
+				i++;
+			else if(c == '"')
+				inq = 0;
+			continue;
+		}
+		case c {
+		'"' =>
+			inq = 1;
+		'(' =>
+			depth++;
+		')' =>
+			if(depth > 0)
+				depth--;
+		'<' =>
+			angle = 1;
+		'>' =>
+			angle = 0;
+		',' =>
+			if(depth == 0 && !angle) {
+				a := trimaddr(s[start:i]);
+				if(a != "")
+					out = a :: out;
+				start = i + 1;
+			}
 		}
 	}
-	if(start < len s)
-		out = trimaddr(s[start:]) :: out;
+	if(start < len s) {
+		a := trimaddr(s[start:]);
+		if(a != "")
+			out = a :: out;
+	}
 	# Reverse
 	rev: list of string;
 	for(; out != nil; out = tl out)
 		rev = hd out :: rev;
 	return rev;
+}
+
+smtpkeys(imaphost, smtphost: string, named: int): list of string
+{
+	keys: list of string;
+	if(named || smtphost == imaphost)
+		keys = "proto=pass service=imap dom=" + imaphost :: nil;
+	return "proto=pass service=smtp dom=" + smtphost :: keys;
 }
 
 trimaddr(s: string): string

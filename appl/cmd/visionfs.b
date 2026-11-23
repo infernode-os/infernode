@@ -23,6 +23,15 @@ implement Visionfs;
 #		N/status	state=idle|running|ready|following|ended|error model=NAME ...
 #		N/stats		images= ms= found=, or for a feed in= inferred= skipped= ...
 #
+# WHOSE IT IS.  The root's ctl (load, unload, engine) is the server's
+# user's to write.  A session is its maker's: the user of the connection
+# that read clone owns its files (ctl and detections are not for others).
+# The server reads files only for its own user: a model's directory, an
+# engine tree, and a feed (src), which it opens in its own name space,
+# turning a camera on; a session of another user's is for pictures that
+# user writes.  Every holder of the mount was one principal: any of them
+# drove any session, and had the server read what it named.
+#
 # The models are vision(4) model directories (tools/vision/onnx2vis.py),
 # run by appl/lib/visnet.b on $Tensor. A session lasts while any of its
 # files is open. Each picture, and each feed, is looked at in a proc of
@@ -72,6 +81,9 @@ Qroot, Qctl, Qclone, Qmodels, Qmodel, Qminfo, Qmclasses,
 Qsess, Qsctl, Qsimage, Qsdet, Qsstatus, Qsstats, Qslayer, Qslayerf: con iota;
 
 Maximage: con 64*1024*1024;
+Maxpictures: con 256*1024*1024;	# pictures being written or looked at, in all
+Maxsessions: con 64;
+Fmtwait: con 10*1000;	# how long a feed's fmt is waited for
 Ringsz: con 16;		# a feed's frames whose records are kept for readers behind
 Nms: con 64;		# the times kept for stats
 
@@ -82,7 +94,7 @@ user := "inferno";
 # so it never sees one half made
 Snap: adt {
 	models:	list of (int, string);	# id, name
-	sessions:	list of int;
+	sessions:	list of (int, string);	# id, owner
 };
 snap: ref Snap;
 
@@ -95,6 +107,7 @@ Model: adt {
 
 Session: adt {
 	id:	int;
+	owner:	string;		# who read clone
 	refs:	int;
 	model:	ref Model;
 	place:	string;		# cpu, or one of the engine tree's: gpu dla0 dla1
@@ -106,6 +119,8 @@ Session: adt {
 	# a picture
 	text:	string;			# the records
 	gen:	int;			# which picture's answer is wanted
+	looking:	int;		# a detector is at work: one a session
+	nextpic:	array of byte;	# the newest picture written while it was
 	reads:	list of (ref Styxserver, ref Tmsg.Read);
 	images:	int;
 	found:	int;
@@ -116,6 +131,7 @@ Session: adt {
 	rate:	int;			# frames a second at most, 0 as many as it can
 	fgen:	int;			# which follower's frames are wanted
 	fpid:	int;
+	fstop:	chan of int;		# tells it to go, should the kill not
 	ring:	array of (int, string);	# the last frames' records, by sequence
 	nseq:	int;			# the next frame's sequence number
 	ended:	int;
@@ -132,12 +148,30 @@ Freader: adt {
 	sess:	int;
 	next:	int;
 	rd:	ref Tmsg.Read;
+	rest:	array of byte;	# of a frame's records, what a read had no room for
 };
 
 Openf: adt {
 	srv:	ref Styxserver;
 	fid:	int;
 	sess:	int;			# -1 for none
+	nbytes:	int;			# of a picture, written so far
+};
+
+# a write answered later (load, src): forgotten if it is flushed
+Pending: adt {
+	srv:	ref Styxserver;
+	tag:	int;
+};
+
+# a feed's fmt looked at for a src command
+Srcres: adt {
+	srv:	ref Styxserver;
+	tag:	int;
+	sess:	int;
+	data:	string;
+	count:	int;
+	err:	string;
 };
 
 Req: adt {
@@ -149,6 +183,7 @@ Result: adt {
 	sess, gen:	int;
 	text, err:	string;
 	found, ms:	int;
+	bytes:	int;		# the picture's, no longer held
 };
 
 Frameres: adt {
@@ -161,6 +196,7 @@ Frameres: adt {
 Loaded: adt {
 	srv:	ref Styxserver;
 	tag:	int;
+	count:	int;
 	name, dir:	string;
 	net:	ref Net;
 	err:	string;
@@ -276,6 +312,8 @@ models: list of ref Model;
 sessions: list of ref Session;
 opens: list of ref Openf;
 freaders: list of ref Freader;
+pending: list of ref Pending;
+imgbytes := 0;		# pictures held: being written, waiting, looked at
 nextmodel := 1;
 nextsess := 1;
 framec: chan of ref Frameres;
@@ -288,7 +326,11 @@ server(reqc: chan of ref Req, navops: chan of ref Navop, mfd: ref Sys->FD, pidc:
 	pidc <-= pid;
 	resc := chan of ref Result;
 	loadc := chan of ref Loaded;
+	srcc := chan of ref Srcres;
 	framec = chan of ref Frameres;
+	# made here, once: made by the first to want it, two followers
+	# starting together each made their own and loaded an engine at once
+	trtlock = chan[1] of int;
 	nconn := 1;
 
 Serve:
@@ -299,8 +341,23 @@ Serve:
 		nconn++;
 
 	r := <-resc =>
+		imgbytes -= r.bytes;
 		s := session(r.sess);
-		if(s == nil || s.gen != r.gen)
+		if(s == nil)
+			break;
+		s.looking = 0;
+		if(s.nextpic != nil){
+			# the picture written while that one was looked at
+			data := s.nextpic;
+			s.nextpic = nil;
+			if(s.model != nil && s.src == nil){
+				s.looking = 1;
+				spawn detector(s.id, s.gen, s.model.net, engof(s), data, s.thresh, s.iou, s.classes, resc);
+				break;
+			}
+			imgbytes -= len data;
+		}
+		if(s.gen != r.gen)
 			break;
 		if(r.err != nil){
 			s.state = "error";
@@ -343,7 +400,27 @@ Serve:
 			if((hd fl).sess == s.id && (hd fl).rd != nil)
 				deliver(s, hd fl);
 
+	c := <-srcc =>
+		if(!unpend(c.srv, c.tag))
+			break;		# flushed: not done
+		s := session(c.sess);
+		e := c.err;
+		if(s == nil)
+			e = Styxservers->Enotfound;
+		else if(e == nil)
+			(e, nil) = sessctl(s, c.data, 1);
+		else
+			e = "src: " + e;
+		if(e != nil)
+			c.srv.reply(ref Rmsg.Error(c.tag, e));
+		else
+			c.srv.reply(ref Rmsg.Write(c.tag, c.count));
+
 	l := <-loadc =>
+		# A load given up (flushed) is not done: it was answered all the
+		# same, on a tag its client might have used again.
+		if(!unpend(l.srv, l.tag))
+			break;
 		if(l.err != nil){
 			l.srv.reply(ref Rmsg.Error(l.tag, l.err));
 			break;
@@ -354,7 +431,8 @@ Serve:
 		}
 		models = ref Model(nextmodel++, l.name, l.dir, l.net) :: models;
 		resnap();
-		l.srv.reply(ref Rmsg.Write(l.tag, 0));
+		# the count written: it said 0, a write of nothing
+		l.srv.reply(ref Rmsg.Write(l.tag, l.count));
 
 	r := <-reqc =>
 		srv := r.srv;
@@ -362,11 +440,17 @@ Serve:
 			# a connection gone: its opens with it
 			nl: list of ref Openf;
 			for(o := opens; o != nil; o = tl o)
-				if((hd o).srv == srv)
+				if((hd o).srv == srv){
+					imgbytes -= (hd o).nbytes;
 					unref((hd o).sess);
-				else
+				}else
 					nl = hd o :: nl;
 			opens = nl;
+			np: list of ref Pending;
+			for(pl := pending; pl != nil; pl = tl pl)
+				if((hd pl).srv != srv)
+					np = hd pl :: np;
+			pending = np;
 			nf: list of ref Freader;
 			for(f := freaders; f != nil; f = tl f)
 				if((hd f).srv != srv)
@@ -385,6 +469,12 @@ Serve:
 		}
 		pick m := r.m {
 		Open =>
+			# sessions are counted: each open of clone made one more
+			cf := srv.getfid(m.fid);
+			if(cf != nil && (int cf.path & 16rFF) == Qclone && len sessions >= Maxsessions){
+				srv.reply(ref Rmsg.Error(m.tag, "too many sessions"));
+				break;
+			}
 			f := srv.open(m);
 			if(f == nil)
 				break;
@@ -392,9 +482,9 @@ Serve:
 			id := int (f.path >> 8);
 			case t {
 			Qclone =>
-				s := newsession();
+				s := newsession(f.uname);
 				s.refs++;
-				opens = ref Openf(srv, m.fid, s.id) :: opens;
+				opens = ref Openf(srv, m.fid, s.id, 0) :: opens;
 				f.data = array of byte sys->sprint("%d\n", s.id);
 				resnap();
 			Qsctl or Qsimage or Qsdet or Qsstatus or Qsstats or Qslayerf =>
@@ -402,11 +492,11 @@ Serve:
 				if(s == nil)
 					break;
 				s.refs++;
-				opens = ref Openf(srv, m.fid, s.id) :: opens;
+				opens = ref Openf(srv, m.fid, s.id, 0) :: opens;
 				if(t == Qsimage)
 					f.data = array[0] of byte;
 				if(t == Qsdet || t == Qslayerf)
-					freaders = ref Freader(srv, m.fid, s.id, s.nseq, nil) :: freaders;
+					freaders = ref Freader(srv, m.fid, s.id, s.nseq, nil, nil) :: freaders;
 			}
 		Read =>
 			(f, err) := srv.canread(m);
@@ -502,14 +592,25 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Styxservers->Enotfound));
 					break;
 				}
-				e := sessctl(s, string m.data);
+				(e, feed) := sessctl(s, string m.data, 0);
 				if(e != nil)
 					srv.reply(ref Rmsg.Error(m.tag, e));
-				else
+				else if(feed != nil){
+					# The feed's fmt is another server's to answer, or
+					# not: it is asked by a process of its own and the
+					# write answered then.  Asked here, a feed that
+					# never answered stopped every session.
+					pending = ref Pending(srv, m.tag) :: pending;
+					spawn srccheck(srv, m.tag, s.id, string m.data, len m.data, feed, srcc);
+				} else
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qsimage =>
 				s := session(id);
-				if(s != nil && s.src != nil){
+				if(s == nil){
+					srv.reply(ref Rmsg.Error(m.tag, Styxservers->Enotfound));
+					break;
+				}
+				if(s.src != nil){
 					srv.reply(ref Rmsg.Error(m.tag, "following a feed: src none first"));
 					break;
 				}
@@ -520,6 +621,16 @@ Serve:
 				if(len f.data + len m.data > Maximage){
 					srv.reply(ref Rmsg.Error(m.tag, "picture too large"));
 					break;
+				}
+				# each open of image could hold 64MB, with no count
+				# of them
+				if(imgbytes + len m.data > Maxpictures){
+					srv.reply(ref Rmsg.Error(m.tag, "too many pictures being written"));
+					break;
+				}
+				if((o := openf(srv, m.fid)) != nil){
+					o.nbytes += len m.data;
+					imgbytes += len m.data;
 				}
 				nd := array[len f.data + len m.data] of byte;
 				nd[0:] = f.data;
@@ -540,13 +651,15 @@ Serve:
 			for(fl := freaders; fl != nil; fl = tl fl)
 				if((hd fl).srv == srv && (hd fl).rd != nil && (hd fl).rd.tag == m.oldtag)
 					(hd fl).rd = nil;
+			unpend(srv, m.oldtag);
 			srv.default(r.m);
 		Clunk =>
 			f := srv.getfid(m.fid);
+			looked := 0;
 			if(f != nil && f.isopen && (int f.path & 16rFF) == Qsimage && len f.data > 0){
 				s := session(int (f.path >> 8));
 				if(s != nil && s.src == nil)
-					look(s, f.data, resc);
+					looked = look(s, f.data, resc);
 			}
 			nf: list of ref Freader;
 			for(fl := freaders; fl != nil; fl = tl fl)
@@ -555,9 +668,11 @@ Serve:
 			freaders = nf;
 			nl: list of ref Openf;
 			for(o := opens; o != nil; o = tl o)
-				if((hd o).srv == srv && (hd o).fid == m.fid)
+				if((hd o).srv == srv && (hd o).fid == m.fid){
+					if(!looked)
+						imgbytes -= (hd o).nbytes;
 					unref((hd o).sess);
-				else
+				}else
 					nl = hd o :: nl;
 			opens = nl;
 			srv.clunk(m);
@@ -565,12 +680,81 @@ Serve:
 			srv.default(r.m);
 		}
 	}
+	# its last connection gone: the followers and the navigator were
+	# left behind
+	for(sl := sessions; sl != nil; sl = tl sl)
+		killfeed(hd sl);
+	navops <-= nil;
 }
 
-newsession(): ref Session
+openf(srv: ref Styxserver, fid: int): ref Openf
+{
+	for(l := opens; l != nil; l = tl l)
+		if((hd l).srv == srv && (hd l).fid == fid)
+			return hd l;
+	return nil;
+}
+
+# a late answer's write taken off the list: 0 if it was not there (flushed)
+unpend(srv: ref Styxserver, tag: int): int
+{
+	found := 0;
+	np: list of ref Pending;
+	for(l := pending; l != nil; l = tl l)
+		if((hd l).srv == srv && (hd l).tag == tag)
+			found = 1;
+		else
+			np = hd l :: np;
+	pending = np;
+	return found;
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+kill(pid: int): int
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	return sys->fprint(fd, "kill");
+}
+
+# a feed's fmt, read for a src command, in time or not at all
+srccheck(srv: ref Styxserver, tag, sess: int, data: string, count: int, feed: string, srcc: chan of ref Srcres)
+{
+	c := chan[1] of string;
+	pidc := chan of int;
+	spawn fmtcheck(feed, c, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, Fmtwait);
+	e: string;
+	alt {
+	e = <-c =>
+		;
+	<-tc =>
+		kill(pid);
+		e = sys->sprint("%s/fmt: no answer in %d seconds", feed, Fmtwait/1000);
+	}
+	srcc <-= ref Srcres(srv, tag, sess, data, count, e);
+}
+
+fmtcheck(feed: string, c: chan of string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	(e, nil, nil, nil) := readfmt(feed + "/fmt");
+	c <-= e;
+}
+
+newsession(owner: string): ref Session
 {
 	s := ref Session;
 	s.id = nextsess++;
+	s.owner = owner;
 	s.thresh = 0.3;
 	s.iou = 0.45;
 	s.place = "cpu";
@@ -631,6 +815,8 @@ unref(id: int)
 	if(s == nil || --s.refs > 0)
 		return;
 	stopfeed(s);
+	imgbytes -= len s.nextpic;
+	s.nextpic = nil;
 	nl: list of ref Session;
 	for(l := sessions; l != nil; l = tl l)
 		if(hd l != s)
@@ -644,9 +830,9 @@ resnap()
 	ms: list of (int, string);
 	for(l := models; l != nil; l = tl l)
 		ms = ((hd l).id, (hd l).name) :: ms;
-	ss: list of int;
+	ss: list of (int, string);
 	for(sl := sessions; sl != nil; sl = tl sl)
-		ss = (hd sl).id :: ss;
+		ss = ((hd sl).id, (hd sl).owner) :: ss;
 	snap = ref Snap(ms, ss);
 }
 
@@ -669,6 +855,20 @@ deliver(s: ref Session, fr: ref Freader)
 	m := fr.rd;
 	if(m == nil)
 		return;
+	# what the read before had no room for comes first: a frame's
+	# records longer than a read's count were cut there and the rest
+	# lost, the reader's place already past the frame
+	if(len fr.rest > 0){
+		d := fr.rest;
+		if(len d > m.count){
+			fr.rest = d[m.count:];
+			d = d[0:m.count];
+		} else
+			fr.rest = nil;
+		fr.rd = nil;
+		fr.srv.reply(ref Rmsg.Read(m.tag, d));
+		return;
+	}
 	oldest := s.nseq - Ringsz;
 	if(oldest < 0)
 		oldest = 0;
@@ -691,8 +891,10 @@ deliver(s: ref Session, fr: ref Freader)
 	}
 	fr.rd = nil;
 	d := array of byte text;
-	if(len d > m.count)
+	if(len d > m.count){
+		fr.rest = d[m.count:];
 		d = d[0:m.count];
+	}
 	fr.srv.reply(ref Rmsg.Read(m.tag, d));
 }
 
@@ -795,7 +997,8 @@ rootctl(srv: ref Styxserver, m: ref Tmsg.Write, loadc: chan of ref Loaded): stri
 			return "a model's name is letters, digits, . - and _";
 		if(model(name) != nil)
 			return "model " + name + " is loaded already";
-		spawn loader(srv, m.tag, name, hd tl tl w, loadc);
+		pending = ref Pending(srv, m.tag) :: pending;
+		spawn loader(srv, m.tag, len m.data, name, hd tl tl w, loadc);
 		return nil;
 	"engine" =>
 		if(len w != 2)
@@ -848,19 +1051,36 @@ goodname(s: string): int
 	return 1;
 }
 
-loader(srv: ref Styxserver, tag: int, name, dir: string, loadc: chan of ref Loaded)
+loader(srv: ref Styxserver, tag, count: int, name, dir: string, loadc: chan of ref Loaded)
 {
-	(n, err) := Net.open(dir);
-	loadc <-= ref Loaded(srv, tag, name, dir, n, err);
+	n: ref Net;
+	err: string;
+	{
+		(n, err) = Net.open(dir);
+	} exception e {
+	"*" =>
+		(n, err) = (nil, dir + ": " + e);	# no room for it: its writer waited for ever
+	}
+	loadc <-= ref Loaded(srv, tag, count, name, dir, n, err);
 }
 
-# every line checked before any is done; a feed restarted if what it
-# is looked at with changed
-sessctl(s: ref Session, data: string): string
+# Every line checked before any is done; a feed restarted if what it
+# is looked at with changed.  A feed named is not looked at here: with
+# checked 0, and everything else in order, its name is returned and
+# nothing is done; the caller has its fmt read and calls again with
+# checked 1.
+sessctl(s: ref Session, data: string, checked: int): (string, string)
+{
+	(e, feed) := sessctl1(s, data, checked);
+	return (e, feed);
+}
+
+sessctl1(s: ref Session, data: string, checked: int): (string, string)
 {
 	(nil, lines) := sys->tokenize(data, "\n");
 	ns := ref *s;
 	srcset := 0;
+	feed: string;
 	for(; lines != nil; lines = tl lines){
 		(nil, w) := sys->tokenize(hd lines, " \t\r");
 		if(w == nil)
@@ -868,74 +1088,80 @@ sessctl(s: ref Session, data: string): string
 		case hd w {
 		"model" =>
 			if(len w != 2)
-				return "usage: model name";
+				return ("usage: model name", nil);
 			md := model(hd tl w);
 			if(md == nil)
-				return "no model " + hd tl w;
+				return ("no model " + hd tl w, nil);
 			ns.model = md;
 		"thresh" or "iou" =>
 			if(len w != 2)
-				return "usage: " + hd w + " r (0 to 1)";
+				return ("usage: " + hd w + " r (0 to 1)", nil);
 			(v, rest) := str->toreal(hd tl w, 10);
 			if(rest != nil || v < 0.0 || v > 1.0)
-				return hd w + ": a number from 0 to 1";
+				return (hd w + ": a number from 0 to 1", nil);
 			if(hd w == "thresh")
 				ns.thresh = v;
 			else
 				ns.iou = v;
 		"classes" =>
 			if(len w < 2)
-				return "usage: classes name ... | classes all";
+				return ("usage: classes name ... | classes all", nil);
 			if(len w == 2 && hd tl w == "all"){
 				ns.classes = nil;
 				break;
 			}
 			if(ns.model == nil)
-				return "classes: no model to name them";
+				return ("classes: no model to name them", nil);
 			cl: list of string;
 			for(c := tl w; c != nil; c = tl c){
 				if(classindex(ns.model.net, hd c) < 0)
-					return "classes: " + ns.model.name + " has no class " + hd c;
+					return ("classes: " + ns.model.name + " has no class " + hd c, nil);
 				cl = hd c :: cl;
 			}
 			ns.classes = cl;
 		"place" =>
 			if(len w != 2)
-				return "usage: place cpu | gpu | dla0 | dla1";
+				return ("usage: place cpu | gpu | dla0 | dla1", nil);
+			if(hd tl w != "cpu" && s.owner != user)
+				return ("place: " + user + "'s sessions alone use the engine tree", nil);
 			ns.place = hd tl w;
 		"src" =>
 			if(len w != 2)
-				return "usage: src feed | src none";
+				return ("usage: src feed | src none", nil);
 			if(hd tl w == "none")
 				ns.src = nil;
 			else {
-				(e, nil, nil, nil) := readfmt(hd tl w + "/fmt");
-				if(e != nil)
-					return "src: " + e;
+				# the server opens the feed in its own name space:
+				# for its own user only
+				if(s.owner != user)
+					return ("src: " + user + "'s sessions alone follow a feed (the server reads it for them)", nil);
 				ns.src = hd tl w;
+				feed = ns.src;
 			}
 			srcset = 1;
 		"rate" =>
 			if(len w != 2)
-				return "usage: rate frames-a-second (0 as fast as it can)";
+				return ("usage: rate frames-a-second (0 as fast as it can)", nil);
 			(v, rest) := str->toint(hd tl w, 10);
 			if(rest != nil || v < 0 || v > 1000)
-				return "rate: frames a second, 0 to 1000";
+				return ("rate: frames a second, 0 to 1000", nil);
 			ns.rate = v;
 		* =>
-			return "unknown setting " + hd w + ": model, place, thresh, iou, classes, src, rate";
+			return ("unknown setting " + hd w + ": model, place, thresh, iou, classes, src, rate", nil);
 		}
 	}
 	if(ns.classes != nil && ns.model != s.model)
 		for(c := ns.classes; c != nil; c = tl c)
 			if(classindex(ns.model.net, hd c) < 0)
-				return "classes: " + ns.model.name + " has no class " + hd c;
+				return ("classes: " + ns.model.name + " has no class " + hd c, nil);
 	if(ns.src != nil && ns.model == nil)
-		return "src: no model to look with: load one";
+		return ("src: no model to look with: load one", nil);
 	if(ns.src != nil && s.state == "running")
-		return "src: a picture is being looked at";
+		return ("src: a picture is being looked at", nil);
 	if(ns.place != "cpu" && (ns.model == nil || !member(ns.place, places(ns.model))))
-		return sys->sprint("place %s: not one of %s", ns.place, joined(places(ns.model)));
+		return (sys->sprint("place %s: not one of %s", ns.place, joined(places(ns.model))), nil);
+	if(feed != nil && !checked)
+		return (nil, feed);
 	restart := ns.src != nil && (srcset || ns.model != s.model || ns.thresh != s.thresh ||
 		ns.iou != s.iou || !samelist(ns.classes, s.classes) || ns.rate != s.rate || ns.place != s.place);
 	*s = *ns;
@@ -953,7 +1179,7 @@ sessctl(s: ref Session, data: string): string
 		killfeed(s);
 		startfeed(s);
 	}
-	return nil;
+	return (nil, nil);
 }
 
 samelist(a, b: list of string): int
@@ -981,19 +1207,28 @@ startfeed(s: ref Session)
 	s.err = nil;
 	s.state = "following";
 	pidc := chan of int;
-	spawn follower(s.id, s.fgen, s.src, s.model.net, engof(s), s.thresh, s.iou, s.classes, s.rate, framec, pidc);
+	s.fstop = chan[1] of int;
+	spawn follower(s.id, s.fgen, s.src, s.model.net, engof(s), s.thresh, s.iou, s.classes, s.rate, framec, s.fstop, pidc);
 	s.fpid = <-pidc;
 }
 
-# the follower gone; its frames, if any are still on their way, not taken
+# The follower gone; its frames, if any are still on their way, not
+# taken.  It is told as well as killed: where the kill could not be made
+# (no /prog in the server's name space) it went on reading the feed and
+# looking at every frame, for nobody.
 killfeed(s: ref Session)
 {
 	s.fgen++;
-	if(s.fpid >= 0){
-		fd := sys->open("/prog/" + string s.fpid + "/ctl", Sys->OWRITE);
-		if(fd != nil)
-			sys->fprint(fd, "kill");
-	}
+	if(s.fstop != nil)
+		alt {
+		s.fstop <-= 1 =>
+			;
+		* =>
+			;
+		}
+	s.fstop = nil;
+	if(s.fpid >= 0)
+		kill(s.fpid);
 	s.fpid = -1;
 }
 
@@ -1007,19 +1242,31 @@ stopfeed(s: ref Session)
 			deliver(s, hd fl);
 }
 
-# a picture written: looked at in a proc of its own
-look(s: ref Session, data: array of byte, resc: chan of ref Result)
+# A picture written: looked at in a proc of its own, one a session.
+# Every picture closed started a detector, whether or not the last had
+# done: pictures written faster than they are looked at had a detector
+# each, all but the last working for nobody.  The newest waits for the
+# one at work, and replaces any waiting before it.  1 if the picture was
+# taken (it is then counted until it has been looked at).
+look(s: ref Session, data: array of byte, resc: chan of ref Result): int
 {
 	s.gen++;
 	if(s.model == nil){
 		s.state = "error";
 		s.err = "no model: load one (ctl) and name it (N/ctl)";
-		return;
+		return 0;
 	}
 	s.state = "running";
 	s.err = nil;
 	s.images++;
+	if(s.looking){
+		imgbytes -= len s.nextpic;
+		s.nextpic = data;
+		return 1;
+	}
+	s.looking = 1;
 	spawn detector(s.id, s.gen, s.model.net, engof(s), data, s.thresh, s.iou, s.classes, resc);
+	return 1;
 }
 
 records(prefix: string, n: ref Net, dets: array of ref Det, classes: list of string): (string, int)
@@ -1031,8 +1278,10 @@ records(prefix: string, n: ref Net, dets: array of ref Det, classes: list of str
 		name := n.classes[d.class];
 		if(classes != nil && !member(name, classes))
 			continue;
+		# a name with a blank, a quote or an = in it is quoted: bare,
+		# it was a record with a word no reader knew what to do with
 		text += sys->sprint("%sclass=%s score=%.2f x0=%d y0=%d x1=%d y1=%d\n",
-			prefix, name, d.score, round(d.x0), round(d.y0), round(d.x1), round(d.y1));
+			prefix, quote(name), d.score, round(d.x0), round(d.y0), round(d.x1), round(d.y1));
 		found++;
 	}
 	return (text, found);
@@ -1047,7 +1296,7 @@ detector(id, gen: int, n: ref Net, eng: ref Eng, data: array of byte, thresh, io
 		detector1(id, gen, n, eng, data, thresh, iou, classes, resc);
 	} exception e {
 	"*" =>
-		resc <-= ref Result(id, gen, nil, "the detector raised: " + e, 0, 0);
+		resc <-= ref Result(id, gen, nil, "the detector raised: " + e, 0, 0, len data);
 	}
 }
 
@@ -1056,17 +1305,17 @@ detector1(id, gen: int, n: ref Net, eng: ref Eng, data: array of byte, thresh, i
 	t0 := sys->millisec();
 	(pix, w, h, err) := visnet->readpixelsdata(data, "image");
 	if(pix == nil){
-		resc <-= ref Result(id, gen, nil, err, 0, 0);
+		resc <-= ref Result(id, gen, nil, err, 0, 0, len data);
 		return;
 	}
 	dets: array of ref Det;
 	(dets, err) = engdetect(eng, n, pix, w, h, thresh, iou);
 	if(err != nil){
-		resc <-= ref Result(id, gen, nil, err, 0, 0);
+		resc <-= ref Result(id, gen, nil, err, 0, 0, len data);
 		return;
 	}
 	(text, found) := records("", n, dets, classes);
-	resc <-= ref Result(id, gen, text, nil, found, sys->millisec() - t0);
+	resc <-= ref Result(id, gen, text, nil, found, sys->millisec() - t0, len data);
 }
 
 # a feed's fmt: (error, w, h, fps)
@@ -1125,7 +1374,7 @@ fmtchanged(e: string): list of int
 # a feed, followed: each frame it is ready for looked at, the frames it
 # was not ready for counted
 follower(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real, classes: list of string, rate: int,
-	framec: chan of ref Frameres, pidc: chan of int)
+	framec: chan of ref Frameres, stop: chan of int, pidc: chan of int)
 {
 	pidc <-= sys->pctl(0, nil);
 	# The feed is another program's, and says its own frame size: an
@@ -1133,7 +1382,7 @@ follower(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real
 	# the follower unheard, the session said "following" for ever and
 	# its readers waited.  It ends the following, with the reason.
 	{
-		follower1(id, fgen, src, n, eng, thresh, iou, classes, rate, framec);
+		follower1(id, fgen, src, n, eng, thresh, iou, classes, rate, framec, stop);
 	} exception e {
 	"*" =>
 		framec <-= ref Frameres(id, fgen, nil, sys->sprint("%s: the follower raised: %s", src, e), 0, 0, 1);
@@ -1141,7 +1390,7 @@ follower(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real
 }
 
 follower1(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: real, classes: list of string, rate: int,
-	framec: chan of ref Frameres)
+	framec: chan of ref Frameres, stop: chan of int)
 {
 	(err, w, h, fps) := readfmt(src + "/fmt");
 	if(err != nil){
@@ -1164,6 +1413,12 @@ follower1(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: rea
 	}
 	last := 0;
 	for(;;){
+		alt {
+		<-stop =>
+			return;
+		* =>
+			;
+		}
 		if(rate > 0 && last != 0){
 			wait := 1000/rate - (sys->millisec() - last);
 			if(wait > 0)
@@ -1192,7 +1447,12 @@ follower1(id, fgen: int, src: string, n: ref Net, eng: ref Eng, thresh, iou: rea
 			}
 		}
 		if(expired){
-			# gone before it was read: go on from the newest
+			# gone before it was read: go on from the newest, after
+			# a moment (a feed that says every frame has expired
+			# was asked again at once, for ever, as fast as it
+			# answered)
+			sys->sleep(1000/(4*fps) + 1);
+			last = 0;
 			(nil, frames, first, eof) = feedcount(src);
 			next = livestart(frames, first);
 			continue;
@@ -1286,7 +1546,7 @@ children(p: big): list of big
 	case t {
 	Qroot =>
 		for(sl := sn.sessions; sl != nil; sl = tl sl)
-			k = qid(Qsess, hd sl) :: k;
+			k = qid(Qsess, (hd sl).t0) :: k;
 		k = qid(Qctl, 0) :: qid(Qclone, 0) :: qid(Qmodels, 0) :: k;
 	Qmodels =>
 		for(ml := sn.models; ml != nil; ml = tl ml)
@@ -1334,7 +1594,7 @@ dirgen(p: big): (ref Sys->Dir, string)
 	dir := 0;
 	case t {
 	Qroot =>	(d.name, dir) = (".", 1);
-	Qctl =>		(d.name, d.mode) = ("ctl", 8r666);
+	Qctl =>		(d.name, d.mode) = ("ctl", 8r664);
 	Qclone =>	(d.name, d.mode) = ("clone", 8r444);
 	Qmodels =>	(d.name, dir) = ("models", 1);
 	Qmodel or Qminfo or Qmclasses =>
@@ -1350,17 +1610,23 @@ dirgen(p: big): (ref Sys->Dir, string)
 		Qmclasses =>	(d.name, d.mode) = ("classes", 8r444);
 		}
 	* =>
-		if(!memberi(id, sn.sessions))
+		owner: string;
+		for(sl := sn.sessions; sl != nil; sl = tl sl)
+			if((hd sl).t0 == id)
+				owner = (hd sl).t1;
+		if(owner == nil)
 			return (nil, Styxservers->Enotfound);
+		# a session's files are its maker's
+		d.uid = d.gid = owner;
 		case t {
 		Qsess =>	(d.name, dir) = (string id, 1);
-		Qsctl =>	(d.name, d.mode) = ("ctl", 8r666);
-		Qsimage =>	(d.name, d.mode) = ("image", 8r222);
-		Qsdet =>	(d.name, d.mode) = ("detections", 8r444);
+		Qsctl =>	(d.name, d.mode) = ("ctl", 8r664);
+		Qsimage =>	(d.name, d.mode) = ("image", 8r220);
+		Qsdet =>	(d.name, d.mode) = ("detections", 8r440);
 		Qsstatus =>	(d.name, d.mode) = ("status", 8r444);
 		Qsstats =>	(d.name, d.mode) = ("stats", 8r444);
 		Qslayer =>	(d.name, dir) = ("layer", 1);
-		Qslayerf =>	(d.name, d.mode) = ("vision." + string id, 8r444);
+		Qslayerf =>	(d.name, d.mode) = ("vision." + string id, 8r440);
 		* =>		return (nil, Styxservers->Enotfound);
 		}
 	}
@@ -1369,14 +1635,6 @@ dirgen(p: big): (ref Sys->Dir, string)
 		d.mode = Sys->DMDIR | 8r555;
 	}
 	return (d, nil);
-}
-
-memberi(x: int, l: list of int): int
-{
-	for(; l != nil; l = tl l)
-		if(hd l == x)
-			return 1;
-	return 0;
 }
 
 # ---- an engine tree (trtsrv(1)): a session's network on the Jetson's GPU or DLAs ----
@@ -1538,8 +1796,6 @@ engfound(e: ref Eng, n: ref Net, input: array of byte, w, h: int, scale, thresh,
 engopen(e: ref Eng): string
 {
 	name := e.md.name + "." + e.place;
-	if(trtlock == nil)
-		trtlock = chan[1] of int;
 	trtlock <-= 1;
 	err := engload(e, name);
 	<-trtlock;
@@ -1566,13 +1822,12 @@ engopen(e: ref Eng): string
 	return nil;
 }
 
+# An engine in the tree under this name is used only if it is the one
+# the model's directory records for the place (the tree says each
+# engine's place and hash).  It was used by its name alone: a model
+# loaded here under a name another had there ran the other's engine.
 engload(e: ref Eng, name: string): string
 {
-	if(member(name, trtloaded) || hasmodel(readfile(e.dir + "/ctl"), name)){
-		if(!member(name, trtloaded))
-			trtloaded = name :: trtloaded;
-		return nil;
-	}
 	sha := "";
 	(nil, lines) := sys->tokenize(readfile(e.md.dir + "/engines/sha256"), "\n");
 	for(; lines != nil; lines = tl lines){
@@ -1582,6 +1837,16 @@ engload(e: ref Eng, name: string): string
 	}
 	if(sha == nil)
 		return e.md.name + ": no engine for " + e.place;
+	key := name + " " + sha;
+	if(member(key, trtloaded))
+		return nil;
+	(there, tplace, tsha) := treeengine(readfile(e.dir + "/ctl"), name);
+	if(there){
+		if(tplace != e.place || tsha != sha)
+			return sys->sprint("%s: the engine tree has another engine of that name (%s %.12s...): unload it there", name, tplace, tsha);
+		trtloaded = key :: trtloaded;
+		return nil;
+	}
 	src := sys->open(e.md.dir + "/engines/" + e.place + ".plan", Sys->OREAD);
 	if(src == nil)
 		return sys->sprint("%s: %r", e.place);
@@ -1595,19 +1860,29 @@ engload(e: ref Eng, name: string): string
 	dst = nil;
 	if(writefile(e.dir + "/ctl", sys->sprint("load %s %s %s", name, e.place, sha)) != nil)
 		return sys->sprint("%s: %r", e.place);
-	trtloaded = name :: trtloaded;
+	trtloaded = key :: trtloaded;
 	return nil;
 }
 
-hasmodel(ctl, name: string): int
+# a model's line in the tree's ctl: (whether there, its place, its sha256)
+treeengine(ctl, name: string): (int, string, string)
 {
 	(nil, lines) := sys->tokenize(ctl, "\n");
 	for(; lines != nil; lines = tl lines){
 		(nil, w) := sys->tokenize(hd lines, " ");
-		if(len w >= 2 && hd w == "model" && hd tl w == name)
-			return 1;
+		if(len w < 2 || hd w != "model" || hd tl w != name)
+			continue;
+		(place, sha) := ("", "");
+		for(w = tl tl w; w != nil; w = tl w){
+			f := hd w;
+			if(len f > 6 && f[0:6] == "place=")
+				place = f[6:];
+			else if(len f > 7 && f[0:7] == "sha256=")
+				sha = f[7:];
+		}
+		return (1, place, sha);
 	}
-	return 0;
+	return (0, nil, nil);
 }
 
 # a model's line in the tree's ctl: (whether float16, its outputs' shapes)

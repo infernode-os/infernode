@@ -137,7 +137,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		if(registered == nil)
 			error("cannot register "+addr+": "+err);
 	}
+	# /mnt/keys is hidden from the command in a name space of the
+	# listener's own, as listen(1) does: with none taken, the unmount
+	# took it from whoever started the listener as well.
 	if(!trusted){
+		if(sys->pctl(Sys->FORKNS, nil) < 0)
+			error(sys->sprint("cannot fork the name space: %r"));
 		sys->unmount(nil, "/mnt/keys");	# should do for now
 		# become none?
 	}

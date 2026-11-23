@@ -143,7 +143,9 @@ sslpipe(what, alg: string, buf: array of byte)
 		sys->print("what=%s error=%s%s\n", what, e1, e2);
 		return;
 	}
-	stop := chan of int;
+	# buffered: a writer that has returned on a failed write is not
+	# there to receive, and the send below waited for it for ever
+	stop := chan[1] of int;
 	spawn writer(w, buf, stop);
 	rb := array[len buf] of byte;
 	t0 := sys->millisec();

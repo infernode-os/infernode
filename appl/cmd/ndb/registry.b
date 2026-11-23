@@ -53,6 +53,27 @@ Mask:	con 2r1111;
 Egreg: con "buggy program!";
 Maxreplyidle: con 3;
 
+#
+# What the registry will hold.  Anyone who can attach may register, and
+# there was no end to it: services, their descriptions, filters and
+# event readers were each kept without count, and a service registered
+# to persist stayed for good once its owner had gone, its name taken
+# and its address given to whoever asked.
+#
+Maxservices:	con 1024;	# registered at once, by everyone
+Maxperowner:	con 128;	# and by one user
+Maxattrs:	con 64;		# attributes of one service
+Maxsvcbytes:	con 4096;	# its name, attribute names and values together
+Maxfilters:	con 256;
+Maxevents:	con 256;
+Etoomany: con "too many services registered";
+Etoomanyown: con "too many services registered in your name";
+
+# a persistent service whose creator has closed lasts this long after
+# its owner last wrote it (-t; 0 for ever)
+life := 24*60*60;
+nextexpire := 0;
+
 Service: adt {
 	id:		int;
 	slot:		int;
@@ -62,6 +83,7 @@ Service: adt {
 	mtime:	int;
 	vers:		int;
 	fid:		int;		# fid that created it (NOFID if static)
+	static:	int;		# from the -f file: counted against nobody, never expires
 	attrs:		list of (string, string);
 
 	new:		fn(owner: string): ref Service;
@@ -130,10 +152,15 @@ init(nil: ref Draw->Context, args: list of string)
 	if(arg == nil)
 		loaderr(Arg->PATH);
 	arg->init(args);
-	arg->setusage("ndb/registry [-f initdb]");
+	arg->setusage("ndb/registry [-f initdb] [-t seconds]");
 	while((o := arg->opt()) != 0)
 		case o {
 		'f' =>	dbfile = arg->earg();
+		't' =>
+			ts := arg->earg();
+			if(ts == nil || !alldigits(ts) || len ts > 9)
+				arg->usage();
+			life = int ts;
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -180,6 +207,8 @@ serve(tchan: chan of ref Tmsg, navops: chan of ref Navop)
 Serve:
 	while((gm := <-tchan) != nil){
 		now = daytime->now();
+		if(life > 0 && now >= nextexpire)
+			expire();
 		err := "";
 		pick m := gm {
 		Readerror =>
@@ -260,10 +289,22 @@ open(m: ref Tmsg.Open, fid: ref Fid)
 		}
 		fid.open(m.mode, (fid.path, 0, fid.qtype));
 	Qnew =>
+		if(ndynamic() >= Maxservices){
+			srv.reply(ref Rmsg.Error(m.tag, Etoomany));
+			return;
+		}
+		if(nowned(fid.uname) >= Maxperowner){
+			srv.reply(ref Rmsg.Error(m.tag, Etoomanyown));
+			return;
+		}
 		svc := Service.new(fid.uname);
 		svc.fid = fid.fid;
 		fid.open(m.mode, (big ((svc.id << Shift)|Qsvc), 0, Sys->QTFILE));
 	Qevent =>
+		if(len events >= Maxevents){
+			srv.reply(ref Rmsg.Error(m.tag, "too many readers of event"));
+			return;
+		}
 		Event.new(fid.fid);
 		fid.open(m.mode, (fid.path, 0, Sys->QTFILE));
 	* =>
@@ -295,7 +336,7 @@ read(m: ref Tmsg.Read, fid: ref Fid): string
 	Qevent =>
 		e := Event.find(fid.fid);
 		if(e == nil)
-			return Egreg;
+			return "event file not open";
 		if(e.vers == rootvers)
 			return e.queue(m);
 		else{
@@ -318,7 +359,7 @@ write(m: ref Tmsg.Write, fid: ref Fid): string
 	Qsvc =>
 		svc := Service.find(path >> Shift);
 		if(svc == nil)
-			return Egreg;
+			return "service has been removed";	# it said "buggy program!"
 		s := string m.data;
 		toks := str->unquoted(s);
 		if(toks == nil)
@@ -340,6 +381,38 @@ write(m: ref Tmsg.Write, fid: ref Fid): string
 		for(tk := toks; tk != nil; tk = tl tl tk)
 			if(hd tk == nil || !textok(hd tk) || !textok(hd tl tk))
 				return "bad character in attribute";
+		# what the service would be with this write, counted before
+		# any of it is taken
+		nm := svc.name;
+		if(name != nil)
+			nm = name;
+		na := 0;
+		nb := len array of byte nm;
+		for(al := svc.attrs; al != nil; al = tl al){
+			(an, av) := hd al;
+			for(tk = toks; tk != nil; tk = tl tl tk)
+				if(hd tk == an)
+					break;
+			if(tk == nil){	# one this write does not replace
+				na++;
+				nb += len array of byte an + len array of byte av;
+			}
+		}
+		seen: list of string;
+		for(tk = toks; tk != nil; tk = tl tl tk){
+			for(sl := seen; sl != nil; sl = tl sl)
+				if(hd sl == hd tk)
+					break;
+			if(sl == nil){
+				seen = hd tk :: seen;
+				na++;
+			}
+			nb += len array of byte hd tk + len array of byte hd tl tk;
+		}
+		if(na > Maxattrs)
+			return "too many attributes";
+		if(nb > Maxsvcbytes)
+			return "service description too long";
 		if(name != nil)
 			svc.name = name;
 		svc.mtime = now;
@@ -355,6 +428,10 @@ write(m: ref Tmsg.Write, fid: ref Fid): string
 		if(n % 2 != 0)
 			return "odd attribute/value pairs";
 		f := Filter.find(fid.fid);
+		if(n/2 > Maxattrs)
+			return "too many attributes";
+		if(f == nil && n != 0 && len filters >= Maxfilters)
+			return "too many filters";
 		if(n != 0){
 			a := array[n/2] of (string, string);
 			for(n=0; toks != nil; n++){
@@ -369,9 +446,59 @@ write(m: ref Tmsg.Write, fid: ref Fid): string
 				f.remove();
 		}
 	* =>
-		return Egreg;
+		return "not a file that is written";
 	}
 	return nil;
+}
+
+alldigits(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+ndynamic(): int
+{
+	n := 0;
+	for(i := 0; i < nservices; i++)
+		if(!services[i].static)
+			n++;
+	return n;
+}
+
+nowned(owner: string): int
+{
+	n := 0;
+	for(i := 0; i < nservices; i++)
+		if(!services[i].static && services[i].owner == owner)
+			n++;
+	return n;
+}
+
+# Persistent services whose creators have closed and whose owners have
+# not written them for life seconds are removed.  Looked at once a
+# minute at most, when a request comes.
+expire()
+{
+	nextexpire = now + 60;
+	if(nextexpire > now + life)
+		nextexpire = now + life;
+	changed := 0;
+	for(i := 0; i < nservices; ){
+		svc := services[i];
+		if(!svc.static && svc.fid == Styx->NOFID && now - svc.mtime >= life){
+			svc.remove();	# another takes its slot: look at slot i again
+			if(svc.name != nil)
+				changed = 1;
+		}else
+			i++;
+	}
+	if(changed){
+		rootvers++;
+		Event.post(rootvers);
+	}
 }
 
 #
@@ -813,6 +940,7 @@ dbload(db: ref Db)
 		svc := Service.new("registry");	 # TO DO: read user's name
 		svc.name = svcname;
 		svc.fid = Styx->NOFID;
+		svc.static = 1;
 		for(l := e.lines; l != nil; l = tl l){
 			for(al := (hd l).pairs; al != nil; al = tl al){
 				a := hd al;

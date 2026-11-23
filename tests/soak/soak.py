@@ -727,6 +727,23 @@ class Run:
             self.log('TLS server started on %s:%d (shared; it stays up for other runs)' % (self.jetson, self.tlsport))
         else:
             self.log('TLS server already up on :%d (shared)' % self.tlsport)
+        #
+        # Whatever is listening must be the run's server: on 2026-11-21 a
+        # hosted emulator's export held 8443, reset every handshake, and
+        # the load counted 87 failures that were the port's, not the
+        # board's. A handshake from here, verified against the run's CA,
+        # says whether it is.
+        #
+        chk = subprocess.run(['openssl', 's_client', '-connect', '%s:%d' % (self.jetson, self.tlsport),
+                              '-CAfile', os.path.join(d, 'ca.pem'), '-verify_return_error', '-brief'],
+                             input='', capture_output=True, text=True, timeout=15)
+        if chk.returncode != 0:
+            who = subprocess.run(['ss', '-ltnp'], capture_output=True, text=True).stdout
+            who = [l for l in who.splitlines() if ':%d ' % self.tlsport in l]
+            self.log('TLS port %d is held by something that is not the run\'s server (%s); tls not run'
+                     % (self.tlsport, (who[0].split('users:')[-1] if who else 'unknown').strip()))
+            self.tlsup = False
+            return
         self.tlsup = True
         if self.cons:
             self.cons.sh(['mkdir -p /tmp/soak/certs'])
@@ -1308,6 +1325,29 @@ class Run:
         def floor(s, at, w=6):
             vals = [v for t, v in s if abs(t - at) <= w * 60]
             return min(vals) if vals else None
+        #
+        # The trend: a line fitted to each half hour's floor, from an hour
+        # in. The first hour is the loads starting -- the TCP conversation
+        # table filling to its high-water mark, queues being made -- and
+        # first-to-last floors read that as growth: a Zero 2 W's 3-hour run
+        # (2026-11-21) said +709 KB/h, its floors flat to 0.1 MB for the
+        # last two hours. None for a run too short to have two half hours
+        # after the first.
+        def trend(s):
+            if not s:
+                return None
+            t0 = s[0][0] + 3600
+            pts = {}
+            for t, v in s:
+                if t >= t0:
+                    k = (t - t0) // 1800
+                    pts[k] = min(pts.get(k, v), v)
+            if len(pts) < 2:
+                return None
+            xs = [k * 0.5 + 0.25 for k in pts]; ys = list(pts.values())
+            mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+            den = sum((x - mx) ** 2 for x in xs)
+            return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den if den else None
         out = []
         out.append('soak %s %s' % (self.info.name, os.path.basename(self.dir)))
         out.append('kernel %s bytes, sha1 %s; driven over %s; %s' % (self.kernel[0], self.kernel[1],
@@ -1333,8 +1373,9 @@ class Run:
             s = series(col)
             if len(s) > 12:
                 a, b = floor(s, s[min(10, len(s) - 1)][0]), floor(s, s[-1][0])
-                hrs = max((s[-1][0] - s[min(10, len(s) - 1)][0]) / 3600, 0.01)
-                out.append('%-5s floor %d -> %d bytes, %+.0f bytes/h' % (name, a, b, (b - a) / hrs))
+                tr = trend(s)
+                out.append('%-5s floor %d -> %d bytes; after the first hour %s' % (name, a, b,
+                           '%+.0f bytes/h (half-hour floors)' % tr if tr is not None else 'too short to say'))
         wt = ticks.get('sd-write', 0) * self.iv['sdw_kb'] * 1024; nt = ticks.get('nvme-write', 0) * self.iv['nvw_kb'] * 1024
         out.append('written: SD %.1f MB (files), NVMe raw %.1f MB (%s); raw SD never' % (
             wt / 1e6, nt / 1e6, self.scratch.get('nvme', 'no scratch: never')))
@@ -1385,11 +1426,8 @@ class Run:
             if new:
                 f.write('start\tboard\tkernel_sha1\tkernel_bytes\thours\toptions\tresult\tfails\tmain_per_h\tskipped\trun_dir\theap_per_h\n')
             def slope(col):
-                s = series(col)
-                if len(s) <= 12:
-                    return ''
-                a, b = floor(s, s[10][0]), floor(s, s[-1][0])
-                return '%.0f' % ((b - a) / max((s[-1][0] - s[10][0]) / 3600, 0.01))
+                tr = trend(series(col))
+                return '' if tr is None else '%.0f' % tr
             f.write('%s\t%s\t%s\t%s\t%.1f\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
                 time.strftime('%Y-%m-%d %H:%M', time.localtime(self.t0)), self.info.name, self.kernel[1], self.kernel[0],
                 (time.time() - self.t0) / 3600, self.options().replace(' ', ','),

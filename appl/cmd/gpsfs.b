@@ -150,7 +150,7 @@ Maxline: con 1024;
 Maxopens: con 64;	# of event and nmea, each with its queue
 
 # what a reader proc reports
-Iopen, Iline, Iend, Itarget, Ibad: con iota;
+Iopen, Iline, Iend, Itarget, Ibad, Iorigin: con iota;
 Input: adt {
 	gen:	int;
 	kind:	int;
@@ -395,6 +395,9 @@ Serve:
 			st.target(in.target);
 		Ibad =>
 			st.bad += int in.us;
+		Iorigin =>
+			if(src != nil)
+				src.origin = in.line;
 		Iend =>
 			readerpid = -1;
 			if(in.err != nil) {
@@ -670,16 +673,18 @@ State.take1(st: self ref State, line, origin: string, owntime: int, us: big): st
 {
 	if(len line > 0 && line[len line-1] == '\r')
 		line = line[0:len line-1];
-	# the arrival of each time's first sentence, for the time file
-	if(us != big 0 && (t := nmea->timeof(line)) != nil && t != st.etime) {
-		(st.ptime, st.plocal) = (st.etime, st.elocal);
-		(st.etime, st.elocal) = (t, us);
-	}
 	(fl, err) := st.p.sentence(line);
 	st.sentences++;
 	if(err != nil) {
 		st.bad++;
 		return err;
+	}
+	# The arrival of each time's first sentence, for the time file: of
+	# a sentence that is one.  It was noted before the sentence was
+	# looked at, so a line refused could stand as a time's arrival.
+	if(us != big 0 && (t := nmea->timeof(line)) != nil && t != st.etime) {
+		(st.ptime, st.plocal) = (st.etime, st.elocal);
+		(st.etime, st.elocal) = (t, us);
 	}
 	for(l := st.clients; l != nil; l = tl l)
 		if((hd l).path == Qnmea)
@@ -952,6 +957,7 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 	fd: ref Sys->FD;
 	conn: Sys->Connection;	# a listening source's, kept while it is read
 	origin: string;		# what the source turns out to be, if not live
+	maybelog := 0;		# a file of no length when opened
 	case s.verb {
 	"file" or "replay" =>
 		fd = sys->open(s.addr, Sys->OREAD);
@@ -959,11 +965,15 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 			inputc <-= failed(gen, sys->sprint("%r"));
 			return;
 		}
-		# a file with a length is a recording; a device, a pipe or a
-		# serial port, as it arrives, has none
+		# A file with a length is a recording; a device, a pipe or a
+		# serial port, as it arrives, has none.  One that cannot be
+		# asked is not taken for a receiver (it was), and one with no
+		# length yet is asked again when it is first read (below).
 		(ok, d) := sys->fstat(fd);
-		if(ok >= 0 && (d.qid.qtype & Sys->QTDIR) == 0 && d.length > big 0)
+		if(ok < 0 || (d.qid.qtype & Sys->QTDIR) == 0 && d.length > big 0)
 			origin = "recorded";
+		else
+			maybelog = 1;
 		if(s.baud != nil) {
 			cfd := sys->open(s.addr + "ctl", Sys->OWRITE);
 			if(cfd == nil || sys->fprint(cfd, "b%s", s.baud) < 0) {
@@ -1054,6 +1064,15 @@ reader(gen: int, s: ref Source, inputc: chan of ref Input, pidc: chan of int)
 			if(len b < Udphdr)
 				continue;
 			b = b[Udphdr:];
+		}
+		# A file empty when it was opened, with a length now that it
+		# has been read, is a file being written (a log growing), not
+		# a receiver: it was live, its times offered to the clock.
+		if(maybelog) {
+			maybelog = 0;
+			(ok, d) := sys->fstat(fd);
+			if(ok < 0 || d.length > big 0)
+				inputc <-= ref Input(gen, Iorigin, "recorded", nil, nil, big 0);
 		}
 		# a decoder that raises on what it is sent costs what it was
 		# sent, not the source: counted with the frames whose check

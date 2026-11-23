@@ -185,6 +185,17 @@ run()
 		} exception e {
 		"*" =>
 			sys->print("epoch %d: kill: %s\n", epoch, e);
+			# No memory to spawn the helper (-P: the main pool is full,
+			# and a Prog is made from it): the epoch is killed here, which
+			# needs none (lctl is open; the kernel parses a ctl message on
+			# its stack). Left unkilled, its Progs held what they had, and
+			# every later epoch's needs waited on them: the run never ended.
+			{
+				epochkill(lctl, epochpids, chan[1] of int);
+			} exception {
+			"*" =>
+				;
+			}
 		}
 		lctl = nil;
 		epochpids = nil;

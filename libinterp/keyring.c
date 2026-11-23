@@ -16,14 +16,13 @@
 #include "ipint.h"
 #include "../libkeyring/keys.h"
 
+extern int	upkilled(void);	/* is this Prog being killed (the kernels' dis.c)? */
+
 static Type*	TDigestState;
 static Type*	TAESstate;
 static Type*	TAESGCMstate;
 static Type*	TChaChastate;
 static Type*	TECpoint;
-static Type*	TDESstate;
-static Type*	TIDEAstate;
-static Type*	TBFstate;
 static Type*	TRC4state;
 
 static Type*	TSigAlg;
@@ -80,9 +79,6 @@ static uchar AESstatemap[] = Keyring_AESstate_map;
 static uchar AESGCMstatemap[] = Keyring_AESGCMstate_map;
 static uchar ChaChastatemap[] = Keyring_ChaChastate_map;
 static uchar ECpointmap[] = Keyring_ECpoint_map;
-static uchar DESstatemap[] = Keyring_DESstate_map;
-static uchar IDEAstatemap[] = Keyring_IDEAstate_map;
-static uchar BFstatemap[] = Keyring_BFstate_map;
 static uchar RC4statemap[] = Keyring_RC4state_map;
 
 static uchar SigAlgmap[] = Keyring_SigAlg_map;
@@ -110,7 +106,6 @@ static char exBadSA[]	= "bad signature algorithm";
 static char exBadSK[]	= "bad secret key";
 static char exBadPK[]	= "bad public key";
 static char exBadCert[]	= "bad certificate";
-static char exBadBsize[]	= "data not multiple of block size";
 static char exBadKey[]	= "bad encryption key";
 static char exBadDigest[]	= "bad digest value";
 static char exBadIvec[]	= "bad ivec";
@@ -142,15 +137,6 @@ genbits(int n, int min, int max)
 	if(n < min || n > max)
 		error(exBadBits);
 }
-
-typedef struct XBFstate XBFstate;
-
-/* BF state */
-struct XBFstate
-{
-	Keyring_BFstate	x;
-	BFstate	state;
-};
 
 /* convert a Big to base64 ascii */
 int
@@ -1165,7 +1151,7 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	SigAlg *sa;
 	SigAlgVec *vec;
 	DigestState ds0;
-	uchar digest[SHA256dlen];
+	uchar digest[SHA512dlen];
 	char *buf;
 	String *hastr;
 	void *signa;
@@ -1188,6 +1174,10 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 		sha256(a, len, 0, &ds0);
 		sha256((uchar*)buf, n, digest, &ds0);
 		n = Keyring_SHA256dlen;
+	} else if(strcmp(ha, "sha384") == 0){
+		sha384(a, len, 0, &ds0);
+		sha384((uchar*)buf, n, digest, &ds0);
+		n = Keyring_SHA384dlen;
 	} else if(strcmp(ha, "sha") == 0 || strcmp(ha, "sha1") == 0){
 		sha1(a, len, 0, &ds0);
 		sha1((uchar*)buf, n, digest, &ds0);
@@ -1195,10 +1185,6 @@ sign(SK *sk, char *ha, ulong exp, uchar *a, int len)
 	} else if(strcmp(ha, "md5") == 0){
 		md5(a, len, 0, &ds0);
 		md5((uchar*)buf, n, digest, &ds0);
-		n = Keyring_MD5dlen;
-	} else if(strcmp(ha, "md4") == 0){
-		md4(a, len, 0, &ds0);
-		md4((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
@@ -1298,9 +1284,6 @@ Keyring_sign(void *fp)
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(string2c(f->ha), "md5") == 0){
 		md5((uchar*)buf, n, digest, &ds->state);
-		n = Keyring_MD5dlen;
-	} else if(strcmp(string2c(f->ha), "md4") == 0){
-		md4((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
@@ -1428,10 +1411,6 @@ verify(PK *pk, Certificate *c, char *a, int len)
 		md5((uchar*)a, len, 0, &ds0);
 		md5((uchar*)buf, n, digest, &ds0);
 		n = Keyring_MD5dlen;
-	} else if(strcmp(string2c(c->x.ha), "md4") == 0){
-		md4((uchar*)a, len, 0, &ds0);
-		md4((uchar*)buf, n, digest, &ds0);
-		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
 		return 0;
@@ -1501,9 +1480,6 @@ Keyring_verify(void *fp)
 		n = Keyring_SHA1dlen;
 	} else if(strcmp(string2c(c->x.ha), "md5") == 0){
 		md5((uchar*)buf, n, digest, &ds->state);
-		n = Keyring_MD5dlen;
-	} else if(strcmp(string2c(c->x.ha), "md4") == 0){
-		md4((uchar*)buf, n, digest, &ds->state);
 		n = Keyring_MD5dlen;
 	} else {
 		free(buf);
@@ -1586,8 +1562,8 @@ Keyring_DigestState_copy(void *fp)
 /*
  * How many bytes of a program's array a digest is to read: the count is
  * the program's, and only one longer than the array was looked for (and
- * cut down). A negative one went to libsec as an unsigned length: sha1,
- * md5 and md4 take whole blocks off it in an int, which stepped back
+ * cut down). A negative one went to libsec as an unsigned length: sha1
+ * and md5 take whole blocks off it in an int, which stepped back
  * from the array, and hashed up to 63 bytes found before it (a program
  * read the heap below its array a byte at a time, by matching digests);
  * the SHA-2 and SHA-3 digests walked forward to the end of memory. A
@@ -1769,20 +1745,6 @@ Keyring_md5(void *fp)
 	*f->ret = keyring_digest_x(f->buf, f->n, f->digest, MD5dlen, f->state, md5);
 }
 
-void
-Keyring_md4(void *fp)
-{
-	F_Keyring_md4 *f;
-	void *r;
-
-	f = fp;
-	r = *f->ret;
-	*f->ret = H;
-	destroy(r);
-
-	*f->ret = keyring_digest_x(f->buf, f->n, f->digest, MD4dlen, f->state, md4);
-}
-
 static Keyring_DigestState*
 keyring_hmac_x(Array *data, int n, Array *key, Array *digest, int dlen, Keyring_DigestState *state, DigestState* (*fn)(uchar*, ulong, uchar*, ulong, uchar*, DigestState*))
 {
@@ -1914,10 +1876,17 @@ Keyring_dhparams(void *fp)
 		ok = gensafeprime(p, alpha, f->nbits, 0);
 	acquire();
 	if(ok < 0){
-		/* the search gave up: two zeros are no group */
+		/*
+		 * the search gave up: two zeros are no group.  It also stops
+		 * when this Prog is being killed, and then there is nothing
+		 * to raise: the kill is raised as the call returns, and an
+		 * error raised here left the Prog broken in its place.
+		 */
 		mpfree(p);
 		mpfree(alpha);
-		error("dhparams: no prime found");
+		if(!upkilled())
+			error("dhparams: no prime found");
+		return;
 	}
 	/* newIPint frees its number when it raises, but not the other one */
 	c = cres(p, (void(*)(void*))mpfree);
@@ -2310,6 +2279,37 @@ cnsamode(void)
 }
 
 /*
+ * The mode's rule for the keys of an authentication, as login(2)'s
+ * cnsakey has it for the programs that make and issue them (CNSA 2.0):
+ * ML-DSA-87 for every signature, SHA-384 or SHA-512 under one, and a
+ * Diffie-Hellman modulus of 3072 bits or more.  The mode chose
+ * ML-KEM-1024 below and took whatever key file it was given: a node in
+ * it authenticated with an Ed25519 key over a 2048-bit group, and to a
+ * peer that had one, and each signed the exchange over SHA-256.
+ */
+enum
+{
+	CNSAdhbits	= 3072,
+};
+
+static int
+cnsasig(Keyring_SigAlg *sa)
+{
+	return sa != H && sa->name != H && strcmp(string2c(sa->name), "mldsa87") == 0;
+}
+
+static int
+cnsahash(String *ha)
+{
+	char *s;
+
+	if(ha == H)
+		return 0;
+	s = string2c(ha);
+	return strcmp(s, "sha384") == 0 || strcmp(s, "sha512") == 0;
+}
+
+/*
  * The ML-KEM material of one authentication, in one heap block. It was
  * seven arrays on Keyring_auth's C stack, 9,440 bytes of them, which the
  * hosted emulator's 32KB thread stacks carried and the native kernel's
@@ -2418,6 +2418,17 @@ Keyring_auth(void *fp)
 			argerr = "-ve modulus";
 		else if(p->top == 0 || mpsignif(p) > Maxdhbits)
 			argerr = "bad diffie hellman mod";
+		else if(cnsa){
+			/* said to the peer as well, after the versions */
+			if(!cnsasig(mysk->x.sa) || !cnsasig(mypk->x.sa))
+				argerr = "CNSA mode: the key is not ML-DSA-87";
+			else if(!cnsasig(spk->x.sa) || !cnsasig(cert->x.sa))
+				argerr = "CNSA mode: the signer's key or the certificate is not ML-DSA-87";
+			else if(!cnsahash(cert->x.ha))
+				argerr = "CNSA mode: the certificate is not over SHA-384 or SHA-512";
+			else if(mpsignif(p) < CNSAdhbits)
+				argerr = "CNSA mode: the Diffie-Hellman modulus is under 3072 bits";
+		}
 	}
 
 	/*
@@ -2614,6 +2625,16 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 
+	/*
+	 * the peer's key file is held to the mode's rule as ours is (its
+	 * certificate is our signer's, but its own key is whatever the
+	 * signer certified)
+	 */
+	if(cnsa && (!cnsasig(hispk->x.sa) || !cnsasig(hiscert->x.sa) || !cnsahash(hiscert->x.ha))){
+		err = "CNSA mode: the peer's key or certificate is not ML-DSA-87 over SHA-384 or SHA-512";
+		goto out;
+	}
+
 	/* check expiration date - in seconds of epoch */
 
 	now = osusectime()/1000000;
@@ -2692,7 +2713,8 @@ Keyring_auth(void *fp)
 	}
 	memmove(buf+n, myek, pklen); n += pklen;
 	memmove(buf+n, hisek, pklen); n += pklen;
-	alphacert = sign(mysk, "sha256", 0, (uchar*)buf, n);
+	/* the exchange is signed over SHA-384 in CNSA mode, as the certificates are */
+	alphacert = sign(mysk, cnsa? "sha384": "sha256", 0, (uchar*)buf, n);
 	/*
 	 * sign gives nil when it has no memory for its buffer or the
 	 * algorithm made no signature: it went on to be printed, through
@@ -2725,6 +2747,10 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 	certimmutable(alphacert);		/* hide from the garbage collector */
+	if(cnsa && !cnsahash(alphacert->x.ha)){
+		err = "CNSA mode: the peer signed the exchange over a hash that is not SHA-384 or SHA-512";
+		goto out;
+	}
 	n = bigtobase64(alphar1, buf, Maxbuf);
 	n += bigtobase64(alphar0, buf+n, Maxbuf-n);
 	if(n > Maxbuf - 2*pklen){
@@ -3088,6 +3114,22 @@ out:
 		*f->ret = kept(ai);
 }
 
+/*
+ * A cipher's state holds its key (AES's schedule, in three forms;
+ * ChaCha's key itself; RC4's permutation) and a digest's may hold a
+ * keyed hash's (HMAC).  None holds a pointer.  They were given back to
+ * the heap as they were, and the key stayed in the freed block until
+ * something else was put there: in the emulator's memory, a core file,
+ * the heap as /prog/n/heap gives it to a debugger.  Cleared when the
+ * block goes, by its last reference or by the collector.
+ */
+static void
+freestate(Heap *h, int swept)
+{
+	USED(swept);
+	secureZero(H2D(void*, h), h->t->size);
+}
+
 void
 keyringmodinit(void)
 {
@@ -3107,23 +3149,17 @@ keyringmodinit(void)
 	TPK = dtype(freePK, sizeof(PK), PKmap, sizeof(PKmap));
 	TCertificate = dtype(freeCertificate, sizeof(Certificate), Certificatemap,
 		sizeof(Certificatemap));
-	TDigestState = dtype(freeheap, sizeof(XDigestState), DigestStatemap,
+	TDigestState = dtype(freestate, sizeof(XDigestState), DigestStatemap,
 		sizeof(DigestStatemap));
-	TAESstate = dtype(freeheap, sizeof(XAESstate), AESstatemap,
+	TAESstate = dtype(freestate, sizeof(XAESstate), AESstatemap,
 		sizeof(AESstatemap));
-	TAESGCMstate = dtype(freeheap, sizeof(XAESGCMstate), AESGCMstatemap,
+	TAESGCMstate = dtype(freestate, sizeof(XAESGCMstate), AESGCMstatemap,
 		sizeof(AESGCMstatemap));
-	TChaChastate = dtype(freeheap, sizeof(XChaChastate), ChaChastatemap,
+	TChaChastate = dtype(freestate, sizeof(XChaChastate), ChaChastatemap,
 		sizeof(ChaChastatemap));
 	TECpoint = dtype(freeheap, sizeof(XECpoint), ECpointmap,
 		sizeof(ECpointmap));
-	TDESstate = dtype(freeheap, sizeof(XDESstate), DESstatemap,
-		sizeof(DESstatemap));
-	TIDEAstate = dtype(freeheap, sizeof(XIDEAstate), IDEAstatemap,
-		sizeof(IDEAstatemap));
-	TBFstate = dtype(freeheap, sizeof(XBFstate), BFstatemap,
-		sizeof(BFstatemap));
-	TRC4state = dtype(freeheap, sizeof(XRC4state), RC4statemap,
+	TRC4state = dtype(freestate, sizeof(XRC4state), RC4statemap,
 		sizeof(RC4statemap));
 	TAuthinfo = dtype(freeheap, sizeof(Keyring_Authinfo), Authinfomap, sizeof(Authinfomap));
 	TDSAsk = dtype(freeheap, sizeof(Keyring_DSAsk), DSAskmap, sizeof(DSAskmap));
@@ -3425,125 +3461,6 @@ Keyring_putbytearray(void *fp)
 }
 
 void
-Keyring_dessetup(void *fp)
-{
-	USED(fp);
-	error("DES is disabled");
-}
-
-void
-Keyring_desecb(void *fp)
-{
-	USED(fp);
-	error("DES is disabled");
-}
-
-void
-Keyring_descbc(void *fp)
-{
-	USED(fp);
-	error("DES is disabled");
-}
-
-void
-Keyring_ideasetup(void *fp)
-{
-	F_Keyring_ideasetup *f;
-	Heap *h;
-	XIDEAstate *is;
-	uchar *ivec;
-	void *r;
-
-	f = fp;
-	r = *f->ret;
-	*f->ret = H;
-	destroy(r);
-
-	if(f->key == H || f->key->len < 16)
-		error(exBadKey);
-	if(f->ivec != H){
-		if(f->ivec->len < 8)
-			error(exBadIvec);
-		ivec = f->ivec->data;
-	}else
-		ivec = nil;
-
-	h = heap(TIDEAstate);
-	is = H2D(XIDEAstate*, h);
-
-	setupIDEAstate(&is->state, f->key->data, ivec);
-
-	*f->ret = (Keyring_IDEAstate*)is;
-}
-
-void
-Keyring_ideaecb(void *fp)
-{
-	F_Keyring_ideaecb *f;
-	XIDEAstate *is;
-	int i;
-	uchar *p;
-
-	f = fp;
-
-	if(f->buf == H)
-		return;
-	if(f->n < 0 || f->n > f->buf->len)
-		error(exBounds);
-	if(f->n & 7)
-		error(exBadBsize);
-
-	is = checktype(f->state, TIDEAstate, exBadState, 0);
-	p = f->buf->data;
-
-	for(i = 8; i <= f->n; i += 8, p += 8)
-		idea_cipher(is->state.edkey, p, f->direction);
-}
-
-void
-Keyring_ideacbc(void *fp)
-{
-	F_Keyring_ideacbc *f;
-	XIDEAstate *is;
-	uchar *p, *ep, *ip, *p2, *eip;
-	uchar tmp[8];
-
-	f = fp;
-
-	if(f->buf == H)
-		return;
-	if(f->n < 0 || f->n > f->buf->len)
-		error(exBounds);
-	if(f->n & 7)
-		error(exBadBsize);
-
-	is = checktype(f->state, TIDEAstate, exBadState, 0);
-	p = f->buf->data;
-
-	if(f->direction == 0){
-		for(ep = p + f->n; p < ep; p += 8){
-			p2 = p;
-			ip = is->state.ivec;
-			for(eip = ip+8; ip < eip; )
-				*p2++ ^= *ip++;
-			idea_cipher(is->state.edkey, p, 0);
-			memmove(is->state.ivec, p, 8);
-		}
-	} else {
-		for(ep = p + f->n; p < ep; ){
-			memmove(tmp, p, 8);
-			idea_cipher(is->state.edkey, p, 1);
-			p2 = tmp;
-			ip = is->state.ivec;
-			for(eip = ip+8; ip < eip; ){
-				*p++ ^= *ip;
-				*ip++ = *p2++;
-			}
-		}
-	}
-}
-
-void
 Keyring_aessetup(void *fp)
 {
 	F_Keyring_aessetup *f;
@@ -3710,62 +3627,6 @@ Keyring_aesgcmdecrypt(void *fp)
 
 	*f->ret = mem2array(buf, ndat);
 	free(buf);
-}
-
-void
-Keyring_blowfishsetup(void *fp)
-{
-	F_Keyring_blowfishsetup *f;
-	Heap *h;
-	XBFstate *is;
-	uchar *ivec;
-	void *r;
-
-	f = fp;
-	r = *f->ret;
-	*f->ret = H;
-	destroy(r);
-
-	if(f->key == H || f->key->len <= 0)
-		error(exBadKey);
-	if(f->ivec != H){
-		if(f->ivec->len != BFbsize)
-			error(exBadIvec);
-		ivec = f->ivec->data;
-	}else
-		ivec = nil;
-
-	h = heap(TBFstate);
-	is = H2D(XBFstate*, h);
-
-	setupBFstate(&is->state, f->key->data, f->key->len, ivec);
-
-	*f->ret = (Keyring_BFstate*)is;
-}
-
-void
-Keyring_blowfishcbc(void *fp)
-{
-	F_Keyring_blowfishcbc *f;
-	XBFstate *is;
-	uchar *p;
-
-	f = fp;
-
-	if(f->buf == H)
-		return;
-	if(f->n < 0 || f->n > f->buf->len)
-		error(exBounds);
-	if(f->n & 7)
-		error(exBadBsize);
-
-	is = checktype(f->state, TBFstate, exBadState, 0);
-	p = f->buf->data;
-
-	if(f->direction == 0)
-		bfCBCencrypt(p, f->n, &is->state);
-	else
-		bfCBCdecrypt(p, f->n, &is->state);
 }
 
 void
@@ -4145,8 +4006,12 @@ EGsk_gen(void *fp)
 		egprivfree(p);
 	}
 	acquire();
-	if(p == nil)	/* eggen found no group, or was told to stop */
-		error("EGsk.gen: no key made");
+	if(p == nil){
+		/* eggen found no group, or was told to stop: see dhparams */
+		if(!upkilled())
+			error("EGsk.gen: no key made");
+		return;
+	}
 	c = cres(p, (void(*)(void*))egprivfree);
 	sk = newthing(TEGsk, 0);
 	sk->pk = newthing(TEGpk, 0);

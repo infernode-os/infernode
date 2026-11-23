@@ -21,8 +21,11 @@
 #     word (it did: every save was then a failed login at the server,
 #     and the account locked itself out).  Saving is arranged or, by a
 #     factotum that does not take such a password, refused and said so;
-#   - the mark Keyring and Settings read (/tmp/.secstore-unlocked) is
-#     there after an unlock and not after a failed one.
+#   - no mark is left in /tmp (/tmp/.secstore-unlocked), after an
+#     unlock or a failed one: Keyring and Settings, which read it, ask
+#     factotum's secstore file, which says "none" before an unlock
+#     with a forged mark in /tmp and "saving secstore" after one, and
+#     the login screen went on making a file nothing read.
 #
 # tests/logon_unlock.b calls the unlock; the server is on a port and a
 # store of the test's own, /tmp a directory of its own.
@@ -88,9 +91,13 @@ auth/secstore-setup -s '#U/$T/store' -u \$user -k plainpass >[2] /dev/null
 echo WRONG
 unlock direct $A wrongpass
 mark wrong
+echo forged > /tmp/.secstore-unlocked
+echo STOREWRONG \`{cat /mnt/factotum/secstore}
+rm -f /tmp/.secstore-unlocked
 echo RIGHT
 unlock direct $A plainpass
 mark right
+echo STORERIGHT \`{cat /mnt/factotum/secstore}
 echo 'key proto=pass service=unlocktest user=u !password=sekrit' > /mnt/factotum/ctl
 echo sync > /mnt/factotum/ctl; echo SYNC \$status
 SCRIPT
@@ -103,7 +110,9 @@ n=$(sed -n '/^WRONG/,/^RIGHT/p' "$ROOT/$T/new.out" | grep -c 'PAK auth failed')
 sed -n '/^WRONG/,/^RIGHT/p' "$ROOT/$T/new.out" | grep '^UNLOCK' | grep -q 'version mismatch'
 [ $? != 0 ]; check $? "and not reported as a version mismatch"
 has new '^UNLOCK err=<> save=<>'; check $? "a new account unlocks, and saving is arranged"
-has new '^MARK-THERE right'; check $? "the mark of an unlock is left"
+has new '^MARK-ABSENT right'; check $? "an unlock leaves no mark in /tmp either: nothing reads one"
+has new '^STOREWRONG none'; check $? "factotum says keys are kept nowhere before an unlock, whatever is in /tmp"
+has new '^STORERIGHT saving secstore '; check $? "and that they are saved to the secstore after one"
 has new '^SYNC *$'; check $? "a key added is saved"
 [ -s "$F" ]; check $? "to the account's file on the server"
 cp "$F" "$ROOT/$T/factotum.saved" 2>/dev/null
@@ -198,6 +207,16 @@ has twofa '^SLOTS STATE enrolling err=<>'; check $? "given a slot, its second fa
 has twofa '^ENROLLING UNLOCK err=<> '; check $? "and the vault under the password is still taken"
 has twofa '^MARKED STATE enrolled err=<>'; check $? "once the vault has been read under the data key the account is enrolled"
 has twofa '^ENROLLED UNLOCK err=<NEEDRECOVERY'; check $? "and a vault under the password alone is no longer the vault"
+
+# Keyring and Settings say where keys are kept from factotum's secstore
+# file, which the boots above read (STORE): not from the mark in /tmp,
+# which anything can make and which outlives a boot.
+if grep -q 'secstore-unlocked' "$ROOT/appl/wm/keyring.b" "$ROOT/appl/wm/settings.b"; then
+	check 1 "wm/keyring and wm/settings do not ask the mark in /tmp where keys are kept"
+else
+	grep -q '/mnt/factotum/secstore' "$ROOT/appl/wm/keyring.b" && grep -q '/mnt/factotum/secstore' "$ROOT/appl/wm/settings.b"
+	check $? "wm/keyring and wm/settings ask factotum where keys are kept"
+fi
 
 if [ "$failed" != 0 ]; then
 	for f in new again cut nobytes hostile blank twofa; do

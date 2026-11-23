@@ -47,7 +47,9 @@ or
 when the report says the direction is a true heading), and
 .B err
 at half the 95% bound the report's NACp gives.
-It is valid only after a heartbeat says the GPS position is valid.
+It is valid only after a heartbeat says the GPS position is valid, and
+for the ten own-ship reports after it: a receiver whose heartbeats have
+stopped is not believed on the last one's word.
 It has no
 .B alt
 (the own-ship geometric altitude is above the WGS-84 ellipsoid, not
@@ -57,7 +59,23 @@ A traffic report is a
 .B Target
 of kind
 .BR adsb ,
-its id the 24-bit address in hex, with its position, pressure altitude,
+its id the 24-bit address in hex (an ICAO address; an address of
+another kind, a self-assigned one, a TIS-B track file, a surface
+vehicle or a ground beacon, has its kind's number and a point before
+it, as
+.BR 3.ab4549 ),
+.B extrapolated
+set when the report says the position was reckoned on from an older
+one,
+.B emergency
+when it declares one
+.RB ( general ,
+.BR medical ,
+.BR fuel ,
+.BR comms ,
+.BR unlawful ,
+.BR downed ),
+with its position, pressure altitude,
 speed, track, vertical speed
 .RB ( climb ),
 call sign

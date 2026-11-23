@@ -8,7 +8,7 @@
 load std
 
 d=$1
-gpsfs
+@{pctl newpgrp; gpsfs}
 # a port listened to is anyone's to send to: its times are not offered
 # to the clock unless the source command says sync
 echo source udp!*!^$2 > /mnt/gps/ctl
@@ -25,6 +25,21 @@ timesync -n 2 > $d/out.again >[2] $d/err.again
 
 # from a name space that has not the mount: the posted files
 @{pctl forkns; unmount /mnt/gps; timesync -n 1 -t 3600000000 > $d/out.posted >[2] $d/err.posted}
+
+# -p in such a name space, and gpsfs gone and started again: the new
+# one's posted files are mounted, and the errors stop
+@{pctl forkns; unmount /mnt/gps; timesync -n 1 -p 1 > $d/out.remount >[2] $d/err.remount} &
+sleep 3
+kill -g Gpsfs > /dev/null
+unmount /mnt/gps
+sleep 3
+@{pctl newpgrp; gpsfs}
+echo source udp!*!^$2 sync > /mnt/gps/ctl
+sleep 5
+cat $d/err.remount > $d/err.remount.1
+sleep 5
+kill Timesync > /dev/null
+cat $d/err.remount > $d/err.remount.2
 
 # a recording's times are not set from
 echo source $d/track.nmea > /mnt/gps/ctl
@@ -70,6 +85,10 @@ cat /dev/time > $d/clock.back
 timesync -n 1 /chan/t7 > $d/out.nooffset >[2] $d/err.nooffset
 /dis/tests/timerec.dis t8 empty
 timesync -n 1 /chan/t8 > $d/out.empty >[2] $d/err.empty
+
+# this host's clock cannot be read: said, and nothing set
+/dis/tests/timerec.dis t10 0
+@{pctl forkns; bind $d/empty /dev; timesync -n 1 /chan/t10 > $d/out.noclock >[2] $d/err.noclock}
 
 # one record an hour behind and then no more, as when the receiver goes:
 # applied once, however often it is looked at

@@ -51,7 +51,7 @@ functions in
 .PP
 The
 .B export
-function takes two mutually exclusive flags:
+function takes one of two flags:
 .TP
 .B Sys->EXPWAIT
 .B Export
@@ -62,6 +62,36 @@ Client requests are handled by a background (kernel) process.
 .B Export
 returns immediately.
 The serving process terminates when the client hangs up.
+.PP
+Either can be combined (by
+.BR | )
+with:
+.TP
+.B Sys->EXPREADONLY
+Nothing is changed through the export.
+The client can walk, stat and read; a
+.BR Tcreate ,
+.BR Twrite ,
+.BR Tremove
+or
+.BR Twstat ,
+and a
+.B Topen
+to write, to truncate or to remove on close, is answered with the error
+.RB `` "file system read only" ''
+(a refused
+.B Tremove
+still clunks its fid, as
+.IR remove (5)
+requires).
+A write to a device's or a server's control file is a write, and is
+refused with the rest.
+.PP
+A
+.I flag
+with any other bit set is an error
+.RB (`` "bad arg in system call" '');
+such bits were ignored.
 .SH EXAMPLES
 .PP
 Export a given directory on

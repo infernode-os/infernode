@@ -1003,6 +1003,56 @@ fuzzproc(done: chan of string, pidc: chan of int, count: chan of int)
 	}
 }
 
+# What is sent beside a position (a compass's heading, a pressure
+# altitude, an error estimate) is in the fix while it is being sent:
+# each was copied from one time to the next for ever, so a compass
+# unplugged left its last heading in every fix after.
+rmcat(hms: string): string
+{
+	return cs("GPRMC," + hms + ",A,4041.0000,N,07403.0000,W,10.0,90.0,311026,12.9,W,A");
+}
+
+testStale(t: ref T)
+{
+	p := Parser.new();
+	feed(p, rmcat("120000") :: cs("HEHDT,45.5,T") :: cs("PGRMZ,1000,f,3") :: cs("PGRME,5.0,M,7.0,M,9.0,M") :: nil);
+	feed(p, rmcat("120001") :: rmcat("120002") :: rmcat("120003") :: rmcat("120004") :: rmcat("120005") :: nil);
+	s := p.last.text();
+	t.assert(contains(s, " heading=45.5") && contains(s, " baroalt=304.8") && contains(s, " err=5.0"),
+		"five seconds on, the heading, pressure altitude and error are still the fix's: " + s);
+	feed(p, rmcat("120008") :: rmcat("120011") :: rmcat("120015") :: nil);
+	s = p.last.text();
+	t.assert(!contains(s, "heading="), "a heading not heard for fifteen seconds is gone: " + s);
+	t.assert(!contains(s, "baroalt="), "and a pressure altitude: " + s);
+	t.assert(!contains(s, " err=") && !contains(s, "verr="), "and an error: " + s);
+	t.assert(contains(s, " course=90.0"), "what the position sentence says is there: " + s);
+	feed(p, cs("HEHDT,50.0,T") :: rmcat("120016") :: nil);
+	t.assert(contains(p.last.text(), " heading=50.0"), "heard again, it is back: " + p.last.text());
+
+	# heard each second, it stays; and across midnight
+	p = Parser.new();
+	feed(p, rmcat("235950") :: cs("HEHDT,10.0,T") :: rmcat("235955") :: cs("HEHDT,11.0,T") :: rmcat("000001") :: rmcat("000004") :: nil);
+	t.assert(contains(p.last.text(), " heading=11.0"), "nine seconds across midnight: still there: " + p.last.text());
+	feed(p, rmcat("000030") :: nil);
+	t.assert(!contains(p.last.text(), "heading="), "thirty-five seconds across midnight: gone: " + p.last.text());
+}
+
+# GGA's fix quality: a fix is one of the qualities there are.  Anything
+# but 0 or nothing was taken for one.
+testQuality(t: ref T)
+{
+	for(q := array[] of {"9", "A", "-1", "10", "0", ""}; len q > 0; q = q[1:]){
+		p := Parser.new();
+		feed(p, cs("GPGGA,120000,4041.0000,N,07403.0000,W," + q[0] + ",08,0.9,10.0,M,-34.0,M,,") :: nil);
+		t.assert(!p.cur.valid, "GGA quality \"" + q[0] + "\" is no fix");
+	}
+	for(g := array[] of {("1", "gps"), ("2", "dgps"), ("4", "rtk"), ("6", "dr")}; len g > 0; g = g[1:]){
+		p := Parser.new();
+		feed(p, cs("GPGGA,120000,4041.0000,N,07403.0000,W," + g[0].t0 + ",08,0.9,10.0,M,-34.0,M,,") :: nil);
+		t.assert(p.cur.valid && p.cur.quality == g[0].t1, "GGA quality " + g[0].t0 + " is a fix, " + g[0].t1);
+	}
+}
+
 testFuzz(t: ref T)
 {
 	mkpoison();
@@ -1077,6 +1127,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Hostile", testHostile);
 	run("Tables", testTables);
 	run("Names", testNames);
+	run("Stale", testStale);
+	run("Quality", testQuality);
 	run("Fuzz", testFuzz);
 
 	if(testing->summary(passed, failed, skipped) > 0)

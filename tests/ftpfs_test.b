@@ -257,7 +257,15 @@ ftpconn(fd: ref Sys->FD)
 		"PWD" =>
 			say(fd, "257 \"/\" is current\r\n");
 		"CWD" =>
-			if(len arg >= 6 && arg[len arg - 6:] == "crash3") {
+			if(stalling && (arg == "/d" || arg == "//d")) {
+				# no answer
+				sys->sleep(20000);
+				return;
+			}
+			if(madedir && (arg == "/d/newdir" || arg == "//d/newdir")) {
+				cwd = arg;
+				say(fd, "250 ok\r\n");
+			} else if(len arg >= 6 && arg[len arg - 6:] == "crash3") {
 				cwd = arg;
 				say(fd, "250\r\n");	# the code and nothing more
 			} else if(arg == "/" || arg == "/d" || arg == "//d") {
@@ -283,9 +291,19 @@ ftpconn(fd: ref Sys->FD)
 					spawn thirdparty(tc);
 				}
 				say(fd, sys->sprint("227 Entering Passive Mode (127,0,0,78,%d,%d)\r\n", p >> 8, p & 255));
-			} else
+			} else if(pasvbare)
+				say(fd, sys->sprint("227 Entering Passive Mode 127,0,0,1,%d,%d\r\n", p >> 8, p & 255));
+			else
 				say(fd, sys->sprint("227 Entering Passive Mode (127,0,0,1,%d,%d)\r\n", p >> 8, p & 255));
 		"LIST" =>
+			lists = arg :: lists;
+			if(faillists > 0) {
+				# a listing that cannot be had just now, long or not
+				faillists--;
+				havedc = 0;
+				say(fd, "425 cannot open a data connection\r\n");
+				continue;
+			}
 			say(fd, "150 here\r\n");
 			if(havedc) {
 				d := accept(dc);
@@ -296,6 +314,8 @@ ftpconn(fd: ref Sys->FD)
 				}
 				if(cwd == "/")
 					say(d, LISTING);
+				else if(madedir && (cwd == "/d" || cwd == "//d"))
+					say(d, "drwxr-xr-x 2 u g 0 Jan  1 00:00 newdir\r\n");
 				d = nil;
 			}
 			say(fd, "226 done\r\n");
@@ -309,7 +329,15 @@ ftpconn(fd: ref Sys->FD)
 				havedc = 0;
 			}
 			say(fd, "226 done\r\n");
+		"MKD" =>
+			cmds = l :: cmds;
+			madedir = 1;
+			say(fd, "257 made\r\n");
+		"DELE" or "RMD" =>
+			cmds = l :: cmds;
+			say(fd, "550 removal is against policy here\r\n");
 		"STOR" =>
+			cmds = l :: cmds;
 			say(fd, "150 send\r\n");
 			if(havedc) {
 				d := accept(dc);
@@ -351,6 +379,23 @@ ftpserve(c: Sys->Connection)
 		if(fd != nil)
 			spawn ftpconn(fd);
 	}
+}
+
+# what the tests ask of the server, and what it saw
+stalling := 0;		# a CWD to d is never answered
+pasvbare := 0;		# PASV's numbers without brackets
+faillists := 0;		# so many LISTs refused
+madedir := 0;		# MKD newdir has been taken
+lists: list of string;	# each LIST's argument, newest first
+cmds: list of string;	# MKD, DELE, RMD and STOR as they came, newest first
+extraargs: list of string;	# more options for the next ftpfs
+
+saw(verb: string): int
+{
+	for(l := cmds; l != nil; l = tl l)
+		if(len hd l >= len verb && (hd l)[0:len verb] == verb)
+			return 1;
+	return 0;
 }
 
 # ---- ftpfs ----
@@ -435,7 +480,10 @@ start(t: ref T): ref Fs
 	spawn collect(op[0], stdout);
 	spawn collect(ep[0], stderr);
 	done := chan[1] of int;
-	spawn runftpfs("ftpfs" :: "-q" :: "-m" :: mtpt :: "-a" :: "test@" :: NAME :: nil, op[1], ep[1], done);
+	args := "-q" :: "-m" :: mtpt :: "-a" :: "test@" :: NAME :: nil;
+	for(; extraargs != nil; extraargs = tl extraargs)
+		args = hd extraargs :: args;
+	spawn runftpfs("ftpfs" :: args, op[1], ep[1], done);
 	op[1] = nil;
 	ep[1] = nil;
 	tmo := chan[1] of int;
@@ -658,6 +706,155 @@ testRefusedStore(t: ref T)
 	fs.stop();
 }
 
+# A PASV reply whose numbers are not in brackets (RFC 1123 4.1.2.6) is
+# one: the split made for that form was dropped, and nothing was listed.
+testPasvBare(t: ref T)
+{
+	redirect = 0;
+	pasvbare = 1;
+	fs := start(t);
+	(l, ok) := lswithin(fs.mtpt, 5000);
+	pasvbare = 0;
+	t.assert(ok, "the directory is listed");
+	t.assertseq(names(l), "crash3 d f ", "through a PASV reply with no brackets");
+	fs.stop();
+}
+
+openbg(f: string, mode: int, c: chan of int)
+{
+	fd := sys->open(f, mode);
+	c <-= fd != nil;
+	fd = nil;
+}
+
+# A name is found only if it is there.  In a directory not yet listed
+# every name was found, so an open for writing of a file that is not
+# there "opened" it and stored an empty file of the name at the close;
+# and making a directory was that, the server never asked to make one.
+testNames(t: ref T)
+{
+	redirect = 0;
+	cmds = nil;
+	madedir = 0;
+	fs := start(t);
+	mtpt := fs.mtpt;
+	c := chan[1] of int;
+	tmo := chan[1] of int;
+	# in a directory that has not been listed yet
+	spawn openbg(mtpt + "/d/nosuch", Sys->OWRITE | Sys->OTRUNC, c);
+	spawn timer(tmo, 5000);
+	alt {
+	ok := <-c =>
+		t.asserteq(ok, 0, "an open, for writing, of a file that is not there");
+	<-tmo =>
+		t.error("no answer to an open within 5 s");
+	}
+	sys->sleep(200);
+	t.assert(!saw("STOR"), "nothing is stored for it");
+
+	fs.stop();
+	cmds = nil;
+	fs = start(t);
+	mtpt = fs.mtpt;
+	fd := sys->create(mtpt + "/d/newdir", Sys->OREAD, Sys->DMDIR | 8r755);
+	t.assert(fd != nil, sys->sprint("a directory is made: %r"));
+	if(fd != nil) {
+		(ok, d) := sys->fstat(fd);
+		t.assert(ok >= 0 && (d.mode & Sys->DMDIR), "and is a directory when asked");
+	}
+	fd = nil;
+	sys->sleep(200);
+	t.assert(saw("MKD newdir"), "the server is asked to make it");
+	t.assert(!saw("STOR"), "and no file of its name is stored");
+	(l, ok) := lswithin(mtpt + "/d", 5000);
+	t.assert(ok && contains(names(l), "newdir "), "it is listed: " + names(l));
+	madedir = 0;
+	fs.stop();
+}
+
+removebg(f: string, c: chan of string)
+{
+	if(sys->remove(f) < 0)
+		c <-= sys->sprint("%r");
+	else
+		c <-= "removed";
+}
+
+# A remove the server refuses is told in the server's words, and leaves
+# the mount usable: the fid stayed busy (a remove clunks it either way),
+# so the next walk that used its number was "fid in use".
+testRefusedRemove(t: ref T)
+{
+	redirect = 0;
+	cmds = nil;
+	fs := start(t);
+	mtpt := fs.mtpt;
+	c := chan[1] of string;
+	tmo := chan[1] of int;
+	spawn removebg(mtpt + "/f", c);
+	spawn timer(tmo, 5000);
+	alt {
+	e := <-c =>
+		t.assert(contains(e, "against policy"), "a refused remove says what the server said: " + e);
+	<-tmo =>
+		t.error("no answer to a remove within 5 s");
+	}
+	t.assert(saw("DELE f"), "the server was asked");
+	bad := 0;
+	for(i := 0; i < 6; i++) {
+		(ok, nil) := sys->stat(mtpt + "/f");
+		if(ok < 0)
+			bad++;
+	}
+	t.asserteq(bad, 0, "stats of the file that fail after the refused remove");
+	fs.stop();
+}
+
+# A listing that fails once does not change how every later one is
+# asked for: after any failed "LIST -la" the server was taken for one
+# that has no long listing, for good.
+testListAgain(t: ref T)
+{
+	redirect = 0;
+	lists = nil;
+	faillists = 2;	# the long listing, and the plain one tried after it
+	fs := start(t);
+	(nil, ok) := lswithin(fs.mtpt, 5000);
+	t.asserteq(faillists, 0, "the first listing was refused both ways");
+	(l, ok2) := lswithin(fs.mtpt, 5000);
+	t.assert(ok2 && names(l) == "crash3 d f ", "the directory is listed when asked again: " + names(l));
+	t.assert(lists != nil && hd lists == "-la", "and is asked for as a long listing still");
+	ok = ok;
+	fs.stop();
+}
+
+# A server that stops answering does not keep the mount for ever: its
+# connections are hung up after -t seconds with nothing from it, and
+# the request is answered with an error.
+testStall(t: ref T)
+{
+	redirect = 0;
+	extraargs = "2" :: "-t" :: nil;
+	fs := start(t);
+	mtpt := fs.mtpt;
+	(l, lok) := lswithin(mtpt, 5000);
+	t.assert(lok && names(l) == "crash3 d f ", "the mount answers");
+	c := chan[1] of int;
+	tmo := chan[1] of int;
+	stalling = 1;
+	spawn statbg(mtpt + "/d/x", c);
+	spawn timer(tmo, 12000);
+	alt {
+	ok := <-c =>
+		t.asserteq(ok, -1, "a request the server never answers ends in an error");
+	<-tmo =>
+		t.error("a request the server never answers was still waiting after 12 s");
+	}
+	stalling = 0;
+	t.assert(contains(fs.stderr.s, "hanging up"), "and standard error says the server was given up on: " + fs.stderr.s);
+	fs.stop();
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -667,6 +864,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:cannot load testing";
 	}
 	testing->init();
+	testing->own();	# what this starts is killed at the end (reap)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
@@ -680,12 +878,20 @@ init(nil: ref Draw->Context, args: list of string)
 	run("FarOffset", testFarOffset);
 	run("RefusedStore", testRefusedStore);
 	run("ShortReply", testShortReply);
+	run("PasvBare", testPasvBare);
+	run("Names", testNames);
+	run("RefusedRemove", testRefusedRemove);
+	run("ListAgain", testListAgain);
+	run("Stall", testStall);
 
 	# let the server's listener go
 	stopping = 1;
 	if(ftpport != nil)
 		sys->dial("tcp!127.0.0.1!" + ftpport, nil);
 
+	# nothing of the test's is left running: run as emu's own program
+	# it never exited, for the servers and waiting procs it left
+	testing->reap();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

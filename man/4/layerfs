@@ -21,6 +21,8 @@ written, and its
 .B frame=*
 records, never the frames before.
 A line that is no record is not kept.
+A directory holds 256 layers; a file made past that is refused
+.RB ( "too many layers" ).
 A read is not at an offset: an open's first read gives what is due, in
 one read, and each read after gives the records written since, waiting
 while there are none.

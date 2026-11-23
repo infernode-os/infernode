@@ -16,10 +16,11 @@ implement AuthAlgsTest;
 # had "none" in it too.
 #
 # The listeners passed any -a name on.  They now refuse to start with a
-# name ssl does not have, and with "none" beside an algorithm unless -M
-# says so (the client's choice is not authenticated, so that mixture lets
-# someone on the path make any caller's session at the server a clear
-# one).  styxlisten -A with -a started, and its first caller ended it.
+# name ssl does not have.  ("none" beside an algorithm was refused too,
+# unless -M was given, while the client's choice was not authenticated;
+# it is confirmed under the shared secret now, and -M is gone.)
+# styxlisten -A with -a started, and its first caller ended it; listen
+# -A with -a authenticated without a word.  Both refuse the pair.
 #
 
 include "sys.m";
@@ -282,10 +283,15 @@ testListenerStart(t: ref T)
 		"fail:bad algorithm", "listen with the old algorithms");
 	t.assertseq(start(l, "listen" :: "-k" :: nokey :: "-a" :: "aes_256_gcm" :: "-a" :: "sha1" :: addr :: cmd),
 		"fail:bad algorithm", "listen with one name it has and one it has not");
+	# each caller's choice is confirmed under the shared secret now
+	# (auth_bind_test), so none beside a cipher is a list like another,
+	# and the -M that used to allow it is no option
 	t.assertseq(start(l, "listen" :: "-k" :: nokey :: "-a" :: "none" :: "-a" :: "aes_256_gcm" :: addr :: cmd),
-		"fail:mixed algorithms", "listen with none beside a cipher");
+		"fail:bad keyfile", "listen takes none beside a cipher");
 	t.assertseq(start(l, "listen" :: "-M" :: "-k" :: nokey :: "-a" :: "none" :: "-a" :: "aes_256_gcm" :: addr :: cmd),
-		"fail:bad keyfile", "listen -M takes none beside a cipher");
+		"fail:usage", "listen has no -M");
+	t.assertseq(start(l, "listen" :: "-A" :: "-a" :: "aes_256_gcm" :: addr :: cmd),
+		"fail:usage", "listen -A with an algorithm");
 	t.assertseq(start(l, "listen" :: "-k" :: nokey :: "-a" :: "aes_256_gcm" :: "-a" :: "hmac_sha384" :: addr :: cmd),
 		"fail:bad keyfile", "listen takes ssl's own algorithms");
 	t.assertseq(start(l, "listen" :: "-k" :: nokey :: "-a" :: "none" :: addr :: cmd),
@@ -299,9 +305,9 @@ testListenerStart(t: ref T)
 	t.assertseq(start(s, "styxlisten" :: "-k" :: nokey :: "-a" :: "rc4_256" :: "-a" :: "sha1" :: addr :: cmd),
 		"fail:bad algorithm", "styxlisten with the old algorithms");
 	t.assertseq(start(s, "styxlisten" :: "-k" :: nokey :: "-a" :: "none" :: "-a" :: "aes_256_gcm" :: addr :: cmd),
-		"fail:mixed algorithms", "styxlisten with none beside a cipher");
+		"fail:error", "styxlisten takes none beside a cipher");
 	t.assertseq(start(s, "styxlisten" :: "-M" :: "-k" :: nokey :: "-a" :: "none" :: "-a" :: "aes_256_gcm" :: addr :: cmd),
-		"fail:error", "styxlisten -M takes none beside a cipher");
+		"fail:usage", "styxlisten has no -M");
 	t.assertseq(start(s, "styxlisten" :: "-k" :: nokey :: addr :: cmd),
 		"fail:error", "styxlisten takes its default");
 	t.assertseq(start(s, "styxlisten" :: "-A" :: "-a" :: "aes_256_gcm" :: addr :: cmd),

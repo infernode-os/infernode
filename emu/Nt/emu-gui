@@ -26,6 +26,7 @@ dev
 
 lib
 	interp
+	tk
 	math
 	draw
 	memlayer
@@ -41,10 +42,14 @@ link
 mod
 	sys
 	draw
+	tk
 	math
 	srv	srv
 	keyring
 	ipints
+	i420
+	tensor
+	bayer
 
 port
 	alloc
@@ -85,3 +90,4 @@ root
 	/net	/
 	/chan	/
 	/env	/
+	/nvfs	/

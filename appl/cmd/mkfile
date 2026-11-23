@@ -25,7 +25,6 @@ TARG=\
 	auditget.dis\
 	auditverify.dis\
 	9660srv.dis\
-	9cpu.dis\
 	9export.dis\
 	9win.dis\
 	acmeevent.dis\
@@ -105,7 +104,6 @@ TARG=\
 	gzip.dis\
 	history.dis\
 	hostplumb.dis\
-	idea.dis\
 	import.dis\
 	iostats.dis\
 	js.dis\
@@ -141,7 +139,6 @@ TARG=\
 	mount.dis\
 	mprof.dis\
 	mv.dis\
-	netkey.dis\
 	netstat.dis\
 	newer.dis\
 	ns.dis\
@@ -220,6 +217,9 @@ TARG=\
 	vid9p.dis\
 	videnc.dis\
 	vidjpeg.dis\
+	i420.dis\
+	topng.dis\
+	tojpg.dis\
 	visionfs.dis\
 	camsrv.dis\
 	wav2iaf.dis\
@@ -361,6 +361,7 @@ SYSMODULES=\
 	parread.m\
 	mdhtml.m\
 	sdrdsp.m\
+	visrec.m\
 
 DISBIN=$ROOT/dis
 

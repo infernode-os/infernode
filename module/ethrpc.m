@@ -3,8 +3,11 @@ Ethrpc: module {
 
 	init:	fn(rpcurl: string): string;
 
-	# Set/get RPC endpoint URL
-	setrpc:	fn(url: string);
+	# Set the RPC endpoint: an https URL, or an http one to this
+	# machine (127.0.0.1, localhost, [::1]).  Any other is refused,
+	# with the reason, and the endpoint is as it was; init refuses
+	# the same.
+	setrpc:	fn(url: string): string;
 
 	# Chain ID
 	chainid:	fn(): (int, string);
@@ -22,22 +25,9 @@ Ethrpc: module {
 	sendrawtx:	fn(rawtx: string): (string, string);
 		# returns (txhash, error)
 
-	# Get transaction receipt (returns status, block, gasUsed)
-	getreceipt:	fn(txhash: string): (ref TxReceipt, string);
-
-	# Poll for receipt with timeout
-	waitreceipt:	fn(txhash: string, timeoutsec: int): (ref TxReceipt, string);
-
 	# Generic eth_call (for arbitrary contract reads)
 	ethcall:	fn(calldata: string, contract: string): (string, string);
 		# returns (hex result, error)
-
-	TxReceipt: adt {
-		status:		int;	# 1 = success, 0 = revert
-		txhash:		string;
-		blocknumber:	string;
-		gasused:	string;
-	};
 
 	# Get current gas price (returns wei as decimal string)
 	gasprice:	fn(): (string, string);

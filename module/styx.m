@@ -1,7 +1,6 @@
 Styx: module
 {
 	PATH:	con "/dis/lib/styx.dis";
-	PATHV1:	con "/dis/lib/styx1.dis";
 
 	VERSION:	con "9P2000";
 	MAXWELEM:	con 16;
@@ -17,8 +16,8 @@ Styx: module
 
 	STATFIXLEN:	con BIT16SZ+QIDSZ+5*BIT16SZ+4*BIT32SZ+BIT64SZ;	# amount of fixed length data in a stat buffer
 	IOHDRSZ:	con 24;	# room for Twrite/Rread header
-	MAXFDATA: con 8192;	# `reasonable' iounit
-	MAXRPC:	con IOHDRSZ+MAXFDATA;	# usable default for fversion and iounit
+	DEFIOUNIT: con 8192;	# `reasonable' iounit
+	DEFMSIZE:	con IOHDRSZ+DEFIOUNIT;	# usable default for fversion and iounit
 
 	Tversion,		# 100
 	Rversion,
@@ -176,7 +175,4 @@ Styx: module
 	qid2text:	fn(q: Sys->Qid): string;
 
 	utflen:	fn(s: string): int;
-
-	# temporary undocumented compatibility function
-	write:	fn(fd: ref Sys->FD, a: array of byte, n: int): int;
 };

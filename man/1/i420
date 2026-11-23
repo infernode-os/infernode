@@ -1,0 +1,53 @@
+.TH I420 1
+.SH NAME
+i420 \- a video frame as a picture
+.SH SYNOPSIS
+.B i420
+.I w h
+.SH DESCRIPTION
+.I I420
+reads one frame of
+.I w
+by
+.I h
+pixels in I420 (a plane of luma, then the half-size planes of blue and
+red chroma, full-range BT.601: what
+.IR camsrv (4),
+vid9p and any feed of their schema serve) from its standard input, and
+writes it as an uncompressed
+.IR image (6)
+picture, r8g8b8, on its standard output, for
+.IR topng (1),
+.IR tojpg (1)
+or anything else that takes a picture. It knows nothing of where the
+frame came from: a feed serves frames,
+.IR read (1)
+cuts one out, and the filters after it turn it into what is wanted.
+.PP
+A frame is
+.IR w × h
+bytes of luma and twice
+.RI ( w +1)/2\(mu( h +1)/2
+of chroma; a feed's
+.B fmt
+gives
+.I w
+and
+.IR h .
+.SH EXAMPLES
+A still from a camera, as PNG and as JPEG:
+.IP
+.EX
+read 189420 < /mnt/video/0/frame | i420 410 308 | topng > still.png
+read 189420 < /mnt/video/0/frame | i420 410 308 | tojpg > still.jpg
+.EE
+.SH SOURCE
+.B /appl/cmd/i420.b
+.SH SEE ALSO
+.IR read (1),
+.IR topng (1),
+.IR camsrv (4),
+.IR image (6)
+.SH DIAGNOSTICS
+A size not between 1 and 16384, or a frame shorter than the size
+says, is refused, saying which.

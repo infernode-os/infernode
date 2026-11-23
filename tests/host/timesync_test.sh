@@ -41,15 +41,16 @@ T=tmp/timesync_test.$$
 D="$ROOT/$T"
 mkdir -p "$D"
 PIDS=""
-trap 'for p in $PIDS; do kill $p 2>/dev/null || true; done; rm -rf "$D"' EXIT
+trap 'for p in $PIDS; do kill $p 2>/dev/null || true; done; [ -n "${KEEP:-}" ] || rm -rf "$D"' EXIT
 F="$ROOT/tests/host/gps/fake_feed.py"
+mkdir -p "$D/empty"
 python3 -I "$F" track "$D/track.nmea"
 PORT=$(python3 -I "$F" port)
 python3 -I "$F" udpnmea "$PORT" 3600 2>"$D/udp.err" &
 PIDS="$PIDS $!"
 
 cd "$ROOT"
-SDL_VIDEODRIVER=dummy with_timeout 110 "$EMU" -r"$ROOT" /dis/sh.dis /tests/gps/timesync.sh "/$T" "$PORT" \
+SDL_VIDEODRIVER=dummy with_timeout 240 "$EMU" -r"$ROOT" /dis/sh.dis /tests/gps/timesync.sh "/$T" "$PORT" \
 	</dev/null >"$D/log" 2>&1 || true
 HOSTUS=$(python3 -c 'import time; print(int(time.time() * 1000000))')
 
@@ -131,6 +132,12 @@ e = f("err.nooffset")
 check("that is none" in e and f("out.nooffset") == "", "a record with no offset is no sample", e + f("out.nooffset"))
 e = f("err.empty")
 check("no fix with a time yet" in e, "an empty time file is no fix yet", e)
+e = f("err.noclock")
+check("/dev/time" in e and f("out.noclock") == "", "a clock that cannot be read is said, and nothing set", e + f("out.noclock"))
+ts = lambda x: [l for l in x.split("\n") if l.startswith("timesync:")]
+e1, e2 = f("err.remount.1"), f("err.remount.2")
+check(ts(e1) != [] and ts(e2) == ts(e1) and f("out.remount") == "",
+      "-p, and gpsfs started again: its posted files mounted again, the errors stop", (e1[-300:], e2[len(e1):][:300], f("out.remount")))
 o = f("out.stale")
 check(o.count(": set\n") == 1 and near("clock.stale", 0),
       "a record an hour behind, never replaced, is applied once", (o, f("err.stale")[:200], clock("clock.stale")))

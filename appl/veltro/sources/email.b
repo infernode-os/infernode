@@ -547,7 +547,7 @@ send(msg: ref Message): string
 #
 msgid(m: ref Msg): string
 {
-	if(m.uid <= 0 || currentmbox == nil || currentmbox.uidvalidity <= 0)
+	if(m.uid <= 0 || currentmbox == nil || currentmbox.uidvalidity <= big 0)
 		return nil;
 	return string currentmbox.uidvalidity + "." + string m.uid;
 }
@@ -562,9 +562,13 @@ resolve(id: string): (int, string)
 	(vs, us) := str->splitl(id, ".");
 	if(us == nil || !alldigits(vs) || !alldigits(us[1:]))
 		return (0, "invalid message id (it is <uidvalidity>.<uid>, as the message's notification gave it)");
-	uv := int vs;
+	# the validity is 32 bits unsigned: as an int, one past 2^31 was
+	# negative or another's
+	if(len vs > 10)
+		return (0, "invalid message id");
+	uv := big vs;
 	uid := int us[1:];
-	if(uv <= 0 || uid <= 0)
+	if(uv <= big 0 || uid <= 0)
 		return (0, "invalid message id");
 	if(currentmbox == nil || currentmbox.uidvalidity != uv)
 		return (0, "message " + id + " cannot be named any more: the mailbox's ids have changed");

@@ -7,8 +7,7 @@ include "sys.m";
 include "styxpersist.m";
 styxpersist := load Styxpersist Styxpersist->PATH;
 
-init: fn(clientfd: ref Sys->FD, usefac: int, keyspec: string):
-        (chan of chan of ref Sys->FD, string);
+init: fn(clientfd: ref Sys->FD): (chan of chan of ref Sys->FD, string);
 .EE
 .SH DESCRIPTION
 .I Styxpersist
@@ -16,19 +15,6 @@ tries to maintain a persistent 9P (Styx) connection for its client.
 .B Init
 starts a process to serve 9P for the client on
 .IR clientfd .
-If
-.I usefac
-is non-zero,
-.I styxpersist
-will use
-.IR factotum (2)
-to do plan 9-style authentication if necessary,
-and
-.I keyspec
-gives attribute-value pairs to pass to
-.IR factotum 's
-.B proxy
-function.
 .PP
 .B Init
 returns a tuple, say
@@ -70,11 +56,14 @@ namely create, rename, remove, and write to an append-only file.
 If a fileserver dies while such a request is outstanding, it is unclear
 what it should do. Currently it returns an error to the client if such a sitution occurs.
 .PP
-.I Styxpersist
-is dependent on the capabilities of the local factotum to re-authenticate
-Plan 9 style. If a client uses an external factotum with different keys,
-.I styxpersist
-may be unable to re-authenticate.
+An attach the client authenticated on the connection itself (with
+.IR sys-fauth (2))
+is not made again on a new connection: the files under it give errors from then on.
+Authenticate the connection before it is given to
+.IR styxpersist ,
+as
+.IR mount (1)
+does.
 .SH "SEE ALSO"
 .IR mount (1),
 .IR dial (2)

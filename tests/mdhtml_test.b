@@ -62,6 +62,85 @@ cases(t: ref T, c: array of (string, string))
 	}
 }
 
+# htmlsafe: text that is not the page's author's.  html passed its
+# HTML and any link through, so such text given to it was script in the
+# page: there was no way to render a stranger's Markdown.  In what
+# htmlsafe gives there is no tag of the writer's and no destination but
+# http, https, mailto or a place with no scheme.
+testSafe(t: ref T)
+{
+	c := array[] of {
+	# what html passes through is text here
+	("a <b>bold</b> <img src=x onerror=alert(1)>", "<p>a &lt;b&gt;bold&lt;/b&gt; &lt;img src=x onerror=alert(1)&gt;</p>\n"),
+	("<script>alert(1)</script>\n\nafter", "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>\n<p>after</p>\n"),
+	("<div onclick=\"x()\">\n*in*\n</div>\n", "<p>&lt;div onclick=\"x()\"&gt;\n<em>in</em>\n&lt;/div&gt;</p>\n"),
+	("<!-- a comment -->", "<p>&lt;!-- a comment --&gt;</p>\n"),
+	# a link goes to http, https, mailto, or nowhere else
+	("[a](javascript:alert(1))", "<p>[a](javascript:alert(1))</p>\n"),
+	("[a](JaVaScRiPt:alert(1))", "<p>[a](JaVaScRiPt:alert(1))</p>\n"),
+	("[a](data:text/html,x)", "<p>[a](data:text/html,x)</p>\n"),
+	("[a](vbscript:x) [b](file:///etc/passwd)", "<p>[a](vbscript:x) [b](file:///etc/passwd)</p>\n"),
+	("![i](javascript:alert(1))", "<p>![i](javascript:alert(1))</p>\n"),
+	("[a](java\\:script) [b](javascript&colon;alert(1)) [c](&#106;avascript:x)",
+		"<p>[a](java\\:script) [b](javascript&colon;alert(1)) [c](&#106;avascript:x)</p>\n"),
+	("[a][r]\n\n[r]: javascript:alert(1)\n", "<p>[a][r]</p>\n"),
+	("<javascript:alert(1)> <ftp://h/f>", "<p>&lt;javascript:alert(1)&gt; &lt;ftp://h/f&gt;</p>\n"),
+	# and those it does go to, as html has them
+	("[a](http://h/p?x=1#f \"t\") [b](https://h) [c](mailto:u@h)",
+		"<p><a href=\"http://h/p?x=1#f\" title=\"t\">a</a> <a href=\"https://h\">b</a> <a href=\"mailto:u@h\">c</a></p>\n"),
+	("[a](/page) [b](sub/page.md) [c](#top) [d](//h/p) [e](?q=a:b)",
+		"<p><a href=\"/page\">a</a> <a href=\"sub/page.md\">b</a> <a href=\"#top\">c</a> <a href=\"//h/p\">d</a> <a href=\"?q=a:b\">e</a></p>\n"),
+	("![i](/pic.png) <http://h/> <u@h.org>",
+		"<p><img src=\"/pic.png\" alt=\"i\" /> <a href=\"http://h/\">http://h/</a> <a href=\"mailto:u@h.org\">u@h.org</a></p>\n"),
+	("[a][r]\n\n[r]: https://h/ \"T\"\n", "<p><a href=\"https://h/\" title=\"T\">a</a></p>\n"),
+	# the rest of Markdown is as it was
+	("# H\n\n* a\n* `<b>`\n\n> q **s**\n", "<h1>H</h1>\n<ul>\n<li>a</li>\n<li><code>&lt;b&gt;</code></li>\n</ul>\n<blockquote>\n<p>q <strong>s</strong></p>\n</blockquote>\n"),
+	("a &amp; b &lt; c &copy;", "<p>a &amp; b &lt; c &copy;</p>\n"),
+	};
+	for(i := 0; i < len c; i++){
+		(md, want) := c[i];
+		got := mdhtml->htmlsafe(md);
+		if(got != want)
+			t.error(sys->sprint("case %d:\n--- markdown\n%s\n--- want\n%s--- got\n%s", i, md, want, got));
+	}
+	# and html still passes its author's HTML and links through
+	t.assertseq(mdhtml->html("<b>x</b> [a](javascript:f())"), "<p><b>x</b> <a href=\"javascript:f()\">a</a></p>\n", "html is as it was");
+	# whatever is written, nothing of it is a tag or an attribute
+	hostile := array[] of {
+		"<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>", "<a href=\"javascript:x\">y</a>",
+		"[x](javascript:alert(1) \"t\")", "[x]( javascript:alert(1))", "[x](<javascript:alert(1)>)",
+		"[x](\tjavascript:alert(1))", "![x](data:image/svg+xml,<svg onload=alert(1)>)",
+		"<iframe src=//evil>", "</p><script>x</script>", "<<script>script>", "[a](\"onmouseover=\"x)",
+		"<a\nhref=javascript:x>", "<style>*{x:expression(1)}</style>", "<form action=//evil><input>",
+	};
+	for(i = 0; i < len hostile; i++){
+		h := mdhtml->htmlsafe(hostile[i]);
+		ok := 1;
+		# every tag in it is one Markdown makes, and holds no script
+		for(j := 0; j + 1 < len h; j++)
+			if(h[j] == '<' && h[j+1] != '/'){
+				k := j+1;
+				while(k < len h && h[k] >= 'a' && h[k] <= 'z')
+					k++;
+				tag := h[j+1:k];
+				if(tag != "p" && tag != "a" && tag != "img" && tag != "em" && tag != "strong" && tag != "code" && tag != "br")
+					ok = 0;
+				while(k < len h && h[k] != '>')
+					k++;
+				low := "";
+				for(m := j; m < k; m++){
+					ch := h[m];
+					if(ch >= 'A' && ch <= 'Z')
+						ch += 'a' - 'A';
+					low[len low] = ch;
+				}
+				if(count(low, "javascript") + count(low, "data:") + count(low, " on") != 0)
+					ok = 0;
+			}
+		t.assert(ok, sys->sprint("no tag or script of the writer's in %q -> %q", hostile[i], h));
+	}
+}
+
 testBlocks(t: ref T)
 {
 	cases(t, array[] of {
@@ -318,6 +397,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Hostile", testHostile);
 	run("Lookahead", testLookahead);
 	run("RefsNotInCode", testRefsNotInCode);
+	run("Safe", testSafe);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

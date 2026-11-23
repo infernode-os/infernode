@@ -44,10 +44,19 @@
 #     levels up; the anchor is not asked, and no usage asks nothing;
 #   - an intermediate's CRL: it revokes what the intermediate issued,
 #     signed by the key the path verified, with cRLSign if the CA has a
-#     keyUsage (a root's CRL the same); forged, or of a CA that is not in
-#     the chain, it fails the call; two levels each with its own; an
+#     keyUsage (a root's CRL the same); two levels each with its own; an
 #     intermediate given as a trust anchor refused once a root's CRL
-#     names it.
+#     names it;
+#   - whose a CRL is (RFC 5280 6.3.3): one is consulted for what its own
+#     issuer issued and for nothing else, a caller's and the store's
+#     alike.  An intermediate's CRL, the intermediate no anchor, refuses
+#     the leaf it names and takes its sibling, and a chain that does not
+#     go through the intermediate (it failed that call); another CA's
+#     CRL, a root's or not, changes nothing for a chain that is not that
+#     CA's (a CRL some root had not signed failed every root's chains);
+#     a CRL its issuer did not sign refuses the paths through that
+#     issuer and no other; the store's CRLs are held to their issuers'
+#     signatures (they were taken by name: an unsigned file revoked).
 #
 # Handshakes on the loopback (tests/tlsverify.b: tls->client with
 # verification on):

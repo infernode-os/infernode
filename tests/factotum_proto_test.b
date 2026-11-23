@@ -24,12 +24,10 @@ implement FactotumProtoTest;
 # is refused wherever a certificate is a credential, and still verifies
 # as the signature it is (as auditverify verifies it).
 #
-# p9any: the answer to the server's offer was written into the offer's
-# array, and a domain that is not UTF-8 is longer said back than it came:
-# array bounds error; the last domain offered was taken, whether or not
-# it was the one there is a key for; the caller's user= was dropped, so
-# with keys for two users of a domain it was given the first's;
-# role=server ran the client's side.
+# p9any: gone with p9sk1, whose tickets are DES (there is none), and a
+# start for either says so.  (Its faults, which had tests here: the
+# answer to an offer written into the offer's array, the last domain
+# taken, the caller's user= dropped, role=server running the client.)
 #
 # auth/rpc, the tool: a last line with no newline lost its last
 # character; a blank line printed a stale error; a reply that filled its
@@ -42,9 +40,6 @@ include "draw.m";
 include "sh.m";
 include "keyring.m";
 	kr: Keyring;
-include "auth9.m";
-	auth9: Auth9;
-	Ticketreq: import auth9;
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -296,10 +291,6 @@ testKeycheck(t: ref T)
 		("key proto=pass service=kc !password=pw", "user"),
 		("key proto=sign service=kc !sk=notakey", "secret key"),
 		("key proto=sign !sk=notakey", "service"),
-		("key proto=p9sk1 user=kc !password=pw", "dom"),
-		("key proto=p9sk1 dom=kc !password=pw", "user"),
-		("key proto=p9sk1 dom=kc user=kc", "!password"),
-		("key proto=p9sk1 dom=kc user=kc !hex=00", "14 hex"),
 	};
 	for(i := 0; i < len bad; i++){
 		(k, why) := bad[i];
@@ -312,7 +303,6 @@ testKeycheck(t: ref T)
 		"key proto=btltk addr=ee:ee:ee:ee:ee:ee type=1 ediv=4660 rand=0102030405060708 irk=00 !ltk=00112233445566778899aabbccddeeff",
 		"key proto=btpin !pin=1234567890123456",
 		"key proto=wpapsk role=client essid=kcgood !password=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		"key proto=p9sk1 dom=kcgood user=kc !hex=00112233445566",
 		"key proto=somethingelse service=kcgood whatever=1 !secret=x",
 	};
 	for(i = 0; i < len good; i++)
@@ -419,99 +409,21 @@ testSign(t: ref T)
 	t.assert(cert == nil && contains(err, "error"), "an op that is not one signs nothing: " + err);
 }
 
-# bytes of s with \xff where it has '~'
-offer(s: string): array of byte
-{
-	b := array of byte s;
-	for(i := 0; i < len b; i++)
-		if(b[i] == byte '~')
-			b[i] = byte 16rff;
-	return b;
-}
-
-# start p9any, write the server's offer, and read the client's answer
-p9offer(t: ref T, start: string, o: array of byte): (ref Sys->FD, string)
-{
-	fd := newrpc(t);
-	r := rpc(fd, "start " + start);
-	if(r != "ok")
-		return (fd, "start: " + r);
-	w := array[6 + len o] of byte;
-	w[0:] = array of byte "write ";
-	w[6:] = o;
-	r = string rpcb(fd, w);
-	if(r != "ok")
-		return (fd, "write: " + r);
-	return (fd, rpc(fd, "read"));
-}
-
+# p9any and p9sk1 are gone (their tickets are DES, which is): a start for
+# either says so, role or not, and a key stored for p9sk1 is still a key
+# of a protocol with no module here, taken and listed.
 testP9any(t: ref T)
 {
-	ctl(t, "key proto=p9sk1 dom=corp user=alice !hex=ffeeddccbbaa99 !password=x");
-	ctl(t, "key proto=p9sk1 dom=corp user=bob !hex=00112233445566 !password=x");
-	ctl(t, "key proto=p9sk1 dom=lab user=carol !password=short");
-	ctl(t, "key proto=p9sk1 dom=� user=dave !password=short");
-
-	# a domain that is not UTF-8: said back as U+FFFD, three bytes for one
-	(nil, r) := p9offer(t, "proto=p9any role=client", offer("p9sk1@~\0"));
-	t.assert(!contains(r, "exception"), "an offer whose domain is not UTF-8 raises nothing: " + r);
-	t.assertseq(r, "ok p9sk1 �\0", "and is answered");
-
-	(nil, r) = p9offer(t, "proto=p9any role=client", offer("p9sk1@corp p9sk1@lab\0"));
-	t.assertseq(r, "ok p9sk1 corp\0", "of two domains there are keys for, the first offered is taken");
-	(nil, r) = p9offer(t, "proto=p9any role=client", offer("p9sk1@nokey p9sk1@lab\0"));
-	t.assertseq(r, "ok p9sk1 lab\0", "a domain there is no key for is passed over");
-	(nil, r) = p9offer(t, "proto=p9any role=client", offer("p9sk1@lab p9sk1@nokey\0"));
-	t.assertseq(r, "ok p9sk1 lab\0", "wherever it is in the offer");
-	(nil, r) = p9offer(t, "proto=p9any role=client", offer("p9sk1@nokey\0"));
-	t.assert(contains(r, "error") && contains(r, "key"), "with no key for any domain offered, an error saying so: " + r);
-
+	ctl(t, "key proto=p9sk1 dom=corp user=alice !password=x");
+	plain := "p9sk1 authentication is not available";
+	r := ask(t, "proto=p9any role=client");
+	t.assert(contains(r, "start: ") && contains(r, plain), "a start for p9any says the protocol is gone: " + r);
 	r = ask(t, "proto=p9any role=server");
-	t.assert(contains(r, "error") && contains(r, "role"), "role=server is refused, there being only the client's side: " + r);
-
-	# the caller's user chooses the key: bob's works as far as asking
-	# the authentication server (there is none: no network here)
-	fd: ref Sys->FD;
-	(fd, r) = p9offer(t, "proto=p9any role=client user=bob", offer("p9sk1@corp\0"));
-	t.assertseq(r, "ok p9sk1 corp\0", "a domain with keys for two users");
-	chal := rpcb(fd, array of byte "read");
-	t.asserteq(len chal, 3 + Auth9->CHALLEN, "the client's challenge follows");
-	tr := ref Ticketreq(Auth9->AuthTreq, "bootes", "corp", array[Auth9->CHALLEN] of {* => byte 'c'}, "x", "y");
-	p := tr.pack();
-	w := array[6 + len p] of byte;
-	w[0:] = array of byte "write ";
-	w[6:] = p;
-	r = string rpcb(fd, w);
-	if(r == "ok")
-		r = rpc(fd, "read");
-	t.log("after the ticket request: " + r);
-	t.assert(contains(r, "getasticket"), "bob's key gets as far as the authentication server: " + r);
-	# A domain with no authentication server named for it (ndb) has
-	# none: $auth, the machine's own, was dialled in its place, with a
-	# key for whatever domain the server had named.
-	t.assert(contains(r, "no auth server found for corp"), "and there is none for corp, so none is dialled: " + r);
-
-	# The ticket request must be for the domain negotiated: the key
-	# was found by that one and the authentication server by the
-	# request's, and a server could name another's.
-	(fd, r) = p9offer(t, "proto=p9any role=client user=bob", offer("p9sk1@corp\0"));
-	t.assertseq(r, "ok p9sk1 corp\0", "corp negotiated again");
-	rpcb(fd, array of byte "read");
-	tr = ref Ticketreq(Auth9->AuthTreq, "bootes", "evil", array[Auth9->CHALLEN] of {* => byte 'c'}, "x", "y");
-	p = tr.pack();
-	w = array[6 + len p] of byte;
-	w[0:] = array of byte "write ";
-	w[6:] = p;
-	r = string rpcb(fd, w);
-	if(r == "ok")
-		r = rpc(fd, "read");
-	t.assert(contains(r, "negotiated") && !contains(r, "getasticket"), "a ticket request for another domain is refused before anything is asked of anybody: " + r);
-
-	# the caller's user chooses the key: with bob's gone, user=bob is
-	# not given alice's
-	ctl(t, "delkey proto=p9sk1 dom=corp user=bob");
-	(nil, r) = p9offer(t, "proto=p9any role=client user=bob", offer("p9sk1@corp\0"));
-	t.assert(contains(r, "error") && contains(r, "key"), "user=bob is not given alice's key: " + r);
+	t.assert(contains(r, plain), "for the server's side too: " + r);
+	r = ask(t, "proto=p9sk1 role=client dom=corp");
+	t.assert(contains(r, plain), "and for p9sk1 by name: " + r);
+	t.assert(!contains(r, "does not exist") && !contains(r, "module"), "not that a file is missing");
+	t.assert(contains(keys(), "dom=corp"), "a p9sk1 key is kept as any key with no protocol module is");
 }
 
 # auth/rpc with text as its standard input: what it prints
@@ -622,19 +534,16 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 	kr = load Keyring Keyring->PATH;
-	auth9 = load Auth9 Auth9->PATH;
-	if(kr == nil || auth9 == nil){
-		sys->fprint(sys->fildes(2), "factotum_proto_test: cannot load keyring or auth9: %r\n");
+	if(kr == nil){
+		sys->fprint(sys->fildes(2), "factotum_proto_test: cannot load keyring: %r\n");
 		raise "fail:load";
 	}
-	auth9->init();
 
 	sys->pctl(Sys->FORKNS, nil);
 	sys->create("/tmp", Sys->OREAD, Sys->DMDIR | 8r777);
 	sys->create(MNT, Sys->OREAD, Sys->DMDIR | 8r777);
 	sys->create(EMPTY, Sys->OREAD, Sys->DMDIR | 8r777);
-	# no network for the agent: p9sk1's call to an authentication
-	# server finds nothing to dial with
+	# no network for the agent
 	sys->bind(EMPTY, "/net", Sys->MREPL);
 	c := chan of string;
 	spawn startagent(c);

@@ -36,12 +36,26 @@ badmodule(p: string)
 
 user := "wikifs";
 qidseq := 1;
-pidregister: chan of (int, int);
-flush: chan of (int, int, chan of int);
-reqpool: list of chan of (ref Tmsg, ref Aux, ref Fid);
-reqidle: int;
-reqdone: chan of chan of (ref Tmsg, ref Aux, ref Fid);
 srv: ref Styxserver;
+
+# A request that takes work (a page read, made or stat'ed) is given to
+# a worker, which gives its answer back to the serve loop: the serve
+# loop alone writes to the connection.  (The workers wrote their own
+# replies.  Two of more than 32K at once could mix on a pipe, which
+# takes that much whole and no more; and a flush killed the worker it
+# named, wherever it was, in the middle of a reply's write as well,
+# after which the connection held half a message.)
+Worker: adt {
+	pid:	int;
+	c:	chan of (ref Tmsg, ref Fid);
+	tag:	int;	# of the request it has
+	flushed:	int;	# that request has been flushed: its answer is not sent
+};
+idle: list of ref Worker;
+nidle: int;
+busy: list of ref Worker;
+nworkers: int;
+workdone: chan of (ref Worker, ref Rmsg);
 commitc: chan of (string, chan of (int, string));	# a page written to new, to the committer
 
 filelist := array[] of {
@@ -71,16 +85,9 @@ Qindexhtml,
 Derror, Droot, D1st, D2nd, Fnew, Fmap, F1st, F2nd: con iota;
 
 Maxreqidle: con 3;
-Maxreplyidle: con 3;
+Maxworkers: con 64;	# requests being worked on at once (httpd has at most 64 connections)
+ENDWAIT: con 10*1000;	# ms the work under way is given to finish when the connection has gone
 Maxnew: con 1024*1024;	# bytes of a page written to new
-
-Aux: adt {
-	path:		big;
-	name:	string;
-	w:		ref Whist;
-	t:		int;
-	s:		string;
-};
 
 # Each field in its own bits: a page number past 16 bits ran into the
 # type, so /262144 was page 0's index.html, a file at the root.
@@ -147,11 +154,8 @@ init(nil: ref Draw->Context, args: list of string)
 
 serve(tchan: chan of ref Tmsg, navops: chan of ref Navop)
 {
-	pidregister = chan of (int, int);
-	flush = chan of (int, int, chan of int);
-	reqdone = chan of chan of (ref Tmsg, ref Aux, ref Fid);
+	workdone = chan of (ref Worker, ref Rmsg);
 	commitc = chan of (string, chan of (int, string));
-	spawn flushproc(flush);
 	spawn committer();
 
 Serve:
@@ -159,54 +163,132 @@ Serve:
 	gm := <-tchan =>
 		if(gm == nil)
 			break Serve;
-		pick m := gm {
-		Readerror =>
-			sys->fprint(sys->fildes(2), "wikifs: fatal read error: %s\n", m.error);
-			break Serve;
-		Read =>
-			(fid, err) := srv.canread(m);
-			if(err != nil)
-				srv.reply(ref Rmsg.Error(m.tag, err));
-			else if(fid.qtype & Sys->QTDIR)
-				srv.read(m);
-			else
-				request(m, fid);
-		Write =>
-			(fid, err) := srv.canwrite(m);
-			if(err != nil)
-				srv.reply(ref Rmsg.Error(m.tag, err));
-			else
-				request(m, fid);
-		Flush =>
-			done := chan of int;
-			flush <-= (m.tag, m.oldtag, done);
-			<-done;
-		Stat =>
-			# (a stat of a fid not in use was answered and then the
-			# loop left: the server gone for one bad message)
-			c := srv.getfid(m.fid);
-			if(c == nil)
-				srv.reply(ref Rmsg.Error(m.tag, "bad fid"));
-			else
-				request(m, c);
-		* =>
-			srv.default(gm);
+		{
+			pick m := gm {
+			Readerror =>
+				sys->fprint(sys->fildes(2), "wikifs: fatal read error: %s\n", m.error);
+				break Serve;
+			Read =>
+				(fid, err) := srv.canread(m);
+				if(err != nil)
+					srv.reply(ref Rmsg.Error(m.tag, err));
+				else if(fid.qtype & Sys->QTDIR)
+					srv.read(m);
+				else
+					request(m, fid);
+			Write =>
+				(fid, err) := srv.canwrite(m);
+				if(err != nil)
+					srv.reply(ref Rmsg.Error(m.tag, err));
+				else
+					request(m, fid);
+			Flush =>
+				# The request flushed is answered no more: its worker
+				# goes on to the end of what it is doing (a page's
+				# cache or its history half made would be the next
+				# request's), and what it then says is dropped.  (The
+				# worker was killed; and a request handed over but
+				# not yet noted was not found, so it was answered
+				# after its flush.)
+				for(l := busy; l != nil; l = tl l)
+					if((hd l).tag == m.oldtag && !(hd l).flushed)
+						(hd l).flushed = 1;
+				srv.reply(ref Rmsg.Flush(m.tag));
+			Stat =>
+				# (a stat of a fid not in use was answered and then the
+				# loop left: the server gone for one bad message)
+				c := srv.getfid(m.fid);
+				if(c == nil)
+					srv.reply(ref Rmsg.Error(m.tag, "bad fid"));
+				else
+					request(m, c);
+			* =>
+				srv.default(gm);
+			}
+		} exception {
+		"*" =>
+			# a reply to a connection that has gone (a write on a
+			# closed pipe is an exception): its end is on its way
+			;
 		}
-	reqpool = <-reqdone :: reqpool =>
-		if(reqidle++ > Maxreqidle){
-			hd reqpool <-= (nil, nil, nil);
-			reqpool = tl reqpool;
-			reqidle--;
+	(w, r) := <-workdone =>
+		busy = without(busy, w);
+		if(!w.flushed){
+			{
+				srv.reply(r);
+			} exception {
+			"*" =>
+				;
+			}
+		}
+		w.flushed = 0;
+		if(nidle >= Maxreqidle){
+			w.c <-= (nil, nil);
+			nworkers--;
+		}else{
+			idle = w :: idle;
+			nidle++;
 		}
 	}
-	# The connection has gone, and with it everything that served it:
-	# idle workers, the flush process and the committer stayed for
-	# ever.  The committer first, so a page being written is whole.
-	commitc <-= (nil, nil);
-	navops <-= nil;
-	fd := sys->open("/prog/" + string sys->pctl(0, nil) + "/ctl", Sys->OWRITE);
-	if(fd != nil)
-		sys->fprint(fd, "killgrp");
+	# The connection has gone, and with it everything that served it,
+	# each told to go and none waited for without end: the workers
+	# with nothing to do; those with work when it is done (so a page
+	# being written is whole), or ten seconds from now; then the
+	# committer and the navigator.  Whatever is left after that (a
+	# worker that did not finish, the connection's reader) is killed
+	# with the group.  (Idle workers, the flush process and the
+	# committer stayed for ever; then the committer and the navigator
+	# were each waited for with no limit before anything was killed.)
+	for(; idle != nil; idle = tl idle)
+		(hd idle).c <-= (nil, nil);
+	(tick, tpid) := timer(ENDWAIT);
+Drain:
+	while(busy != nil)
+		alt{
+		(w, nil) := <-workdone =>
+			busy = without(busy, w);
+			w.c <-= (nil, nil);
+		<-tick =>
+			break Drain;
+		}
+	alt{
+	commitc <-= (nil, nil) =>
+		;
+	<-tick =>
+		;
+	}
+	alt{
+	navops <-= nil =>
+		;
+	* =>
+		;
+	}
+	kill(tpid, "kill");
+	kill(sys->pctl(0, nil), "killgrp");
+}
+
+without(l: list of ref Worker, w: ref Worker): list of ref Worker
+{
+	r: list of ref Worker;
+	for(; l != nil; l = tl l)
+		if(hd l != w)
+			r = hd l :: r;
+	return r;
+}
+
+timer(ms: int): (chan of int, int)
+{
+	c := chan[1] of int;
+	pidc := chan of int;
+	spawn sleeper(ms, c, pidc);
+	return (c, <-pidc);
+}
+
+sleeper(ms: int, c, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	sys->sleep(ms);
+	c <-= 1;
 }
 
 # The one process that writes pages.  An edit says which version it was
@@ -214,9 +296,9 @@ Serve:
 # compare and the write are one step only because no other write runs
 # between them, and the lock wiki.b takes round them is a file made for
 # exclusive use, which the emulator's host file system does not have.
-# Not a lock held by the worker: a flush kills workers, and a killed
-# one would keep it.  The answer waits in the channel for a worker that
-# has been killed.
+# Not a lock held by the worker: a worker whose request is flushed, or
+# whose connection has gone, may never come back for it.  The answer
+# waits in the channel for such a worker.
 committer()
 {
 	for(;;){
@@ -241,118 +323,125 @@ commit(file: string): (int, string)
 
 request(m: ref Styx->Tmsg, fid: ref Fid)
 {
-	c: chan of (ref Tmsg, ref Aux, ref Fid);
-	if(reqpool == nil){
-		c = chan of (ref Tmsg, ref Aux, ref Fid);
-		spawn requestproc(c);
+	w: ref Worker;
+	if(idle != nil){
+		(w, idle) = (hd idle, tl idle);
+		nidle--;
+	}else if(nworkers >= Maxworkers){
+		srv.reply(ref Rmsg.Error(m.tag, "wikifs: too many requests at once"));
+		return;
 	}else{
-		(c, reqpool) = (hd reqpool, tl reqpool);
-		reqidle--;
+		w = ref Worker(0, chan of (ref Tmsg, ref Fid), 0, 0);
+		pidc := chan of int;
+		spawn requestproc(w, pidc);
+		w.pid = <-pidc;
+		nworkers++;
 	}
-	c <-= (m, nil, fid);
+	# noted before it is handed over: a flush that comes next finds it
+	w.tag = m.tag;
+	w.flushed = 0;
+	busy = w :: busy;
+	w.c <-= (m, fid);
 }
 
-requestproc(req: chan of (ref Tmsg, ref Aux, ref Fid))
+requestproc(w: ref Worker, pidc: chan of int)
 {
-	pid := sys->pctl(0, nil);
+	pidc <-= sys->pctl(0, nil);
 	for(;;){
-		(gm, nil, fid) := <-req;
+		(gm, fid) := <-w.c;
 		if(gm == nil)
 			break;
-		pidregister <-= (pid, gm.tag);
-		path := fid.path;
-		pick m := gm {
-		Read =>
-			case qidtype(path) {
-			Fnew =>
-				if(fid.data != nil)
-					srv.reply(readbytes(m, fid.data));
-				else
-					srv.reply(ref Rmsg.Error(m.tag, "protocol botch"));
-			Fmap =>
-				srv.reply(readbytes(m, fid.data));
-			F1st or F2nd =>
-				if(fid.data != nil)
-					srv.reply(readbytes(m, fid.data));
-				else{
-					fid.data = loadpath(path);
-					srv.reply(readbytes(m, fid.data));
-				}
-			* =>
-				srv.reply(ref Rmsg.Error(m.tag, "what was i thinking1?"));
-			}
-		Write =>
-			case qidtype(path) {
-			Fnew =>
-				if(len fid.data + len m.data > Maxnew){
-					fid.data = nil;
-					srv.reply(ref Rmsg.Error(m.tag, sys->sprint("page too long: at most %d bytes", Maxnew)));
-				}else if(len m.data != 0){
-					n := len fid.data;
-					fid.data = (array[len fid.data + len m.data] of byte)[0:] = fid.data;
-					p := fid.data[n:];
-					p[0:] = m.data;
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
-				}else if(len fid.data != 0) {
-					(n, err) := commit(string fid.data);
-					if(n < 0){
-						# why: a title that names no page, a full wiki
-						fid.data = nil;
-						if(err == nil)
-							err = "newfile failed";
-						srv.reply(ref Rmsg.Error(m.tag, err));
-					}else{
-						# as Plan 9's: a write refused (an update
-						# conflict) still names the page, so the
-						# writer can be shown its werror.html
-						name := wiki->numtoname(n);
-						for(i:=0;i<len name;i++)
-							if(name[i] == ' ')
-								name[i] = '_';
-						fid.data = array of byte name;
-						if(err != nil)
-							srv.reply(ref Rmsg.Error(m.tag, err));
-						else
-							srv.reply(ref Rmsg.Write(m.tag, 0));
-					}
-				}else
-					srv.reply(ref Rmsg.Error(m.tag, "protocol botch"));
-			Fmap =>
-				n := wiki->nametonum(string m.data);
-				if(n < 0)
-					srv.reply(ref Rmsg.Error(m.tag, "name not found"));
-				else{
-					fid.data = m.data;
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
-				}
-			* =>
-				srv.reply(ref Rmsg.Error(m.tag, "what was i thinking2?"));
-			}
-		Stat =>
-			# the length is important because it is used by httpd for content-length
-			# so we have to read and generate the content and calculate it's length
-			# we can then stash it in the fid, or a cache of qid if we wanted.
-			# httpd also uses mtime for last-modified
-			# (an error here left the worker without telling the flush
-			# process or the pool; and a second stat of a file said 0)
-			(d, err) := dirgen(path);
-			if(d == nil)
-				srv.reply(ref Rmsg.Error(m.tag, err));
-			else{
-				case qidtype(path) {
-				F1st or F2nd =>
-					if(fid.data == nil)
-						fid.data = loadpath(path);
-					d.length = big len fid.data;
-				}
-				srv.reply(ref Rmsg.Stat(m.tag, *d));
-			}
-		* =>
-			srv.reply(ref Rmsg.Error(gm.tag, "oh dear"));	
+		r: ref Rmsg;
+		{
+			r = work(gm, fid);
+		} exception e {
+		"*" =>
+			r = ref Rmsg.Error(gm.tag, "wikifs: " + e);
 		}
-		pidregister <-= (pid, -1);
-		reqdone <-= req;
+		workdone <-= (w, r);
 	}
+}
+
+# A request's answer
+work(gm: ref Tmsg, fid: ref Fid): ref Rmsg
+{
+	path := fid.path;
+	pick m := gm {
+	Read =>
+		case qidtype(path) {
+		Fnew =>
+			if(fid.data != nil)
+				return readbytes(m, fid.data);
+			return ref Rmsg.Error(m.tag, "protocol botch");
+		Fmap =>
+			return readbytes(m, fid.data);
+		F1st or F2nd =>
+			if(fid.data == nil)
+				fid.data = loadpath(path);
+			return readbytes(m, fid.data);
+		}
+		return ref Rmsg.Error(m.tag, "what was i thinking1?");
+	Write =>
+		case qidtype(path) {
+		Fnew =>
+			if(len fid.data + len m.data > Maxnew){
+				fid.data = nil;
+				return ref Rmsg.Error(m.tag, sys->sprint("page too long: at most %d bytes", Maxnew));
+			}
+			if(len m.data != 0){
+				n := len fid.data;
+				fid.data = (array[len fid.data + len m.data] of byte)[0:] = fid.data;
+				p := fid.data[n:];
+				p[0:] = m.data;
+				return ref Rmsg.Write(m.tag, len m.data);
+			}
+			if(len fid.data != 0) {
+				(n, err) := commit(string fid.data);
+				if(n < 0){
+					# why: a title that names no page, a full wiki
+					fid.data = nil;
+					if(err == nil)
+						err = "newfile failed";
+					return ref Rmsg.Error(m.tag, err);
+				}
+				# as Plan 9's: a write refused (an update
+				# conflict) still names the page, so the
+				# writer can be shown its werror.html
+				name := wiki->numtoname(n);
+				for(i:=0;i<len name;i++)
+					if(name[i] == ' ')
+						name[i] = '_';
+				fid.data = array of byte name;
+				if(err != nil)
+					return ref Rmsg.Error(m.tag, err);
+				return ref Rmsg.Write(m.tag, 0);
+			}
+			return ref Rmsg.Error(m.tag, "protocol botch");
+		Fmap =>
+			n := wiki->nametonum(string m.data);
+			if(n < 0)
+				return ref Rmsg.Error(m.tag, "name not found");
+			fid.data = m.data;
+			return ref Rmsg.Write(m.tag, len m.data);
+		}
+		return ref Rmsg.Error(m.tag, "what was i thinking2?");
+	Stat =>
+		# the length is important because it is used by httpd for content-length
+		# so we have to read and generate the content and calculate it's length
+		# we can then stash it in the fid, or a cache of qid if we wanted.
+		# httpd also uses mtime for last-modified
+		(d, err) := dirgen(path);
+		if(d == nil)
+			return ref Rmsg.Error(m.tag, err);
+		case qidtype(path) {
+		F1st or F2nd =>
+			if(fid.data == nil)
+				fid.data = loadpath(path);
+			d.length = big len fid.data;
+		}
+		return ref Rmsg.Stat(m.tag, *d);
+	}
+	return ref Rmsg.Error(gm.tag, "oh dear");
 }
 
 # a page written to new: its number, and why its write was refused
@@ -661,49 +750,6 @@ dirgen(path: big): (ref Sys->Dir, string)
 	if(qidfile(path) == Qedithtml)
 		d.mtime = daytime->now();
 	return (d, nil);
-}
-
-flushproc(flush: chan of (int, int, chan of int))
-{
-	a: array of (int, int);
-	n := 0;
-	for(;;)alt{
-	(pid, tag) := <-pidregister =>
-		if(tag == -1){
-			# (an entry was dropped whether or not pid was found:
-			# after a flush had taken a worker's the count went
-			# negative and the next register indexed a[-1])
-			for(i := 0; i < n; i++)
-				if(a[i].t0 == pid){
-					a[i] = a[--n];
-					break;
-				}
-		}else{
-			if(n >= len a){
-				na := array[n + 5] of (int, int);
-				na[0:] = a;
-				a = na;
-			}
-			a[n++] = (pid, tag);
-		}
-	(tag, oldtag, done) := <-flush =>
-		pid := -1;
-		for(i := 0; i < n; i++)
-			if(a[i].t1 == oldtag){
-				pid = a[i].t0;
-				a[i] = a[--n];	# its worker is killed: it will not say it is done
-				break;
-			}
-		spawn doflush(tag, pid, done);
-	}
-}
-
-doflush(tag: int, pid: int, done: chan of int)
-{
-	if(pid != -1)
-		kill(pid, "kill");
-	srv.reply(ref Rmsg.Flush(tag));
-	done <-= 1;
 }
 
 kill(pid: int, note: string): int

@@ -106,6 +106,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TrimAddr",             testTrimAddr);
 	run("ParseAddrList",        testParseAddrList);
 	run("StrtoBig",             testStrtoBig);
+	run("AddrListQuoted",       testAddrListQuoted);
+	run("HeaderAll",            testHeaderAll);
+	run("DropHeader",           testDropHeader);
+	run("SmtpKeys",             testSmtpKeys);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
@@ -224,6 +228,62 @@ testParseAddrList(t: ref T)
 	t.assertseq(hd addrs, "a@x.com", "first");
 	t.assertseq(hd tl addrs, "b@x.com", "second extracted from <>");
 	t.assertseq(hd tl tl addrs, "c@x.com", "third");
+}
+
+# A comma inside a quoted name, angle brackets or a comment separates
+# nothing: split at every comma, "Doe, John" <j@x> was two recipients,
+# the first of them `"Doe`.
+testAddrListQuoted(t: ref T)
+{
+	addrs := mailparse->parseaddrlist("\"Doe, John\" <j@x.com>, b@x.com (Bob, the builder), , <c@x.com>");
+	t.asserteq(listlen(addrs), 3, "three addresses");
+	if(listlen(addrs) != 3)
+		return;
+	t.assertseq(hd addrs, "j@x.com", "a quoted name with a comma is one address");
+	t.assertseq(hd tl addrs, "b@x.com (Bob, the builder)", "a comment with a comma is not split");
+	t.assertseq(hd tl tl addrs, "c@x.com", "an empty entry is left out");
+	t.asserteq(listlen(mailparse->parseaddrlist("")), 0, "nothing gives nobody");
+	t.asserteq(listlen(mailparse->parseaddrlist(" , ")), 0, "nor do blanks and commas");
+}
+
+MSG: con "From: a@x\r\nTo: b@x,\r\n\tc@x\r\nBcc: d@x\r\nSubject: s\r\nbcc: e@x,\r\n f@x\r\nCc: g@x\r\n\r\nBcc: not a header\r\n";
+
+# compose took its recipients from the first To: line: a Cc got
+# nothing, a folded line's addresses neither.
+testHeaderAll(t: ref T)
+{
+	t.assertseq(mailparse->headerall(MSG, "To:"), " b@x,\tc@x", "To: with its continuation line");
+	t.assertseq(mailparse->headerall(MSG, "Bcc:"), " d@x,  e@x, f@x", "every Bcc:, whatever its case");
+	t.assertseq(mailparse->headerall(MSG, "Cc:"), " g@x", "Cc: is not Bcc:");
+	t.assertseq(mailparse->headerall(MSG, "Reply-To:"), "", "a field that is not there");
+	t.assertseq(mailparse->headerall("To: a@x\nCc: b@x\n\nCc: c@x\n", "Cc:"), " b@x", "LF lines; the body is not searched");
+}
+
+# A Bcc: left in the message is read by every recipient.
+testDropHeader(t: ref T)
+{
+	t.assertseq(mailparse->dropheader(MSG, "Bcc:"),
+		"From: a@x\r\nTo: b@x,\r\n\tc@x\r\nSubject: s\r\nCc: g@x\r\n\r\nBcc: not a header\r\n",
+		"both Bcc: headers gone with their continuation lines, the body as it was");
+	t.assertseq(mailparse->dropheader(MSG, "X-None:"), MSG, "a field that is not there changes nothing");
+	t.assertseq(mailparse->dropheader("Bcc: a@x", "Bcc:"), "", "a header with no newline");
+}
+
+# The IMAP server's key goes to the SMTP host only if that is the same
+# host or one the user named: it was offered to smtp.X, a name made up
+# from imap.X.
+testSmtpKeys(t: ref T)
+{
+	k := mailparse->smtpkeys("imap.example.com", "smtp.example.com", 0);
+	t.asserteq(listlen(k), 1, "a made-up SMTP host: one key");
+	t.assertseq(hd k, "proto=pass service=smtp dom=smtp.example.com", "its own");
+	k = mailparse->smtpkeys("imap.example.com", "smtp.example.com", 1);
+	t.asserteq(listlen(k), 2, "a named SMTP host: two keys");
+	t.assertseq(hd k, "proto=pass service=smtp dom=smtp.example.com", "its own first");
+	t.assertseq(hd tl k, "proto=pass service=imap dom=imap.example.com", "then the IMAP server's");
+	k = mailparse->smtpkeys("mail.example.com", "mail.example.com", 0);
+	t.asserteq(listlen(k), 2, "the IMAP host itself: two keys");
+	t.assertseq(hd tl k, "proto=pass service=imap dom=mail.example.com", "the IMAP server's second");
 }
 
 testStrtoBig(t: ref T)

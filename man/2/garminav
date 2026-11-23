@@ -47,12 +47,13 @@ navigation records (distance, cross track, waypoint, bearing) are
 passed over.
 The track is magnetic unless the unit is set to true, when its
 variation is E00.0; the fix's course is made true with the variation.
-A record of dashes is data the unit does not have; a group without a
+A record of dashes is data the unit does not have, and takes back what
+an earlier record of the group said of it; a group without a
 position is a lost fix.
 A record whose value is none a unit sends (a track past 360, a
 variation past 180, a sign in a latitude's degrees or minutes) is
 passed over.
-A group ends at ETX, or at the next
+A group ends at ETX, or at the next STX or the next
 .B z
 when the ETX was lost.
 A fix has no time: the format gives none, and the caller stamps it.

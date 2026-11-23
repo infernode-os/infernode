@@ -198,6 +198,9 @@ enum
 		Fwready		= 0x80,
 
 	/* wifi control commands */
+	GetRate		= 12,	/* WLC_GET_RATE: 500 kbit/s units */
+	GetChannel	= 29,	/* WLC_GET_CHANNEL: channel_info, hw_channel first */
+	GetRssi		= 127,	/* WLC_GET_RSSI: scb_val, the signal in dBm first */
 	GetVar		= 262,
 	SetVar		= 263,
 
@@ -254,6 +257,7 @@ struct Ctlr
 	Lock	txwinlock;	/* the flow-control pair, written by rproc */
 	Rendez	cmdr;
 	Rendez	joinr;
+	QLock	joinlock;	/* one join at a time: joinr has room for one sleeper */
 	int	joinstatus;	/* 1 + the firmware's E_SET_SSID status */
 	long	assocfail;	/* the 802.11 status of the last refused association (E_ASSOC); 0 after a join */
 	Lock	rsplock;	/* rsp, handed from rproc to wlcmd */
@@ -2400,7 +2404,12 @@ wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
 	else
 		p = put4(p, 2);		/* flags = Primarykey */
 	p += 3*4;
-	p = put4(p, 0);		/* iv initialised */
+	/*
+	 * A group key comes with the receive sequence counter the
+	 * handshake gave (the RSC): it is marked as set, as Linux's
+	 * brcmfmac marks it.
+	 */
+	p = put4(p, pairwise? 0: 1);	/* iv initialised */
 	p += 4;
 	p = put4(p, iv>>16);	/* iv high */
 	p = put2(p, iv&0xFFFF);	/* iv low */
@@ -2416,8 +2425,31 @@ wlwpakey(Ctlr *ctl, int id, uvlong iv, uchar *ea, int groupid)
  * happened. The parameter block is the firmware's "join" iovar: the
  * ssid, a scan specification, and either one channel or none.
  */
+/*
+ * One join at a time. Each waits on joinr for the firmware's answer, and
+ * a Rendez holds one sleeper: a second join written while the first was
+ * waiting -- the supplicant re-associating after "link lost" while
+ * osinit's Wi-Fi watch asked for a join of its own -- panicked the kernel
+ * with "double sleep" (2026-10-14, the access point unplugged). The
+ * second now waits for the first to finish, then joins.
+ */
+static void wljoin1(Ctlr*, char*, int);
+
 static void
 wljoin(Ctlr *ctl, char *ssid, int chan)
+{
+	qlock(&ctl->joinlock);
+	if(waserror()){
+		qunlock(&ctl->joinlock);
+		nexterror();
+	}
+	wljoin1(ctl, ssid, chan);
+	qunlock(&ctl->joinlock);
+	poperror();
+}
+
+static void
+wljoin1(Ctlr *ctl, char *ssid, int chan)
 {
 	uchar params[72];
 	uchar *p;
@@ -3351,6 +3383,26 @@ etherbcmtransmit(Ether *edev)
  * host has run out of credit or the queue has run dry, and txseq
  * equal to txwin answers it.
  */
+/*
+ * One of the firmware's integers about the link: the command's answer
+ * is its first word (channel_info's hw_channel, the rate in 500 kbit/s,
+ * scb_val's signal), and the question is that many zero bytes (an
+ * scb_val with no address asks for the access point's). Refused, or a
+ * radio not answering, it is def.
+ */
+static int
+linkint(Ctlr *ctl, int op, int len, int def)
+{
+	uchar buf[16];
+
+	memset(buf, 0, sizeof buf);
+	if(waserror())
+		return def;
+	wlcmd(ctl, 0, op, buf, len, buf, len);
+	poperror();
+	return (int)get4(buf);
+}
+
 static long
 etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 {
@@ -3384,7 +3436,26 @@ etherbcmifstat(Ether *edev, void *a, long n, ulong offset)
 	l += snprint(p+l, 512-l, "firmware: %s\n", ctl->running? ctl->ver : "not loaded");
 	if(ctl->running)
 		l += snprint(p+l, 512-l, "firmware bytes: %d\n", ctl->fwbytes);
-	l += snprint(p+l, 512-l, "channel: %d\n", ctl->chanid);
+	/*
+	 * Associated, the channel is the one in use and the link's rate
+	 * and signal are the firmware's own, asked now: what was asked
+	 * for on ctl is 0 (any channel) for nearly every join, and a
+	 * link nobody can measure cannot be made faster. A command the
+	 * firmware refuses leaves its line out; the rest still reads.
+	 */
+	if(ctl->running && ctl->status == Connected){
+		int ch, rate, rssi;
+
+		ch = linkint(ctl, GetChannel, 12, 0);
+		rate = linkint(ctl, GetRate, 4, 0);
+		rssi = linkint(ctl, GetRssi, 12, 0);	/* scb_val: 4 + 6, padded to 12 */
+		l += snprint(p+l, 512-l, "channel: %d\n", ch > 0? ch : ctl->chanid);
+		if(rate > 0)
+			l += snprint(p+l, 512-l, "rate: %d.%d Mbit/s\n", rate/2, (rate&1)*5);
+		if(rssi < 0)
+			l += snprint(p+l, 512-l, "rssi: %d dBm\n", rssi);
+	}else
+		l += snprint(p+l, 512-l, "channel: %d\n", ctl->chanid);
 	l += snprint(p+l, 512-l, "essid: %s\n", ctl->essid);
 	if(ctl->assocfail != 0)
 		l += snprint(p+l, 512-l, "assocfail: %ld\n", ctl->assocfail);

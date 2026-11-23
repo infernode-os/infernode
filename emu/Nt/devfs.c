@@ -29,6 +29,19 @@ typedef	WIN32_FIND_DATA	Fsdir;
 #define	INVALID_SET_FILE_POINTER	((DWORD)-1)
 #endif
 
+/*
+ * A host path's bytes here, and its wide characters: Linux's PATH_MAX,
+ * not MAX_PATH (260), which a tree under a user's home passed a few
+ * directories down (devfs_longpath_test: "file name too long" at the
+ * first 200-byte name).  Win32 takes a path past MAX_PATH only with
+ * the \\?\ prefix: fswiden adds it to those.
+ */
+enum
+{
+	NTPATH	= 4096,
+	NTWPATH	= NTPATH+8,	/* room for \\?\UNC\ */
+};
+
 struct Fsinfo
 {
 	int	uid;
@@ -39,6 +52,7 @@ struct Fsinfo
 	QLock	oq;
 	char*	spec;
 	wchar_t*	srv;
+	Lock	namel;	/* name is replaced by a rename; see fsname */
 	Cname*	name;	/* Windows' idea of the file name */
 	ushort	usesec;
 	ushort	checksec;
@@ -186,6 +200,12 @@ static	int		fsisroot(Chan*);
 static	int		okelem(char*, int);
 static	int		fsexist(char*, Qid*);
 static	char*	fspath(Cname*, char*, char*, char*);
+static	wchar_t*	fswiden(char*);
+static	void		fswidecopy(wchar_t*, char*, int);
+static	Cname*	fsname(Chan*);
+static	void		fssetname(Chan*, Cname*);
+static	char*	fschanpath(Chan*, char*, char*);
+static	Cname*	fschanwalk(Chan*, char*);
 static	Cname*	fswalkpath(Cname*, char*, int);
 static	char*	fslastelem(Cname*);
 static	long		fsdirread(Chan*, uchar*, int, vlong);
@@ -251,7 +271,7 @@ winfileclash(char *path)
 	WIN32_FIND_DATA data;
 	wchar_t *wpath;
 
-	wpath = widen(path);
+	wpath = fswiden(path);
 	h = FindFirstFile(wpath, &data);
 	free(wpath);
 	if (h != INVALID_HANDLE_VALUE) {
@@ -443,7 +463,7 @@ fswalk(Chan *c, Chan *nc, char **name, int nname)
 	 */
 	volatile int alloc;
 	Walkqid *wq;
-	char path[MAX_PATH], *p;
+	char path[NTPATH], *p;
 	Cname *ph;
 	Cname *volatile current;
 	Cname *next;
@@ -467,9 +487,7 @@ fswalk(Chan *c, Chan *nc, char **name, int nname)
 		alloc = 1;
 	}
 	wq->clone = nc;
-	current = FS(c)->name;
-	if(current != nil)
-		incref(&current->r);
+	current = fsname(c);
 	for(j = 0; j < nname; j++){
 		if(!(nc->qid.type&QTDIR)){
 			if(j==0)
@@ -553,13 +571,13 @@ fsopen(Chan *c, int mode)
 {
 	HANDLE h;
 	int m, isdir, aflag, cflag;
-	char path[MAX_PATH];
+	char path[NTPATH];
 	wchar_t *wpath;
 
 	isdir = c->qid.type & QTDIR;
 	if(isdir && mode != OREAD)
 		error(Eperm);
-	fspath(FS(c)->name, 0, path, FS(c)->spec);
+	fschanpath(c, 0, path);
 
 	if(FS(c)->checksec) {
 		switch(mode & (OTRUNC|3)) {
@@ -589,14 +607,23 @@ fsopen(Chan *c, int mode)
 	else {
 		m = fsomode(mode & 3);
 		cflag = OPEN_EXISTING;
-		if(mode & OTRUNC)
+		if(mode & OTRUNC){
+			/*
+			 * TRUNCATE_EXISTING needs a handle that may write: OREAD|OTRUNC
+			 * was "The parameter is incorrect", where the other hosts
+			 * truncate (export_readonly_test).  checksec asked for
+			 * write permission above; the channel is still opened
+			 * OREAD, so nothing writes through it.
+			 */
 			cflag = TRUNCATE_EXISTING;
+			m |= GENERIC_WRITE;
+		}
 		aflag = FILE_FLAG_RANDOM_ACCESS;
 		if(mode & ORCLOSE)
 			aflag |= FILE_FLAG_DELETE_ON_CLOSE;
 		if (winfileclash(path))
 			error(Eexist);
-		wpath = widen(path);
+		wpath = fswiden(path);
 		h = CreateFile(wpath, m, FILE_SHARE_READ|FILE_SHARE_WRITE|file_share_delete, 0, cflag, aflag, 0);
 		free(wpath);
 		if(h == INVALID_HANDLE_VALUE)
@@ -619,7 +646,7 @@ fscreate(Chan *c, char *name, int mode, ulong perm)
 	SECURITY_ATTRIBUTES sa;
 	SECURITY_DESCRIPTOR *sd;
 	BY_HANDLE_FILE_INFORMATION hi;
-	char *p, path[MAX_PATH], sdrock[SD_ROCK];
+	char *p, path[NTPATH], sdrock[SD_ROCK];
 	wchar_t *wpath;
 	ACL *acl;
 
@@ -627,7 +654,7 @@ fscreate(Chan *c, char *name, int mode, ulong perm)
 		error(Efilename);
 
 	m = fsomode(mode & 3);
-	p = fspath(FS(c)->name, name, path, FS(c)->spec);
+	p = fschanpath(c, name, path);
 	acl = (ACL*)smalloc(ACL_ROCK);
 	sd = nil;
 	if(FS(c)->usesec) {
@@ -669,7 +696,7 @@ fscreate(Chan *c, char *name, int mode, ulong perm)
 			free(acl);
 			error(Eisdir);
 		}
-		wpath = widen(path);
+		wpath = fswiden(path);
 		if(!CreateDirectory(wpath, &sa) || !fsexist(path, &c->qid)) {
 			free(wpath);
 			free(acl);
@@ -684,8 +711,17 @@ fscreate(Chan *c, char *name, int mode, ulong perm)
 			aflag = FILE_FLAG_DELETE_ON_CLOSE;
 		if (winfileclash(path))
 			error(Eexist);
-		wpath = widen(path);
-		h = CreateFile(wpath, m, FILE_SHARE_READ|FILE_SHARE_WRITE|file_share_delete, &sa, CREATE_ALWAYS, aflag, 0);
+		/*
+		 * A device's create is create(5): it fails if the file is
+		 * there, and namec opens it with OTRUNC in its place for a
+		 * create(2) that is not OEXCL (emu/port/chan.c's Acreate), as
+		 * devfs-posix.c's O_CREAT|O_EXCL does.  CREATE_ALWAYS
+		 * truncated the file that was there and succeeded, so OEXCL
+		 * never failed: two takers of a lock file both had it (sdg's
+		 * handshake counter gave one value twice, sdg_test).
+		 */
+		wpath = fswiden(path);
+		h = CreateFile(wpath, m, FILE_SHARE_READ|FILE_SHARE_WRITE|file_share_delete, &sa, CREATE_NEW, aflag, 0);
 		free(wpath);
 		if(h == INVALID_HANDLE_VALUE) {
 			free(acl);
@@ -808,7 +844,7 @@ int
 fsstat(Chan *c, uchar *buf, int n)
 {
 	WIN32_FIND_DATA data;
-	char path[MAX_PATH];
+	char path[NTPATH];
 	wchar_t *wpath;
 
 	/*
@@ -833,8 +869,15 @@ fsstat(Chan *c, uchar *buf, int n)
 	} else {
 		HANDLE h = INVALID_HANDLE_VALUE;
 
-		fspath(FS(c)->name, 0, path, FS(c)->spec);
-		if (c->flag & COPEN)
+		fschanpath(c, 0, path);
+		/*
+		 * An open directory's fd is the search handle of its last
+		 * read (FindFirstFile's), which is no file handle: an fstat of
+		 * a directory once read was "The handle is invalid".  And it
+		 * is replaced under oq by a read in another process.  A
+		 * directory is stat'ed by its name, as one not open is.
+		 */
+		if ((c->flag & COPEN) && !(c->qid.type & QTDIR))
 			h = FS(c)->fd;
 
 		if (h != INVALID_HANDLE_VALUE) {
@@ -850,7 +893,7 @@ fsstat(Chan *c, uchar *buf, int n)
 			data.nFileSizeHigh = fi.nFileSizeHigh;
 			data.nFileSizeLow = fi.nFileSizeLow;
 		} else {
-			wpath = widen(path);
+			wpath = fswiden(path);
 			h = FindFirstFile(wpath, &data);
 			free(wpath);
 			if(h == INVALID_HANDLE_VALUE)
@@ -861,7 +904,13 @@ fsstat(Chan *c, uchar *buf, int n)
 			}
 			FindClose(h);
 		}
-		utftorunes(data.cFileName, fslastelem(FS(c)->name), MAX_PATH);
+		{
+			Cname *nm;
+
+			nm = fsname(c);
+			utftorunes(data.cFileName, fslastelem(nm), MAX_PATH);
+			cnameclose(nm);
+		}
 	}
 
 	return fsdirset(buf, n, &data, path, c, 0);
@@ -879,8 +928,8 @@ fswstat(Chan *c, uchar *buf, int n)
 	User *ou, *gu;
 	WIN32_FIND_DATA data;
 	SECURITY_DESCRIPTOR *sd;
-	char *last, sdrock[SD_ROCK], path[MAX_PATH], newpath[MAX_PATH], strs[4*256];
-	wchar_t wspath[MAX_PATH], wsnewpath[MAX_PATH];
+	char *last, sdrock[SD_ROCK], path[NTPATH], newpath[NTPATH], strs[4*256];
+	wchar_t wspath[NTWPATH], wsnewpath[NTWPATH];
 	wchar_t *wpath;
 	int nmatch;
 
@@ -899,14 +948,14 @@ fswstat(Chan *c, uchar *buf, int n)
 		error(Eshortstat);
 
 	/*
-	 * path and newpath are MAX_PATH bytes and a name here can be near
+	 * path and newpath are NTPATH bytes and a name here can be near
 	 * a thousand: fspath refuses (Etoolong) what does not fit before
 	 * it copies anything, for the file's own name and for the new one
 	 * below, and the wide copies are no longer than the bytes.
 	 */
 	sd = nil;	/* (it was given to CreateFile unset where there is no security) */
-	last = fspath(FS(c)->name, 0, path, FS(c)->spec);
-	utftorunes(wspath, path, MAX_PATH);
+	last = fschanpath(c, 0, path);
+	fswidecopy(wspath, path, NTWPATH);
 
 	if(fsisroot(c)){
 		if(dir.atime != ~0)
@@ -1004,18 +1053,18 @@ fswstat(Chan *c, uchar *buf, int n)
 	if(!emptystr(dir.name) && nmatch != 0){
 		if(!okelem(dir.name, 1))
 			error(Efilename);
-		ph = fswalkpath(FS(c)->name, "..", 1);
+		ph = fschanwalk(c, "..");
 		if(waserror()){
 			cnameclose(ph);
 			nexterror();
 		}
 		ph = fswalkpath(ph, dir.name, 0);
 		/*
-		 * (the new name, which fspath has held to MAX_PATH: it was
+		 * (the new name, which fspath has held to NTPATH: it was
 		 * asked of wpath, the name's wide copy, freed just above)
 		 */
 		fspath(ph, 0, newpath, FS(c)->spec);
-		utftorunes(wsnewpath, newpath, MAX_PATH);
+		fswidecopy(wsnewpath, newpath, NTWPATH);
 		if(GetFileAttributes(wsnewpath) != 0xffffffff && !winfileclash(newpath))
 			error("file already exists");
 		if(fsisroot(c))
@@ -1066,14 +1115,14 @@ fswstat(Chan *c, uchar *buf, int n)
 	nmatch = runescmp(wpath, data.cFileName);
 	free(wpath);
 	if(!emptystr(dir.name) && nmatch != 0) {
-		ph = fswalkpath(FS(c)->name, "..", 1);
+		ph = fschanwalk(c, "..");
 		if(waserror()){
 			cnameclose(ph);
 			nexterror();
 		}
 		ph = fswalkpath(ph, dir.name, 0);
 		fspath(ph, 0, newpath, FS(c)->spec);
-		utftorunes(wsnewpath, newpath, MAX_PATH);
+		fswidecopy(wsnewpath, newpath, NTWPATH);
 		/*
 		 * can't rename if it is open: if this process has it open, close it temporarily.
 		 */
@@ -1101,9 +1150,8 @@ fswstat(Chan *c, uchar *buf, int n)
 				oserror();
 			FS(c)->fd = h;
 		}
-		cnameclose(FS(c)->name);
 		poperror();
-		FS(c)->name = ph;
+		fssetname(c, ph);
 	}
 	return n;
 }
@@ -1112,8 +1160,8 @@ static void
 fsremove(Chan *c)
 {
 	int n;
-	char *p, path[MAX_PATH];
-	wchar_t wspath[MAX_PATH];
+	char *p, path[NTPATH];
+	wchar_t wspath[NTWPATH];
 
 	if(waserror()){
 		fsfree(c);
@@ -1121,8 +1169,8 @@ fsremove(Chan *c)
 	}
 	if(fsisroot(c))
 		error(Eperm);
-	p = fspath(FS(c)->name, 0, path, FS(c)->spec);
-	utftorunes(wspath, path, MAX_PATH);
+	p = fschanpath(c, 0, path);
+	fswidecopy(wspath, path, NTWPATH);
 	if(FS(c)->checksec){
 		*p = '\0';
 		seccheck(path, WMODE, FS(c)->srv);
@@ -1219,7 +1267,77 @@ cnisroot(Cname *c)
 static int
 fsisroot(Chan *c)
 {
-	return strcmp(FS(c)->name->s, "/") == 0;
+	int r;
+
+	lock(&FS(c)->namel);
+	r = strcmp(FS(c)->name->s, "/") == 0;
+	unlock(&FS(c)->namel);
+	return r;
+}
+
+/*
+ * A channel's host name is replaced when the file is renamed through
+ * it (fswstat), and a channel open in several processes is read and
+ * stat'ed by the others meanwhile.  They used the name with no
+ * reference of their own: the rename freed it under them, and a read
+ * built its path from freed memory (devfs_rename_test; fixed in
+ * emu/port/devfs-posix.c first).  Each use takes a reference here and
+ * gives it back with cnameclose.
+ */
+static Cname*
+fsname(Chan *c)
+{
+	Cname *n;
+
+	lock(&FS(c)->namel);
+	n = FS(c)->name;
+	if(n != nil)
+		incref(&n->r);
+	unlock(&FS(c)->namel);
+	return n;
+}
+
+/* n's reference becomes the channel's */
+static void
+fssetname(Chan *c, Cname *n)
+{
+	Cname *o;
+
+	lock(&FS(c)->namel);
+	o = FS(c)->name;
+	FS(c)->name = n;
+	unlock(&FS(c)->namel);
+	cnameclose(o);
+}
+
+/* fspath of the channel's name, held while it is made */
+static char*
+fschanpath(Chan *c, char *ext, char *path)
+{
+	Cname *volatile nm;
+	char *p;
+
+	nm = fsname(c);
+	if(waserror()){
+		cnameclose(nm);
+		nexterror();
+	}
+	p = fspath(nm, ext, path, FS(c)->spec);
+	poperror();
+	cnameclose(nm);
+	return p;
+}
+
+/* a new name: the channel's with name added */
+static Cname*
+fschanwalk(Chan *c, char *name)
+{
+	Cname *nm, *r;
+
+	nm = fsname(c);
+	r = fswalkpath(nm, name, 1);
+	cnameclose(nm);
+	return r;
 }
 
 static char*
@@ -1231,7 +1349,7 @@ fspath(Cname *c, char *ext, char *path, char *spec)
 	rootd = spec != nil ? spec : rootdir;
 	if(ext)
 		extlen = strlen(ext) + 1;
-	if(strlen(rootd) + extlen >= MAX_PATH)
+	if(strlen(rootd) + extlen >= NTPATH)
 		error(Etoolong);
 	strcpy(path, rootd);
 	if(cnisroot(c)){
@@ -1241,11 +1359,11 @@ fspath(Cname *c, char *ext, char *path, char *spec)
 		}
 	}else{
 		if(*c->s != '/') {
-			if(strlen(path) + 1 >= MAX_PATH)
+			if(strlen(path) + 1 >= NTPATH)
 				error(Etoolong);
 			strcat(path, "\\");
 		}
-		if(strlen(path) + strlen(c->s) + extlen >= MAX_PATH)
+		if(strlen(path) + strlen(c->s) + extlen >= NTPATH)
 			error(Etoolong);
 		strcat(path, c->s);
 		if(ext){
@@ -1261,6 +1379,60 @@ fspath(Cname *c, char *ext, char *path, char *spec)
 		}
 	}
 	return last;
+}
+
+/*
+ * A host path as Win32 takes it, malloc'd: as it is when it is short,
+ * and with \\?\ (or \\?\UNC\ for a share) when it is not, which lifts
+ * MAX_PATH.  fspath's paths are absolute, their separators backslashes
+ * and their dot-dots gone, as \\?\ needs: it gives the path to the
+ * file system as it is.  Kept to long paths only, so that a short one
+ * is treated as it always was.
+ */
+static wchar_t*
+fswiden(char *path)
+{
+	wchar_t *w, *r, *pre;
+	int n, skip;
+
+	w = widen(path);
+	n = runeslen(w);
+	if(n < MAX_PATH-12)	/* CreateDirectory's limit: MAX_PATH less an 8.3 name */
+		return w;
+	if(path[0] == '\\' && path[1] == '\\'){
+		if(path[2] == '?' || path[2] == '.')
+			return w;	/* a device path already */
+		pre = L"\\\\?\\UNC\\";
+		skip = 2;
+	}else if(path[0] != 0 && path[1] == ':'){
+		pre = L"\\\\?\\";
+		skip = 0;
+	}else
+		return w;
+	r = malloc((wcslen(pre) + n - skip + 1) * sizeof(wchar_t));
+	if(r == nil){
+		free(w);
+		error(Enomem);
+	}
+	wcscpy(r, pre);
+	wcscat(r, w + skip);
+	free(w);
+	return r;
+}
+
+/* fswiden into w, of nw characters */
+static void
+fswidecopy(wchar_t *w, char *path, int nw)
+{
+	wchar_t *t;
+
+	t = fswiden(path);
+	if(wcslen(t) >= nw){
+		free(t);
+		error(Etoolong);
+	}
+	wcscpy(w, t);
+	free(t);
 }
 
 extern void cleancname(Cname*);
@@ -1313,7 +1485,7 @@ fsdirent(Chan *c, char *path, Fsdir *data)
 	if(FS(c)->offset == 0){
 		if(h != INVALID_HANDLE_VALUE)
 			FindClose(h);
-		wpath = widen(path);
+		wpath = fswiden(path);
 		h = FindFirstFile(wpath, data);
 		free(wpath);
 		FS(c)->fd = h;
@@ -1337,13 +1509,13 @@ static long
 fsdirread(Chan *c, uchar *va, int count, vlong offset)
 {
 	int i, r;
-	char path[MAX_PATH], *p;
+	char path[NTPATH], *p;
 	Fsdir *de;
 	vlong o;
 
 	if(count == 0 || offset < 0)
 		return 0;
-	p = fspath(FS(c)->name, "*.*", path, FS(c)->spec);
+	p = fschanpath(c, "*.*", path);
 	p++;
 	de = nil;
 	if(FS(c)->offset != offset){
@@ -1359,8 +1531,8 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 				FS(c)->offset = o;
 				return 0;
 			}
-			runestoutf(p, de->cFileName, &path[MAX_PATH]-p);
-			path[MAX_PATH-1] = '\0';
+			runestoutf(p, de->cFileName, &path[NTPATH]-p);
+			path[NTPATH-1] = '\0';
 			o += fsdirsize(de, path, c);
 		}
 		FS(c)->offset = offset;
@@ -1374,8 +1546,8 @@ fsdirread(Chan *c, uchar *va, int count, vlong offset)
 			if(de == nil)
 				break;
 		}
-		runestoutf(p, de->cFileName, &path[MAX_PATH]-p);
-		path[MAX_PATH-1] = '\0';
+		runestoutf(p, de->cFileName, &path[NTPATH]-p);
+		path[NTPATH-1] = '\0';
 		r = fsdirset(va+i, count-i, de, path, c, 1);
 		if(r <= 0){
 			/* won't fit; save for next read at this offset */
@@ -1443,7 +1615,7 @@ fsexist(char *p, Qid *q)
 
 	if(devfile(p))
 		return 0;
-	wpath = widen(p);
+	wpath = fswiden(p);
 	h = FindFirstFile(wpath, &data);
 	free(wpath);
 	if(h == INVALID_HANDLE_VALUE)
@@ -1536,7 +1708,7 @@ fssettime(char *path, long at, long mt)
 	FILETIME atime, mtime;
 	wchar_t *wpath;
 
-	wpath = widen(path);
+	wpath = fswiden(path);
 	h = CreateFile(wpath, GENERIC_WRITE,
 		0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
 	free(wpath);
@@ -1821,7 +1993,7 @@ secsd(char *file, char sdrock[SD_ROCK])
 	}
 	sd = (SECURITY_DESCRIPTOR*)sdrock;
 	need = 0;
-	wpath = widen(path);
+	wpath = fswiden(path);
 	if(GetFileSecurity(wpath, OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION, sd, SD_ROCK, &need)) {
 		free(wpath);
 		return sd;

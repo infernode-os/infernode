@@ -15,6 +15,13 @@ Mdhtml: module {
 	# A Markdown document as HTML
 	html: fn(text: string): string;
 
+	# The same for text that is not the page's author's: no HTML of
+	# the writer's (a tag is its characters), and a link or image goes
+	# only to http, https, mailto or a place with no scheme; any other
+	# is left as it was written.  What it gives can be put in a page
+	# beside the site's own.
+	htmlsafe: fn(text: string): string;
+
 	# s with & < > and " as entities, for text or an attribute's value
 	escape: fn(s: string): string;
 };

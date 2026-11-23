@@ -138,6 +138,57 @@ testWeights(t: ref T)
 	t.assert(int fonts->face("w" :: nil, 600, 0, 20.0).width("x") != 20, "600 takes 800 (heavier first)");
 }
 
+# A WOFF2 font says how long its tables are, and the sum was the size
+# Brotli was told to decode to, which it allocates before it reads: a
+# font of sixty bytes asked for a gigabyte, and two lengths of 2^30
+# wrapped to a negative size, which Brotli takes for no limit.  The sum
+# is held to 64MB and nothing is made for what is not decoded.
+woff2hdr(lens: array of int): array of byte
+{
+	b := array[48] of {* => byte 0};
+	b[0:] = array of byte "wOF2";
+	b[4] = byte 0; b[5] = byte 1; b[6] = byte 0; b[7] = byte 0;	# flavor 0x00010000
+	b[12] = byte (len lens >> 8);
+	b[13] = byte len lens;
+	body := array[0] of byte;
+	for(i := 0; i < len lens; i++){
+		# flags: a known tag (cmap, head, ...) not transformed; then
+		# the length, base 128, five bytes
+		e := array[6] of byte;
+		e[0] = byte i;
+		v := lens[i];
+		e[1] = byte (16r80 | ((v >> 28) & 16r7F));
+		e[2] = byte (16r80 | ((v >> 21) & 16r7F));
+		e[3] = byte (16r80 | ((v >> 14) & 16r7F));
+		e[4] = byte (16r80 | ((v >> 7) & 16r7F));
+		e[5] = byte (v & 16r7F);
+		nb := array[len body + 6] of byte;
+		nb[0:] = body;
+		nb[len body:] = e;
+		body = nb;
+	}
+	# the compressed data: one byte, an empty Brotli stream
+	br := array[] of {byte 16r3B};
+	b[20] = byte 0; b[21] = byte 0; b[22] = byte 0; b[23] = byte len br;	# totalCompressedSize
+	out := array[len b + len body + len br] of byte;
+	out[0:] = b;
+	out[len b:] = body;
+	out[len b + len body:] = br;
+	return out;
+}
+
+testWoff2Size(t: ref T)
+{
+	(d, err) := woff2->decode(woff2hdr(array[] of {16r10000000 + 1, 100}));
+	t.assert(d == nil, "a font whose tables are said to be 256MB is refused");
+	t.assertseq(err, "woff2: font too large", "as too large");
+	(d, err) = woff2->decode(woff2hdr(array[] of {16r40000000, 16r40000000, 16r40000000, 16r40000000}));
+	t.assert(d == nil, "one whose lengths sum past an int is refused");
+	t.assertseq(err, "woff2: font too large", "as too large");
+	(d, err) = woff2->decode(woff2hdr(array[] of {1000, 2000}));
+	t.assert(d == nil && err == "woff2: corrupt font", sys->sprint("one whose data is shorter than its tables is corrupt (%s)", err));
+}
+
 # WOFF2 against the font it was made from: every character's advance,
 # and its glyph drawn, the same
 woff2vs(t: ref T, file: string)
@@ -427,6 +478,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("OTF", testOTF);
 	run("Standins", testStandins);
 	run("LazyFace", testLazyFace);
+	run("Woff2Size", testWoff2Size);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

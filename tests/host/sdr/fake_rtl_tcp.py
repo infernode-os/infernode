@@ -12,6 +12,14 @@
                                         rtl_tcp does while another client
                                         holds it; print the port
 
+    fake_rtl_tcp.py trickle             listen; greet as rtl_tcp, and after
+                                        2.5 s send 6000 bytes of samples two
+                                        at a time, a millisecond apart, then
+                                        nothing; print the port
+    fake_rtl_tcp.py slow                listen; greet as rtl_tcp two seconds
+                                        after a client connects, then send
+                                        nothing; print the port
+
 rtl_tcp (librtlsdr) greets a client with 12 bytes, "RTL0", the tuner type
 and the number of its gains (big-endian 32-bit), then sends samples until
 the client hangs up: 8-bit unsigned I then Q.  It takes commands of 5
@@ -140,6 +148,46 @@ def busy():
         held.append(c)
 
 
+def drain(c):
+    try:
+        while c.recv(4096):
+            pass
+    except OSError:
+        pass
+
+
+def trickle():
+    s = listen()
+    while True:
+        c, _ = s.accept()
+        c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        threading.Thread(target=drain, args=(c,), daemon=True).start()
+        try:
+            c.sendall(b"RTL0" + struct.pack(">II", 5, 29))
+            time.sleep(2.5)
+            for k in range(3000):
+                c.sendall(bytes((k % 256, 255 - k % 256)))
+                time.sleep(0.001)
+            time.sleep(30)
+        except OSError:
+            pass
+        c.close()
+
+
+def slow():
+    s = listen()
+    while True:
+        c, _ = s.accept()
+        threading.Thread(target=drain, args=(c,), daemon=True).start()
+        try:
+            time.sleep(2)
+            c.sendall(b"RTL0" + struct.pack(">II", 5, 29))
+            time.sleep(30)
+        except OSError:
+            pass
+        c.close()
+
+
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "serve":
         samples = PATTERN
@@ -151,8 +199,12 @@ def main():
         http()
     elif len(sys.argv) == 2 and sys.argv[1] == "busy":
         busy()
+    elif len(sys.argv) == 2 and sys.argv[1] == "trickle":
+        trickle()
+    elif len(sys.argv) == 2 and sys.argv[1] == "slow":
+        slow()
     else:
-        sys.exit("usage: fake_rtl_tcp.py serve LOG [TUNER [IQ]] | http | busy")
+        sys.exit("usage: fake_rtl_tcp.py serve LOG [TUNER [IQ]] | http | busy | trickle | slow")
 
 
 if __name__ == "__main__":

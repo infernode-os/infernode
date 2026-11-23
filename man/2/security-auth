@@ -148,6 +148,19 @@ tells both functions
 that
 .IR ssl (3)
 should not be used at all on a connection.
+.PP
+In CNSA mode
+.RB ( /env/cnsamode ;
+see
+.IR security-login (2))
+.BR client ,
+.B server
+and
+.B auth
+refuse a key file that is not the mode's before anything is sent on the connection,
+with the reason
+.B cnsakey
+gives.
 .SH EXAMPLE
 This selection from
 .B /appl/cmd/mount.b

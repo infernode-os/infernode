@@ -32,7 +32,7 @@ warning, error : import utils;
 
 init(mods : ref Dat->Mods)
 {
-	messagesize = Styx->MAXRPC;
+	messagesize = Styx->DEFMSIZE;
 
 	sys = mods.sys;
 	styx = mods.styx;

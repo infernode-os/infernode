@@ -12,7 +12,9 @@ implement Hostplumb;
 # A message from another host (attr host=name, sent by tools/rplumb on
 # that host) has its paths placed under /n/name instead, where that
 # host's file system is mounted (tools/xen does it, before Xenith starts,
-# for the hosts named in $XEN_HOSTS).
+# for the hosts named in $XEN_HOSTS), if -h names that host: a message
+# says its own host, and one that named any other mount under /n (or
+# "local", this machine's own files) was taken at its word.
 #
 # With -p it reads plain host paths instead, one to a line: files the
 # host asked this InferNode to open (the emulator's /dev/hostopen, fed
@@ -45,6 +47,7 @@ Hostplumb: module
 
 Retries: con 30;
 Retrywait: con 500;	# ms; 15s in all
+hosts: list of string;	# -h: the hosts whose messages are taken
 
 stderr: ref Sys->FD;
 
@@ -68,11 +71,15 @@ init(nil: ref Draw->Context, args: list of string)
 	root := "/n/local";
 	plain := 0;
 	arg->init(args);
-	arg->setusage("hostplumb [-p] [-r root]");
+	arg->setusage("hostplumb [-p] [-r root] [-h host,...]");
 	while((c := arg->opt()) != 0)
 		case c {
 		'p' =>
 			plain = 1;
+		'h' =>
+			(nil, hl) := sys->tokenize(arg->earg(), ", ");
+			for(; hl != nil; hl = tl hl)
+				hosts = hd hl :: hosts;
 		'r' =>
 			root = arg->earg();
 		* =>
@@ -95,7 +102,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(plain){
 		while((s := in.gets('\n')) != nil){
 			p := hostpath(s);
-			if(p != nil && (m := local(ref Msg("hostopen", nil, "/", "text", nil, array of byte p), root)) != nil)
+			if(p != nil && (m := local(ref Msg("hostopen", nil, "/", "text", nil, array of byte p), root, "hostopen")) != nil)
 				send(m);
 		}
 		return;
@@ -104,28 +111,48 @@ init(nil: ref Draw->Context, args: list of string)
 		r := root;
 		(ok, host) := attr(m.attr, "host");
 		if(ok && host != nil){
-			if(!validhost(host)){
-				sys->fprint(stderr, "hostplumb: bad host name %q\n", host);
+			if(!validhost(host) || !member(host, hosts)){
+				sys->fprint(stderr, "hostplumb: a message from host %q, which is not one of -h's: dropped\n", host);
 				continue;
 			}
 			r = "/n/" + host;
 		}
-		if((lm := local(m, r)) != nil)
+		if((lm := local(m, r, "hostplumb")) != nil)
 			send(lm);
 	}
 }
 
-# the receiver may still be starting (a message can arrive as soon as
-# the host's plumber sees this reader): retry a while
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+# The receiver may still be starting (a message can arrive as soon as
+# the host's plumber sees this reader): retry a while.  Only that: a
+# message no rule takes is refused at once and will be at every try,
+# and each such message held the stream for the whole fifteen seconds.
 send(m: ref Msg)
 {
 	for(i := 0; m.send() < 0; i++){
-		if(i == Retries){
-			sys->fprint(stderr, "hostplumb: plumb %s: %r\n", string m.data);
+		e := sys->sprint("%r");
+		if(i == Retries || !waitable(e)){
+			sys->fprint(stderr, "hostplumb: plumb %s: %s\n", string m.data, e);
 			return;
 		}
 		sys->sleep(Retrywait);
 	}
+}
+
+# whether a refusal may pass: no receiver yet, not no rule
+waitable(e: string): int
+{
+	for(i := 0; i + 4 <= len e; i++)
+		if(e[i:i+4] == "rule")
+			return 0;
+	return 1;
 }
 
 # one line of -p: an absolute host path, a Windows one on C: made a
@@ -236,7 +263,10 @@ readmsg(in: ref Iobuf): ref Msg
 # "..", which left the root for this machine's own files, or one that
 # is not absolute and has no absolute directory to make it so, which
 # was passed on as it came and read here as a name of this name space)
-local(m: ref Msg, root: string): ref Msg
+# src is the caller's word for where it came from: a message said
+# "hostopen" of itself and was plumbed under the rules for files the
+# host asked to open, which take any name.
+local(m: ref Msg, root: string, src: string): ref Msg
 {
 	data := string m.data;
 	if(m.dir != nil && (m.dir[0] != '/' || dotdot(m.dir))){
@@ -258,9 +288,6 @@ local(m: ref Msg, root: string): ref Msg
 	dir := m.dir;
 	if(dir != nil && dir[0] == '/')
 		dir = root + dir;
-	src := "hostplumb";
-	if(m.src == "hostopen")
-		src = m.src;
 	# no destination or attributes: this namespace's rules decide
 	return ref Msg(src, nil, dir, m.kind, nil, array of byte data);
 }

@@ -20,6 +20,72 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **The security review's second round: what the first left, closed.**
+  The fixes and their tests are in `CLAUDE.md`'s table. What is not
+  compatible with 0.11.0:
+  - **One 9P library.** `Ninep` (`ninep.b`, `9p.m`) is gone: it was
+    Styx under another name, and only tests loaded it. Styx takes its
+    names: `Styx->MAXRPC` is `DEFMSIZE`, `Styx->MAXFDATA` is
+    `DEFIOUNIT`; `Styx->write` and `PATHV1` are gone.
+  - **Plan 9's authentication is removed.** p9sk1 needs DES, which went
+    in 0.11.0, so it could run nowhere: `auth9`, `oldauth`, factotum's
+    `p9any` and `crypt.m` are gone, factotum refuses those protocols
+    with the reason. Nothing asks for them any more: `9cpu` is
+    removed, `import` and `9export` run only with `-A` (no
+    authentication, clear text) and say so without it, their `-k` is
+    gone, `mount -9` and namespace(6)'s `mount -9` and `import` are
+    refused (a 9P server that wants no authentication is `mount -A`),
+    and `Factotum->mount` and `Styxpersist->init`'s `usefac` and
+    `keyspec` are gone.
+  - **Ciphers removed from Keyring:** the DES, IDEA, Blowfish and MD4
+    functions, with `idea(1)` and `netkey(1)`. A certificate whose hash
+    is `md4` is refused. RC4 stays for old PDFs.
+  - **Keys.** An RSA key with an even modulus or an exponent past 256
+    bits is refused. In CNSA mode a key file that is not the mode's
+    authenticates nobody, and both ends need this build.
+  - **Listeners.** `listen -M` and `styxlisten -M` are usage errors
+    (nothing is mixed now that the client's choice is confirmed); `-A`
+    with `-a` is refused; `listen -A` forks its name space.
+  - **Daemons removed:** `bootpd`, `tftpd`, `rip`, `virgild`, with
+    tftp(2), virgil(2) and ether(2). None could be run safely and
+    nothing used them.
+  - **Registry:** a `persist` service expires a day after its owner
+    last wrote it (`-t 0` keeps it); services, attributes and filters
+    are counted and bounded.
+  - **Time:** `ip/sntp` and the native boot's SNTP will not step a
+    clock already set by more than a day (`sntp -m`).
+  - **Mail:** the IMAP password is not sent to a guessed `smtp.` host:
+    give a `service=smtp` key or name the host. `Imap->Mailbox`'s
+    `uidvalidity` is a big.
+  - **Payments:** `x402->authorize` withdraws a request not approved in
+    its wait and returns an error; an RPC URL is https, or http to the
+    loopback; `Ethrpc`'s receipt functions, which had no caller, are
+    gone.
+  - **Feeds:** hostplumb takes `host=` messages only from hosts named
+    with `-h`; vision(4)'s session files belong to whoever made the
+    session; GDL 90 ids for addresses that are not ICAO's are
+    `kind.hex`; a GGA whose quality is outside 1 to 8 is no fix; an sdg
+    session ends at 2^60 packets.
+  - **wikifs:** a page keeps 10000 versions and 16MB of history at
+    most; titles httpd would not serve by name are refused.
+  - **ftpfs:** a mount ends in errors after `-t` seconds of silence
+    (120).
+  - **Exports:** `sys->export` refuses a flag bit no flag has (it was
+    ignored); `Sys->EXPREADONLY` makes an export refuse every change,
+    and `post -r` posts a directory with it; `post` refuses a spec that
+    begins with `-`.
+  - **Revocation lists:** a CRL is consulted only for what its own
+    issuer issued, and must be signed by that issuer. A chain that
+    failed only because of another CA's CRL now verifies; an unsigned
+    CRL in `/lib/crls` refuses its issuer's paths where it revoked by
+    name; httpd's `-A` takes an intermediate's CRL.
+  - **The agent's vision tool** is given the models and one session of
+    its own, not `/mnt/vision`: no `ctl`, no `clone`, no other session.
+  - **Faster again on x86-64:** AES and GHASH use the processor's AES
+    and PCLMULQDQ instructions where it has them (AES-256-GCM in the
+    emulator from 71 to 2770 MB/s here); the constant-time C runs
+    elsewhere, and on Windows. Ed25519 keys and signatures are made in
+    constant time; signatures are unchanged.
 - **`pctl(NEWNS)`: a relative ".." left the new root.** sys-pctl(2) makes
   the current directory the root of the new name space. `/..` was held
   there, but the new dot was a clone that kept the name dot had before,

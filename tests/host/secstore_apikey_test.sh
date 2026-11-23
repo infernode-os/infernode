@@ -6,9 +6,8 @@
 #   1. secstore account created
 #   2. factotum configured with secstore save-back
 #   3. API key added to factotum and synced to secstore
-#   4. sentinel file created (/tmp/.secstore-unlocked)
-#   5. key survives factotum restart via secstore reload
-#   6. llmsrv can read key from factotum (getfactotumkey)
+#   4. key survives factotum restart via secstore reload
+#   5. llmsrv can read key from factotum (getfactotumkey)
 #
 set -e
 
@@ -70,9 +69,9 @@ run_emu() {
 
 echo "=== secstore API key persistence tests ==="
 
-# ── Test 1: Create account, add API key, verify sentinel ──
+# ── Test 1: Create account, add API key ──
 echo ""
-echo "--- test 1: secstore account + API key + sentinel ---"
+echo "--- test 1: secstore account + API key ---"
 cat > "$ROOT/tmp/test_apikey_setup.sh" << EOF
 load std
 bind -a '#I' /net
@@ -92,22 +91,10 @@ sleep 3
 echo '--- factotum keys ---'
 cat /mnt/factotum/ctl
 
-# Create sentinel (as logon.b would)
-echo '1' > /tmp/.secstore-unlocked
-
-# Verify sentinel exists
-echo '--- sentinel check ---'
-if {ftest -f /tmp/.secstore-unlocked} {
-    echo 'sentinel exists'
-} {
-    echo 'sentinel missing'
-}
-
 echo '--- done ---'
 EOF
 OUTPUT=$(run_emu 25 /tmp/test_apikey_setup.sh)
 check "API key stored in factotum" "$OUTPUT" "service=anthropic"
-check "sentinel file created" "$OUTPUT" "sentinel exists"
 
 # Verify secstore has encrypted factotum file on host
 if [ -f "$ROOT/usr/inferno/secstore/$USER/factotum" ]; then

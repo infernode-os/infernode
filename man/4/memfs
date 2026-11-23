@@ -56,6 +56,14 @@ Add the root of the new filesystem to the beginning of the union directory
 represented by the
 .I mountpoint
 directory.
+.PP
+A
+.IR wstat (5)
+that gives a length sets the file's length, as
+.IR truncate
+does elsewhere: the file is cut, or lengthened with zeros.
+It needs write permission and room in the store for what it adds; a
+directory's length, and a length that cuts an append-only file, are refused.
 .SH SOURCE
 .B /appl/cmd/memfs.b
 .SH SEE ALSO

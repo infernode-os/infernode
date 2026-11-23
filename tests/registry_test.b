@@ -74,6 +74,8 @@ run(name: string, testfn: ref fn(t: ref T))
 	sys->unmount(nil, B);
 }
 
+regargs: list of string;	# options for the next registry started
+
 regproc(fd: ref Sys->FD, sync: chan of string)
 {
 	sys->pctl(Sys->FORKFD, nil);
@@ -85,7 +87,9 @@ regproc(fd: ref Sys->FD, sync: chan of string)
 		return;
 	}
 	sync <-= nil;
-	reg->init(nil, "registry" :: nil);	# returns when its connection ends
+	args := "registry" :: regargs;
+	regargs = nil;
+	reg->init(nil, args);	# returns when its connection ends
 }
 
 # a registry on a pipe; the end to mount or to speak Styx on
@@ -392,6 +396,76 @@ testWrites(t: ref T)
 	t.assertseq(readfile(A + "/tcp!z!1"), "tcp!z!1 empty '' descr 'two words'\n", "and read back quoted");
 }
 
+# What the registry holds is counted: services in all and by one owner,
+# a service's attributes and their bytes.  Nothing was.
+testLimits(t: ref T)
+{
+	fd := startreg(t);
+	if(sys->mount(fd, nil, A, Sys->MREPL|Sys->MCREATE, nil) < 0)
+		t.fatal(sys->sprint("mount: %r"));
+	N: con 128;	# registry.b's Maxperowner
+	fds := array[N] of ref Sys->FD;
+	ok := 0;
+	for(i := 0; i < N; i++){
+		err: string;
+		(fds[i], err) = register(A, sys->sprint("tcp!many!%d", i));
+		if(err == nil)
+			ok++;
+	}
+	t.asserteq(ok, N, "services registered by one user");
+	xfd := sys->open(A + "/new", Sys->ORDWR);
+	e := sys->sprint("%r");
+	t.assert(xfd == nil, "one more is refused");
+	if(xfd == nil)
+		t.assert(e != nil && len e >= 8, "and says why: " + e);
+	fds[0] = nil;
+	(rfd, rerr) := register(A, "tcp!room!1");
+	t.assertnil(rerr, "one closed makes room for one");
+
+	long := "";
+	for(i = 0; i < 5000; i++)
+		long[len long] = 'v';
+	t.assertseq(string sys->fprint(rfd, "descr %s", long) + " " + sys->sprint("%r"), "-1 service description too long",
+		"a description of 5000 bytes is refused");
+	many := "";
+	for(i = 0; i < 65; i++)
+		many += sys->sprint(" a%d v", i);
+	t.assert(sys->fprint(rfd, "%s", many[1:]) < 0, "sixty-five attributes are refused");
+	t.assertseq(readfile(A + "/tcp!room!1"), "tcp!room!1\n", "and nothing of either write was taken");
+	t.assert(sys->fprint(rfd, "addr 10.0.0.1") > 0, "an ordinary attribute is still taken");
+	rfd = nil;
+	for(i = 0; i < N; i++)
+		fds[i] = nil;
+}
+
+# A service registered to persist stayed for good when its owner had
+# gone.  It lasts -t seconds (a day) from its owner's last write.
+testExpiry(t: ref T)
+{
+	# times are whole seconds: a life of 4 and waits of 2 leave a second
+	# to spare each way
+	regargs = "-t" :: "4" :: nil;
+	fd := startreg(t);
+	if(sys->mount(fd, nil, A, Sys->MREPL|Sys->MCREATE, nil) < 0)
+		t.fatal(sys->sprint("mount: %r"));
+	(pfd, err) := register(A, "tcp!stays!1 persist 1");
+	t.assertnil(err, "a persistent service is registered");
+	pfd = nil;
+	(hfd, herr) := register(A, "tcp!held!1");
+	t.assertnil(herr, "and one whose file is kept open");
+	t.assert(listed(A, "tcp!stays!1"), "the persistent one is listed after its creator closed");
+	sys->sleep(2000);
+	wfd := sys->open(A + "/tcp!stays!1", Sys->OWRITE);
+	t.assert(wfd != nil && sys->fprint(wfd, "addr 10.0.0.2") > 0, sys->sprint("its owner writes it again: %r"));
+	wfd = nil;
+	sys->sleep(2100);
+	t.assert(listed(A, "tcp!stays!1"), "and it lasts from that write");
+	sys->sleep(4200);
+	t.assert(!listed(A, "tcp!stays!1"), "a persistent service not written for its life is removed");
+	t.assert(listed(A, "tcp!held!1"), "one whose creator still has it open is not");
+	hfd = nil;
+}
+
 rpc(t: ref T, fd: ref Sys->FD, m: ref Tmsg): ref Rmsg
 {
 	p := m.pack();
@@ -481,6 +555,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Owner", testOwner);
 	run("Writes", testWrites);
 	run("RawStyx", testRawStyx);
+	run("Limits", testLimits);
+	run("Expiry", testExpiry);
 
 	sys->remove(A);
 	sys->remove(B);

@@ -6709,9 +6709,10 @@ else
 fi
 [[ -n "$BUILDONLY" ]] && return
 
-# A blank USB disk on the DWC OTG: this controller is not an xHCI, so the
-# walker must name it and leave it alone (os/init/osinit.b, the gate on
-# diskusb), which is what is checked.
+# A blank USB disk on the DWC OTG. diskusb is started on any controller
+# now (os/init/osinit.b: it has run on a Zero 2 W's OTG socket), so the
+# walker must hand it over and diskusb must serve it -- blank, so with no
+# FAT to mount -- which is what is checked.
 dd if=/dev/zero of="$BUILD/$PLAT-usbdisk.img" bs=1M count=4 status=none
 QEMUARGS="$PI4ARGS -drive if=none,id=ud,file=$BUILD/$PLAT-usbdisk.img,format=raw -device usb-storage,drive=ud"
 OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 90)"
@@ -6756,7 +6757,7 @@ pcheck "the missing GENET is noticed, not faulted on" "genet: NO ETHERNET MAC AT
 # Likewise the PCIe bridge (os/bcm2711/pcibcm.c). The code above it --
 # os/port/pci.c -- is run on the virt machine, which has a bridge.
 pcheck "the missing PCIe bridge is noticed, not faulted on" "pci: NO PCIe BRIDGE AT"
-pcheck "a USB disk on the DWC OTG is enumerated and, with no xHCI, left alone" "is a USB disk; diskusb is not started on this machine"
+pcheck "a USB disk on the DWC OTG is enumerated and served by diskusb" "(4 MB), served as /chan/usbdisk0"
 prefute "nothing panics"                            "panic:"
 prefute "no exception goes unhandled"               "unhandled exception"
 pcheck "init reaches the shell"                     "init: starting the shell"

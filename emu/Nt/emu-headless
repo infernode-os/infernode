@@ -14,6 +14,11 @@ dev
 	fs
 	cmd	cmd
 
+	draw
+	pointer
+	snarf
+	wmsz
+
 	ip	ipif ipaux
 
 lib
@@ -32,10 +37,15 @@ link
 
 mod
 	sys
+	draw
+	tk
 	math
 	srv	srv
 	keyring
 	ipints
+	i420
+	tensor
+	bayer
 
 port
 	alloc
@@ -75,3 +85,4 @@ root
 	/net	/
 	/chan	/
 	/env	/
+	/nvfs	/

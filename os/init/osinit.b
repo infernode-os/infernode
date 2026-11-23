@@ -987,6 +987,7 @@ rootwalk(name: string, nports: int): int
 	}
 
 	found := 0;
+	hubs := 0;	# root ports with a hub on them
 	devs := array[nports+1] of { * => "" };	# port -> the device on it
 	seen := array[nports+1] of { * => 0 };	# port -> was anything there when this looked
 	for(port := 1; port <= nports; port++){
@@ -1040,17 +1041,24 @@ rootwalk(name: string, nports: int): int
 			detachdev(dev);
 		else
 			devs[port] = dev;
+		if(ok >= 0 && enumhub)
+			hubs++;
 	}
 
 	#
 	# Root ports that are sockets get the watcher a hub's ports get: the
 	# same code, since a root hub answers the same requests. A controller
-	# with ONE root port is a DWC OTG, and on the boards this runs on
-	# that port has a hub soldered to it -- it is left as it always was,
-	# unwatched. An xHCI's ports are where things are plugged in: all of
+	# with ONE root port is a DWC OTG. On a 3B+ that port has a hub
+	# soldered to it (its Ethernet's) -- left as it always was, unwatched.
+	# On a Zero 2 W it is the OTG socket: nothing on it at boot, or a
+	# device that is no hub, means a socket, and it is watched, so what
+	# is plugged in after boot is set up (it was never seen). A hub
+	# plugged into a Zero's socket before boot is walked and its ports
+	# watched, as on a 3B+; the hub's own unplugging is not.
+	# An xHCI's ports are where things are plugged in: all of
 	# them under QEMU, the SuperSpeed ones on a Raspberry Pi 4.
 	#
-	if(nports > 1)
+	if(nports > 1 || hubs == 0)
 		spawn hubwatch(d, name, nports, "", devs, seen);
 	return found;
 }
@@ -1103,8 +1111,12 @@ reresetport(d: ref Sys->FD, port: int, indent: string): int
 # has to be able to detach it. Nothing about the device is kept in a
 # global: this runs concurrently, once per hub watcher.
 #
+# Set by enumerate when the device it brought up was a hub.
+enumhub := 0;
+
 enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): (int, string)
 {
+	enumhub = 0;
 	c := sys->open(hubctl, Sys->ORDWR);
 	if(c == nil){
 		sys->print("init: cannot open %s: %r\n", hubctl);
@@ -1284,6 +1296,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 
 	if(class == Clhub){
 		hubwalk(name, d, dctl, indent + "  ");
+		enumhub = 1;		# after the walk: its own enumerates clear it
 		return (0, name);
 	}
 
@@ -1352,15 +1365,13 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
 			string hidproto :: nil);
 	#
-	# A disk. Only on a machine with an xHCI controller, for now: the
-	# driver has run on QEMU's xHCI and nowhere else, and a Raspberry
-	# Pi 3 gets no new behaviour on emulator evidence (#679 says why).
-	# On a Pi 3 the disk is enumerated, listed, and left alone.
+	# A disk, on any controller. It was xHCI's alone until it had run on
+	# a DWC OTG board (#679: no new Pi 3 behaviour on emulator evidence):
+	# on a Zero 2 W, a disk on its OTG socket read back whole (16 MB,
+	# the same MD5 as the image) and its FAT mounted.
 	#
-	else if(isdisk && havexhci)
-		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 	else if(isdisk)
-		sys->print("init: %s%s is a USB disk; diskusb is not started on this machine\n", indent, name);
+		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 
 	#
 	# Hand it to a class driver, which is a program. The bus walk's
@@ -1386,14 +1397,13 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# A serial port: a CDC-ACM control interface that is not part of a
 	# network adapter (the Jetson's gadget is serial AND Ethernet, and
 	# stays etherusb's), or a vendor interface on an FTDI or CP210x.
-	# usbserial serves it as /dev/eiaU<n>. On an xHCI machine only, as
-	# with disks: it has not run on a Pi 3's controller, and a Pi 3
-	# keeps what it did before -- an ACM device goes to etherusb, which
-	# refuses it.
+	# usbserial serves it as /dev/eiaU<n>, on any controller: it was
+	# xHCI's alone (as disks were, #679) until it had run on a DWC OTG
+	# board, the Zero 2 W's socket.
 	#
 	serial := (isacm && !isether) ||
 		(isvendorif && (vendor == Vftdi || vendor == Vsilabs));
-	if(serial && havexhci)
+	if(serial)
 		startdriver("/dis/usbserial.dis", name, -1, 0, 0, nil);
 	#
 	# Ethernet by the device's class (2), or by an Ethernet interface
@@ -1408,8 +1418,6 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	#
 	else if(class == Clcomm || isether && !isdisk || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name, -1, 0, 0, nil);
-	if(serial && !havexhci)
-		sys->print("init: %s%s is a USB serial port; usbserial is not started on this machine\n", indent, name);
 	return (0, name);
 }
 
@@ -2224,7 +2232,7 @@ wifijoin(essid, pass: string)
 	sys->sleep(1000);
 	ifcno := wifiaddr();
 	if(ifcno != nil)
-		wifiwatch(ifcno);
+		wifiwatch(ifcno, essid);
 }
 
 #
@@ -2243,11 +2251,68 @@ wifijoin(essid, pass: string)
 # The lease needs nothing from here: ip/dhcp -m runs for as long as it
 # does, and renews it, or finds another, by itself.
 #
-wifiwatch(nil: string)
+wifiwatch(ifcno, essid: string)
 {
 	seen := keycount();
+	rx := rxcount();
+	quiet := 0;		# ms since the radio last delivered a frame
+	deaf := Deaf;		# how long that may last before joining again
+	sincejoin := Deaf;	# ms since this watcher last asked for a join
 	for(;;){
-		sys->sleep(10*1000);
+		sys->sleep(Livepoll);
+		sincejoin += Livepoll;
+
+		#
+		# A radio can be associated and hear nothing. An access point
+		# that restarts forgets its stations; the station learns it
+		# only when it next transmits and is turned away, and this
+		# board, with its wired interface on the same subnet, sends
+		# its replies out the wire: 31 frames on the radio in a day.
+		# So the firmware kept the access point's beacons, reported
+		# nothing, and the board was deaf on Wi-Fi from 10:20 until a
+		# join was asked for by hand at 21:30 (2026-10-11). The
+		# network is quiet at times, so silence alone proves
+		# nothing: after Probeafter of it the gateway is asked for
+		# its address, out of the radio, and a live link answers.
+		# After deaf of silence the network is joined again, as the
+		# supplicant itself does after "link lost"; the handshake
+		# that follows is counted below as a re-join, and the
+		# address is asked for again. A join that does not help
+		# makes the next wait twice as long, so a network that is
+		# simply gone is not joined every minute.
+		#
+		#
+		# Only a radio that says it is associated. One that says it is
+		# not has reported its loss, and the supplicant is already
+		# joining: this watch joining as well raced it (the kernel's
+		# "double sleep", before ether4330 took one join at a time)
+		# and, once the network was back, made a second join and a
+		# second address request (2026-10-14, the 5 GHz radio
+		# switched off at the router for five minutes).
+		#
+		r := rxcount();
+		if(wifistatus() != "associated"){
+			rx = r;
+			quiet = 0;
+		}else if(r != rx){
+			rx = r;
+			quiet = 0;
+			if(sincejoin > Deaf)
+				deaf = Deaf;	# heard, and not just the handshake a join brings
+		}else if(r >= 0){
+			quiet += Livepoll;
+			if(quiet >= deaf){
+				sys->print("init: wifi: nothing heard on %s for %d s; joining %s again\n",
+					Wifidev, quiet/1000, essid);
+				rejoin(essid);
+				quiet = 0;
+				sincejoin = 0;
+				if(deaf < Deafmax)
+					deaf *= 2;
+			}else if(quiet >= Probeafter)
+				arpprobe(ifcno);
+		}
+
 		n := keycount();
 		if(n <= seen){
 			seen = n;	# a supplicant restarted with a new log
@@ -2256,6 +2321,140 @@ wifiwatch(nil: string)
 		seen = n;
 		sys->print("init: wifi: re-joined; the address and its lease are left to ip/dhcp\n");
 	}
+}
+
+Wifidev: con "/net/ether1";
+Livepoll: con 10*1000;
+Probeafter: con 30*1000;
+Deaf: con 60*1000;
+Deafmax: con 16*60*1000;
+
+# the driver's "status:" line in ifstats: associated, connecting, ...
+wifistatus(): string
+{
+	(st, nil) := slurp(Wifidev + "/ifstats");
+	(nil, lines) := sys->tokenize(st, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "status:")
+			return hd tl f;
+	}
+	return nil;
+}
+
+# frames the radio has delivered: "in: n" in its stats; -1 if unreadable
+rxcount(): int
+{
+	(st, nil) := slurp(Wifidev + "/stats");
+	(nil, lines) := sys->tokenize(st, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "in:")
+			return int hd tl f;
+	}
+	return -1;
+}
+
+# what the supplicant writes after "link lost": the firmware joins again
+rejoin(essid: string)
+{
+	fd := sys->open(Wifidev + "/clone", Sys->ORDWR);
+	if(fd == nil || sys->fprint(fd, "essid %s", essid) < 0)
+		sys->print("init: wifi: essid %s: %r\n", essid);
+}
+
+#
+# "Who has the gateway?", broadcast out of the radio itself rather than
+# wherever the routes would send it, from the radio's own address. Its
+# answer is a frame the radio delivers, which is all that is wanted.
+#
+arpprobe(ifcno: string)
+{
+	me := ip4(ifcaddr(ifcno));	# nil for "none"
+	gw := defaultgw();
+	mac := wifimac();
+	if(me == nil || gw == nil || mac == nil)
+		return;
+	fd := sys->open(Wifidev + "/clone", Sys->ORDWR);
+	if(fd == nil)
+		return;
+	b := array[16] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0 || sys->fprint(fd, "connect %d", 16r0806) < 0)
+		return;
+	(nil, conv) := sys->tokenize(string b[0:n], " \t\n");
+	if(conv == nil)
+		return;
+	data := sys->open(Wifidev + "/" + hd conv + "/data", Sys->OWRITE);
+	if(data == nil)
+		return;
+	f := array[14+28] of { * => byte 0 };
+	for(i := 0; i < 6; i++){
+		f[i] = byte 16rff;		# to everyone
+		f[6+i] = mac[i];
+		f[22+i] = mac[i];		# sender hardware address
+	}
+	f[12] = byte 16r08; f[13] = byte 16r06;	# ARP
+	f[15] = byte 1;				# Ethernet
+	f[16] = byte 16r08;			# IPv4
+	f[18] = byte 6; f[19] = byte 4;
+	f[21] = byte 1;				# a request
+	f[28:] = me;				# sender protocol address
+	f[38:] = gw;				# target protocol address
+	sys->write(data, f, len f);
+}
+
+# the default route's gateway: "0.0.0.0 /96 <gateway> ..." in /net/iproute
+defaultgw(): array of byte
+{
+	(rt, nil) := slurp("/net/iproute");
+	(nil, lines) := sys->tokenize(rt, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf >= 3 && hd f == "0.0.0.0" && hd tl f == "/96")
+			return ip4(hd tl tl f);
+	}
+	return nil;
+}
+
+wifimac(): array of byte
+{
+	(a, nil) := slurp(Wifidev + "/addr");
+	if(len a < 12)
+		return nil;
+	m := array[6] of byte;
+	for(i := 0; i < 6; i++){
+		hi := hexval(a[2*i]);
+		lo := hexval(a[2*i+1]);
+		if(hi < 0 || lo < 0)
+			return nil;
+		m[i] = byte (hi<<4 | lo);
+	}
+	return m;
+}
+
+hexval(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+ip4(s: string): array of byte
+{
+	(n, f) := sys->tokenize(s, ".");
+	if(n != 4)
+		return nil;
+	b := array[4] of byte;
+	for(i := 0; i < 4; i++){
+		b[i] = byte int hd f;
+		f = tl f;
+	}
+	return b;
 }
 
 keycount(): int
@@ -2313,13 +2512,47 @@ killproc(pid: int)
 # An interface with an address: its status file lists them one per
 # line after the header, each indented.
 #
+#
+# Whether the interface has an address of its own: a line of the status
+# file after the first, other than the unspecified address. The DHCP
+# client adds 0.0.0.0 before it asks (the stack sends nothing from an
+# interface with no address) and only replaces it when a lease comes.
+# Counted as an address, it made init take the first instant of every
+# DHCP exchange for success: the Wi-Fi was reported up with an empty
+# /net/ndb and never asked again, so a lost offer -- a Zero 2 W on a
+# phone's hotspot at -70 dBm lost one boot in two -- left the board
+# with no address for good.
+#
 hasaddress(ifcno: string): int
 {
 	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
 	for(i := 0; i + 1 < len st; i++)
-		if(st[i] == '\n' && st[i+1] == '\t')
-			return 1;
+		if(st[i] == '\n' && st[i+1] == '\t'){
+			j := i + 2;
+			k := j;
+			while(k < len st && st[k] != ' ' && st[k] != '\t' && st[k] != '\n')
+				k++;
+			a := st[j:k];
+			if(a != "0.0.0.0" && a != "::")
+				return 1;
+		}
 	return 0;
+}
+
+# an interface's first address, from its status's lines after the
+# first ("\t192.168.1.153 /120 ..."), or "none"
+ifcaddr(ifcno: string): string
+{
+	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
+	(nil, lines) := sys->tokenize(st, "\n");
+	if(lines == nil)
+		return "none";
+	for(lines = tl lines; lines != nil; lines = tl lines){
+		(n, w) := sys->tokenize(hd lines, " \t");
+		if(n >= 1)
+			return hd w;
+	}
+	return "none";
 }
 
 associated(): int
@@ -2456,8 +2689,13 @@ wifiaddr(): string
 		while(!wifidhcp(ifcno))
 			sys->sleep(30*1000);
 	}
-	(ndb, nil) := slurp("/net/ndb");
-	sys->print("init: wifi: %s\n", ndb);
+	#
+	# The interface's own address, from its status. This printed
+	# /net/ndb, which is the last DHCP client's: on a board with
+	# Ethernet too it said the wired address (a Pi 5: "ip=192.168.1.100"
+	# for a radio given 192.168.1.153).
+	#
+	sys->print("init: wifi: address %s\n", ifcaddr(ifcno));
 	return ifcno;
 }
 
@@ -2490,7 +2728,9 @@ wifidhcp(ifcno: string): int
 	pidc := chan of int;
 	spawn dhcprun(dhcp, ifcno, pidc);
 	dhcpgrp = <-pidc;
-	for(i := 0; i < 40 && !hasaddress(ifcno); i++)
+	# One round of the client's asking is 2+4+8+16 s (dhcpclient's
+	# Timeout0 and Ntries): wait it out rather than kill it in its last.
+	for(i := 0; i < 70 && !hasaddress(ifcno); i++)
 		sys->sleep(500);
 	return hasaddress(ifcno);
 }

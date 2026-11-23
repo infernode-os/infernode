@@ -80,10 +80,12 @@ Nmea: module
 		callsign:	string;	# a ship's radio call sign, or nil
 		category:	string;	# cargo tanker ... glider jet ..., or nil
 		seen:	int;		# sys->millisec() when last heard
+		extrapolated:	int;	# its position is reckoned on, not reported
+		emergency:	string;	# general medical fuel comms unlawful downed, or nil
 
 		new:	fn(kind, id: string): ref Target;
 		# attr=value, no newline: kind id lat lon alt speed course
-		# heading climb name callsign cat age
+		# heading climb name callsign cat extrapolated emergency age
 		text:	fn(t: self ref Target, now: int): string;
 	};
 
@@ -114,6 +116,10 @@ Nmea: module
 		goodlat, goodlon:	real;
 		suspect:	int;	# suspect positions in a row
 		suspects:	int;	# all held back
+		# the receiver's second of the day when each of what is not
+		# sent with a position was last heard, -1 never: a heading, a
+		# pressure altitude, an error
+		headat, baroat, errat:	int;
 
 		new:	fn(): ref Parser;
 		# the fixes the sentence completed (oldest first), or an error

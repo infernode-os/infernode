@@ -241,12 +241,63 @@ heartbeat(pidc: chan of int)
 		beatcount++;
 		if (beatcount == beatlimit) {
 			acquire();
-			if (sendrequest("NOOP", 0) == Success)
+			# (looked at again with the lock held: a transfer may
+			# have begun, and its completion reply is not ours)
+			if (!transfer && sendrequest("NOOP", 0) == Success) {
+				beating = 1;
 				getreply(0);
+				beating = 0;
+			}
 			release();
 			beatcount = 0;
 			activity = 0;
 		}
+	}
+}
+
+#
+#	Nothing waited on the server for ever.  Every request of the
+#	mount is served by one loop, which waited as long as the server
+#	chose for a reply or for a data connection's bytes, and the
+#	mount and everyone using it with it.  While a request is being
+#	served the connections must show some sign every so often
+#	(stall seconds, -t): if they do not they are hung up, the
+#	request fails, and the loop goes on.  A control connection hung
+#	up is not made again: the mount then answers with errors.
+#
+
+stall := 120;		# seconds without a byte either way
+progress := 0;		# counts what moves on the connections
+serving := 0;		# the loop is in a request
+beating := 0;		# the heartbeat is waiting for its reply
+datacfd: ref FD;	# the data connection of the transfer in hand
+
+watchdogpid: int;
+
+watchdog(pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	tick := 10;
+	if (stall < tick)
+		tick = 1;
+	last := -1;
+	idle := 0;
+	for (;;) {
+		sys->sleep(tick * 1000);
+		if (!(serving || beating) || progress != last) {
+			last = progress;
+			idle = 0;
+			continue;
+		}
+		idle += tick;
+		if (idle < stall)
+			continue;
+		sys->fprint(stderr, "ftpfs: nothing from the server for %d seconds: hanging up\n", idle);
+		if (datacfd != nil)
+			sys->fprint(datacfd, "hangup");
+		if (ftp.cfd != nil)
+			sys->fprint(ftp.cfd, "hangup");
+		idle = 0;
 	}
 }
 
@@ -275,7 +326,7 @@ sendreply(r: ref Rmsg)
 	if (debug)
 		sys->print("> %s\n", r.text());
 	a := r.pack();
-	if(styx->write(styxfd, a, len a) != len a)
+	if(sys->write(styxfd, a, len a) != len a)
 		sys->print("ftpfs: error replying: %r\n");
 }
 
@@ -666,15 +717,43 @@ fail(s: int, l: string)
 	exit;
 }
 
+# A line of the control connection, of at most Maxline bytes; nil at
+# the connection's end, and for a line that does not end (a reply's
+# line, and the lines of a reply, were read at any length).
+Maxline:	con 4096;
+Maxreply:	con 64*1024;
+
+ctlline(): string
+{
+	a := array[Maxline] of byte;
+	n := 0;
+	for (;;) {
+		c := dfidiob.getb();
+		if (c < 0)
+			break;
+		progress++;
+		if (n >= len a)
+			return nil;
+		a[n++] = byte c;
+		if (c == '\n')
+			break;
+	}
+	if (n == 0)
+		return nil;
+	return string a[0:n];
+}
+
 getfullreply(echo: int): (int, int, string)
 {
 	reply := "";
 	s: string;
 	code := -1;
 	do{
-		s = dfidiob.gets('\n');
+		s = ctlline();
 		if(s == nil)
 			return (Shutdown, 0, nil);
+		if(len reply + len s > Maxreply)
+			return (Syntax, 0, nil);
 		if(len s >= 2 && s[len s-1] == '\n'){
 			if (s[len s - 2] == '\r')
 				s = s[0: len s - 2];
@@ -709,6 +788,7 @@ getreply(echo: int): (int, string)
 sendrequest2(req: string, echo: int, figleaf: string): int
 {
 	activity = 1;
+	progress++;
 	if (debug || echo) {
 		if (figleaf == nil)
 			figleaf = req;
@@ -903,10 +983,14 @@ passive(cmd: string): ref FD
 	release();
 	if (r != Success)
 		return nil;
+	# the numbers are in brackets, or (RFC 1123 4.1.2.6) just follow
+	# the code: for that form the split was made and its result
+	# dropped, so such a server could not be used
 	(nil, p) := str->splitl(m, "(");
-	if (p == nil)
-		str->splitl(m, "0-9");
-	else
+	if (p == nil) {
+		if (len m > 4)
+			(nil, p) = str->splitl(m[4:], "0-9");
+	} else
 		p = p[1:len p];
 	(c, l) := sys->tokenize(p, ",");
 	if (c < 6) {
@@ -931,9 +1015,22 @@ passive(cmd: string): ref FD
 	}
 	(r, m) = getreply(0);
 	release();
-	if (r != Extra)
+	if (r != Extra) {
+		# why not, for whoever reports it
+		if (r > Success && len m > 4)
+			errstr = m[4:];
 		return nil;
+	}
+	datacfd = d.cfd;
 	return d.dfd;
+}
+
+# the transfer's data connection is done with: its ctl file is let go
+# with its data file, or the connection would stay open and the
+# server never see the end of what was sent
+closedata()
+{
+	datacfd = nil;
 }
 
 getnet(dir: string): (string, int)
@@ -974,7 +1071,9 @@ activate(cmd: string): ref FD
 	if (r < 0)
 		return nil;
 	(x1, x2)  := getnet(listenport.dir);
-	(nil, x4) := sys->tokenize(x1, ".");
+	(nx, x4) := sys->tokenize(x1, ".");
+	if (nx != 4)
+		return nil;	# no address to give: it was the head of no list
 	t := sys->sprint("PORT %s,%d,%d", commas(x4), int x2 / 256, int x2&255);
 	acquire();
 	r = sendrequest(t, 0);
@@ -996,19 +1095,77 @@ activate(cmd: string): ref FD
 	release();
 	if (r != Extra)
 		return nil;
-	(r, dataport) = sys->listen(listenport);
-	if (r < 0) {
-		sys->fprint(stderr, "activate: listen failed: %r\n");
-		return nil;
+	# The server is to call back.  The first caller was taken, whoever
+	# it was and however long it took: the data is the server's only
+	# if the call is from the server's address, and it is waited for
+	# no longer than a reply is.
+	want := peeraddr();
+	for (try := 0; try < 4; try++) {
+		lc := chan[1] of (int, Connection);
+		pc := chan of int;
+		spawn listenproc(listenport, lc, pc);
+		lpid := <-pc;
+		tc := chan[1] of int;
+		spawn sleeper(tc, stall * 1000);
+		alt {
+		(r, dataport) = <-lc =>
+			;
+		<-tc =>
+			kill(lpid);
+			sys->fprint(stderr, "ftpfs: the server did not connect for the data in %d seconds\n", stall);
+			return nil;
+		}
+		if (r < 0) {
+			sys->fprint(stderr, "activate: listen failed: %r\n");
+			return nil;
+		}
+		who := remoteof(dataport.dir);
+		if (want != nil && who != want) {
+			sys->fprint(stderr, "ftpfs: a data connection from %s, not the server %s: refused\n", who, want);
+			if (dataport.cfd != nil)
+				sys->fprint(dataport.cfd, "hangup");
+			continue;
+		}
+		fd := sys->open(dataport.dir + "/data", sys->ORDWR);
+		if (debug)
+			sys->print("activate: data connection on %s\n", dataport.dir);
+		if (fd == nil) {
+			sys->fprint(stderr, "activate: open of %s failed: %r\n", dataport.dir);
+			return nil;
+		}
+		datacfd = dataport.cfd;
+		return fd;
 	}
-	fd := sys->open(dataport.dir + "/data", sys->ORDWR);
-	if (debug)
-		sys->print("activate: data connection on %s\n", dataport.dir);
-	if (fd == nil) {
-		sys->fprint(stderr, "activate: open of %s failed: %r\n", dataport.dir);
+	return nil;
+}
+
+listenproc(c: Connection, lc: chan of (int, Connection), pc: chan of int)
+{
+	pc <-= sys->pctl(0, nil);
+	lc <-= sys->listen(c);
+}
+
+sleeper(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+# the address at the other end of the connection in dir
+remoteof(dir: string): string
+{
+	fd := sys->open(dir + "/remote", Sys->OREAD);
+	if (fd == nil)
 		return nil;
-	}
-	return fd;
+	buf := array[128] of byte;
+	n := sys->read(fd, buf, len buf);
+	if (n <= 0)
+		return nil;
+	a := string buf[0:n];
+	for (i := 0; i < len a; i++)
+		if (a[i] == '!' || a[i] == '\n')
+			return a[0:i];
+	return a;
 }
 
 data(cmd: string): ref FD
@@ -1206,34 +1363,48 @@ Node.readdir(n: self ref Node): int
 	if (n.changedir() < 0)
 		return -1;
 	transfer = 1;
-	for (;;) {
-		if (longls) {
-			f = data("LIST -la");
-			if (f == nil) {
-				longls = 0;
-				continue;
-			}
+	# A server that will not take "LIST -la" is asked "LIST" from
+	# then on.  It was taken for one whenever a long listing failed,
+	# for whatever reason (a directory that may not be read, a data
+	# connection that could not be made), and every listing after
+	# was of names alone, each a file of mode 777.  It is one only
+	# when the plain listing then works where the long one did not.
+	long := longls;
+	if (long)
+		f = data("LIST -la");
+	if (f == nil) {
+		f = data("LIST");
+		if (f == nil) {
+			transfer = 0;
+			return seterr(Err, Enosuchfile);
 		}
-		else {
-			f = data("LIST");
-			if (f == nil) {
-				transfer = 0;
-				return seterr(Err, Enosuchfile);
-			}
-		}
-		break;
+		if (long)
+			longls = 0;
+		long = 0;
 	}
 	b := bufio->fopen(f, sys->OREAD);
 	if (b == nil) {
+		f = nil;
+		closedata();
+		getreply(0);	# the transfer's reply is not left for the next command
 		transfer = 0;
 		return seterr(Err, Eioerror);
 	}
-	while ((s := b.gets('\n')) != nil) {
+	nent := 0;
+	toolong := 0;
+	while ((s := listline(b)) != nil) {
 		if (debug)
 			sys->print("%s", s);
+		if (toolong)
+			continue;	# read to its end, and not kept
 		(l, d) := crackdir(s);
 		if (l == nil)
 			continue;
+		# a listing had as many entries as the server sent
+		if (++nent > Maxentries) {
+			toolong = 1;
+			continue;
+		}
 		p = n.extendpath(l);
 		p.dir = d;
 		p.dir.qid = p.qid();
@@ -1241,11 +1412,39 @@ Node.readdir(n: self ref Node): int
 	}
 	b = nil;
 	f = nil;
+	closedata();
 	(r, nil) := getreply(0);
 	transfer = 0;
+	if (toolong)
+		return seterr(Err, sys->sprint("directory of more than %d entries", Maxentries));
 	if (r != Success)
 		return seterr(Err, Enosuchfile);
 	return 0;
+}
+
+Maxentries:	con 16384;
+
+# a line of a listing, cut at Maxline; nil at its end
+listline(b: ref Iobuf): string
+{
+	a := array[Maxline] of byte;
+	n := 0;
+	for (;;) {
+		c := b.getb();
+		if (c < 0)
+			break;
+		if (n < len a)
+			a[n++] = byte c;
+		if (c == '\n') {
+			progress++;
+			if (n == len a)
+				a[n-1] = byte '\n';
+			break;
+		}
+	}
+	if (n == 0)
+		return nil;
+	return string a[0:n];
 }
 
 Node.readfile(n: self ref Node): int
@@ -1261,26 +1460,39 @@ Node.readfile(n: self ref Node): int
 		return seterr(Err, Enosuchfile);
 	}
 	off := 0;
+	toobig := 0;
 	while ((c = sys->read(f, tbuff, BSZ)) > 0) {
+		progress++;
+		# a file is kept here whole, and counted in an int
+		if (off > Maxfile - c) {
+			toobig = 1;
+			break;
+		}
 		if (n.filewrite(tbuff, off, c) != c) {
 			off = -1;
 			break;
 		}
 		off += c;
 	}
-	if (c < 0) {
-		transfer = 0;
-		return seterr(Err, Eioerror);
-	}
 	f = nil;
-	if(off == 0)
+	closedata();
+	if(off == 0 && c >= 0)
 		n.filewrite(tbuff, off, 0);
+	# The reply that ends the transfer is read however it went: after
+	# a read error it was left unread, and was taken for the answer
+	# to the next command, and so on for every command after.
 	(s, nil) := getreply(0);
 	transfer = 0;
+	if (toobig)
+		return seterr(Err, sys->sprint("file longer than %d bytes", Maxfile));
+	if (c < 0)
+		return seterr(Err, Eioerror);
 	if (s != Success)
 		return seterr(s, Enosuchfile);
 	return off;
 }
+
+Maxfile:	con 16r3FFFFFFF;
 
 path(a, b: string): string
 {
@@ -1353,9 +1565,14 @@ Node.docreate(n: self ref Node): int
 			off = -1;
 			break;
 		}
+		progress++;
 		off += r;
 	}
-	transfer = 0;
+	f = nil;
+	closedata();
+	# transfer stays set until the reply that ends it has been read
+	# (createfile): cleared here, the heartbeat could read that
+	# reply as its NOOP's
 	return off;
 }
 
@@ -1364,11 +1581,17 @@ Node.createfile(n: self ref Node): int
 	if (n.parent.changedir() < 0)
 		return -1;
 	off := n.docreate();
+	if (!transfer)
+		return -1;	# no data connection: nothing was begun
+	(r, m) := getreply(0);
+	transfer = 0;
 	if (off < 0)
 		return -1;
-	(r, nil) := getreply(0);
-	if (r != Success)
+	if (r != Success) {
+		if (r > Success && len m > 4)
+			errstr = m[4:];
 		return -1;
+	}
 	return off;
 }
 
@@ -1377,12 +1600,18 @@ Node.action(n: self ref Node, cmd: string): int
 	if (n.parent.changedir() < 0)
 		return -1;
 	acquire();
+	m: string;
 	r := sendrequest(cmd + " " + n.dir.name, 0);
 	if (r == Success)
-		(r, nil) = getreply(0);
+		(r, m) = getreply(0);
 	release();
-	if (r != Success)
-		return -1;
+	if (r != Success) {
+		# in the server's words: the caller reported whatever error
+		# an earlier request had left
+		if (r > Success && len m > 4)
+			return seterr(Err, m[4:]);
+		return seterr(r, Eioerror);
+	}
 	return 0;
 }
 
@@ -1447,10 +1676,13 @@ server()
 	while((t := Tmsg.read(styxfd, 0)) != nil){
 		if (debug)
 			sys->print("< %s\n", t.text());
+		progress++;
+		serving = 1;
 		pick x := t {
 		Readerror =>
 			sys->print("ftpfs: read error on mount point: %s\n", x.error);
 			kill(heartbeatpid);
+			kill(watchdogpid);
 			exit;
 		Version =>
 			versionT(x);
@@ -1481,10 +1713,12 @@ server()
 		* =>
 			rerror(t.tag, "unimp");
 		}
+		serving = 0;
 	}
 	if (debug)
 		sys->print("ftpfs: server: exiting\n");
 	kill(heartbeatpid);
+	kill(watchdogpid);
 }
 
 raw(on: int)
@@ -1564,7 +1798,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# parse arguments
 	# [-/dpq] [-m mountpoint] [-a password] host
 	arg->init(args);
-	arg->setusage("ftpfs [-/dpq] [-m mountpoint] [-a password] [-k keyspec] ftphost");
+	arg->setusage("ftpfs [-/dpq] [-m mountpoint] [-a password] [-k keyspec] [-t seconds] ftphost");
 	keyspec := "";
 	while((op := arg->opt()) != 0)
 		case op {
@@ -1583,6 +1817,10 @@ init(nil: ref Draw->Context, args: list of string)
 			user = "anonymous";
 		'k' =>
 			keyspec = arg->earg();
+		't' =>
+			stall = int arg->earg();
+			if (stall < 1)
+				arg->usage();
 		* =>
 			arg->usage();
 		}
@@ -1727,6 +1965,8 @@ init(nil: ref Draw->Context, args: list of string)
 	pidc := chan of int;
 	spawn heartbeat(pidc);
 	heartbeatpid = <-pidc;
+	spawn watchdog(pidc);
+	watchdogpid = <-pidc;
 	if (debug)
 		sys->print("heartbeatpid %d\n", heartbeatpid);			
 	spawn server();				# dies when receive on chan fails
@@ -1759,7 +1999,7 @@ shutdown()
 
 versionT(t: ref Tmsg.Version)
 {
-	(msize, version) := styx->compatible(t, Styx->MAXRPC, Styx->VERSION);
+	(msize, version) := styx->compatible(t, Styx->DEFMSIZE, Styx->VERSION);
 	sendreply(ref Rmsg.Version(t.tag, msize, version));
 }
 
@@ -1804,7 +2044,26 @@ walkT(t: ref Tmsg.Walk)
 					continue;
 				}
 				node = node.extendpath(t.names[i]);
-				if (node.parent.cached) {
+				# A name is found if its directory's listing has
+				# it.  In a directory not yet listed any name was
+				# found: a directory if the server would change
+				# to it, a file otherwise, whether or not there
+				# was one.  So making a directory was an open of
+				# a "file" of its name, and an empty file of that
+				# name was stored when it was closed.  The
+				# directory is listed first; in one that cannot
+				# be listed, only a directory can be found.
+				par := node.parent;
+				if (!par.cached) {
+					par.invalidate();
+					if (par.readdir() >= 0)
+						par.markcached();
+				}
+				# (a file made here and not yet stored is in no
+				# listing, and is there)
+				if (node.fileisdirty())
+					node.valid = 1;
+				if (par.cached) {
 					if (!node.valid) {
 						if(i == 0)
 							return rerror(t.tag, Enosuchfile);
@@ -1817,8 +2076,9 @@ walkT(t: ref Tmsg.Walk)
 						node.dir.qid.qtype = Sys->QTDIR;
 						node.dir.mode |= Sys->DMDIR;
 					}else{
-						node.dir.qid.qtype = Sys->QTFILE;
-						node.dir.mode &= ~Sys->DMDIR;
+						if(i == 0)
+							return rerror(t.tag, Enosuchfile);
+						break;
 					}
 				}
 				qids[i] = node.qid();
@@ -1868,7 +2128,7 @@ openT(t: ref Tmsg.Open)
 		}
 		f.node.markcached();
 	}
-	sendreply(ref Rmsg.Open(t.tag, f.node.qid(), Styx->MAXFDATA));
+	sendreply(ref Rmsg.Open(t.tag, f.node.qid(), Styx->DEFIOUNIT));
 }
 
 createT(t: ref Tmsg.Create)
@@ -1882,7 +2142,8 @@ createT(t: ref Tmsg.Create)
 	f.node.uncache();
 	if ((t.perm & Sys->DMDIR) != 0) {
 		if (f.node.createdir() < 0) {
-			rerror(t.tag, Epermission);
+			f.node = f.node.parent;	# the fid is where it was
+			rerror(t.tag, errstr);
 			return;
 		}
 	}
@@ -1890,7 +2151,13 @@ createT(t: ref Tmsg.Create)
 		f.node.filedirty();
 	f.node.parent.invalidate();
 	f.node.parent.uncache();
-	sendreply(ref Rmsg.Create(t.tag, f.node.qid(), Styx->MAXFDATA));
+	if ((t.perm & Sys->DMDIR) != 0) {
+		# what was made is a directory, and is said to be
+		f.node.dir.mode = Sys->DMDIR | 8r777;
+		f.node.dir.qid = f.node.qid();
+		f.node.valid = 1;
+	}
+	sendreply(ref Rmsg.Create(t.tag, f.node.qid(), Styx->DEFIOUNIT));
 }
 
 readT(t: ref Tmsg.Read)
@@ -1900,8 +2167,8 @@ readT(t: ref Tmsg.Read)
 
 	if (count < 0)
 		return rerror(t.tag, Ebadlength);
-	if (count > Styx->MAXFDATA)
-		count = Styx->MAXFDATA;
+	if (count > Styx->DEFIOUNIT)
+		count = Styx->DEFIOUNIT;
 	if (t.offset < big 0)
 		return rerror(t.tag, Ebadoffset);
 	# no file here is longer than an int counts: past that is past its
@@ -1988,6 +2255,9 @@ clunkT(t: ref Tmsg.Clunk)
 removeT(t: ref Tmsg.Remove)
 {
 	f := getfid(t.fid);
+	# a remove clunks its fid whether or not it removes: refused, the
+	# fid stayed busy, and the next walk to its number was "fid in use"
+	f.busy = 0;
 	if ((f.node.dir.mode & Sys->DMDIR) != 0) {
 		if (f.node.removedir() < 0) {
 			rerror(t.tag, errstr);
@@ -2013,10 +2283,11 @@ statT(t: ref Tmsg.Stat)
 	n := f.node.parent;
 	if (!n.cached) {
 		n.invalidate();
-		n.readdir();
-		n.markcached();
+		# (a listing that failed was marked as had)
+		if (n.readdir() >= 0)
+			n.markcached();
 	}
-	if (!f.node.valid) {
+	if (!f.node.valid && !f.node.fileisdirty()) {
 		rerror(t.tag, Enosuchfile);
 		return;
 	}

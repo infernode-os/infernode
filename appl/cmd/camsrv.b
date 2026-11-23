@@ -83,7 +83,7 @@ Camsrv: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
 
-Qroot, Qstream, Qctl, Qfmt, Qframe, Qraw, Qstatus, Qlayer: con iota;
+Qroot, Qstream, Qctl, Qfmt, Qframe, Qraw, Qstatus, Qlayer, Qndvi, Qndvifmt: con iota;
 
 # the sensor's one mode; smaller frames are merged from it. The IMX708's
 # until a probe finds otherwise (sensorprobe), and always for -t.
@@ -92,6 +92,7 @@ sensor := Imx708;
 Sw := 2304;
 Sh := 1296;
 Black: con 64;
+Clip: con 1000;		# a sample this high is taken to have clipped: left out of white balance
 Maxsample: con 1023;
 Maxexposure: con 65535;	# lines: the register's sixteen bits
 Aetarget: con 180;	# above black, of 959: near a grey card's 18%
@@ -126,6 +127,28 @@ base := 0;		# the first frame since the sensor last came on
 Ring: con 8;		# the frames kept, at 30 fps a quarter second
 ring := array[Ring] of (int, array of byte);
 ringdim := array[Ring] of (int, int);	# each kept frame's width and height, as served
+ndviring := array[Ring] of array of byte;	# frame N's plant health, if it was asked for (issue #1244)
+# NDVI from the raw channels, before white balance: which is near-infrared
+# and which visible (0 red, 1 green, 2 blue); on a NoIR camera with its
+# blue filter, red and blue. A pixel whose two sum to less than floor
+# above black is no reading.
+ndvinir := 0;
+ndvivis := 2;
+ndvifloor := 16;
+# Lens shading: a gain for each of the cell's four positions at Shadegw by
+# Shadegh points from corner to corner ($Bayer->shade), made by shade
+# learn from a flat white field and kept as /lib/camera/SENSOR.shade.
+Shadegw: con 17;
+Shadegh: con 13;
+Shadelearn: con 8;		# frames of the flat field summed
+shadetab: array of int;		# nil: none for this sensor
+shadeon := 1;
+shadelearn := 0;		# frames still to sum, while learning
+shadesum: array of big;
+shadecnt: array of int;
+shadenote := "";		# how the last learn went, for status: learning,
+				# learnt:darkest=N%, refused:dark=N, refused:clipped=N
+ndvistat := array[5] of int;	# the last frame's mean, 10th, 50th, 90th percentile, count
 latest: array of byte;
 lastraw: array of byte;
 err := "";
@@ -142,11 +165,26 @@ sess: list of ref Fsess;
 parked: list of (ref Tmsg.Read, ref Fsess);
 users := 0;
 capstop: chan of int;
-capdone: chan of int;
-framec: chan of (array of byte, int, int);
+# A capture's end, with what ended it ("" for a stop).  The error went on
+# a channel of its own, buffered, and the end on this: the loop could
+# take the end first, find no error yet, and start another capture beside
+# the first one's report of why it could not run.
+capdone: chan of (int, string);
+cappidc: chan of (int, int);	# a capture's generation and pid, as it starts
+stuckc: chan of int;		# a generation told to stop Stopwait ago
+framec: chan of (array of byte, array of byte, int, int);	# the picture, its NDVI or nil, width, height
 rawc: chan of array of byte;
-errc: chan of string;
 ctlc: chan of string;
+capgen := 0;		# the capture now running, or the last
+cappid := -1;
+simstall := 0;		# -t: the next frame never comes (ctl stall)
+
+# How long a capture told to stop is waited for.  It looks at its stop
+# between frames, and a frame is a read of the receiver: with the link
+# dead that read does not return, the capture never went, and nothing
+# after it started (nor did the mount's end finish).  Past this it is
+# killed and the sensor put off for it.
+Stopwait: con 3000;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -184,10 +222,11 @@ init(nil: ref Draw->Context, args: list of string)
 	if(!sim)
 		sensorprobe();
 	fsize = framesize();
-	framec = chan of (array of byte, int, int);
+	framec = chan of (array of byte, array of byte, int, int);
 	rawc = chan of array of byte;
-	errc = chan[1] of string;
-	capdone = chan of int;
+	capdone = chan of (int, string);
+	cappidc = chan of (int, int);
+	stuckc = chan[4] of int;
 	ctlc = chan[8] of string;
 
 	(tree, treeop) := nametree->start();
@@ -200,6 +239,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("ctl", 8r664, Qctl));
 	tree.create(big Qstream, dir("fmt", 8r444, Qfmt));
 	tree.create(big Qstream, dir("frame", 8r444, Qframe));
+	tree.create(big Qstream, dir("ndvi", 8r444, Qndvi));
+	tree.create(big Qstream, dir("ndvifmt", 8r444, Qndvifmt));
 	tree.create(big Qstream, dir("raw", 8r444, Qraw));
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
 	# empty as served: where the feed's layers are bound (#1095)
@@ -311,24 +352,89 @@ serve(tree: ref Tree)
 		}
 		if(done)
 			return;
-	(fr, fwid, fht) := <-framec =>
+	(fr, nd, fwid, fht) := <-framec =>
 		latest = fr;
 		ring[seq % Ring] = (seq, fr);
+		ndviring[seq % Ring] = nd;
 		ringdim[seq % Ring] = (fwid, fht);
 		seq++;
 		wake();
 	r := <-rawc =>
 		lastraw = r;
 		wake();
-	e := <-errc =>
+	(g, pid) := <-cappidc =>
+		if(g == capgen)
+			cappid = pid;
+	(g, e) := <-capdone =>
+		ended(g, e);
+	g := <-stuckc =>
+		if(running && g == capgen)
+			reap();
+	}
+}
+
+# a capture has gone: generation g, saying e
+ended(g: int, e: string)
+{
+	if(g != capgen)
+		return;		# one reaped already
+	running = 0;
+	capstop = nil;
+	cappid = -1;
+	if(e != nil){
 		err = e;
 		wake();
-	<-capdone =>
-		running = 0;
-		capstop = nil;
-		if(wanted && err == "")
-			launch();
 	}
+	if(wanted && err == "")
+		launch();
+}
+
+# The capture told to stop has not gone: it is in a frame that does not
+# come.  Kill it and put the sensor off for it; its readers are told.
+reap()
+{
+	if(cappid >= 0){
+		fd := sys->open("/prog/" + string cappid + "/ctl", Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+	}
+	if(!sim)
+		sensoroff();
+	capgen++;	# whatever it still sends is not this capture's
+	ended(capgen, "camsrv: the sensor stopped answering");
+}
+
+# Wait for a capture on its way out to have gone, the loop's other
+# channels served meanwhile; an error if it is still there at the end.
+settle(): string
+{
+	if(!running)
+		return nil;
+	tc := chan[1] of int;
+	spawn timer(tc, Stopwait + 500);
+	while(running) alt {
+	<-framec =>
+		;
+	<-rawc =>
+		;
+	(g, pid) := <-cappidc =>
+		if(g == capgen)
+			cappid = pid;
+	(g, e) := <-capdone =>
+		ended(g, e);
+	g := <-stuckc =>
+		if(g == capgen)
+			reap();
+	<-tc =>
+		return "camsrv: in use";
+	}
+	return nil;
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }
 
 # one request; 1 when the mount has gone and the server with it
@@ -345,13 +451,18 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 		path := -1;
 		if(c != nil)
 			path = int c.path;
-		if((path == Qframe || path == Qraw) && err != "" && users == 0)
+		if((path == Qframe || path == Qraw || path == Qndvi) && err != "" && users == 0)
 			err = "";
-		if(srv.open(tm) != nil && (path == Qframe || path == Qraw)){
+		if(srv.open(tm) != nil && (path == Qframe || path == Qraw || path == Qndvi)){
 			sess = ref Fsess(srv, tm.fid, path, seq, nil, fw(), fh()) :: sess;
 			if(users++ == 0)
 				startcapture();
 		}
+	Flush =>
+		# The read flushed is forgotten, parked or not: left parked,
+		# the next frame answered a tag its client had given up.
+		unpark(tm.oldtag);
+		srv.default(tmsg);
 	Clunk =>
 		drop(tm.fid);
 		srv.default(tmsg);
@@ -367,7 +478,7 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 		case int c.path {
 		Qroot or Qstream or Qlayer =>
 			srv.read(tm);
-		Qfmt or Qstatus or Qctl =>
+		Qfmt or Qstatus or Qctl or Qndvifmt =>
 			# One open reads one text, as vid9p's: made at a read at
 			# offset 0 and kept with the fid (made at every read and
 			# cut at its offset, a status that moved between two
@@ -375,12 +486,13 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 			if(tm.offset == big 0 || c.data == nil){
 				case int c.path {
 				Qfmt =>	c.data = array of byte sys->sprint("%d %d i420 %d\n", fw(), fh(), fps);
+				Qndvifmt =>	c.data = array of byte sys->sprint("%d %d ndvi8\n", fw(), fh());
 				Qstatus =>	c.data = array of byte status();
 				Qctl =>	c.data = array of byte settings();
 				}
 			}
 			srv.reply(styxservers->readbytes(tm, c.data));
-		Qframe or Qraw =>
+		Qframe or Qraw or Qndvi =>
 			s := find(tm.fid);
 			if(s == nil)
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
@@ -413,18 +525,16 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 # waits for ever, with the sensor on and the name tree held.
 shutdown(tree: ref Tree)
 {
+	users = 0;
 	stopcapture();
-	while(running) alt {
-	<-framec =>
-		;
-	<-rawc =>
-		;
-	<-errc =>
-		;
-	<-capdone =>
-		running = 0;
-	}
+	if(settle() != nil)
+		reap();
 	tree.quit();
+	# the status log (-l) and anything else of the server's group go
+	# with it: the log wrote its line a minute for ever
+	fd := sys->open("/prog/" + string sys->pctl(0, nil) + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
 }
 
 # a soak's record: the status line, time first, once a minute, until the
@@ -461,15 +571,31 @@ drop(fid: int)
 		if(hd l != s)
 			n = hd l :: n;
 	sess = n;
+	# a read parked on the fid is answered: dropped unanswered, its tag
+	# waited for ever
 	p: list of (ref Tmsg.Read, ref Fsess);
 	for(q := parked; q != nil; q = tl q){
 		(tm, ps) := hd q;
 		if(ps != s)
 			p = (tm, ps) :: p;
+		else
+			s.srv.reply(ref Rmsg.Error(tm.tag, "camsrv: fid clunked"));
 	}
 	parked = p;
 	if(--users == 0)
 		stopcapture();
+}
+
+# forget the parked read of a tag on this connection
+unpark(tag: int)
+{
+	p: list of (ref Tmsg.Read, ref Fsess);
+	for(q := parked; q != nil; q = tl q){
+		(tm, ps) := hd q;
+		if(tm.tag != tag || ps.srv != srv)
+			p = (tm, ps) :: p;
+	}
+	parked = p;
 }
 
 # 1 if a reply went
@@ -482,6 +608,8 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 	fs := fsize;
 	if(s.path == Qraw)
 		fs = Sw*Sh*2/simdiv();
+	if(s.path == Qndvi)
+		fs = fw()*fh();
 	if(fs <= 0)
 		return 0;
 	foff := int (tm.offset % big fs);
@@ -489,7 +617,7 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		s.srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
 		return 1;
 	}
-	if(s.path == Qframe){
+	if(s.path == Qframe || s.path == Qndvi){
 		# Frame n, as every reader numbers it; the offset is the
 		# reader's, any 63 bits, so n is found in 64.  It was cut to
 		# an int: an offset near the frame size times 2^32 gave a
@@ -507,6 +635,8 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		if(n >= seq)
 			return 0;	# not made yet: wait for it
 		(sn, fr) := ring[n % Ring];
+		if(s.path == Qndvi)
+			fr = ndviring[n % Ring];	# nil: made before anyone asked
 		if(sn != n || fr == nil || len fr != fs){
 			s.srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
 			return 1;
@@ -516,7 +646,10 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 			# turned since this reader last knew: once, saying how
 			s.w = dw;
 			s.h = dh;
-			s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d i420 %d", dw, dh, fps)));
+			if(s.path == Qndvi)
+				s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d ndvi8", dw, dh)));
+			else
+				s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d i420 %d", dw, dh, fps)));
 			return 1;
 		}
 		k := tm.count;
@@ -559,9 +692,14 @@ simdiv(): int
 
 status(): string
 {
+	# as the capture is, not as its readers are counted: "on" with
+	# readers and a sensor that would not start was not so, nor "off"
+	# while the last frame of a stopped stream was still being made
 	on := "off";
-	if(users > 0)
+	if(running && capstop != nil)
 		on = "on";
+	else if(running)
+		on = "stopping";
 	first := seq - Ring;
 	if(first < base)
 		first = base;
@@ -570,13 +708,34 @@ status(): string
 		s += " sim=1";
 	else
 		s += " sensor=" + sensorname();
-	s += sys->sprint(" rawformat=rggb10:%d:%d", Sw/simdivr(), Sh/simdivr());
+	# the mosaic's order as the sensor now reads it out: flip changes it
+	order := "rggb";
+	if(!sim)
+		order = (array[] of {"rggb", "grbg", "gbrg", "bggr"})[flip & 3];
+	s += sys->sprint(" rawformat=%s10:%d:%d", order, Sw/simdivr(), Sh/simdivr());
 	if(linkbad)
 		s += sys->sprint(" linkbad=%d", linkbad);
 	if(regcheck != "")
 		s += " regcheck=" + regcheck;
 	if(afresult != "")
 		s += " autofocus=" + afresult;
+	# the last NDVI frame's figures, while 0/ndvi is read: mean, tenth,
+	# fiftieth and ninetieth percentiles in thousandths, and the readings
+	if(ndviwanted())
+		s += sys->sprint(" ndvi=%d:%d:%d:%d ndvireadings=%d", ndvistat[0], ndvistat[1], ndvistat[2], ndvistat[3], ndvistat[4]);
+	# lens shading: whether a table is in use, and the last learn
+	if(!sim){
+		if(shadetab == nil)
+			s += " shade=none";
+		else if(shadeon)
+			s += " shade=on";
+		else
+			s += " shade=off";
+		if(shadenote != "")
+			s += " shadelearn=" + shadenote;
+	}
+	# the gains in use, set or found: red and blue to green, 256 one
+	s += sys->sprint(" wbgains=%d:%d", lgr, lgb);
 	s += sys->sprint(" writes=%d i2cerrors=%d lostwrites=%d", nwrites, i2cerrs, lostw);
 	if(err != "")
 		s += " error=" + err;
@@ -592,8 +751,12 @@ simdivr(): int
 
 settings(): string
 {
-	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\n",
-		fw(), fh(), fps, exposure, gain, flip, rotate, focus);
+	wb := "auto";
+	if(wbfixed)
+		wb = sys->sprint("%d %d", wbr, wbb);
+	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\nwb %s\nndvi %s %s\nndvifloor %d\nshade %s\n",
+		fw(), fh(), fps, exposure, gain, flip, rotate, focus, wb,
+		channames[ndvinir], channames[ndvivis], ndvifloor, (array[] of {"off", "on"})[shadeon]);
 }
 
 # a ctl argument: a whole number of at most six digits, or -1
@@ -624,8 +787,8 @@ doctl(s: string): string
 	"mode" =>
 		if(n != 3)
 			return "camsrv: mode W H";
-		if(users > 0)
-			return "camsrv: in use";
+		if((e := inuse()) != nil)
+			return e;
 		w := a;
 		h := arg(hd tl tl f);
 		if(rotate%180)
@@ -642,10 +805,10 @@ doctl(s: string): string
 		fsize = framesize();
 		latest = nil;
 	"fps" =>
-		if(n != 2 || a < 1 || a > 56)
-			return "camsrv: fps 1..56";
-		if(users > 0)
-			return "camsrv: in use";
+		if(n != 2 || a < 1 || a > maxfps())
+			return sys->sprint("camsrv: fps 1..%d", maxfps());
+		if((e := inuse()) != nil)
+			return e;
 		fps = a;
 	"exposure" =>
 		if(n != 2 || a < 0 || a > Maxexposure)
@@ -677,6 +840,55 @@ doctl(s: string): string
 			return "camsrv: flip 0..3";
 		flip = a;
 		tell("flip");
+	"ndvi" =>
+		# ndvi NIR VIS: which raw channels are near-infrared and visible
+		if(n != 3)
+			return "camsrv: ndvi NIR VIS (red, green or blue)";
+		ni := chanindex(hd tl f);
+		vi := chanindex(hd tl tl f);
+		if(ni < 0 || vi < 0 || ni == vi)
+			return "camsrv: ndvi NIR VIS (red, green or blue, not the same)";
+		ndvinir = ni;
+		ndvivis = vi;
+	"shade" =>
+		if(n != 2)
+			return "camsrv: shade on|off|learn";
+		case hd tl f {
+		"on" =>
+			shadeon = 1;
+		"off" =>
+			shadeon = 0;
+		"learn" =>
+			if(sim)
+				return "camsrv: shade learn needs a camera";
+			if(users == 0)
+				return "camsrv: shade learn needs the camera running (a reader)";
+			shadesum = array[4*Shadegw*Shadegh] of {* => big 0};
+			shadecnt = array[4*Shadegw*Shadegh] of {* => 0};
+			shadenote = "learning";
+			shadelearn = Shadelearn;
+		* =>
+			return "camsrv: shade on|off|learn";
+		}
+	"ndvifloor" =>
+		if(n != 2 || a < 0 || a > 2046)
+			return "camsrv: ndvifloor 0..2046";
+		ndvifloor = a;
+	"wb" =>
+		if(n == 2 && hd tl f == "auto"){
+			wbfixed = 0;
+			wlr = nil;
+		}else{
+			if(n != 3)
+				return "camsrv: wb auto|RED BLUE";
+			r := arg(hd tl f);
+			b := arg(hd tl tl f);
+			if(r < 128 || r > 8*256 || b < 128 || b > 8*256)
+				return "camsrv: wb gains 128..2048 (256 is one)";
+			wbr = r;
+			wbb = b;
+			wbfixed = 1;
+		}
 	"rotate" =>
 		if(n != 2)
 			return "camsrv: rotate 0|90|180|270";
@@ -685,10 +897,29 @@ doctl(s: string): string
 		if(!rotation(hd tl f))
 			return "camsrv: rotate 0|90|180|270";
 		latest = nil;
+	"stall" =>
+		# the simulated sensor's next frame never comes, as a real
+		# one's does not when its link has died
+		if(!sim || n != 1)
+			return "camsrv: unknown ctl " + hd f;
+		simstall = 1;
 	* =>
 		return "camsrv: unknown ctl " + hd f;
 	}
 	return nil;
+}
+
+# What the picture is made from (mode, fps, flip, rotate) changes only
+# with no capture running.  Readers were counted, not the capture: a
+# change between the last close and the capture's end was taken, and the
+# frame it was finishing was merged at one size into planes of another
+# (an exception in the capture, which then never reported its end, so
+# none was started again).  The capture is waited for.
+inuse(): string
+{
+	if(users > 0)
+		return "camsrv: in use";
+	return settle();
 }
 
 readuser(): string
@@ -735,7 +966,14 @@ stopcapture()
 	if(capstop != nil){
 		capstop <-= 1;
 		capstop = nil;
+		spawn stuck(capgen);
 	}
+}
+
+stuck(g: int)
+{
+	sys->sleep(Stopwait);
+	stuckc <-= g;
 }
 
 launch()
@@ -748,36 +986,49 @@ launch()
 	lastraw = nil;
 	capstop = chan[1] of int;
 	running = 1;
-	spawn capwrap(capstop);
+	cappid = -1;
+	spawn capwrap(++capgen, capstop);
 }
 
-capwrap(stop: chan of int)
+# A capture always says it has gone: one that raised (no room for a
+# frame) left the server believing it was still running.
+capwrap(g: int, stop: chan of int)
 {
-	capture(stop);
-	capdone <-= 1;
+	cappidc <-= (g, sys->pctl(0, nil));
+	e: string;
+	{
+		e = capture(stop);
+	} exception x {
+	"*" =>
+		e = "camsrv: capture: " + x;
+		if(!sim)
+			sensoroff();
+	}
+	capdone <-= (g, e);
 }
 
 # The capture process: everything that touches the sensor, one place.
-capture(stop: chan of int)
+# What ended it, nil for a stop.
+capture(stop: chan of int): string
 {
 	sys->pctl(Sys->NEWFD, 0 :: 1 :: 2 :: nil);
 	if(sim){
 		simulate(stop);
-		return;
+		return nil;
 	}
 	e := sensoron();
 	if(e != nil){
 		sensoroff();
-		errc <-= e;
-		return;
+		return e;
 	}
+	cerr: string;
 	aewait := Aeevery;
 	aesum := aen := 0;
 	wlines := wgain := -1;
 	raw := array[Sw*Sh*2] of byte;
 	scale := Sw/width;
 	(y, cb, cr) := planes();
-	mean := array[3] of int;
+	mean := array[6] of int;
 	(lr, lg, lb) := tables(256, 256);
 	aelines := framelen - Exposureoff;
 	aegain := gaintoq(gain);
@@ -804,7 +1055,13 @@ capture(stop: chan of int)
 				wlines = -1;
 			}else if(c == "flip" && flip != newflip){
 				newflip = flip;
-				wr8(16r0101, flip);
+				# each sensor's own orientation register: this wrote
+				# the IMX708's to an IMX219, which then did not turn
+				# while its colours were merged as though it had
+				if(sensor == Imx219)
+					wr8(16r0172, flip);
+				else
+					wr8(16r0101, flip);
 				flipwait = 2;
 			}
 		* =>
@@ -812,11 +1069,11 @@ capture(stop: chan of int)
 		}
 		fd := sys->open("/dev/unicam/frame", Sys->OREAD);
 		if(fd == nil){
-			errc <-= sys->sprint("camsrv: %r");
+			cerr = sys->sprint("camsrv: %r");
 			break;
 		}
 		if(!readall(fd, raw)){
-			errc <-= sys->sprint("camsrv: frame: %r");
+			cerr = sys->sprint("camsrv: frame: %r");
 			break;
 		}
 		fd = nil;
@@ -828,10 +1085,20 @@ capture(stop: chan of int)
 			mflip = newflip;
 		(y, cb, cr) = planes();
 		rot := rotate;
-		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean);
-		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
-		if(lastrawwanted())
-			rawc <-= raw[0:];
+		# /raw is the sensor's own: copied before the shading
+		rc: array of byte;
+		if(lastrawwanted()){
+			rc = array[len raw] of byte;
+			rc[0:] = raw;
+		}
+		if(shadelearn > 0)
+			learnshade(raw);
+		else if(shadeon && shadetab != nil)
+			bayer->shade(raw, Sw, Sh, Black, 1023, shadetab, Shadegw, Shadegh);
+		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
+		framec <-= (y[0:fsize], ndviof(raw, Sw, Sh, scale, mflip, rot/90), turnedw(rot), turnedh(rot));
+		if(rc != nil)
+			rawc <-= rc;
 		(lr, lg, lb) = wbal(mean);
 		focusing := afrun || (af != nil && af.on);
 		if(focusing)
@@ -851,6 +1118,45 @@ capture(stop: chan of int)
 		}
 	}
 	sensoroff();
+	return cerr;
+}
+
+channames := array[] of {"red", "green", "blue"};
+
+chanindex(s: string): int
+{
+	for(i := 0; i < len channames; i++)
+		if(s == channames[i])
+			return i;
+	return -1;
+}
+
+ndviwanted(): int
+{
+	for(l := sess; l != nil; l = tl l)
+		if((hd l).path == Qndvi)
+			return 1;
+	return 0;
+}
+
+# a frame's NDVI, if anyone is reading 0/ndvi, from the raw frame it was
+# merged from; nil otherwise
+ndviof(raw: array of byte, rw, rh, scale, red, rot: int): array of byte
+{
+	if(!ndviwanted())
+		return nil;
+	nd := array[(rw/scale)*(rh/scale)] of byte;
+	bayer->ndvi(raw, rw, rh, scale, red, rot, ndvinir, ndvivis, Black, ndvifloor, nd, ndvistat);
+	return nd;
+}
+
+# A frame for /raw's readers, apart from raw: the next frame is read into
+# raw while a reader may still be given this one, and it came torn.
+rawcopy(raw: array of byte): array of byte
+{
+	c := array[len raw] of byte;
+	c[0:] = raw;
+	return c;
 }
 
 lastrawwanted(): int
@@ -923,29 +1229,58 @@ tables(gr, gb: int): (array of byte, array of byte, array of byte)
 
 lgr := 0;
 lgb := 0;
+# wb RED BLUE: fixed gains, 256 a gain of one, green's fixed at one;
+# wb auto: grey world (the default)
+wbfixed := 0;
+wbr := 256;
+wbb := 256;
 wlr, wlg, wlb: array of byte;
 
 # Grey world, moved a quarter of the way a frame, so that a passing
 # colour does not swing the picture.
 wbal(mean: array of int): (array of byte, array of byte, array of byte)
 {
-	r := mean[0]-Black;
-	g := mean[1]-Black;
-	b := mean[2]-Black;
+	if(wbfixed){
+		# the gains set: the channels keep their own ratio, as plant
+		# health from a NoIR camera needs (grey world takes it away)
+		if(wlr == nil || lgr != wbr || lgb != wbb)
+			(wlr, wlg, wlb) = tables(wbr, wbb);
+		return (wlr, wlg, wlb);
+	}
+	# the means over cells with nothing clipped, if there are any: a
+	# highlight clipped in one colour is that colour at its ceiling,
+	# and pulled the balance away from it
+	o := 0;
+	if(len mean >= 6 && mean[4] > 0)
+		o = 3;
+	r := mean[o]-Black;
+	g := mean[o+1]-Black;
+	b := mean[o+2]-Black;
 	if(r < 4)
 		r = 4;
 	if(b < 4)
 		b = 4;
 	if(g < 4)
 		g = 4;
-	gr := clamp(g*256/r, 128, 8*256);
-	gb := clamp(g*256/b, 128, 8*256);
-	gr = lgr + (gr-lgr)/4;
-	gb = lgb + (gb-lgb)/4;
-	if(wlr == nil || abs(gr-lgr)*16 > lgr || abs(gb-lgb)*16 > lgb){
-		(wlr, wlg, wlb) = tables(gr, gb);
-	}
+	tr := clamp(g*256/r, 128, 8*256);
+	tb := clamp(g*256/b, 128, 8*256);
+	# the tables made again while the gains in use are more than 1 in
+	# 64 from the picture's, a quarter of the way at a time.  Asked
+	# of the step, as it was, the balance stopped once a quarter of
+	# what was left was under 1 in 16: a quarter short of the picture
+	# (246:271 in daylight on a NoIR camera, whose grey was 218:321)
+	if(wlr == nil || abs(tr-lgr)*64 > lgr || abs(tb-lgb)*64 > lgb)
+		(wlr, wlg, wlb) = tables(step(lgr, tr), step(lgb, tb));
 	return (wlr, wlg, wlb);
+}
+
+# a quarter of the way from v to w, and at least one
+step(v, w: int): int
+{
+	d := (w-v)/4;
+	if(d == 0 && w != v)
+		d = (w-v)/abs(w-v);
+	return v+d;
 }
 
 clamp(v, lo, hi: int): int
@@ -1147,11 +1482,20 @@ simulate(stop: chan of int)
 	raw := array[w*h*2] of byte;
 	scale := w/width;
 	(y, cb, cr) := planes();
-	mean := array[3] of int;
+	mean := array[6] of int;
 	(lr, lg, lb) := (tone(256), tone(256), tone(256));
 	lgr = lgb = 256;
 	band := 0;
 	for(;;){
+		# the stall before the stop: a frame that will not come does
+		# not come for a capture told to stop either.  Looked at after
+		# it, a stop that came while this was still making the last
+		# frame was taken at once, and the stall was left set for the
+		# next capture, whose first frame then never came.
+		if(simstall){
+			simstall = 0;
+			<-chan of int;
+		}
 		alt {
 		<-stop =>
 			return;
@@ -1163,10 +1507,10 @@ simulate(stop: chan of int)
 		band = (band+4) % h;
 		(y, cb, cr) = planes();
 		rot := rotate;
-		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean);
-		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
+		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
+		framec <-= (y[0:fsize], ndviof(raw, w, h, scale, 0, rot/90), turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
-			rawc <-= raw[0:];
+			rawc <-= rawcopy(raw);
 		d := 1000/fps - (sys->millisec()-t0);
 		if(d > 0)
 			sys->sleep(d);
@@ -1283,6 +1627,15 @@ Reggain := 16r0204;
 Gainbits := 16;
 Gainmax := 960;			# the highest gain code
 Gainfull := 1024;		# gain = Gainfull/(Gainfull-code)
+
+# The most frames a second the sensor's timing allows: its shortest frame
+# (its height and least vertical blank) at its pixel rate. The IMX708's
+# is 56, the IMX219's 41; asking more was taken and silently held to it
+# while fmt said what was asked.
+maxfps(): int
+{
+	return int (big Pixrate / (big Linelen * big (Sh + Vblankmin)));
+}
 
 ctlset(fd: ref Sys->FD, s: string): int
 {
@@ -1489,6 +1842,7 @@ sensoron(): string
 	if(e != nil)
 		return e;
 	r := 0;
+	shadetab = loadshade();
 	if(sensor == Imx219)
 		r = sensormode219();
 	else
@@ -1580,6 +1934,149 @@ chipid(reg, want: int): int
 		id = a<<8 | b;
 	}
 	return id;
+}
+
+# ---- lens shading: learnt from a flat field, kept on the card
+
+shadefile(): string
+{
+	return "/lib/camera/" + sensorname() + ".shade";
+}
+
+# the nearest grid point's index for each column and row, made once
+shadecol, shaderow: array of int;
+
+learnshade(raw: array of byte)
+{
+	if(shadecol == nil || len shadecol != Sw || len shaderow != Sh){
+		shadecol = array[Sw] of int;
+		shaderow = array[Sh] of int;
+		for(x := 0; x < Sw; x++)
+			shadecol[x] = (x*(Shadegw-1) + (Sw-1)/2)/(Sw-1);
+		for(y := 0; y < Sh; y++)
+			shaderow[y] = (y*(Shadegh-1) + (Sh-1)/2)/(Sh-1);
+	}
+	n := Shadegw*Shadegh;
+	for(y := 0; y < Sh; y++){
+		o := y*Sw*2;
+		r := shaderow[y]*Shadegw;
+		q0 := (y&1)*2*n;
+		for(x := 0; x < Sw; x++){
+			v := (int raw[o] | int raw[o+1]<<8) - Black;
+			o += 2;
+			i := q0 + (x&1)*n + r + shadecol[x];
+			if(v > 0)
+				shadesum[i] += big v;
+			shadecnt[i]++;
+		}
+	}
+	if(--shadelearn == 0)
+		finishshade();
+}
+
+# The table from the sums: each position's brightest point over each
+# point, at most eight. A field too dark or nearly clipped is refused and
+# the table left as it was.
+finishshade()
+{
+	n := Shadegw*Shadegh;
+	t := array[4*n] of int;
+	lo := 1024;
+	for(q := 0; q < 4; q++){
+		mx := 0;
+		m := array[n] of int;
+		for(i := 0; i < n; i++){
+			c := shadecnt[q*n+i];
+			if(c > 0)
+				m[i] = int (shadesum[q*n+i] / big c);
+			if(m[i] > mx)
+				mx = m[i];
+		}
+		if(mx < 40){
+			shadenote = sys->sprint("refused:dark=%d", mx);	# above black at its brightest
+			return;
+		}
+		if(mx > 1023-Black-60){
+			shadenote = sys->sprint("refused:clipped=%d", mx);
+			return;
+		}
+		for(i = 0; i < n; i++){
+			g := 8*1024;
+			if(m[i] > 0 && mx*1024/m[i] < g)
+				g = mx*1024/m[i];
+			t[q*n+i] = g;
+			if(m[i]*1024/mx < lo)
+				lo = m[i]*1024/mx;
+		}
+	}
+	e := saveshade(t);
+	shadetab = t;
+	shadenote = sys->sprint("learnt:darkest=%d%%", lo*100/1024);	# of the brightest
+	if(e != nil){
+		sys->fprint(sys->fildes(2), "camsrv: shade: %s\n", e);
+		shadenote += ",notsaved";
+	}
+}
+
+saveshade(t: array of int): string
+{
+	sys->create("/lib/camera", Sys->OREAD, Sys->DMDIR|8r775);
+	fd := sys->create(shadefile(), Sys->OWRITE, 8r664);
+	if(fd == nil)
+		return sys->sprint("%s: %r", shadefile());
+	n := Shadegw*Shadegh;
+	s := sys->sprint("shade %s %d %d\n", sensorname(), Shadegw, Shadegh);
+	for(q := 0; q < 4; q++){
+		for(i := 0; i < n; i++){
+			if(i > 0)
+				s += " ";
+			s += string t[q*n+i];
+		}
+		s += "\n";
+	}
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("%s: %r", shadefile());
+	return nil;
+}
+
+# The sensor's table, if the card has one that fits; nil otherwise.
+loadshade(): array of int
+{
+	fd := sys->open(shadefile(), Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[64*1024] of byte;
+	got := 0;
+	while(got < len b){
+		m := sys->read(fd, b[got:], len b - got);
+		if(m <= 0)
+			break;
+		got += m;
+	}
+	(nl, lines) := sys->tokenize(string b[0:got], "\n");
+	if(nl != 5)
+		return nil;
+	(nh, h) := sys->tokenize(hd lines, " \t");
+	if(nh != 4 || hd h != "shade" || hd tl h != sensorname() || int hd tl tl h != Shadegw || int hd tl tl tl h != Shadegh)
+		return nil;
+	n := Shadegw*Shadegh;
+	t := array[4*n] of int;
+	q := 0;
+	for(lines = tl lines; lines != nil; lines = tl lines){
+		(nv, v) := sys->tokenize(hd lines, " \t");
+		if(nv != n)
+			return nil;
+		for(i := 0; i < n; i++){
+			g := int hd v;
+			v = tl v;
+			if(g < 512 || g > 8*1024)
+				return nil;
+			t[q*n+i] = g;
+		}
+		q++;
+	}
+	return t;
 }
 
 sensorname(): string

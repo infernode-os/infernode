@@ -5,8 +5,9 @@ sntp \- simple network time protocol client
 .B ip/sntp
 [
 .B -di
-]
-[
+] [
+.BI -m " seconds"
+] [
 .I server
 ]
 .SH DESCRIPTION
@@ -31,6 +32,22 @@ Other datagrams are passed over, and after four tries of three seconds
 .I sntp
 fails, saying why the last was refused if any came.
 It also fails if the clock could not be written.
+.PP
+What an answer may do to the clock is bounded, as
+.IR timesync (8)
+bounds a GPS receiver's.
+A time before
+.I sntp
+was written, or before the kernel was built, is not a time.
+A clock that already says a time since then is stepped by at most
+.I seconds
+(default 86400, a day): an answer further from it is refused and the
+clock left, with status
+.BR "step too large" .
+.B "-m 0"
+allows any step.
+A clock that has never been set (it says a time before the system was
+built) is set whatever the step.
 The
 .B -d
 option prints debugging text, including the time received;
@@ -51,6 +68,6 @@ from actually updating the local time.
 .IR timesync (8)
 .SH BUGS
 SNTP is not authenticated: a reply that answers the request is
-believed, whatever time it says from 2005 to 2036, so whoever is on
-the path to the server chooses the clock.
+believed, so whoever is on the path to the server chooses the clock,
+within the step allowed.
 

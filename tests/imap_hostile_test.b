@@ -161,6 +161,23 @@ testLiteral(t: ref T)
 	}
 }
 
+# A mailbox's UIDVALIDITY is 32 bits unsigned: kept in an int, every
+# value from 2^31 up was the largest int, so a mailbox made again with
+# another such validity was taken for the same one.
+testUidvalidity(t: ref T)
+{
+	a := imap->uidvalidityof("* OK [UIDVALIDITY 3857529045] UIDs valid");
+	b := imap->uidvalidityof("* OK [UIDVALIDITY 3857529046] UIDs valid");
+	t.assertseq(string a, "3857529045", "a UIDVALIDITY past 2^31 is the number sent");
+	t.assert(a != b, "and differs from the one above it");
+	t.assertseq(string imap->uidvalidityof("* OK [UIDVALIDITY 7]"), "7", "a small one");
+	t.assertseq(string imap->uidvalidityof("* OK [UIDVALIDITY 4294967295]"), "4294967295", "the largest");
+	t.assertseq(string imap->uidvalidityof("* OK [UIDVALIDITY 4294967296]"), "0", "past 32 bits is none");
+	t.assertseq(string imap->uidvalidityof("* OK [UIDVALIDITY 99999999999999999999999]"), "0", "nor are twenty digits");
+	t.assertseq(string imap->uidvalidityof("* OK [UIDVALIDITY ]"), "0", "nor no digits");
+	t.assertseq(string imap->uidvalidityof("* OK [UIDNEXT 9]"), "0", "nor another code");
+}
+
 testUid(t: ref T)
 {
 	(a, nil) := parse("* 1 FETCH (UID 4000000000)");
@@ -257,6 +274,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Addresses", testAddresses);
 	run("Literal", testLiteral);
 	run("Uid", testUid);
+	run("Uidvalidity", testUidvalidity);
 	run("Arguments", testArguments);
 	run("Mutations", testMutations);
 

@@ -82,7 +82,7 @@ void		errorf(char*, ...) INF_NORETURN;
 #pragma varargck argpos errorf 1
 void		excinit(void);
 void		exhausted(char*) INF_NORETURN;
-int		export(int, char*, int);
+int		export(int, char*, int, int);
 Chan*	fdtochan(Fgrp*, int, int, int, int);
 int		findmount(Chan**, Mhead**, int, int, Qid);
 void		checkwritable(Chan*);

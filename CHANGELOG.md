@@ -4,7 +4,7 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
-## [0.11.1] - 2026-11-24
+## [0.12.0] - 2026-11-24
 
 ### Added
 

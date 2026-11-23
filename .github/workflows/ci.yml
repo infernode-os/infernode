@@ -803,10 +803,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # three parts, each well inside the limit beside the build (whose
-        # apt-get alone takes 3 to 9 minutes): shard 1 had grown to 39 of
-        # its 40 and failed whenever a runner was slow. tools9p_integration
-        # takes 9.5 minutes by itself, a fresh emulator for each check
+        # four parts of 25 to 30 minutes, the build's included (its apt-get
+        # alone takes 3 to 9): shard 1 of two had grown to 39 of its 40 and
+        # failed whenever a runner was slow, and shard 2 to 35. tools9p_
+        # integration takes 9.5 minutes by itself, a fresh emulator a check
         include:
           - shard: 1
             tests: >-
@@ -833,22 +833,22 @@ jobs:
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test audiolevel_test audioring_test kernelpins_test kernrandom_test awk_builtins_test calendar9p_test kfscheck_test gefs_test gefs_crash_test gefsroot_test
-              cpu_boundary_test dialogue_test emu_root_test emu_rwlock_test mpexp_test
+              cpu_boundary_test dialogue_test emu_root_test emu_rwlock_test
               libkern_copy_test
               ethermedium_arp_test genet_rxlen_test icmp6_ndopt_test icmp_netlog_test
               virtio_used_test ether4330_bounds_test dns_reply_test usbclass_selftest_test
               usbdwc_bounds_test udp_len_test iproute_guard_test arp_enter_test ptclcsum_guard_test
               usbxhci_trblen_test ip6reasm_test ipifc_guard_test devip_guard_test tcp_isn_test
               bt9p_selftest_test
-              export_limits_test devip_conv_test arpadd_test factotum_persist_test devsd_part_test devether_rndis_test netif_multi_test devcmd_fdleak_test devprog_fdsnap_test errlabel_test flawfinder_filter_test print_heapfull_test load_heapfull_test nil_far_test jit_compile_fail_test jit_4gb_test limbo_stale_test slice_end_test draw_pools_test tk_nomem_test link_digest_test
+              export_limits_test devip_conv_test arpadd_test devsd_part_test devether_rndis_test netif_multi_test devcmd_fdleak_test devprog_fdsnap_test errlabel_test flawfinder_filter_test print_heapfull_test load_heapfull_test nil_far_test jit_compile_fail_test jit_4gb_test limbo_stale_test slice_end_test draw_pools_test tk_nomem_test link_digest_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test
               listen_announce_test listen_plain_test listen_rate_fairness_test mail9p_test
               modifier_mouse_emulation_test mount_clone_walk_test
-              nsaudit_metadata_test nosystemkeyboard_test osk_decoder_test prof_test profile_legacykey_test
-              refadt_zero_test sdl3_keyboard_test secstore_apikey_test
-              secstore_e2e_test secstore_logon_test secstored_test
+              nsaudit_metadata_test nosystemkeyboard_test prof_test profile_legacykey_test
+              refadt_zero_test sdl3_keyboard_test
+              secstore_e2e_test secstored_test
               security_check_test serve_llm_smoke_test stale_dis_test
               strcat_test task_provisioning_test tcpseq_test themefs_test
               tls_malformed_server_test tools9p_activity_ns_test
@@ -862,6 +862,9 @@ jobs:
           - shard: 3
             tests: >-
               tools9p_integration_test activity_switch_test httpd_test httpd_auth_test
+          - shard: 4
+            tests: >-
+              secstore_logon_test osk_decoder_test factotum_persist_test secstore_apikey_test mpexp_test
     permissions:
       contents: read
     env:

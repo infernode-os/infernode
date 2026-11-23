@@ -17,14 +17,14 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
 # Once the runtime has booted once, lib/sh/profile creates ~/.infernode/
 # and bind-mounts subtrees of it over /lib/ndb, /lib/veltro/keys, etc.
-# (commit 3879eba3 — read-only bundle root, writable user overlay).
+# (commit 3879eba3 - read-only bundle root, writable user overlay).
 # Writes to the bundle's lib/* are invisible to the runtime once the
 # overlay exists. Write-Config below mirrors writes to both locations
 # so setup works whether it's run before OR after first launch, and
 # stays consistent if the user later deletes the overlay for a re-seed.
 $Infhome = Join-Path $env:USERPROFILE '.infernode'
 
-# Overlay path mapping per lib/sh/profile binds. Bundle path → overlay
+# Overlay path mapping per lib/sh/profile binds. Bundle path -> overlay
 # subtree-relative path. Where the bind names diverge (the profile
 # avoids putting lib/veltro/keys under lib/veltro so the two binds
 # don't conflict), the mapping records both sides.
@@ -99,7 +99,7 @@ function Pause-OnExit {
     try { Stop-Transcript | Out-Null } catch {}
 }
 
-# ── Helpers ────────────────────────────────────────────────────────
+# -- Helpers --------------------------------------------------------
 function Write-Info  { param($msg) Write-Host "  > " -ForegroundColor Cyan -NoNewline; Write-Host $msg }
 function Write-Ok    { param($msg) Write-Host "  + " -ForegroundColor Green -NoNewline; Write-Host $msg }
 function Write-Warn  { param($msg) Write-Host "  ! " -ForegroundColor Yellow -NoNewline; Write-Host $msg }
@@ -113,7 +113,7 @@ function Write-Key {
 
 try {
 
-# ── Banner ─────────────────────────────────────────────────────────
+# -- Banner ---------------------------------------------------------
 Write-Host ""
 Write-Host "InferNode Setup" -ForegroundColor White -BackgroundColor DarkBlue
 Write-Host "Configure the LLM backend for Veltro" -ForegroundColor DarkGray
@@ -130,7 +130,7 @@ if ($running) {
     Write-Host ""
 }
 
-# ── Choose backend ─────────────────────────────────────────────────
+# -- Choose backend -------------------------------------------------
 Write-Host "Veltro needs an LLM to work. Choose your backend:"
 Write-Host ""
 Write-Host "  1) " -NoNewline; Write-Host "Anthropic API key" -ForegroundColor White -NoNewline; Write-Host " (recommended - best quality)" -ForegroundColor DarkGray
@@ -143,7 +143,7 @@ do {
 
 Write-Host ""
 
-# ── Path 1: Anthropic API ──────────────────────────────────────────
+# -- Path 1: Anthropic API ------------------------------------------
 function Setup-Anthropic {
     Write-Info "Anthropic API setup"
     Write-Host ""
@@ -226,7 +226,7 @@ dial=
     Write-Host "  Common choices: claude-sonnet-4-5-20250929, claude-haiku-4-5-20251001" -ForegroundColor DarkGray
 }
 
-# ── Path 2: Ollama ─────────────────────────────────────────────────
+# -- Path 2: Ollama -------------------------------------------------
 function Setup-Ollama {
     Write-Info "Ollama setup (local LLM)"
     Write-Host ""
@@ -347,7 +347,7 @@ dial=
     Write-Host "  Start it with: ollama serve" -ForegroundColor DarkGray
 }
 
-# ── Optional: Brave Search API key ─────────────────────────────────
+# -- Optional: Brave Search API key ---------------------------------
 function Setup-BraveSearch {
     Write-Host ""
     Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
@@ -363,7 +363,7 @@ function Setup-BraveSearch {
     }
 }
 
-# ── Dispatch ───────────────────────────────────────────────────────
+# -- Dispatch -------------------------------------------------------
 switch ($choice) {
     "1" { Setup-Anthropic }
     "2" { Setup-Ollama }
@@ -371,7 +371,7 @@ switch ($choice) {
 
 Setup-BraveSearch
 
-# ── Preflight: POSIX host shell on PATH ────────────────────────────
+# -- Preflight: POSIX host shell on PATH ----------------------------
 # Inferno's runtime exec's a host `sh` for a handful of integrations
 # (env passthrough, host-side glue). Without one on PATH, boot logs
 # `os: cannot exec ...` warnings and a few helpers degrade.
@@ -437,7 +437,7 @@ function Test-HostShell {
 }
 Test-HostShell
 
-# ── Done ───────────────────────────────────────────────────────────
+# -- Done -----------------------------------------------------------
 Write-Host ""
 Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
 Write-Host ""

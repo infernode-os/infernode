@@ -52,7 +52,7 @@ Write-Host ""
 # Common compiler flags
 $CFLAGS = @(
     "/nologo", "/c", "/O2", "/Gy", "/GF", "/MT",
-    "/W3", "/wd4018", "/wd4244", "/wd4245", "/wd4068",
+    "/W3", "/we4013", "/wd4018", "/wd4244", "/wd4245", "/wd4068",
     "/wd4090", "/wd4554", "/wd4146", "/wd4996", "/wd4305",
     "/wd4102", "/wd4761",
     "/D_AMD64_", "/DWINDOWS_AMD64",
@@ -657,7 +657,7 @@ Write-Host "  Regenerating Srv runtime headers..."
 
 $emuCFlags = @(
     "/nologo", "/c", "/O2", "/Gy", "/GF", "/MT",
-    "/W3", "/wd4018", "/wd4244", "/wd4245", "/wd4068",
+    "/W3", "/we4013", "/wd4018", "/wd4244", "/wd4245", "/wd4068",
     "/wd4090", "/wd4554", "/wd4146", "/wd4996", "/wd4305",
     "/wd4102", "/wd4761",
     "/DEMU", "/D_AMD64_", "/DWINDOWS_AMD64",

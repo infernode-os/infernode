@@ -27,9 +27,12 @@ trap 'rm -rf "$t"' EXIT
 cp -a "$pkg" "$t/pkg"
 E="$t/pkg/$emu"; R=$(cd "$t/pkg/$root" && pwd)
 # Windows (Git Bash/MSYS2): the emu is a native program, so -r takes C:/...
-# not /c/..., and MSYS must not rewrite its /dis/... arguments.
+# not /c/..., and MSYS must not rewrite its /dis/... arguments.  Each run
+# also gets twice the time there: the first start of a freshly copied
+# package is slow (seen once as Xenith printing nothing within 120 s).
+slow=1
 case $(uname -s) in
-MINGW*|MSYS*|CYGWIN*) R=$(cd "$R" && pwd -W); MSYS_NO_PATHCONV=1; export MSYS_NO_PATHCONV;;
+MINGW*|MSYS*|CYGWIN*) R=$(cd "$R" && pwd -W); MSYS_NO_PATHCONV=1; export MSYS_NO_PATHCONV; slow=2;;
 esac
 [ -x "$E" ] || { echo "FAIL: no emulator at $emu"; exit 1; }
 case "$E" in */bin/emu) LD_LIBRARY_PATH="$(dirname "$E")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; export LD_LIBRARY_PATH;; esac
@@ -102,7 +105,7 @@ sleep 3
 report
 echo halt > /dev/sysctl
 RC
-o=$(timeout 120 "$E" -c1 -pheap=1536m -pmain=1024m -pimage=1024m -r"$R" /dis/sh.dis -c "run /lib/release_smoke/headless.sh" </dev/null 2>&1)
+o=$(timeout $((120*slow)) "$E" -c1 -pheap=1536m -pmain=1024m -pimage=1024m -r"$R" /dis/sh.dis -c "run /lib/release_smoke/headless.sh" </dev/null 2>&1)
 check "headless Charon opens on its start page" "$(printf '%s\n' "$o" | sed -n '1,/^LINKS/p')" "^URL $home\$" "^TITLE Charon\$" "^STATUS done"
 check "headless Charon shows a page with scripts off" "$(printf '%s\n' "$o" | sed '1,/^LINKS/d')" "^URL $PAGE\$" "^TITLE Release smoke\$" "^STATUS done" "^TEXT 41 1\$" "^LINKS 40\$"
 
@@ -136,7 +139,7 @@ echo halt > '#c/sysctl'
 RC
 	d=/lib/release_smoke/dump
 	{ echo /; echo; echo; printf '%11d \n' 0; printf 'e%11d %11d %11d %11d %11d \n' 0 0 0 0 0; echo; echo /; echo "sh /lib/release_smoke/xenith.sh"; } >"$R$d"
-	o=$(timeout 120 "$E" -c1 -pheap=1536m -pmain=1024m -pimage=1024m -g1280x800 -r"$R" /dis/sh.dis -c "load std; mkdir -p /tmp; xenith -l $d" </dev/null 2>&1)
+	o=$(timeout $((120*slow)) "$E" -c1 -pheap=1536m -pmain=1024m -pimage=1024m -g1280x800 -r"$R" /dis/sh.dis -c "load std; mkdir -p /tmp; xenith -l $d" </dev/null 2>&1)
 	check "Xenith shows the page" "$o" "^BODY 41\$" "^IMAGE ."
 
 	# 3. Lucifer: Charon in the presentation view
@@ -160,7 +163,7 @@ sleep 3
 report
 echo halt > /dev/sysctl
 RC
-	o=$(timeout 240 "$E" -c1 -pheap=1536m -pmain=1024m -pimage=1024m -g1440x900 -r"$R" /dis/sh.dis -l -c "skiplogon=1; run /lib/lucifer/boot.sh & sleep 45; run /lib/release_smoke/lucifer.sh" </dev/null 2>&1)
+	o=$(timeout $((240*slow)) "$E" -c1 -pheap=1536m -pmain=1024m -pimage=1024m -g1440x900 -r"$R" /dis/sh.dis -l -c "skiplogon=1; run /lib/lucifer/boot.sh & sleep 45; run /lib/release_smoke/lucifer.sh" </dev/null 2>&1)
 	check "Lucifer's Charon opens on its start page" "$(printf '%s\n' "$o" | sed -n '1,/^LINKS/p')" "^URL $home\$" "^TITLE Charon\$" "^STATUS done"
 	check "Lucifer's Charon shows a page with scripts off" "$(printf '%s\n' "$o" | sed '1,/^LINKS/d')" "^URL $PAGE\$" "^TITLE Release smoke\$" "^STATUS done" "^TEXT 41 1\$" "^LINKS 40\$"
 fi

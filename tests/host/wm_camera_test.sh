@@ -4,7 +4,9 @@
 # Hide sends the window "visible 0", wm/camera closes the feed, and with no
 # other reader camsrv(4) stops streaming; unhidden, it takes the feed back.
 # A feed turned (camsrv's rotate) while the window was hidden is shown at
-# its new size, and one turned while it is shown follows at once. Over camsrv -t, so no camera is needed; driven by
+# its new size, and one turned while it is shown follows at once. Its
+# menu (button 3): snapshot saves a PNG, mirror, upside down and rotate 90
+# write the feed's ctl (the window following), exit closes it. Over camsrv -t, so no camera is needed; driven by
 # tests/wm/camera.sh.
 #
 set -e
@@ -21,7 +23,7 @@ T=tmp/wm_camera_test.$$
 mkdir -p "$ROOT/$T"
 trap 'rm -f "$LOG"; rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
-SDL_VIDEODRIVER=dummy with_timeout 90 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
+SDL_VIDEODRIVER=dummy with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
 	/dis/sh.dis -c "bind -c /$T /tmp; wm/wm sh /tests/wm/camera.sh" \
 	</dev/null >"$LOG" 2>&1 || true
 
@@ -49,5 +51,32 @@ if grep "^R live " "$LOG" | awk '{ if ($6-$4 == 296 && $7-$5 == 170) ok = 1 } EN
 	echo "PASS: turned while shown, the window follows"
 else
 	echo "FAIL: turned while shown -- $(grep '^R live' "$LOG" | head -1)"; failed=1
+fi
+# the window's menu (button 3)
+snap=$(ls "$ROOT/$T/home/camera/"*.png 2>/dev/null | head -1)
+if [ -n "$snap" ] && head -c 8 "$snap" | od -An -c | grep -q "P   N   G"; then
+	echo "PASS: snapshot saves the frame shown as a PNG in \$home/camera"
+else
+	echo "FAIL: snapshot -- $(grep '^R snap' "$LOG" | head -1)"; failed=1
+fi
+menucheck() {
+	if grep "^R $1 " "$LOG" | grep -q "$2"; then
+		echo "PASS: $3"
+	else
+		echo "FAIL: $3 -- $(grep "^R $1 " "$LOG" | head -1)"; failed=1
+	fi
+}
+menucheck mirrored "flip 2" "mirror flips the sensor's mirror bit (3, the default, to 2)"
+menucheck upside "rotate 180" "upside down turns the feed half way"
+menucheck rotated "rotate 270" "rotate 90 turns it a quarter more"
+if grep "^R rotwin " "$LOG" | awk '{ if ($6-$4 == 170 && $7-$5 == 296) ok = 1 } END { exit !ok }'; then
+	echo "PASS: turned from the menu, the window follows"
+else
+	echo "FAIL: turned from the menu -- $(grep '^R rotwin' "$LOG" | head -1)"; failed=1
+fi
+if grep -q "^R exited *$" "$LOG"; then
+	echo "PASS: exit closes the window"
+else
+	echo "FAIL: exit -- $(grep '^R exited' "$LOG" | head -1)"; failed=1
 fi
 exit $failed

@@ -307,8 +307,13 @@ testCtl(t: ref T)
 	t.assert(ctl("wb 300") < 0, "one gain refused");
 	t.assert(ctl("wb red blue") < 0, "words refused");
 	t.assert(has(file("status"), " wbgains="), "status says the gains in use");
+	# the sensor's own limit, from its timing: the IMX708's 56 (the
+	# simulated sensor's); more was taken and silently held to it
+	t.assert(ctl("fps 57") < 0, "fps past the sensor's timing refused");
+	t.assert(ctl("fps 56") > 0, "the sensor's most taken");
 	t.assert(ctl("fps 10") > 0, "fps taken");
 	t.assert(has(file("fmt"), " i420 10"), "fmt says so");
+	t.assert(has(file("status"), " rawformat=rggb10:"), "the simulated sensor's mosaic, whatever the flip");
 }
 
 # 0/ndvi (issue #1244) over the simulated bars: red alone +1, blue alone

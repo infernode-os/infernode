@@ -5506,7 +5506,8 @@ RNGOUT="$(QEMUARGS="$VIRTARGS -append rngassess" shell_session "$BUILD/$PLAT-ker
         'rngdump -b /tmp/b1.bin' \
         'rngdump -b /tmp/b2.bin' \
         'ls -l /tmp/raw.bin /tmp/b1.bin' \
-        'read 32 < /dev/random | wc -b')"
+        'read 32 < /dev/random > /tmp/r32' \
+        'ls -l /tmp/r32')"
 printf '%s\n' "$RNGOUT" > "$BUILD/$PLAT-rngassess.txt"
 NORNG="$(shell_session "$BUILD/$PLAT-kernel.img" 'rngdump -n 10 /tmp/x' 'rngdump -b /tmp/y')"
 if grep -aq 'src=/dev/hwrandom bytes=300000 .* throttled0=none cputemp0=none throttled1=none cputemp1=none' <<<"$RNGOUT" && grep -aq ' 300000 .*/tmp/raw.bin' <<<"$RNGOUT"; then
@@ -5520,7 +5521,7 @@ if [[ -n "$B1" && "$(wc -l <<<"$B1")" -eq 1 ]] && [[ "$(grep -ac 'src=/dev/hwran
 else
     fail "virt: rngassess: #c/hwrandomboot -- $(grep -a 'hwrandomboot' <<<"$RNGOUT" | head -3)"
 fi
-if grep -aqE '^ *32[[:space:]]*$' <<<"$(tr -d '\r' <<<"$RNGOUT")"; then
+if grep -aqE ' 32 .*/tmp/r32' <<<"$RNGOUT"; then
     pass "virt: rngassess: /dev/random still gives keys on an assessment boot"
 else
     fail "virt: rngassess: /dev/random gave nothing on an assessment boot"

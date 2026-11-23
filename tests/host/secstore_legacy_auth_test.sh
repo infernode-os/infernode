@@ -44,16 +44,17 @@ if [ ! -f "$ROOT/tmp/secstore_legacy/legacyuser/PAK" ]; then
     exit 1
 fi
 # An account at the first version is moved by its first login with a
-# current client: the verifier is version 4's, made at the file key's
-# cost, and the old one is gone once a version 4 login has worked (the
-# move's own second step is one).  The account used to stay as it was.
+# current client: the verifier is version 6's, made at the file key's
+# cost (PBKDF2-HMAC-SHA-384), and the old one is gone once a version 6
+# login has worked (the move's own second step is one).  The account
+# used to stay as it was.
 PAKHDR=$(LC_ALL=C awk 'NR==1{print $1}' "$ROOT/tmp/secstore_legacy/legacyuser/PAK" 2>/dev/null || true)
 PAKLINES=$(wc -l < "$ROOT/tmp/secstore_legacy/legacyuser/PAK" | tr -d ' ')
-if [ "$PAKHDR" != "secstore4" ] || [ "$PAKLINES" != 1 ]; then
-    echo "FAIL: the legacy account was not moved to version 4 by its login (PAK: $PAKHDR, $PAKLINES lines)"
+if [ "$PAKHDR" != "secstore6" ] || [ "$PAKLINES" != 1 ]; then
+    echo "FAIL: the legacy account was not moved to version 6 by its login (PAK: $PAKHDR, $PAKLINES lines)"
     exit 1
 fi
-echo "PASS: the legacy account is at version 4 alone after its first login"
+echo "PASS: the legacy account is at version 6 alone after its first login"
 
 cat > "$ROOT/tmp/secstore_legacy_p2.sh" << 'INFERNO'
 load std

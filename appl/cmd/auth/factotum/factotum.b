@@ -59,13 +59,24 @@ keymanc: chan of (list of ref Attr, int, chan of (list of ref Key, string));
 allkeys: array of ref Key;
 
 # Persistence
-KEYFILE_MAGIC: con "FKEY1\n";
+#
+# The key file: magic, nonce, AES-256-GCM of the keys (the magic its
+# associated data), tag.  FKEY2's key is PBKDF2 with HMAC-SHA-384 of the
+# password, salted with "factotum keyfile 2", a zero byte and the user's
+# name, 200000 iterations, its first 32 bytes; FKEY1's was 10000 rounds
+# of HMAC-SHA256 under a salt fixed for everyone, which is not CNSA 2.0's
+# hash.  An FKEY1 file is read, and written again as FKEY2 at once.
+#
+KEYFILE_MAGIC: con "FKEY2\n";
+KEYFILE_MAGIC1: con "FKEY1\n";
 KEYFILE_KDF_ROUNDS: con 10000;
+KEYFILE_ITER: con 200000;
 AES_GCM_NONCE_LEN: con 12;
 AES_GCM_TAG_LEN: con 16;
 
 keyfilepath: string;
-keyfilepass: array of byte;	# derived key, not raw password
+keyfilepass: array of byte;	# derived key, not raw password (FKEY2's)
+keyfilepass1: array of byte;	# FKEY1's, until an FKEY1 file has been read and written again
 Maxkeyfile: con 16*1024*1024;	# the most a key file may be
 dirtyc: chan of int;		# signal dirty state to persist thread
 syncc: chan of chan of string;	# request sync, reply with persistence error
@@ -73,10 +84,8 @@ syncc: chan of chan of string;	# request sync, reply with persistence error
 # Secstore persistence
 secstoreaddr: string;		# secstore server address (e.g. "net!localhost!secstore")
 secstoreuser: string;		# username for secstore auth
-secstorepwhash: array of byte;	# legacy password hash for secstore auth
-secstorepwhash2: array of byte;	# secstore2 password hash for new PAK auth
-secstorerootkey: array of byte;	# SGCM2 root key for new secstore blobs
-secstorepwhash4: array of byte;	# version 4's, from the file key's root (mkseckey4)
+secstorecreds: ref Secstore->Creds;	# every key the password gives (secstore(2) mkcreds)
+secstorerootkey: array of byte;	# the root the files are written under: root6, or a second-factor account's data key
 secstorevault: array of byte;	# a second-factor account's vault key, shown before a save
 
 # Cached secstore connection — avoids full PAK handshake on every save
@@ -149,7 +158,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(random == nil)
 			err("cannot load Random");
 		if(keyfilepassarg != nil){
-			keyfilepass = derivekey(keyfilepassarg);
+			setkeyfilepass(keyfilepassarg);
 			keyfilepassarg = nil;
 		}
 	}
@@ -167,23 +176,20 @@ init(nil: ref Draw->Context, args: list of string)
 	spawn factotumsrv();
 }
 
-# The keys a secstore password gives: the three PAK hashes (version 4's
-# from the root of the file key, the others for an account not yet
-# moved) and the file key's root.  dk, when given, is a second-factor
-# account's data key: the files are under it, and its vault key is shown
-# to the server before each save.
+# The keys a secstore password gives (secstore(2)'s mkcreds: the PAK
+# hashes of each verifier version, the old and version 6 roots), and the
+# root the files are written under, version 6's.  dk, when given, is a
+# second-factor account's data key: the files are under it, and its
+# vault key is shown to the server before each save.
 setsecstorekeys(pass: string, dk: array of byte)
 {
-	secstorepwhash = secstore->mkseckey(pass);
-	secstorepwhash2 = secstore->mkseckey2(pass);
-	root := secstore->mkfilekey3(secstoreuser, pass);
-	secstorepwhash4 = secstore->mkseckey4(root);
+	secstore->erasecreds(secstorecreds);
+	secstorecreds = secstore->mkcreds(secstoreuser, pass);
 	if(dk != nil){
-		secstore->erasekey(root);
 		secstorerootkey = dk;
 		secstorevault = secstore->vaultkey(dk);
 	}else{
-		secstorerootkey = root;
+		secstorerootkey = secstorecreds.root6;
 		secstorevault = nil;
 	}
 }
@@ -1481,8 +1487,50 @@ netmkaddr(addr, net, svc: string): string
 
 # ── Keyfile persistence ──────────────────────────────────────
 
+# both keys a key file's password gives: FKEY2's, and FKEY1's for a
+# file not yet written again
+setkeyfilepass(password: string)
+{
+	keyfilepass = derivekey2(password, user());
+	keyfilepass1 = derivekey(password);
+}
+
+# FKEY2's key (see KEYFILE_MAGIC)
+derivekey2(password, owner: string): array of byte
+{
+	pass := array of byte password;
+	label := array of byte "factotum keyfile 2";
+	o := array of byte owner;
+	u := array[len label + 1 + len o + 4] of byte;
+	u[0:] = label;
+	u[len label] = byte 0;
+	u[len label+1:] = o;
+	u[len u-4:] = array[] of {byte 0, byte 0, byte 0, byte 1};
+	t := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(u, len u, pass, t, nil);
+	u = array[Keyring->SHA384dlen] of byte;
+	u[0:] = t;
+	v := array[Keyring->SHA384dlen] of byte;
+	for(i := 1; i < KEYFILE_ITER; i++){
+		kr->hmac_sha384(u, len u, pass, v, nil);
+		for(j := 0; j < len t; j++)
+			t[j] ^= v[j];
+		(u, v) = (v, u);
+	}
+	key := array[32] of byte;
+	key[0:] = t[0:32];
+	for(i = 0; i < len t; i++){
+		t[i] = byte 0;
+		u[i] = byte 0;
+		v[i] = byte 0;
+	}
+	for(i = 0; i < len pass; i++)
+		pass[i] = byte 0;
+	return key;
+}
+
 #
-# Derive a 32-byte AES-256 key from a password using iterated HMAC-SHA256.
+# FKEY1's key: a 32-byte AES-256 key from a password by iterated HMAC-SHA256.
 #
 derivekey(password: string): array of byte
 {
@@ -1562,23 +1610,37 @@ loadkeyfile(path: string): string
 
 	data := buf[0:total];
 
-	# Check magic header
+	# Check magic header: FKEY2, or FKEY1 to be written again
 	magic := array of byte KEYFILE_MAGIC;
 	if(total < len magic)
 		return "keyfile too short";
-	for(i := 0; i < len magic; i++)
+	old := 0;
+	i: int;
+	for(i = 0; i < len magic; i++)
 		if(data[i] != magic[i])
-			return "bad keyfile header";
+			break;
+	if(i < len magic){
+		magic = array of byte KEYFILE_MAGIC1;
+		for(i = 0; i < len magic; i++)
+			if(data[i] != magic[i])
+				return "bad keyfile header";
+		old = 1;
+	}
 
 	# Prompt for password if we don't have one yet
 	if(keyfilepass == nil){
 		pass := promptpassword("keyfile password: ");
 		if(pass == nil)
 			return "no password provided";
-		keyfilepass = derivekey(pass);
+		setkeyfilepass(pass);
 		# Zero the password string
 		pass = nil;
 	}
+	key := keyfilepass;
+	if(old)
+		key = keyfilepass1;
+	if(key == nil)
+		return "an FKEY1 key file, and no key for it";
 
 	# Extract nonce and ciphertext
 	off := len magic;
@@ -1591,12 +1653,13 @@ loadkeyfile(path: string): string
 	tag := data[total-AES_GCM_TAG_LEN:total];
 
 	# Decrypt with AES-GCM
-	state := kr->aesgcmsetup(keyfilepass, nonce);
+	state := kr->aesgcmsetup(key, nonce);
 	if(state == nil)
 		return "AES-GCM setup failed";
 	plaintext := kr->aesgcmdecrypt(state, ciphertext, magic, tag);
 	if(plaintext == nil){
 		keyfilepass = nil;
+		keyfilepass1 = nil;
 		return "decryption failed (wrong password?)";
 	}
 
@@ -1631,6 +1694,18 @@ loadkeyfile(path: string): string
 	if(debug)
 		sys->fprint(sys->fildes(2), "factotum: loaded %d keys from %s\n",
 			len allkeys, path);
+	# an FKEY1 file is written again as FKEY2 now (savekeyfile writes
+	# beside and renames); until that works the old key is kept
+	if(old){
+		if((e := savekeyfile(path)) != nil)
+			sys->fprint(sys->fildes(2), "factotum: %s not written again as FKEY2: %s\n", path, e);
+		else{
+			for(i = 0; i < len keyfilepass1; i++)
+				keyfilepass1[i] = byte 0;
+			keyfilepass1 = nil;
+			sys->fprint(sys->fildes(2), "factotum: %s written again as FKEY2\n", path);
+		}
+	}
 	return nil;
 }
 
@@ -1798,7 +1873,7 @@ savestatus(): string
 	if(secstoreaddr != nil){
 		if(nosave != nil)
 			return "notsaving " + nosave + "\n";
-		if(secstorepwhash4 == nil)
+		if(secstorecreds == nil)
 			return "notsaving no secstore password yet\n";
 		s := sys->sprint("saving secstore %q %q", secstoreaddr, secstoreuser);
 		if(secstorevault != nil)
@@ -1910,7 +1985,7 @@ promptpassword(prompt: string): string
 #
 # Load keys from secstore server.
 # Connects, authenticates, fetches the "factotum" file, decrypts, parses keys.
-# Prompts for password if secstorepwhash is nil.
+# Prompts for password if there are no secstore keys yet.
 #
 secstoreload(): string
 {
@@ -1918,7 +1993,7 @@ secstoreload(): string
 		return "no secstore address";
 
 	# Prompt for password if not provided via -P
-	if(secstorepwhash == nil){
+	if(secstorecreds == nil){
 		pass := promptpassword("secstore password: ");
 		if(pass == nil)
 			return "no password provided";
@@ -1927,7 +2002,7 @@ secstoreload(): string
 	}
 
 	# Connect and authenticate
-	(conn, sname, diag) := secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
+	(conn, sname, diag) := secstore->connect6(secstoreaddr, secstorecreds);
 	if(conn == nil){
 		# Connect failed — auto-create account if it doesn't exist
 		reason := "";
@@ -1941,7 +2016,7 @@ secstoreload(): string
 		if(e != nil)
 			return "secstore setup: " + e;
 		# Retry connect after setup
-		(conn, sname, diag) = secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
+		(conn, sname, diag) = secstore->connect6(secstoreaddr, secstorecreds);
 		if(conn == nil){
 			if(diag != nil)
 				return "secstore connect after setup: " + diag;
@@ -1958,28 +2033,54 @@ secstoreload(): string
 	# is empty, is another matter: it was taken for the same, and the
 	# keys added afterwards were saved over the file that was not read.
 	(file, absent, ferr) := secstore->fetch(conn, "factotum", 0);
-	secstore->bye(conn);
 
 	if(absent){
+		secstore->bye(conn);
 		if(debug)
 			sys->fprint(sys->fildes(2), "factotum: secstore: no factotum file (new account)\n");
 		return nil;	# Not an error — new account, no keys yet
 	}
-	if(ferr != nil)
+	if(ferr != nil){
+		secstore->bye(conn);
 		return "cannot read the keys: " + ferr;
-	if(len file == 0)
+	}
+	if(len file == 0){
+		secstore->bye(conn);
 		return "the key file is empty (damaged)";
+	}
 
 	# Decrypt (auto-detects modern GCM vs legacy CBC format)
 	# The format written, and no other: given the older formats' keys
 	# every time, the file chose its own format, a weaker one if
 	# whoever wrote it liked.
+	# Under the data key, or under the version 6 root; a file under the
+	# old root (SGCM2) opens and is written again in the new form at
+	# once, opened again before it is stored.
 	plaintext := secstore->decrypt3(file, secstorerootkey, nil, nil);
+	if(plaintext == nil && secstorevault == nil)
+		(plaintext, nil) = secstore->openfile(file, secstorecreds);
 	if(plaintext == nil){
-		if(!secstore->iscurrent(file))
+		secstore->bye(conn);
+		if(!secstore->iscurrent(file) && !(len file >= 6 && string file[0:6] == "SGCM2\n"))
 			return "the key file is in an old format: move it with auth/secstore m factotum";
 		return "secstore: decryption failed (wrong password, or a second-factor account's file)";
 	}
+	if(!secstore->iscurrent(file)){
+		shown := secstorevault == nil;
+		if(!shown){
+			(nil, verr) := secstore->showvault(conn, secstorevault);
+			shown = verr == nil;
+		}
+		nf := secstore->encrypt3(plaintext, secstorerootkey);
+		back: array of byte;
+		if(nf != nil)
+			back = secstore->decrypt3(nf, secstorerootkey, nil, nil);
+		if(shown && back != nil && string back == string plaintext && secstore->putfile(conn, "factotum", nf) >= 0)
+			sys->fprint(sys->fildes(2), "factotum: secstore: the key file moved to the new form (SGCM3)\n");
+		if(back != nil)
+			secstore->erasekey(back);
+	}
+	secstore->bye(conn);
 
 	# Parse key lines
 	s := string plaintext;
@@ -2018,11 +2119,11 @@ secstoreload(): string
 #
 # Auto-create secstore account if none exists.
 # Computes the PAK verifier and writes it to the store directory.
-# Uses the password already collected in secstorepwhash.
+# Uses the keys already made from the password (secstorecreds).
 #
 secstoresetup(): string
 {
-	if(secstorepwhash4 == nil)
+	if(secstorecreds == nil)
 		return "no password";
 
 	storedir := "/usr/inferno/secstore";
@@ -2035,7 +2136,7 @@ secstoresetup(): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	hexHi := secstore->mkverifier(secstoreuser, "secstore4", secstorepwhash4);
+	hexHi := secstore->mkverifier(secstoreuser, "secstore6", secstorecreds.h6);
 	if(hexHi == nil)
 		return "can't make the verifier";
 
@@ -2044,7 +2145,7 @@ secstoresetup(): string
 	fd = sys->create(pakpath, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", pakpath);
-	b := array of byte (secstore->formatverifier("secstore4", hexHi) + "\n");
+	b := array of byte (secstore->formatverifier("secstore6", hexHi) + "\n");
 	# a verifier cut short locked the account out, with "created" said
 	if(sys->write(fd, b, len b) != len b){
 		why := sys->sprint("%r");
@@ -2066,7 +2167,7 @@ secstoresave(): string
 {
 	if(secstoreaddr == nil)
 		return "no secstore address";
-	if(secstorepwhash == nil || secstorerootkey == nil)
+	if(secstorecreds == nil || secstorerootkey == nil)
 		return "no secstore credentials";
 
 	# Serialize all keys
@@ -2104,7 +2205,7 @@ secstoresave(): string
 	}
 
 	# Connect and authenticate (full PAK handshake)
-	(conn, nil, diag) := secstore->connect4(secstoreaddr, secstoreuser, secstorepwhash, secstorepwhash2, secstorepwhash4);
+	(conn, nil, diag) := secstore->connect6(secstoreaddr, secstorecreds);
 	if(conn == nil){
 		if(diag != nil)
 			return "secstore save connect: " + diag;

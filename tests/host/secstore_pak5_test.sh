@@ -24,7 +24,7 @@ n=$(echo "$out" | grep -c ': [0-9a-f]\{64,\}$')
 missing=$(echo "$out" | sed -n 's/.*: \([0-9a-f]\{64,\}\)$/\1/p' | while read v; do
 	grep -q "\"$v\"" "$ROOT/tests/secstore_crypto_test.b" || echo "$v"
 done)
-if [ "$n" = 4 ] && [ -z "$missing" ]; then
+if [ "$n" = 7 ] && [ -z "$missing" ]; then
 	echo "PASS: version 5's known answers in tests/secstore_crypto_test.b are Python's"
 else
 	echo "FAIL: known answers not in tests/secstore_crypto_test.b ($n made):"

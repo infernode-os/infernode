@@ -150,6 +150,8 @@ account(t: ref T, user, pass, version: string)
 		h = k.v1;
 	"secstore3" =>
 		h = k.v3;
+	"secstore6" =>
+		h = secstore->mkseckey6(secstore->mkfilekey6(user, pass));
 	}
 	hexHi := secstore->mkverifier(user, version, h);
 	if(hexHi == nil)
@@ -416,14 +418,67 @@ testVersion5(t: ref T)
 	(conn, diag) = oldlogin("pqold", "pqold's password");
 	t.assert(conn == nil && has(diag, "CNSA mode"), "and the client offers no older version: " + diag);
 	(conn, diag) = login("pq", "pq's password");
-	t.assert(conn != nil, "a version 4 account still logs in at version 5: " + diag);
-	if(conn != nil){
-		t.assertseq(get(conn, "factotum"), "pq keys\n", "and reads what it stored");
-		secstore->bye(conn);
-	}
-	(conn, diag) = login("pqold", "pqold's password");
+	t.assert(conn == nil && has(diag, "CNSA mode"), "in CNSA mode an account at version 4 (its verifier SHA-256's) is not logged in to: " + diag);
+	(conn, diag) = login6("pqold", "pqold's password");
 	t.assert(conn == nil && has(diag, "CNSA mode"), "an account at version 3 is not moved in CNSA mode: " + diag);
 	setcnsa(0);
+}
+
+# a login as clients do now (connect6), moving the account if it must
+login6(user, pass: string): (ref Dial->Connection, string)
+{
+	c := secstore->mkcreds(user, pass);
+	(conn, nil, diag) := secstore->connect6(addr, c);
+	secstore->erasecreds(c);
+	return (conn, diag);
+}
+
+#
+# Version 6: the verifier from a root of PBKDF2-HMAC-SHA-384 (mkfilekey6,
+# mkseckey6).  An account at version 4 is given its version 6 verifier
+# by connect6, kept beside the old until a version 6 login has worked,
+# and then is at version 6 alone; one at version 3 goes through version
+# 4 on the way.  In CNSA mode an account at version 6 logs in.
+#
+testVersion6(t: ref T)
+{
+	vers := array[] of {"secstore4", "secstore3"};
+	for(i := 0; i < len vers; i++){
+		user := "six" + string i;
+		pass := user + "'s password";
+		account(t, user, pass, vers[i]);
+		pakfile := store + "/" + user + "/PAK";
+		(conn, diag) := login6(user, pass);
+		t.assert(conn != nil, "a " + vers[i] + " account logs in through connect6: " + diag);
+		pak := readfile(pakfile);
+		t.assert(has(pak, "secstore6 ") && !has(pak, "secstore4 ") && !has(pak, vers[i] + " "), "and is at version 6 alone: " + pak);
+		if(conn != nil){
+			t.assertnil(put(conn, "factotum", "six keys\n"), "a version 6 session stores");
+			secstore->bye(conn);
+		}
+		(conn, diag) = login(user, pass);
+		t.assert(conn == nil, "the old verifier no longer logs in: " + diag);
+		(conn, diag) = login6(user, "not the password");
+		t.assert(conn == nil, "nor another password: " + diag);
+	}
+	# a raw secstore6 hello is answered as version 5's: mu and S alone
+	r := rawdial(t);
+	a := rawsay(r, "secstore6\tPAK\nC=six0\nm=" + IPint.inttoip(2).iptostr(64) + "\n");
+	t.assert(has(a, "mu=") && has(a, "S=") && !has(a, "k="), "a secstore6 hello is answered with mu and S: " + a);
+	setcnsa(1);
+	(conn, diag) := login6("six0", "six0's password");
+	t.assert(conn != nil, "in CNSA mode an account at version 6 logs in: " + diag);
+	if(conn != nil){
+		t.assertseq(get(conn, "factotum"), "six keys\n", "and reads what it stored");
+		secstore->bye(conn);
+	}
+	setcnsa(0);
+	# an account made at version 6 (secstore-setup's default)
+	account(t, "sixnew", "a new one's password", "secstore6");
+	(conn, diag) = login6("sixnew", "a new one's password");
+	t.assert(conn != nil, "an account made at version 6 logs in: " + diag);
+	if(conn != nil)
+		secstore->bye(conn);
 }
 
 testVerifier(t: ref T)
@@ -605,6 +660,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Reserved", testReserved);
 	run("Version4", testVersion4);
 	run("Version5", testVersion5);
+	run("Version6", testVersion6);
 	run("Verifier", testVerifier);
 	run("Vault", testVault);
 

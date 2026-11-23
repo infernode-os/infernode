@@ -1,7 +1,7 @@
 implement SecstoreAbortProbe;
 
 # Drives the secstore PAK abort path for lockout tests: establish the normal
-# SSL transport, send a version 5 PAK hello, read mu, send an ML-KEM key,
+# SSL transport, send a version 6 PAK hello, read mu, send an ML-KEM key,
 # read the server's ciphertext and verifier, then close before sending k'.
 # This simulates a guessing client that stops after learning its password
 # guess was wrong from the server verifier.
@@ -65,7 +65,7 @@ init(nil: ref Draw->Context, args: list of string)
 		conn := secstore->dial(addr);
 		if(conn == nil)
 			fail(sys->sprint("dial %s failed: %r", addr));
-		if(sys->fprint(conn.dfd, "secstore5\tPAK\nC=%s\nm=AQ==\n", user) < 0)
+		if(sys->fprint(conn.dfd, "secstore6\tPAK\nC=%s\nm=AQ==\n", user) < 0)
 			fail(sys->sprint("hello write failed: %r"));
 		buf := array[8192] of byte;
 		n := sys->read(conn.dfd, buf, len buf);
@@ -98,7 +98,7 @@ mprobe(m, user, addr: string)
 	conn := secstore->dial(addr);
 	if(conn == nil)
 		fail(sys->sprint("dial failed: %r"));
-	if(sys->fprint(conn.dfd, "secstore5\tPAK\nC=%s\nm=%s\n", user, m) < 0)
+	if(sys->fprint(conn.dfd, "secstore6\tPAK\nC=%s\nm=%s\n", user, m) < 0)
 		fail(sys->sprint("hello write failed: %r"));
 	buf := array[4096] of byte;
 	n := sys->read(conn.dfd, buf, len buf);

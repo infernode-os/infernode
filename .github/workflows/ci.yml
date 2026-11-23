@@ -822,7 +822,7 @@ jobs:
               tls_clientauth_test ssl_killedcall_test vid9p_hangup_test httpd_test httpd_auth_test
               charon_netfile_test fetch_tools_test msg_email_bind_test editor_deputy_test
               matrix_compose_test llmsrv_ctl_test llmctl9p_test veltrosrv_gate_test veltro_kill_test
-              keyfs_file_test aescbc_test keytools_test login_test secstore_pak5_test x509_chain_test
+              keyfs_file_test aescbc_test keytools_test login_test secstore_pak5_test secstore_migrate_test x509_chain_test
               mail9p_hostile_test pop3_tls_test webget_https_test legacy_ssl_gone_test
               cs_cancel_test registry_test secstore_cmd_test logon_unlock_test sntp_test
               vid9p_ctl_test wpa_log_test

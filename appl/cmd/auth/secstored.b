@@ -105,6 +105,16 @@ VERSION4: con "secstore4";
 # CNSA mode (/env/cnsamode) version 5 alone is spoken.
 #
 VERSION5: con "secstore5";
+#
+# Version 6 is version 5's exchange with a verifier of its own, made
+# by the client from a file key's root of PBKDF2-HMAC-SHA-384
+# (secstore(2)'s mkfilekey6 and mkseckey6): version 4's came from a
+# root of HMAC-SHA256, which is not CNSA 2.0's hash.  An account is
+# given its version 6 verifier by a client in a session of an older
+# version (VERIFIER secstore6), kept beside the old until a version 6
+# login has worked.  In CNSA mode version 6 alone is spoken.
+#
+VERSION6: con "secstore6";
 Maxfilesize: con 128*1024;
 Maxmsg: con 4096;
 
@@ -441,8 +451,8 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 		writerr(fd, "bad protocol: secstore4 is spoken as secstore5");
 		return (nil, nil, nil);
 	}
-	if(ver != VERSION5 && login->cnsamode()){
-		writerr(fd, "bad protocol: CNSA mode: secstore5 alone");
+	if(ver != VERSION6 && login->cnsamode()){
+		writerr(fd, "bad protocol: CNSA mode: secstore6 alone");
 		return (nil, nil, nil);
 	}
 
@@ -529,7 +539,7 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	hexsigma := sigma.iptostr(64);
 
 	kc, session: array of byte;
-	if(ver == VERSION5){
+	if(ver == VERSION5 || ver == VERSION6){
 		# mu and S; then the client's ML-KEM key, the server's
 		# ciphertext for it as the verifier unmasks it, and the
 		# server's proof, made from both secrets
@@ -555,7 +565,7 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 		rl := 32;
 		ek := array[len msg] of byte;
 		ek[0:] = msg[0:len msg-rl];
-		ek[len msg-rl:] = secstore->pak5mask(C, sname, hexm, hexmu, hexsigma, hexHi, msg[len msg-rl:]);
+		ek[len msg-rl:] = secstore->pak5mask(ver, C, sname, hexm, hexmu, hexsigma, hexHi, msg[len msg-rl:]);
 		ct, k: array of byte;
 		{
 			(ct, k) = kr->mlkem1024_encaps(ek);
@@ -572,7 +582,7 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 			return (nil, nil, C);
 		}
 		proofs: array of byte;
-		(proofs, kc, session) = secstore->pak5keys(C, sname, hexm, hexmu, hexsigma, hexHi, msg, ct, k);
+		(proofs, kc, session) = secstore->pak5keys(ver, C, sname, hexm, hexmu, hexsigma, hexHi, msg, ct, k);
 		erasekey(k);
 		if(sys->fprint(fd, "ct=%s\nk=%s\n", base64->enc(ct), base64->enc(proofs)) < 0){
 			erasekey(session);
@@ -661,14 +671,26 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 
 	# Authenticated: clear any accumulated failure state for this account.
 	recordok(C);
-	# logged in at version 5: the older verifier, kept while the
-	# account moved, is done with
-	if(ver == VERSION5 && len verifiers > 1){
-		e = writeuserfile(C, "PAK", array of byte (VERSION4 + " " + hexHi + "\n"));
-		if(e != nil)
-			log(sys->sprint("%s: can't drop the older verifier: %s", C, e));
-		else
-			log(sys->sprint("%s is at version 4's verifier alone", C));
+	# logged in with a verifier: those older than it, kept while the
+	# account moved, are done with (a newer one, set in a session of
+	# this version and not yet logged in with, is kept)
+	if(len verifiers > 1){
+		text := "";
+		kept := 0;
+		for(wl := verifiers; wl != nil; wl = tl wl){
+			(v, h) := hd wl;
+			if(rank(v) >= rank(verver(ver))){
+				text += formatverifier(v, h) + "\n";
+				kept++;
+			}
+		}
+		if(kept < len verifiers){
+			e = writeuserfile(C, "PAK", array of byte text);
+			if(e != nil)
+				log(sys->sprint("%s: can't drop the older verifier: %s", C, e));
+			else
+				log(sys->sprint("%s: verifiers before %s dropped", C, verver(ver)));
+		}
 	}
 	return (C, ver, C);
 }
@@ -679,7 +701,7 @@ fileloop(conn: ref Dial->Connection, user: string, ver: string)
 {
 	fd := conn.dfd;
 	buf := array[Maxmsg] of byte;
-	v4 := ver == VERSION4 || ver == VERSION5;
+	v4 := ver == VERSION4 || ver == VERSION5 || ver == VERSION6;
 	shown := 0;	# this session has shown the account's vault key
 
 	for(;;){
@@ -1054,20 +1076,21 @@ dorm(fd: ref Sys->FD, user: string, name: string, refuse: string)
 doverifier(fd: ref Sys->FD, user, ver, arg: string)
 {
 	(nf, f) := sys->tokenize(arg, " \t");
-	if(nf != 2 || hd f != VERSION4 || !goodverifier(VERSION4, hd tl f)){
-		writerr(fd, "not a version 4 verifier");
+	if(nf != 2 || (hd f != VERSION4 && hd f != VERSION6) || !goodverifier(hd f, hd tl f)){
+		writerr(fd, "not a version 4 or 6 verifier");
 		return;
 	}
-	text := VERSION4 + " " + hd tl f + "\n";
-	if(ver != VERSION4 && ver != VERSION5)
+	nv := hd f;
+	text := nv + " " + hd tl f + "\n";
+	# the verifier this session logged in with, kept beside a newer
+	# one until a login with that has worked; one of the same version
+	# is replaced (a new password)
+	sv := verver(ver);
+	if(rank(sv) < rank(nv))
 		for(vl := readverifiers(user); vl != nil; vl = tl vl){
 			(v, h) := hd vl;
-			if(v == ver){
-				if(v == VERSION1)
-					text += h + "\n";
-				else
-					text += v + " " + h + "\n";
-			}
+			if(v == sv)
+				text += formatverifier(v, h) + "\n";
 		}
 	e := writeuserfile(user, "PAK", array of byte text);
 	if(e != nil){
@@ -1075,9 +1098,28 @@ doverifier(fd: ref Sys->FD, user, ver, arg: string)
 		writerr(fd, "can't record the verifier");
 		return;
 	}
-	log(sys->sprint("%s: version 4 verifier recorded (in a %s session)", user, ver));
+	log(sys->sprint("%s: %s verifier recorded (in a %s session)", user, nv, ver));
 	auditlog("secstore", "verifier", sys->sprint("user=%s session=%s", auditval(user), ver));
 	sys->fprint(fd, "OK");
+}
+
+# the order of the verifiers' versions
+rank(v: string): int
+{
+	case v {
+	VERSION1 =>	return 1;
+	VERSION3 =>	return 3;
+	VERSION4 =>	return 4;
+	VERSION6 =>	return 6;
+	}
+	return 0;
+}
+
+formatverifier(v, h: string): string
+{
+	if(v == VERSION1)
+		return h;
+	return v + " " + h;
 }
 
 # a verifier is a number of its group, not 0 or 1
@@ -1278,7 +1320,7 @@ initPAKparams()
 pakparams(version: string): ref PAKparams
 {
 	initPAKparams();
-	if(version == VERSION3 || version == VERSION4 || version == VERSION5)
+	if(version == VERSION3 || version == VERSION4 || version == VERSION5 || version == VERSION6)
 		return pak3;
 	if(version == VERSION1)
 		return paklegacy;
@@ -1300,7 +1342,7 @@ verver(version: string): string
 
 exponentbits(version: string): int
 {
-	if(version == VERSION3 || version == VERSION4 || version == VERSION5)
+	if(version == VERSION3 || version == VERSION4 || version == VERSION5 || version == VERSION6)
 		return 320;
 	return 240;
 }
@@ -1416,7 +1458,7 @@ readverifiers(user: string): list of (string, string)
 			vl = (VERSION1, hd flds) :: vl;
 		else if(nf >= 2){
 			version := hd flds;
-			if(version == VERSION1 || version == VERSION3 || version == VERSION4)
+			if(version == VERSION1 || version == VERSION3 || version == VERSION4 || version == VERSION6)
 				vl = (version, hd tl flds) :: vl;
 		}
 	}

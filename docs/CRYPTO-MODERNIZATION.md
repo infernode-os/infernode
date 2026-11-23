@@ -713,6 +713,21 @@ The construction is this tree's own and has no published proof.
 **Breaking change:** login's ends must both speak version 3, secstore's
 version 5; an old end is told which version is spoken.
 
+## Secrets made from passwords: SHA-384, moved at their next use
+
+What is kept made from a password was made with SHA-256: an account's
+secret in keyfs (its SHA-256, one hash and unsalted), secstore's
+verifier and its files' keys (a root of HMAC-SHA256), a second factor's
+slot keys, factotum's key file and httpd's password lines. Each is now
+made with SHA-384: an account's secret is PBKDF2-HMAC-SHA-384 salted by
+its name (keys(6)); secstore version 6 has a root of PBKDF2-HMAC-SHA-384,
+its files SGCM3, its slots under HMAC-SHA-384; factotum's key file FKEY2;
+httpd's lines `pbkdf2-sha384`. A secret in the old form is moved the
+next time its owner gives the password, by the program that has it then
+(a login, logon, factotum, a second factor's unlock), never sooner, and
+in CNSA mode one not yet moved is refused. See
+[`compliance/CNSA-2.0.md`](compliance/CNSA-2.0.md) G9.
+
 Tests: `tests/login_test.b`, `tests/host/login_test.sh`,
 `tests/signer_test.b`, `tests/passwd_test.b`.
 

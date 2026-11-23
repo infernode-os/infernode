@@ -71,8 +71,28 @@ names beginning with a dot are the server's while it writes.
 A file is written whole beside the one it replaces and renamed over it.
 .SS "Versions
 The version is the first line of the exchange.
+.B secstore6
+is the current one: version 5's exchange (below) with a verifier made from a
+file key's root of PBKDF2-HMAC-SHA-384
+.RB ( mkfilekey6
+and
+.B mkseckey6
+in
+.IR secstore (2)),
+as the account's files' keys are (SGCM3);
+version 4's root was HMAC-SHA-256, which is not CNSA 2.0's hash.
+A client of this version moves an account by a login at its own version,
+sending its
+.B secstore6
+verifier, kept beside the old one until a
+.B secstore6
+login has worked; and moves its files as it reads them.
+In CNSA mode
+.B secstore6
+alone is spoken.
+.PP
 .B secstore5
-is the current one: an account at version 4, its verifier, and an exchange
+is version 4's account, its verifier, and an exchange
 that runs ML-KEM-1024 beside the PAK, the client's encapsulation key's seed
 masked under the PAK's secret and the verifier, the proofs and the session made
 from both secrets by HKDF over HMAC-SHA-384 (PAK5 in
@@ -101,10 +121,7 @@ The
 .B secstore4
 exchange is not spoken: a client asking for it is told
 .BR "secstore4 is spoken as secstore5" .
-In CNSA mode
-.RB ( /env/cnsamode )
-.B secstore5
-alone is spoken, and an account still at an older version is not moved.
+It is still spoken outside CNSA mode, for an account at version 4 to move.
 .PP
 The version 4 verifier is made from the key the account's files are encrypted under
 (100000 HMAC-SHA-256 of the password with the user's name;
@@ -161,8 +178,10 @@ followed by the size and the bytes: store the file.
 .BI RM " name"
 Remove it.
 .TP
-.BI VERIFIER " secstore4 verifier"
-Replace the account's verifier: from a session of an older version, the move to version 4;
+.BI VERIFIER " secstore6 verifier"
+(or
+.BR secstore4 )
+Replace the account's verifier: from a session of an older version, the move to version 6;
 from a
 .B secstore4
 session, a new password.

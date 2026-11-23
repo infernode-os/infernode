@@ -59,11 +59,22 @@ testSGCM2RoundTrip(t: ref T)
 
 	blob := secstore->encrypt3(plaintext, rootkey);
 	t.assert(blob != nil, "encrypt3 returns a blob");
-	t.assert(hasprefix(blob, "SGCM2\n"), "encrypt3 writes SGCM2 header");
+	t.assert(hasprefix(blob, "SGCM3\n"), "encrypt3 writes the SGCM3 header (its file keys by HMAC-SHA-384)");
+	t.assert(secstore->iscurrent(blob), "which is the current form");
 
 	out := secstore->decrypt3(blob, rootkey, gcm1key, nil);
-	t.assert(out != nil, "decrypt3 reads SGCM2 blob");
-	t.assertseq(string out, string plaintext, "SGCM2 round-trip preserves plaintext");
+	t.assert(out != nil, "decrypt3 reads SGCM3 blob");
+	t.assertseq(string out, string plaintext, "SGCM3 round-trip preserves plaintext");
+
+	# openfile: under version 6's root it is current; under the old
+	# root (the form before version 6) it opens and is to be moved
+	c := secstore->mkcreds(user, pass);
+	(o, cur) := secstore->openfile(secstore->encrypt3(plaintext, c.root6), c);
+	t.assert(o != nil && cur == 1, "a file under version 6's root is of the current form");
+	(o, cur) = secstore->openfile(blob, c);
+	t.assert(o != nil && cur == 0, "one under the old root opens and is to be written again");
+	t.asserteq(len c.root6, 48, "version 6's root is 48 bytes (PBKDF2-HMAC-SHA-384)");
+	t.asserteq(len c.h6, 48, "and its verifier key too");
 }
 
 testSGCM1Compat(t: ref T)
@@ -152,20 +163,43 @@ hexs(a: array of byte): string
 	return s;
 }
 
+unhexs(h: string): array of byte
+{
+	a := array[len h/2] of byte;
+	for(i := 0; i < len a; i++)
+		a[i] = byte ((hv(h[2*i])<<4) | hv(h[2*i+1]));
+	return a;
+}
+
+hv(c: int): int
+{
+	if(c >= 'a')
+		return c - 'a' + 10;
+	return c - '0';
+}
+
 testPak5Vectors(t: ref T)
 {
-	m := secstore->pak5mask("alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(19, 6, 32));
-	t.assertseq(hexs(m), "0ebe324c5199ee7e72b6cf67a4db3dc0adfa38c909538ab9190b1c62048917af", "the masked ML-KEM seed");
-	again := secstore->pak5mask("alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", m);
+	m := secstore->pak5mask("secstore5", "alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(19, 6, 32));
+	t.assertseq(hexs(m), "da71d1d3a823312da20e38a8af0db52d40f344b5fe3116dfe31293f191bf40df", "the masked ML-KEM seed");
+	again := secstore->pak5mask("secstore5", "alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", m);
 	t.assertseq(hexs(again), hexs(ramp(19, 6, 32)), "masked again it is the seed");
-	(ps, pc, sess) := secstore->pak5keys("alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 5, 32));
-	t.assertseq(hexs(ps), "2ba2357fccbb9dc4b4b992984eb6f0dfb4bea19b27b85a2e2485595d3a7ac2dee9244b383fa28c28f7292cfeaf86bf32", "the server's proof");
-	t.assertseq(hexs(pc), "c8e4b85e9844e2e148a4b3ee24aa16312c2aa85bb3d77db6ae5516a8be5829fe79e7fbaabe53be4f6a955d9670162078", "the client's proof");
-	t.assertseq(hexs(sess), "1eb6f49509ef9ba43cbb0b3e19c45dbf9e4fdf73d9c873a302a89bc8c68836363990ba8e61c4bf9d688d3294bfb0a621", "the session's secret");
+	(ps, pc, sess) := secstore->pak5keys("secstore5", "alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 5, 32));
+	t.assertseq(hexs(ps), "26cfb8ad0806da1276f968a982a1a9890383e7bc36d84bdb0a69e78b7cbce79dec1ac57a3bf7935b6d741261948706a0", "the server's proof");
+	t.assertseq(hexs(pc), "20994b4b6b98cc5b5319622eb8494963f1718326330a4d9a9435e314f3cc47d9a97ca979158abda69d1a88b82f82567c", "the client's proof");
+	t.assertseq(hexs(sess), "4021c76d1dd4e5ad4548b9c6c5a3d9fc9c934edc9289c49a5f432f7bc79a109505e4e2c261707e33e420e26ec3a84473", "the session's secret");
+	# version 6's root and verifier key, and a file in SGCM3, against
+	# hashlib's and cryptography's
+	root6 := secstore->mkfilekey6("alice", "correct horse battery staple");
+	t.assertseq(hexs(root6), "dc93add1269eff22a97aba5002b4da8f9cc3cb931e9c9d2a6b99f73cfdf304c742b113be5f4e6a7487f36e3c4e3a32e7", "version 6's root is PBKDF2-HMAC-SHA-384");
+	t.assertseq(hexs(secstore->mkseckey6(root6)), "5b37682cc6d57988d983059602acb7b2d51aa64f34b75aa0e6da4a1029fb2755a2bce4a2a0db24e0c2a437a6d3501f04", "and its verifier key");
+	blob := unhexs("5347434d330a0104070a0d101316191c1f2225282b2e02070c11161b20252a2f34391728b46d38baf8b3169a42393744083399b65b74d84682068f1f57adb98c505e8b152a2cf8bb031d433012bd6547247343825b5025");
+	pt := secstore->decrypt3(blob, root6, nil, nil);
+	t.assert(pt != nil && string pt == "key proto=pass service=x !password=y\n", "an SGCM3 file Python made opens");
 	# each input changes it
-	(ps2, nil, nil) := secstore->pak5keys("alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 6, 32));
+	(ps2, nil, nil) := secstore->pak5keys("secstore5", "alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 6, 32));
 	t.assert(hexs(ps2) != hexs(ps), "another ML-KEM secret, another proof");
-	(ps2, nil, nil) = secstore->pak5keys("alice", "secstore", "m-text", "mu-text", "sigma-texT", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 5, 32));
+	(ps2, nil, nil) = secstore->pak5keys("secstore5", "alice", "secstore", "m-text", "mu-text", "sigma-texT", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 5, 32));
 	t.assert(hexs(ps2) != hexs(ps), "another PAK secret, another proof");
 }
 
@@ -192,7 +226,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 
-	run("SGCM2RoundTrip", testSGCM2RoundTrip);
+	run("SGCM3RoundTrip", testSGCM2RoundTrip);
 	run("SGCM1Compat", testSGCM1Compat);
 	run("SGCM2UserBinding", testSGCM2UserBinding);
 	run("VerifierFormats", testVerifierFormats);

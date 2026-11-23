@@ -162,6 +162,7 @@ init(nil: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
 	stderr = sys->fildes(2);
+	cnsa = readcnsa();
 	daytime = load Daytime Daytime->PATH;
 	if(daytime == nil)
 		fatal(sys->sprint("cannot load %s: %r", Daytime->PATH));
@@ -2740,7 +2741,12 @@ User: adt {
 	iters:	int;
 	salt:	array of byte;
 	hash:	array of byte;
+	sha384:	int;	# pbkdf2-sha384's line; else pbkdf2-sha256's
 };
+
+# CNSA 2.0 mode (/env/cnsamode), read at start, before the server's
+# environment is its own: a line of pbkdf2-sha256 is not taken in it
+cnsa := 0;
 
 users: list of ref User;
 pwqid: Sys->Qid;
@@ -2754,7 +2760,10 @@ WINDOW: con 600*1000;	# ms a source's failures are counted, and it is refused fo
 MAXFAIL: con 10;
 CACHETIME: con 300*1000;	# ms a checked password is taken again without its hash
 
-# user:pbkdf2-sha256:iterations:salt:hash, the last two base64.
+# user:pbkdf2-sha384:iterations:salt:hash, the last two base64, as
+# svc/httpd/passwd writes them; or pbkdf2-sha256's, the form before,
+# still taken but not in CNSA mode (it is not CNSA 2.0's hash): such a
+# line is made again with svc/httpd/passwd.
 #
 # The file is who may log in: one that has gone, cannot be read or
 # holds no users is no users, and every password is refused.  (Any of
@@ -2781,14 +2790,22 @@ loadpasswords(): list of ref User
 			continue;
 		f := split(line, ':');
 		u: ref User;
-		if(len f == 5 && hd tl f == "pbkdf2-sha256") {
+		if(len f == 5 && (hd tl f == "pbkdf2-sha256" || hd tl f == "pbkdf2-sha384")) {
 			name := hd f;
+			s384 := hd tl f == "pbkdf2-sha384";
+			hlen := Keyring->SHA256dlen;
+			if(s384)
+				hlen = Keyring->SHA384dlen;
 			f = tl tl f;
 			it := posint(hd f);
 			salt := base64->dec(hd tl f);
 			hash := base64->dec(hd tl tl f);
-			if(name != nil && it >= 1000 && salt != nil && len salt >= 8 && hash != nil && len hash == Keyring->SHA256dlen)
-				u = ref User(name, it, salt, hash);
+			if(!s384 && cnsa){
+				sys->fprint(stderr, "httpd: %s:%d: CNSA mode: pbkdf2-sha256 is not taken; make the line again with svc/httpd/passwd\n", pwfile, n);
+				continue;
+			}
+			if(name != nil && it >= 1000 && salt != nil && len salt >= 8 && hash != nil && len hash == hlen)
+				u = ref User(name, it, salt, hash, s384);
 		}
 		if(u == nil) {
 			sys->fprint(stderr, "httpd: %s:%d: not a password line, left out\n", pwfile, n);
@@ -2967,6 +2984,20 @@ count(key: string, t: int)
 USERFAIL: con 50;
 
 # A password asked about: answered at once from the cache or the
+# /env/cnsamode as login(2) reads it: on unless it begins 0, n or N
+readcnsa(): int
+{
+	fd := sys->open("/env/cnsamode", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	b := array[8] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return 0;
+	c := int b[0];
+	return c != '0' && c != 'n' && c != 'N' && c != '\n';
+}
+
 # lockouts, or counted and left for the hasher
 ask(user, pass, ip: string, rc: chan of int)
 {
@@ -3066,11 +3097,11 @@ hasher(jobs: chan of ref Job, res: chan of ref Job)
 			# told from one that is no user by the time.)
 			pass := array of byte j.pass;
 			if(j.u != nil) {
-				j.good = bytesame(pbkdf2(pass, j.u.salt, j.u.iters), j.u.hash);
+				j.good = bytesame(pbkdf2(pass, j.u.salt, j.u.iters, j.u.sha384), j.u.hash);
 				if(j.u.iters < j.most)
-					pbkdf2(pass, dummysalt, j.most - j.u.iters);
+					pbkdf2(pass, dummysalt, j.most - j.u.iters, j.u.sha384);
 			} else
-				pbkdf2(pass, dummysalt, j.most);
+				pbkdf2(pass, dummysalt, j.most, 1);
 		} exception e {
 		"*" =>
 			sys->fprint(stderr, "httpd: checking a password: %s\n", e);
@@ -3120,19 +3151,23 @@ netof(ip: string): string
 	return s + ":/64";
 }
 
-# PBKDF2-HMAC-SHA-256 (RFC 8018), one block: 32 bytes
-pbkdf2(pass, salt: array of byte, iters: int): array of byte
+# PBKDF2 (RFC 8018), one block: with HMAC-SHA-384 48 bytes, with
+# HMAC-SHA-256 (the form before) 32
+pbkdf2(pass, salt: array of byte, iters, s384: int): array of byte
 {
 	s := array[len salt + 4] of byte;
 	s[0:] = salt;
 	s[len salt:] = array[] of {byte 0, byte 0, byte 0, byte 1};
-	u := array[Keyring->SHA256dlen] of byte;
-	keyring->hmac_sha256(s, len s, pass, u, nil);
+	n := Keyring->SHA256dlen;
+	if(s384)
+		n = Keyring->SHA384dlen;
+	u := array[n] of byte;
+	hmac(s, pass, u, s384);
 	t := array[len u] of byte;
 	t[0:] = u;
 	v := array[len u] of byte;
 	for(i := 1; i < iters; i++) {
-		keyring->hmac_sha256(u, len u, pass, v, nil);
+		hmac(u, pass, v, s384);
 		(u, v) = (v, u);
 		for(j := 0; j < len t; j++)
 			t[j] ^= u[j];
@@ -3140,10 +3175,19 @@ pbkdf2(pass, salt: array of byte, iters: int): array of byte
 	return t;
 }
 
+hmac(data, key, d: array of byte, s384: int)
+{
+	if(s384)
+		keyring->hmac_sha384(data, len data, key, d, nil);
+	else
+		keyring->hmac_sha256(data, len data, key, d, nil);
+}
+
+# a checked password's key in the cache
 sha256(b: array of byte): array of byte
 {
-	d := array[Keyring->SHA256dlen] of byte;
-	keyring->sha256(b, len b, d, nil);
+	d := array[Keyring->SHA384dlen] of byte;
+	keyring->sha384(b, len b, d, nil);
 	return d;
 }
 

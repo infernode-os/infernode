@@ -14,7 +14,7 @@ implement SecstoreSetup;
 #   -s storedir   secstore data directory (default: /usr/inferno/secstore)
 #   -u user       username (default: current user from /dev/user)
 #   -i            import current factotum keys into secstore
-#   -V version    PAK verifier version (default: secstore3)
+#   -V version    PAK verifier version (default: secstore6)
 #
 
 include "sys.m";
@@ -51,12 +51,12 @@ init(nil: ref Draw->Context, args: list of string)
 	user := readfile("/dev/user");
 	force := 0;
 	pass: string;
-	version := "secstore4";
+	version := "secstore6";
 
 	arg := load Arg Arg->PATH;
 	if(arg != nil){
 		arg->init(args);
-		arg->setusage("auth/secstore-setup [-f] [-k password] [-s storedir] [-u user] [-V secstore|secstore3|secstore4]");
+		arg->setusage("auth/secstore-setup [-f] [-k password] [-s storedir] [-u user] [-V secstore|secstore3|secstore4|secstore6]");
 		while((o := arg->opt()) != 0)
 			case o {
 			'f' =>	force = 1;
@@ -81,10 +81,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# the name is a directory in the store, as the server takes it
 	if(user == "." || user == ".." || hasslash(user))
 		fatal("user name cannot be a path: " + user);
-	if(version != "secstore" && version != "secstore3" && version != "secstore4")
+	if(version != "secstore" && version != "secstore3" && version != "secstore4" && version != "secstore6")
 		fatal("unsupported verifier version");
-	if(version != "secstore4")
-		sys->fprint(stderr, "secstore-setup: warning: a %s account is one to be moved: its first login makes it secstore4\n", version);
+	if(version != "secstore6")
+		sys->fprint(stderr, "secstore-setup: warning: a %s account is one to be moved: its first login makes it secstore6\n", version);
 
 	sys->fprint(stderr, "secstore setup for user: %s\n", user);
 	sys->fprint(stderr, "store directory: %s\n", storedir);
@@ -120,9 +120,13 @@ init(nil: ref Draw->Context, args: list of string)
 		pwhash = secstore->mkseckey(pass);
 	"secstore3" =>
 		pwhash = secstore->mkseckey2(pass);
-	* =>
+	"secstore4" =>
 		root := secstore->mkfilekey3(user, pass);
 		pwhash = secstore->mkseckey4(root);
+		secstore->erasekey(root);
+	* =>
+		root := secstore->mkfilekey6(user, pass);
+		pwhash = secstore->mkseckey6(root);
 		secstore->erasekey(root);
 	}
 	hexHi := secstore->mkverifier(user, version, pwhash);

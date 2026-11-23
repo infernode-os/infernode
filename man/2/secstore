@@ -237,7 +237,33 @@ the version 4 verifier, whose verifier costs as much to guess against as the fil
 spoken to in version 5 of the exchange (ML-KEM-1024 and SHA-384 beside the PAK;
 see PAK5 in the source and
 .IR secstored (8)).
-In CNSA mode version 5 alone is spoken.
+.PP
+.B Connect6
+is what a client uses now: version 6, version 5's exchange with a verifier from
+.BR mkfilekey6 ,
+PBKDF2 with HMAC-SHA-384 of the password salted by the user's name (200000
+iterations, 48 bytes), and
+.B mkseckey6
+of it.
+.B Mkcreds
+makes every key a password gives, of every version (the PAK hashes, the old
+root
+.B mkfilekey3
+and
+.BR mkfilekey6 );
+.B connect6
+logs in to an account at an older version at its own, gives it its version 6
+verifier and logs in again.
+.B Encrypt3
+writes SGCM3 (its file keys HMAC-SHA-384 of the root);
+.B decrypt3
+reads SGCM3 and SGCM2;
+.B openfile
+opens a file under either root and says whether it is of the current form, so
+that the caller writes it again under
+.BR root6 .
+In CNSA mode version 6 alone is spoken, and an account or file not yet moved is
+refused.
 .I Pwhash
 .RB ( mkseckey )
 and

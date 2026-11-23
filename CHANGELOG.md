@@ -50,6 +50,23 @@ All notable changes to InferNode are documented in this file.
     authenticated 9P connection between a node updated and one not is
     refused, saying the other end is of another version.
 
+- **Secrets made from passwords are made with SHA-384 (CNSA 2.0 G9), and
+  move at their next use.** None needs a new password. Not compatible:
+  - **An account's secret** (keys(6)) is PBKDF2-HMAC-SHA-384 salted by its
+    name, where it was the password's SHA-256. An account of the old form
+    is given the new at its next login; in CNSA mode it is refused until
+    then. keysrv is version 3 (its challenge says the form). createuser,
+    which wrote a SHA-1 no login took, writes the new form.
+  - **secstore version 6**: the verifier and the files' keys come from a
+    root of PBKDF2-HMAC-SHA-384, files are SGCM3, a second factor's slots
+    are wrapped under HMAC-SHA-384. An account, its files and its slots
+    are moved by their next login or unlock; in CNSA mode an account not
+    yet at version 6 is refused. A client before this one cannot read an
+    SGCM3 file.
+  - **factotum's key file** is FKEY2, and an FKEY1 file is rewritten when it
+    is read. **httpd(8)**'s password lines are `pbkdf2-sha384`; old ones are
+    still taken, but not in CNSA mode.
+
 - **The security review's second round: what the first left, closed.**
   The fixes and their tests are in `CLAUDE.md`'s table. What is not
   compatible with 0.11.0:

@@ -30,11 +30,9 @@ Maxfilesize: con 128*1024;
 
 stderr: ref Sys->FD;
 conn: ref Dial->Connection;
-seckey: array of byte;
-seckey2: array of byte;
+creds: ref Secstore->Creds;	# every key the password gives (secstore(2) mkcreds)
 pin: string;	# a second factor's, when one is given or asked for: erase() clears it
-seckey4: array of byte;
-rootkey: array of byte;	# files as logon and factotum write them (SGCM2)
+rootkey: array of byte;	# files as logon and factotum write them (SGCM3, under creds.root6)
 filekey2: array of byte;	# the two older formats, read only
 filekey: array of byte;
 file: array of byte;
@@ -126,10 +124,8 @@ Auth:
 		if(pass == nil)
 			exit;
 		erase();
-		seckey = secstore->mkseckey(pass);
-		seckey2 = secstore->mkseckey2(pass);
-		rootkey = secstore->mkfilekey3(user, pass);
-		seckey4 = secstore->mkseckey4(rootkey);
+		creds = secstore->mkcreds(user, pass);
+		rootkey = creds.root6;
 		# the two formats no longer written have keys only for m,
 		# which moves a file out of them
 		if(op == 'm'){
@@ -139,7 +135,7 @@ Auth:
 		for(i := 0; i < len pass; i++)
 			pass[i] = 0;	# clear it
 		{
-			(conn, srvname, diag) = secstore->connect4(dial->netmkaddr(addr, "net", "secstore"), user, seckey, seckey2, seckey4);
+			(conn, srvname, diag) = secstore->connect6(dial->netmkaddr(addr, "net", "secstore"), creds);
 		}exception e{
 		"*" =>
 			# nothing the server sends should raise; if it does, say so
@@ -192,12 +188,11 @@ Auth:
 	}
 	if(verbose)
 		sys->fprint(stderr, "server: %s\n", clean(srvname));
-	secstore->erasekey(seckey);
-	secstore->erasekey(seckey2);
-	secstore->erasekey(seckey4);
-	seckey = nil;
-	seckey2 = nil;
-	seckey4 = nil;
+	# the PAK hashes are done with; the roots are kept for the files
+	secstore->erasekey(creds.h1);
+	secstore->erasekey(creds.h2);
+	secstore->erasekey(creds.h4);
+	secstore->erasekey(creds.h6);
 	{
 		operate(op, args);
 	}exception e{
@@ -312,9 +307,10 @@ operate(op: int, args: list of string)
 			file = nil;
 			verb('r', sname);
 		'm' =>
-			# Move a file of an older format (SGCM1, or Plan 9's
-			# AES-CBC under a SHA-1 of the password) to the one
-			# written now.  Nothing else reads the older formats.
+			# Move a file of an older format (SGCM2 under the old
+			# root, SGCM1, or Plan 9's AES-CBC under a SHA-1 of the
+			# password) to the one written now, SGCM3.  Nothing else
+			# reads the formats before SGCM2.
 			checkname(fname, 1);
 			(old, absent, merr) := secstore->fetch(conn, fname, 0);
 			if(absent)
@@ -327,7 +323,9 @@ operate(op: int, args: list of string)
 				sys->fprint(stderr, "secstore: %q is already in the current format\n", fname);
 				break;
 			}
-			file = secstore->decrypt3(old, rootkey, filekey2, filekey);
+			(file, nil) = secstore->openfile(old, creds);
+			if(file == nil)
+				file = secstore->decrypt3(old, nil, filekey2, filekey);
 			if(file == nil)
 				error(sys->sprint("can't decrypt %q: %r", fname));
 			sent := secstore->encrypt3(file, rootkey);
@@ -406,9 +404,9 @@ getfile(fname: string): array of byte
 	if(len f == 0)
 		error(sys->sprint("%q is empty on the server: not an encrypted file", fname));
 	enc := f;
-	f = secstore->decrypt3(enc, rootkey, nil, nil);
+	(f, nil) = secstore->openfile(enc, creds);
 	if(f == nil){
-		if(!secstore->iscurrent(enc))
+		if(!secstore->iscurrent(enc) && !(len enc >= 6 && string enc[0:6] == "SGCM2\n"))
 			error(sys->sprint("%q is in an old format: move it with auth/secstore m %s", fname, fname));
 		error(sys->sprint("can't decrypt %q: %r", fname));
 	}
@@ -418,10 +416,7 @@ getfile(fname: string): array of byte
 erase()
 {
 	if(secstore != nil){
-		secstore->erasekey(seckey);
-		secstore->erasekey(seckey2);
-		secstore->erasekey(seckey4);
-		secstore->erasekey(rootkey);
+		secstore->erasecreds(creds);
 		secstore->erasekey(filekey2);
 		secstore->erasekey(filekey);
 		secstore->erasekey(file);

@@ -18,6 +18,25 @@ Secstore: module
 	# session's putfile and remove are answered by the server.
 	mkseckey4:	fn(rootkey: array of byte): array of byte;
 	connect4:	fn(addr: string, user: string, pwhash, pwhash2, pwhash4: array of byte): (ref Dial->Connection, string, string);
+
+	# Version 6 (secstore(2)): version 5's exchange, its verifier and the
+	# account's files' keys from a root made by PBKDF2-HMAC-SHA-384
+	# (mkfilekey6); an account at an older version is moved to it by
+	# connect6.  A Creds is everything a password gives a client, for a
+	# store and files of any version; openfile opens a file under either
+	# root and says whether it is of the current form (else it is to be
+	# written again, by encrypt3 under root6).
+	Creds: adt {
+		user:	string;
+		h1, h2, h4, h6:	array of byte;	# PAK hashes of verifier versions 1, 3, 4, 6
+		root3, root6:	array of byte;	# the files' roots: SGCM2's, SGCM3's
+	};
+	mkcreds:	fn(user, pass: string): ref Creds;
+	erasecreds:	fn(c: ref Creds);
+	connect6:	fn(addr: string, c: ref Creds): (ref Dial->Connection, string, string);
+	openfile:	fn(file: array of byte, c: ref Creds): (array of byte, int);
+	mkfilekey6:	fn(user, pass: string): array of byte;
+	mkseckey6:	fn(rootkey: array of byte): array of byte;
 	setverifier:	fn(conn: ref Dial->Connection, version, hexHi: string): string;
 	# The second factor's lock on the account's files: once the vault
 	# key (made from the data key) is enrolled, the server stores and
@@ -53,10 +72,12 @@ Secstore: module
 	mkfilekey3:	fn(user, pass: string): array of byte;
 	# Mix a hardware second-factor secret R into an already-stretched root key
 	# to form a key-encryption key for a 2FA slot (see docs/second-factor-auth.md).
-	mkkek2fa:	fn(rootkey, R: array of byte): array of byte;
-	# SGCM2, the one format written.  decrypt3 reads an older format
-	# only when given its key (gcm1key: mkfilekey2; legacykey: mkfilekey);
-	# iscurrent says whether a file is SGCM2.
+	mkkek2fa:	fn(rootkey, R: array of byte): array of byte;	# HMAC-SHA-384: under root6
+	oldkek2fa:	fn(rootkey, R: array of byte): array of byte;	# HMAC-SHA256: a slot before version 6
+	# SGCM3, the one format written (its file keys by HMAC-SHA-384 of the
+	# root).  decrypt3 reads SGCM3 and SGCM2 under the root given, and an
+	# older format only when given its key (gcm1key: mkfilekey2;
+	# legacykey: mkfilekey); iscurrent says whether a file is SGCM3.
 	encrypt3:	fn(a: array of byte, rootkey: array of byte): array of byte;
 	decrypt3:	fn(a: array of byte, rootkey: array of byte, gcm1key: array of byte, legacykey: array of byte): array of byte;
 	iscurrent:	fn(a: array of byte): int;
@@ -66,7 +87,7 @@ Secstore: module
 	# version 5's exchange (secstore(2)'s PAK5), for the server: the
 	# ML-KEM key's seed under sigma and the verifier (and back), and the
 	# server's proof, the client's and the session's secret
-	pak5mask:	fn(C, S, m, mu, sigma, Hi: string, rho: array of byte): array of byte;
-	pak5keys:	fn(C, S, m, mu, sigma, Hi: string, ek, ct, k: array of byte): (array of byte, array of byte, array of byte);
+	pak5mask:	fn(version, C, S, m, mu, sigma, Hi: string, rho: array of byte): array of byte;
+	pak5keys:	fn(version, C, S, m, mu, sigma, Hi: string, ek, ct, k: array of byte): (array of byte, array of byte, array of byte);
 	samebytes:	fn(a, b: array of byte): int;
 };

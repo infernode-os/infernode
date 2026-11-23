@@ -49,6 +49,8 @@ include "keyringinst.m";
 include "bioauth.m";
 	bioauth: Bioauth;
 
+include "dial.m";	# secstore.m names Dial->Connection
+include "secstore.m";	# twofaslot.m names Secstore->Creds
 include "twofaslot.m";
 	twofaslot: Twofaslot;
 

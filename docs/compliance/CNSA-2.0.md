@@ -4,8 +4,8 @@
 Security Systems).
 **Roadmap row:** Cryptographic foundation — CNSA 2.0, Tier 0→1.
 **Tracking:** Program epic [INFR-328]; gaps [INFR-329] (G1), [INFR-330] (G2), [INFR-331] (G3). EPIC 3 — Complete CNSA 2.0 ([`history/security-epics.md`](../history/security-epics.md)).
-**Artifact date:** 2026-06-22; revised 2026-11-23 (G4–G8: the password protocols' key establishment, auth(2)'s confirmation, the native transport's combiner, the signer's digest).
-**Overall status:** **All in-scope CNSA 2.0 algorithm requirements Met under CNSA-strict mode**, with the stored-secret derivations of §3.7's known limits outstanding.
+**Artifact date:** 2026-06-22; revised 2026-11-23 (G4–G9: the password protocols' key establishment, auth(2)'s confirmation, the native transport's combiner, the signer's digest, the stored secrets).
+**Overall status:** **All in-scope CNSA 2.0 algorithm requirements Met under CNSA-strict mode.** Secrets stored in an older form are moved at their next use (§3.7).
 Every applicable CNSA 2.0 algorithm is implemented natively at the required security
 category. The two parameter-selection gaps are closed under a fleet-wide **CNSA mode**
 (the host `CNSAMODE` env var, reflected by the emu into Inferno `/env/cnsamode`, off by
@@ -147,15 +147,28 @@ Known limits, stated rather than hidden:
   a quantum adversary gets one password guess per login it takes part in rests
   on the reasoning in login(6) and on `tests/login_test.b` *Logarithms*, not on a
   published proof, and wants a cryptographer's review.
-- **Stored secrets.** keyfs(4)'s key file is PBKDF2-HMAC-SHA-384 and AES-256-GCM
-  in every mode. An account's stored secret is the SHA-256 of its password
-  (keys(6), changelogin(8)) in every mode: it enters login(6)'s suite 2 only as
-  key material to HKDF-SHA-384 and is never a signature's hash. secstore's file
-  key and PAK verifier are HMAC-SHA-256 and SHA-256 (`appl/lib/secstore.b`), with
-  AES-256-GCM for the files and the session: outside the mode's signature and
-  key-establishment rules, and not SHA-384. Moving them to SHA-384 needs each
-  account's password (they are derived from it), so it is a migration at the
-  next password change and is not yet made. **Open.**
+- **Stored secrets in the form before** (G9). Each password-derived secret is
+  now made with SHA-384, and one still in its old form is moved the next time
+  its owner gives the password, never sooner, because only the password makes
+  the new form:
+  - an account's secret (keys(6)) at its next login (login(6)). In CNSA mode an
+    account still in the old form is refused, and is moved by a login outside
+    the mode or set again with changelogin(8);
+  - a secstore account's verifier at its next login (connect6), and its files
+    at the next login that reads them (logon, factotum) or with
+    `auth/secstore m`. In CNSA mode an account not yet at version 6 is refused;
+  - a second factor's key slot at its next unlock with the key, and its
+    recovery slot the next time the recovery passphrase is used: only then is
+    the key's secret, or the passphrase, at hand;
+  - factotum's key file (`-f`) when it is next read;
+  - an httpd(8) password line when the administrator makes it again with
+    `svc/httpd/passwd` (httpd cannot, having only the hash). In CNSA mode an
+    old line is left out.
+
+  Until it is moved, a secret in the old form keeps its old strength. An
+  installation that must have none left can see what remains: keyfs entries of
+  32 bytes, `secstore4` and older lines in secstored's `PAK` files, SGCM2 files,
+  FKEY1 key files, and `pbkdf2-sha256` lines.
 
 ---
 
@@ -193,7 +206,7 @@ stricter, transition-safe posture.
 | **G6** | SHA-384 for **auth(2)'s confirmation** of the ssl algorithm | **Closed.** It was HMAC-SHA-256; `infernode-auth 3` is HMAC-SHA-384 (`appl/lib/auth.b`; `tests/auth_algs_test.b`, `tests/auth_bind_test.b`). | — |
 | **G7** | SHA-2 for the **native transport's hybrid combiner** | **Closed.** It was SHA3-512, which CNSA 2.0 has only inside ML-KEM and ML-DSA; under CNSA mode it is SHA-512 with the ML-KEM-1024 secrets first (`libinterp/keyring.c` `Keyring_auth`; `tests/cnsa_nodepair_test.sh`, `tests/pqauth_test.b`). | — |
 | **G8** | SHA-384 for **signer(8)'s operator digest** | **Closed** for ML-DSA and SLH-DSA signers (`appl/cmd/auth/signer.b`, signer(8)). | — |
-| **G9** | SHA-384 for the **stored secrets** (an account's password hash, secstore's verifier and file key) | **Open** (§3.7, known limits): derived from passwords, so moved at the next password change; not yet made. | — |
+| **G9** | SHA-384 for the **stored secrets** made from passwords | **Closed.** An account's secret (keys(6)) is PBKDF2-HMAC-SHA-384 salted by its name, moved at its next login (`Login->secret`; `tests/login_test.b` *Migration*, `tests/passwd_test.b` *OldForm*). secstore version 6: its verifier and the files' keys from a root of PBKDF2-HMAC-SHA-384, the files SGCM3 (keys by HMAC-SHA-384), second-factor key slots wrapped under HMAC-SHA-384, all moved at the next use (`appl/lib/secstore.b` `connect6`, `openfile`; `appl/lib/twofaslot.b`; `tests/secstored_test.b` *Version6*, `tests/twofaslot_test.b` *OldSlotMoved*, `tests/secstore_crypto_test.b`, `tests/host/secstore_pak5_test.sh` against hashlib). factotum's key file FKEY2 (PBKDF2-HMAC-SHA-384), FKEY1 rewritten when read (`tests/host/factotum_persist_test.sh`). httpd(8)'s password lines `pbkdf2-sha384`, the old refused in CNSA mode (`tests/host/httpd_auth_test.sh`). createuser wrote the password's SHA-1, which no login took; it writes the new form. Secrets still in the old form are moved at their next use (§3.7). | — |
 
 None of G1–G3 require architectural change; G1/G2 are selection of already-implemented
 Category-5 parameters. Per project policy these are scoped and reviewed as their own
@@ -218,6 +231,7 @@ traffic as inside the boundary. A classical Diffie-Hellman exchange of
 | G6 auth(2) confirmation | Every authenticated 9P connection | None: HMAC-SHA-256 is not weakened by a quantum computer | **Compliance** (CNSA 2.0's hash is SHA-384/512) |
 | G7 transport combiner | Every authenticated 9P connection in CNSA mode | None: SHA3-512 is a sound combiner | **Compliance** (CNSA 2.0 has SHA-3 only inside ML-KEM and ML-DSA) |
 | G8 signer digest | The operator's comparison, out of band | None of note: 16 bytes are shown either way | **Compliance** |
+| G9 stored secrets | A copy of a store (keyfs's file, secstored's directory, a factotum key file, an httpd password file) | Grover's algorithm does not make SHA-256 weak here: a password-derived secret is as strong as the password. The one real gain is keyfs's: one unsalted SHA-256 a guess became 200000 HMAC-SHA-384 salted by the name | **Compliance**, and the keyfs store against offline guessing |
 
 **Breaking changes, made on purpose.** Each of these protocols was
 changed in every mode, not only in CNSA mode, and none negotiates down:
@@ -227,6 +241,10 @@ changed in every mode, not only in CNSA mode, and none negotiates down:
   old client cannot reach a new server.
 - auth(2) `infernode-auth 3`: an authenticated 9P connection between an
   updated node and an older one is refused, whatever the mode.
+- keysrv 3 (passwd(1)): the challenge names the form of the secret held;
+  an older passwd is refused, saying so.
+- secstore version 6: accounts and files are moved by a client of this
+  version; an older client cannot read a file written in SGCM3.
 
 Accounts, verifiers, keys and certificates are unchanged; only the
 exchanges are. Each refusal tells the other end which version is spoken.
@@ -241,9 +259,10 @@ after. The changelog's Security section names each break.
 - CNSA 2.0 **algorithm primitives: complete** at Category 5 (FIPS 203/204/205/202; AES-256;
   SHA-384/512) — closes EPIC 3 acceptance item *"algorithm inventory documented."*
 - CNSA 2.0 **strict-mode parameter compliance:** Met under CNSA-strict mode — G1, G2 and
-  G4–G8 Closed, G3 Resolved as Not Applicable, G9 (the stored secrets' hash) Open (§5).
-- Remaining: G9; the accreditor to confirm the G3 applicability determination (LMS/XMSS
-  vs. SLH-DSA waiver); a cryptographer's review of the masked-seed construction (§3.7).
+  G4–G9 Closed, G3 Resolved as Not Applicable (§5).
+- Remaining: the accreditor to confirm the G3 applicability determination (LMS/XMSS
+  vs. SLH-DSA waiver); a cryptographer's review of the masked-seed construction (§3.7);
+  secrets still in their old form, which move at their next use (§3.7).
 
 ## 7. References
 

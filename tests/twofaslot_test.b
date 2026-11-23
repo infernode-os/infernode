@@ -99,7 +99,8 @@ testDataKeyEnvelope(t: ref T)
 	rootkey := secstore->mkfilekey3(TESTUSER, "pw");
 	R := random->randombuf(Random->ReallyRandom, 32);
 	kek := secstore->mkkek2fa(rootkey, R);
-	t.assert(kek != nil && len kek == 32, "mkkek2fa yields a 32-byte KEK");
+	t.assert(kek != nil && len kek == 48, "mkkek2fa yields a 48-byte KEK (HMAC-SHA-384)");
+	t.asserteq(len secstore->oldkek2fa(rootkey, R), 32, "and the old one, HMAC-SHA256, 32 bytes");
 	wrap := secstore->encrypt3(DK, kek);
 	t.assert(wrap != nil, "encrypt3 wraps the data key");
 	out := secstore->decrypt3(wrap, kek, nil, nil);
@@ -131,12 +132,12 @@ testRecoverySlotRoundTrip(t: ref T)
 {
 	cleanslots();
 	DK := random->randombuf(Random->ReallyRandom, 32);
-	rootkey := secstore->mkfilekey3(TESTUSER, "pw");
+	creds := secstore->mkcreds(TESTUSER, "pw");
 	recpass := "correct horse battery staple";
-	e := twofaslot->writeslots(TESTUSER, rootkey, DK, nil, recpass, "");
+	e := twofaslot->writeslots(TESTUSER, creds.root6, DK, nil, recpass, "");
 	t.assertnil(e, "writeslots writes a recovery slot");
 	t.asserteq(twofaslot->is2fa(TESTUSER), 1, "account reads as 2FA once a slot exists");
-	(dk2, ue) := twofaslot->unlock(TESTUSER, rootkey, recpass, "");
+	(dk2, ue) := twofaslot->unlock(TESTUSER, creds, recpass, "");
 	t.assertnil(ue, "unlock via the recovery passphrase succeeds");
 	t.assert(eqb(dk2, DK), "the recovery slot recovers the exact data key");
 	cleanslots();
@@ -148,9 +149,9 @@ testWrongRecoveryFails(t: ref T)
 {
 	cleanslots();
 	DK := random->randombuf(Random->ReallyRandom, 32);
-	rootkey := secstore->mkfilekey3(TESTUSER, "pw");
-	twofaslot->writeslots(TESTUSER, rootkey, DK, nil, "right-passphrase", "");
-	(dk2, ue) := twofaslot->unlock(TESTUSER, rootkey, "wrong-passphrase", "");
+	creds := secstore->mkcreds(TESTUSER, "pw");
+	twofaslot->writeslots(TESTUSER, creds.root6, DK, nil, "right-passphrase", "");
+	(dk2, ue) := twofaslot->unlock(TESTUSER, creds, "wrong-passphrase", "");
 	t.assert(dk2 == nil, "a wrong recovery passphrase yields no data key");
 	t.assertnotnil(ue, "a wrong recovery passphrase returns an error");
 	cleanslots();
@@ -190,7 +191,7 @@ testWriteslotsAdditive(t: ref T)
 		fd = nil;
 	}
 	DK := random->randombuf(Random->ReallyRandom, 32);
-	rootkey := secstore->mkfilekey3(TESTUSER, "pw");
+	rootkey := secstore->mkfilekey6(TESTUSER, "pw");
 	twofaslot->writeslots(TESTUSER, rootkey, DK, nil, "recpass", "");
 	(ok, nil) := sys->stat(dir + "/key");
 	t.assert(ok >= 0, "writeslots preserved the pre-existing key slot");
@@ -198,6 +199,88 @@ testWriteslotsAdditive(t: ref T)
 	t.assert(ok2 >= 0, "writeslots added the recovery slot alongside it");
 	cleanslots();
 }
+
+# SGCM2 as secstore(2) wrote it before version 6: the file key is
+# HMAC-SHA256 of the root, "secstore file" and the salt
+sgcm2(plain, root: array of byte): array of byte
+{
+	kr := load Keyring Keyring->PATH;
+	magic := array of byte "SGCM2\n";
+	salt := random->randombuf(Random->NotQuiteRandom, 16);
+	nonce := random->randombuf(Random->NotQuiteRandom, 12);
+	label := array of byte "secstore file";
+	data := array[len label + len salt] of byte;
+	data[0:] = label;
+	data[len label:] = salt;
+	key := array[Keyring->SHA256dlen] of byte;
+	kr->hmac_sha256(data, len data, root, key, nil);
+	aad := array[len magic + len salt] of byte;
+	aad[0:] = magic;
+	aad[len magic:] = salt;
+	(ct, tag) := kr->aesgcmencrypt(kr->aesgcmsetup(key, nonce), plain, aad);
+	out := array[len magic + 16 + 12 + len ct + len tag] of byte;
+	out[0:] = magic;
+	out[len magic:] = salt;
+	out[len magic+16:] = nonce;
+	out[len magic+28:] = ct;
+	out[len magic+28+len ct:] = tag;
+	return out;
+}
+
+hexs(a: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%.2ux", int a[i]);
+	return s;
+}
+
+# A recovery slot made before version 6 of the store (its wrap SGCM2
+# under mkfilekey3 of the passphrase) unlocks, and is wrapped again under
+# version 6's (mkfilekey6, SGCM3); it still unlocks after.
+testOldSlotMoved(t: ref T)
+{
+	cleanslots();
+	DK := random->randombuf(Random->ReallyRandom, 32);
+	recpass := "an old recovery passphrase";
+	wrap := sgcm2(DK, secstore->mkfilekey3(TESTUSER, recpass));
+	t.assert(eqb(secstore->decrypt3(wrap, secstore->mkfilekey3(TESTUSER, recpass), nil, nil), DK), "SGCM2 is still read");
+	sys->create(Twofaslot->Slotbase, Sys->OREAD, Sys->DMDIR | int 8r700);
+	sys->create(Twofaslot->Slotbase + "/" + TESTUSER, Sys->OREAD, Sys->DMDIR | int 8r700);
+	dir := slotdir();
+	sys->create(dir, Sys->OREAD, Sys->DMDIR | int 8r700);
+	fd := sys->create(dir + "/recovery", Sys->OWRITE, 8r600);
+	b := array of byte ("kind recovery\ncred -\nsalt -\nwrap " + hexs(wrap) + "\n");
+	if(fd == nil || sys->write(fd, b, len b) != len b)
+		t.fatal(sys->sprint("can't write the old slot: %r"));
+	fd = nil;
+	creds := secstore->mkcreds(TESTUSER, "pw");
+	(dk2, ue) := twofaslot->unlock(TESTUSER, creds, recpass, "");
+	t.assertnil(ue, "an old recovery slot unlocks");
+	t.assert(eqb(dk2, DK), "with its data key");
+	fd = sys->open(dir + "/recovery", Sys->OREAD);
+	buf := array[16384] of byte;
+	n := 0;
+	if(fd != nil)
+		n = sys->read(fd, buf, len buf);
+	text := "";
+	if(n > 0)
+		text = string buf[0:n];
+	t.assert(contains(text, "wrap " + hexs(array of byte "SGCM3\n")), "and is written again in SGCM3");
+	(dk3, ue3) := twofaslot->unlock(TESTUSER, creds, recpass, "");
+	t.assertnil(ue3, "the moved slot unlocks");
+	t.assert(eqb(dk3, DK), "with the same data key");
+	cleanslots();
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -225,6 +308,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RecoverySlotRoundTrip", testRecoverySlotRoundTrip);
 	run("WrongRecoveryFails", testWrongRecoveryFails);
 	run("NoSilentDowngrade", testNoSilentDowngrade);
+	run("OldSlotMoved", testOldSlotMoved);
 	run("WriteslotsAdditive", testWriteslotsAdditive);
 
 	cleanslots();

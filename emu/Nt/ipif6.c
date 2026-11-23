@@ -18,6 +18,29 @@
 extern int SOCK_SELECT;
 extern SOCKET oswakesock(void);
 
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)	/* mstcpip.h */
+#endif
+
+/*
+ * Whether an ICMP port unreachable for what a UDP socket sent fails its
+ * next read.  Windows fails the next recvfrom of any UDP socket with
+ * WSAECONNRESET; POSIX hosts fail only a connected one's (ECONNREFUSED).
+ * So an announced socket answering many peers (a server) had a read
+ * fail whenever a peer it had answered was gone, and a server that
+ * reads until an error ended there.
+ */
+static void
+udpconnreset(int fd, int on)
+{
+	BOOL b;
+	DWORD n;
+
+	b = on? TRUE: FALSE;
+	n = 0;
+	WSAIoctl(fd, SIO_UDP_CONNRESET, &b, sizeof(b), nil, 0, &n, nil, nil);
+}
+
 int
 so_socket(int type)
 {
@@ -47,6 +70,7 @@ so_socket(int type)
 	if(type == SOCK_DGRAM){
 		one = 1;
 		setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (char*)&one, sizeof(one));
+		udpconnreset(fd, 0);	/* until it is connected, as POSIX has it */
 	}else{
 		one = 1;
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
@@ -223,7 +247,7 @@ so_close(int sock)
 void
 so_connect(int fd, unsigned char *raddr, unsigned short rport)
 {
-	int r;
+	int r, type, tl;
 	struct sockaddr_storage sa;
 	struct sockaddr_in6 *sin6;
 
@@ -238,6 +262,9 @@ so_connect(int fd, unsigned char *raddr, unsigned short rport)
 	osleave();
 	if(r < 0)
 		oserror();
+	tl = sizeof(type);
+	if(getsockopt(fd, SOL_SOCKET, SO_TYPE, (char*)&type, &tl) == 0 && type == SOCK_DGRAM)
+		udpconnreset(fd, 1);
 }
 
 void

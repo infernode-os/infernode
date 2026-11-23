@@ -13,6 +13,9 @@ implement UdpEmptyTest;
 # - four datagrams sent to a conversation announced with headers on the
 #   loopback, the first and third empty: read as 52, 55, 52 and 55
 #   bytes, each with its sender's port in its header, the data whole
+# - datagrams sent to a port nobody listens on, then one received: the
+#   read is that datagram, not an error (Windows reported the ICMP port
+#   unreachable on the next read of any UDP socket)
 #
 
 include "sys.m";
@@ -140,6 +143,47 @@ testEmpty(t: ref T)
 	}
 }
 
+# A datagram sent to a port nobody listens on fails no later read of an
+# announced conversation: the ICMP port unreachable that answers it is
+# for a peer that has gone, and a POSIX host reports it only on a
+# connected socket.  Windows failed the next read of any UDP socket
+# (WSAECONNRESET), and a server reading until an error (sdgsrv) ended
+# when a client it had answered went away.
+testUnreachable(t: ref T)
+{
+	base := 21000 + sys->pctl(0, nil) % 4000;
+	(rfd, rport) := listener(base);
+	if(rfd == nil)
+		t.skip(sys->sprint("no UDP on the loopback: %r"));
+	(gfd, gport) := listener(rport+1);
+	if(gfd == nil)
+		t.skip(sys->sprint("no second UDP port on the loopback: %r"));
+	gfd = nil;	# gone: nothing listens on gport now
+	(sfd, sport) := listener(gport+1);
+	if(sfd == nil)
+		t.skip(sys->sprint("no third UDP port on the loopback: %r"));
+
+	for(i := 0; i < 3; i++)
+		send(rfd, gport, array of byte "to nobody");
+	sys->sleep(200);	# the unreachables come back
+	got := chan of array of byte;
+	spawn reader(rfd, 1, got);
+	send(sfd, rport, array of byte "hello");
+	tc := chan of int;
+	spawn timer(tc, 5000);
+	alt{
+	b := <-got =>
+		t.assert(len b == Udphdrlen + 5, sys->sprint("the read after them is the datagram sent (%d bytes)", len b));
+		if(len b >= Udphdrlen){
+			p := int b[48]<<8 | int b[49];
+			t.asserteq(p, sport, "from its sender");
+			t.assertseq(string b[Udphdrlen:], "hello", "its data");
+		}
+	<-tc =>
+		t.fatal("the datagram was not read in five seconds");
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -154,6 +198,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	run("Empty", testEmpty);
+	run("Unreachable", testUnreachable);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

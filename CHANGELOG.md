@@ -30,7 +30,10 @@ All notable changes to InferNode are documented in this file.
   impersonator takes part in, whether or not it can take logarithms),
   and the session is made from both secrets. In CNSA mode ML-KEM-1024
   and SHA-384 throughout. auth(2)'s confirmation of the ssl algorithm
-  is HMAC-SHA-384. Not compatible:
+  is HMAC-SHA-384. Not compatible, on purpose: each protocol has one
+  exchange, in every mode, with nothing to negotiate down to, and the
+  break is made now while deployment is limited (why each change was
+  made, threat or compliance, is in `docs/compliance/CNSA-2.0.md` §5.1):
   - **Login is version 3** (login(6)): suite 1 adds ML-KEM-768, suite 2
     (CNSA) ML-KEM-1024, and there is a fourth and fifth message. A
     version 2 end is told which version is spoken. Update logind and

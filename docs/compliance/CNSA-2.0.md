@@ -199,6 +199,43 @@ None of G1–G3 require architectural change; G1/G2 are selection of already-imp
 Category-5 parameters. Per project policy these are scoped and reviewed as their own
 changes rather than bundled here. **No code is altered by this evidence artifact.**
 
+### 5.1 Why G4–G8, and what they break
+
+G4–G8 were made to meet CNSA 2.0, not because each one answered a
+present threat. The table says which did both, so that an accreditor
+and an operator can each weigh them. CNSA 2.0 asks for quantum-resistant
+public-key algorithms in all key establishment within a National
+Security System, on NSA's transition timeline. It names no
+password-authenticated exchange, and it does not exempt a protocol for
+being confined to one host. An accreditor may still scope loopback
+traffic as inside the boundary. A classical Diffie-Hellman exchange of
+3072 bits is CNSA 1.0's transition algorithm, not CNSA 2.0's end state.
+
+| Gap | Exposure in a deployment | Threat it answers | Driven by |
+|-----|--------------------------|-------------------|-----------|
+| G4 login(6) | logind listens on every interface where the auth service runs (`tcp!*!inflogin`: `appl/svc/auth.sh`, `lib/sh/srv`) | A recording of a login, kept until a quantum computer exists, gives the password by offline guessing (the session carries nothing else secret: keys and certificate are public, and the user's secret key never leaves the client). An active attacker with a quantum computer at login time, taking the signer's part, got every password; now it gets one guess | **Threat and compliance** |
+| G5 secstore | secstored listens on `127.0.0.1` by default (`secstored.b`, `lib/sh/profile`); on the network only with `-a` | On loopback, nothing an observer does not already have by holding the machine. With `-a`, a recording plus a future quantum computer gives the password, and with it every file in the store (factotum's keys among them) | **Compliance** by default; **threat and compliance** with `-a` |
+| G6 auth(2) confirmation | Every authenticated 9P connection | None: HMAC-SHA-256 is not weakened by a quantum computer | **Compliance** (CNSA 2.0's hash is SHA-384/512) |
+| G7 transport combiner | Every authenticated 9P connection in CNSA mode | None: SHA3-512 is a sound combiner | **Compliance** (CNSA 2.0 has SHA-3 only inside ML-KEM and ML-DSA) |
+| G8 signer digest | The operator's comparison, out of band | None of note: 16 bytes are shown either way | **Compliance** |
+
+**Breaking changes, made on purpose.** Each of these protocols was
+changed in every mode, not only in CNSA mode, and none negotiates down:
+
+- login(6) version 3: a signer and its clients must be updated together.
+- secstore version 5: secstored refuses the version 4 exchange, so an
+  old client cannot reach a new server.
+- auth(2) `infernode-auth 3`: an authenticated 9P connection between an
+  updated node and an older one is refused, whatever the mode.
+
+Accounts, verifiers, keys and certificates are unchanged; only the
+exchanges are. Each refusal tells the other end which version is spoken.
+The project accepts these breaks now, while deployment is limited: one
+exchange per protocol, with nothing to negotiate down to, gives an
+attacker nothing to downgrade, leaves less to accredit, and is cheaper
+to establish before there are fleets that depend on compatibility than
+after. The changelog's Security section names each break.
+
 ## 6. Disposition
 
 - CNSA 2.0 **algorithm primitives: complete** at Category 5 (FIPS 203/204/205/202; AES-256;

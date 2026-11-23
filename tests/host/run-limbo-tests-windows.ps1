@@ -15,7 +15,7 @@
       CRASH if NTSTATUS exit code matches a known JIT crash signature.
       TIMEOUT if the test ran longer than -TimeoutSec without exiting.
               (Treated as "ran without crashing" unless the test
-              normally exits — distinguishing those is left to authors
+              normally exits - distinguishing those is left to authors
               who can supply -PassPattern.)
 
 .PARAMETER Root
@@ -66,8 +66,8 @@ foreach ($t in $tests) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($t.Name)
     $logFile = "$env:TEMP\limbo-test-$name.log"
 
-    # Skip pre-existing emu instances.
-    Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Stop-Process -Force
+    # Skip pre-existing emu instances of this tree.
+    Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Root\*" } | Stop-Process -Force
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $emu
@@ -105,7 +105,7 @@ foreach ($t in $tests) {
         $crash++
         $failures += "$name (NTSTATUS 0x$hex)"
     } elseif ($timedOut -and -not $sawFail) {
-        # Long-running tests (daemons) — treat as ok if no FAIL marker.
+        # Long-running tests (daemons) - treat as ok if no FAIL marker.
         Write-Host ("  TIMEOUT {0,-30} (>${TimeoutSec}s, no FAIL marker)" -f $name) -ForegroundColor DarkYellow
         $timeout++
     } elseif ($sawFail -or ($code -ne 0 -and -not $sawPass)) {
@@ -118,7 +118,10 @@ foreach ($t in $tests) {
     }
 }
 
-Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Stop-Process -Force
+# Only this tree's emulators: a machine-wide Stop-Process -Name o.emu also
+# killed other checkouts' runs and a user's running InferNode (it was
+# the "intermittent" release smoke failure: exit 1, no output).
+Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Root\*" } | Stop-Process -Force
 
 Write-Host ""
 Write-Host "=== Summary ===" -ForegroundColor Yellow

@@ -41,6 +41,23 @@ LC_ALL=C
 export LC_ALL
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+# Windows (Git Bash/MSYS2): mk.exe and limbo.exe are native Windows programs.
+# They need ROOT as C:/..., not /c/...; MSYS must not rewrite the /dis/...
+# arguments mk passes them; and mk.exe runs its recipes with $MKSH, which it
+# does not quote, so it must be a POSIX sh whose path has no spaces (the 8.3
+# short form of Git's sh.exe).  mkconfig maps MINGW*/MSYS* to SYSHOST=Nt.
+case $(uname -s) in
+MINGW*|MSYS*|CYGWIN*)
+	ROOT=$(cd "$ROOT" && pwd -W)
+	MSYS_NO_PATHCONV=1
+	export MSYS_NO_PATHCONV
+	if [ -z "$MKSH" ]; then
+		MKSH=$(cygpath -d "$(command -v sh)")
+		export MKSH
+	fi
+	;;
+esac
 export ROOT
 cd "$ROOT"
 

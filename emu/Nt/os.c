@@ -23,6 +23,7 @@
 
 int	SYS_SLEEP = 2;
 int SOCK_SELECT = 3;
+
 #define	MAXSLEEPERS	1500
 
 extern	int	cflag;
@@ -70,8 +71,10 @@ char *cputype = "386";
 typedef struct Osproc Osproc;
 struct Osproc
 {
-	HANDLE	ev;
+	HANDLE	ev;	/* what osblock waits on and osready sets */
 	SOCKET	volatile wake;	/* INVALID_SOCKET until the Proc first selects */
+	HANDLE	intr;	/* set by oshostintr, for a proc in a host call: hostio */
+	HANDLE	io;	/* the event a pipe read or write waits on: hostio */
 };
 
 #define	OSEV(p)	(((Osproc*)(p)->os)->ev)
@@ -91,6 +94,8 @@ oswakesock(void)
 	u_long one;
 
 	o = up->os;
+	if(o == nil)
+		return INVALID_SOCKET;	/* libinit's and the SDL3 worker's procs have no Osproc */
 	if(o->wake != INVALID_SOCKET)
 		return o->wake;
 	s = socket(AF_INET, SOCK_DGRAM, 0);
@@ -139,11 +144,17 @@ pfree(Proc *p)
 		free(e->user);
 	}
 	free(p->prog);
+	if(p->pid != 0)
+		CloseHandle((HANDLE)(intptr_t)p->pid);	/* kproc's thread handle; the thread runs on */
 	o = p->os;
-	CloseHandle(o->ev);
-	if(o->wake != INVALID_SOCKET)
-		closesocket(o->wake);
-	free(o);
+	if(o != nil){
+		CloseHandle(o->ev);
+		CloseHandle(o->intr);
+		CloseHandle(o->io);
+		if(o->wake != INVALID_SOCKET)
+			closesocket(o->wake);
+		free(o);
+	}
 	/* forget p before freeing it: lock() counts into up->nlocks (see kproc-pthreads.c:/^pexit) */
 	if(p == up)
 		up = nil;
@@ -205,15 +216,21 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 	Egrp *eg;
 	Osproc *o;
 
-	p = newproc();
-	if(p == nil)
-		panic("out of kernel processes");
-	o = malloc(sizeof(Osproc));
-	if(o == nil)
-		panic("out of kernel processes");
+	/*
+	 * Waited for, not panicked over, as kproc-pthreads.c does: kproc
+	 * gives its callers no error to raise, and a main pool set too
+	 * small (-pmain, tools/sysfuzz -P) took the emulator down here
+	 * ("out of kernel processes").
+	 */
+	while((p = newproc()) == nil)
+		waitmem();
+	while((o = malloc(sizeof(Osproc))) == nil)
+		waitmem();
 	o->wake = INVALID_SOCKET;
 	o->ev = CreateEvent(NULL, FALSE, FALSE, NULL);
-	if(o->ev == NULL)
+	o->intr = CreateEvent(NULL, FALSE, FALSE, NULL);	/* auto-reset: one wakeup per SetEvent */
+	o->io = CreateEvent(NULL, TRUE, FALSE, NULL);	/* manual-reset, as OVERLAPPED wants */
+	if(o->ev == NULL || o->intr == NULL || o->io == NULL)
 		panic("can't allocate os event");
 	p->os = o;
 		
@@ -254,10 +271,17 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 
 	{
 		HANDLE th;
-		th = CreateThread(0, 16384, tramp, p, 0, &h);
-		p->pid = (int)(intptr_t)th;
+		/*
+		 * Suspended until pid is set: oshostintr's APC and pfree
+		 * use it, and a thread that ran first could be done before.
+		 * The handle is pfree's to close (it was never closed: one
+		 * leaked for each kproc, an export's slave each request).
+		 */
+		th = CreateThread(0, 16384, tramp, p, CREATE_SUSPENDED, &h);
 		if(th == NULL)
 			panic("ran out of  kernel processes");
+		p->pid = (int)(intptr_t)th;
+		ResumeThread(th);
 	}
 }
 
@@ -267,19 +291,32 @@ void APIENTRY sleepintr(DWORD param)
 }
 #endif
 
+/*
+ * swiproc has set p->swipend and wants p out of the host call it is in
+ * (or about to enter: it is past osenter).  A synchronous ReadFile or
+ * WriteFile cannot be interrupted, so pipes to host commands are
+ * overlapped and hostio waits on its I/O and on os->intr together;
+ * the event stays set until a wait takes it, so an interrupt that comes
+ * before the wait is not lost.
+ */
 void
 oshostintr(Proc *p)
 {
 	SOCKET w;
+	Osproc *os;
 
 	if (p->syscall == SOCK_SELECT){
 		/* intwait stays set: doselect sees it once select returns */
-		w = ((Osproc*)p->os)->wake;
+		os = p->os;
+		w = os != nil ? os->wake : INVALID_SOCKET;
 		if(w != INVALID_SOCKET)
 			send(w, "", 1, 0);
 		return;
 	}
 	p->intwait = 0;
+	os = p->os;
+	if(os != nil)
+		SetEvent(os->intr);
 #if(_WIN32_WINNT >= 0x0400)
 	if(p->syscall == SYS_SLEEP) {
 		QueueUserAPC(sleepintr, (HANDLE)(intptr_t) p->pid, (ULONG_PTR) p->pid);
@@ -710,20 +747,92 @@ close(int fd)
 	return 0;
 }
 
+/*
+ * Read or write h, which may be overlapped (cmd.c's pipes to host
+ * commands are), for a proc inside osenter: a kill (swiproc, then
+ * oshostintr) cancels the I/O, and the call fails with errno EINTR,
+ * as a signal makes a POSIX read or write fail, so that osleave raises
+ * Eintr.  A synchronous ReadFile on an anonymous pipe could not be
+ * interrupted at all: a Prog killed reading a host command that wrote
+ * nothing, or writing to one that read nothing, stayed in /prog until
+ * the command ended.  Any other failure sets errno to EIO.  An
+ * interrupt with swipend clear is one left from a call already over,
+ * and is ignored.  On a handle that is not overlapped the call
+ * completes before it returns, as before.
+ */
+static int
+hostio(HANDLE h, void *buf, uint n, int iswrite)
+{
+	OVERLAPPED ov;
+	HANDLE w[2];
+	Osproc *os;
+	DWORD r, got;
+	BOOL ok;
+
+	os = nil;
+	if(up != nil)
+		os = up->os;
+	memset(&ov, 0, sizeof(ov));
+	if(os != nil)
+		ov.hEvent = os->io;
+	if(iswrite)
+		ok = WriteFile(h, buf, n, nil, &ov);
+	else
+		ok = ReadFile(h, buf, n, nil, &ov);
+	if(!ok && GetLastError() != ERROR_IO_PENDING){
+		errno = EIO;
+		return -1;
+	}
+	if(!ok && os != nil){
+		w[0] = os->io;
+		w[1] = os->intr;
+		for(;;){
+			r = WaitForMultipleObjects(2, w, FALSE, INFINITE);
+			if(r == WAIT_OBJECT_0)
+				break;
+			if(r == WAIT_OBJECT_0+1){
+				if(up->swipend){
+					CancelIoEx(h, &ov);
+					break;
+				}
+				continue;	/* stale: an interrupt for a call already over */
+			}
+			CancelIoEx(h, &ov);
+			break;
+		}
+	}
+	/* the OVERLAPPED must live until the I/O is over, cancelled or not */
+	if(!GetOverlappedResult(h, &ov, &got, TRUE)){
+		/*
+		 * errno every time: devcmd retries while it is EINTR, and one
+		 * left from a cancelled call had it retry a broken pipe for ever
+		 */
+		if(GetLastError() == ERROR_OPERATION_ABORTED)
+			errno = EINTR;
+		else
+			errno = EIO;
+		return -1;
+	}
+	return got;
+}
+
 int
 read(int fd, void *buf, uint n)
 {
 	HANDLE h;
 
-	if(fd == 0)
+	if(fd == 0){
 		h = kbdh;
-	else
-		h = ntfd2h(fd);
+		if(h == INVALID_HANDLE_VALUE)
+			return -1;
+		if(!ReadFile(h, buf, n, &n, NULL))
+			return -1;
+		return n;
+	}
+	h = ntfd2h(fd);
 	if(h == INVALID_HANDLE_VALUE)
 		return -1;
-	if(!ReadFile(h, buf, n, &n, NULL))
-		return -1;
-	return n;
+	return hostio(h, buf, n, 0);
 }
 
 int
@@ -744,9 +853,7 @@ write(int fd, void *buf, uint n)
 			return -1;
 		return n;
 	}
-	if(!WriteFile(ntfd2h(fd), buf, n, &n, NULL))
-		return -1;
-	return n;
+	return hostio(ntfd2h(fd), buf, n, 1);
 }
 
 /*

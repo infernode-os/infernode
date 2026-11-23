@@ -369,6 +369,28 @@ Create-Library -Name "libdraw.lib" -OutputDir $LibDir
 Pop-Location
 
 # =============================================
+# Build libtk (source list from libtk/mkfile + mkfile-std)
+# =============================================
+# The GUI emu's $Tk (libinterp/tk.c) is this library; without it every Tk
+# program (wm/sam, wm/edit, anything through tkclient) fails to load Tk.
+Write-Host "Building libtk..." -ForegroundColor Yellow
+Push-Location "$ROOT\libtk"
+Remove-Item -Force *.obj -ErrorAction SilentlyContinue
+$tkSrc = @(
+    "ebind.c", "grids.c", "image.c", "packr.c", "panel.c", "parse.c",
+    "utils.c", "varbl.c", "windw.c", "xdata.c",
+    "canvs.c", "canvu.c", "carcs.c", "cbits.c", "cimag.c", "cline.c",
+    "coval.c", "cpoly.c", "crect.c", "ctext.c", "cwind.c",
+    "colrs.c", "entry.c", "extns.c", "frame.c", "buton.c", "label.c",
+    "listb.c", "menus.c", "scale.c", "scrol.c",
+    "textu.c", "textw.c", "tindx.c", "tmark.c", "ttags.c", "twind.c"
+)
+$tkFlags = @("/I$ROOT\libtk", "/I$ROOT\include", "/I$ROOT\Nt\amd64\include", "/I$ROOT\libinterp")
+Compile-CFiles -Dir "." -Sources $tkSrc -ExtraFlags $tkFlags
+Create-Library -Name "libtk.lib" -OutputDir $LibDir
+Pop-Location
+
+# =============================================
 # Build limbo compiler (explicit source list from mkfile)
 # =============================================
 Write-Host ""
@@ -576,12 +598,19 @@ Write-Host "  Generating runtime headers..."
 & $LIMBO -t Loader -I "$ROOT\module" "$ROOT\module\runt.m" 2>$null | Set-Content -Path "loadermod.h" -Encoding ASCII
 & $LIMBO -t IPints -I "$ROOT\module" "$ROOT\module\ipints.m" 2>$null | Set-Content -Path "ipintsmod.h" -Encoding ASCII
 & $LIMBO -t Tk -I "$ROOT\module" "$ROOT\module\runt.m" 2>$null | Set-Content -Path "tkmod.h" -Encoding ASCII
+& $LIMBO -t I420 -I "$ROOT\module" "i420if.m" 2>$null | Set-Content -Path "i420mod.h" -Encoding ASCII
+& $LIMBO -a -I "$ROOT\module" "i420if.m" 2>$null | Set-Content -Path "i420if.h" -Encoding ASCII
+& $LIMBO -t Tensor -I "$ROOT\module" "tensorif.m" 2>$null | Set-Content -Path "tensormod.h" -Encoding ASCII
+& $LIMBO -a -I "$ROOT\module" "tensorif.m" 2>$null | Set-Content -Path "tensorif.h" -Encoding ASCII
+& $LIMBO -t Bayer -I "$ROOT\module" "bayerif.m" 2>$null | Set-Content -Path "bayermod.h" -Encoding ASCII
+& $LIMBO -a -I "$ROOT\module" "bayerif.m" 2>$null | Set-Content -Path "bayerif.h" -Encoding ASCII
 
 $interpSrc = @(
     "alt.c", "conv.c", "dec.c", "draw.c", "gc.c", "geom.c",
     "heap.c", "heapaudit.c", "ipint.c", "link.c", "load.c", "math.c",
     "raise.c", "readmod.c", "runt.c", "sign.c", "stack.c", "tk.c",
-    "validstk.c", "xec.c", "das-amd64.c", "comp-amd64.c", "keyring.c", "string.c"
+    "validstk.c", "xec.c", "das-amd64.c", "comp-amd64.c", "keyring.c", "string.c",
+    "i420.c", "tensor.c", "bayer.c"
 )
 $interpFlags = @(
     "/DEMU", "/I.", "/I$ROOT\include",

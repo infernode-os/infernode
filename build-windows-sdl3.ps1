@@ -369,6 +369,10 @@ extern void mathmodinit(void);
 extern void srvmodinit(void);
 extern void keyringmodinit(void);
 extern void ipintsmodinit(void);
+extern void tkmodinit(void);
+extern void i420modinit(void);
+extern void tensormodinit(void);
+extern void bayermodinit(void);
 void modinit(void){
 	sysmodinit();
 	drawmodinit();
@@ -376,6 +380,10 @@ void modinit(void){
 	srvmodinit();
 	keyringmodinit();
 	ipintsmodinit();
+	tkmodinit();
+	i420modinit();
+	tensormodinit();
+	bayermodinit();
 }
 
 char* conffile = "emu-gui";
@@ -397,6 +405,7 @@ $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
 # empty token never reaches link.exe as a bogus "''" input file.
 $linkLibs = @(
     "$LibDir\libinterp.lib",
+    "$LibDir\libtk.lib",
     "$LibDir\libkeyring.lib",
     "$LibDir\libsec.lib",
     "$LibDir\libmp.lib",

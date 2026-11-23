@@ -1925,10 +1925,9 @@ jobs:
         Write-Zip $HL
 
     # Charon, Xenith and Lucifer in the staged GUI package, as on macOS and
-    # Linux. Not yet blocking on Windows: run against a mk-built tree it shows
-    # Charon and Xenith dropping a page's last line and Charon not loading in
-    # Lucifer's presentation view -- runtime bugs, tracked separately. Make it
-    # blocking (drop continue-on-error) once they are fixed.
+    # Linux. Not yet blocking on Windows: Charon (headless and in Lucifer) and
+    # Xenith drop a page's last line there -- a runtime bug, tracked
+    # separately. Make it blocking (drop continue-on-error) once it is fixed.
     - name: Release smoke test (Windows GUI package)
       continue-on-error: true
       shell: bash

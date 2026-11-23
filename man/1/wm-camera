@@ -46,13 +46,54 @@ and their
 .B frame=*
 records.
 .PP
+Button 2 or 3 (a long press on a touch screen) is a menu:
+.TF upside\ down
+.TP
+.B snapshot
+Save the frame shown as a PNG in
+.BR $home/camera ,
+named by its number in the feed
+.RB ( 274.png ),
+and say where over the picture for two seconds.
+.TP
+.B rotate 90
+Turn the feed a quarter turn more, clockwise (its
+.BR rotate ).
+.TP
+.B upside down
+Turn it half a turn.
+.TP
+.B mirror
+Mirror it left to right: the sensor's mirror bit, in its
+.BR flip .
+.TP
+.B autofocus
+Focus once (a camera with a moving lens, the Camera Module 3, only).
+.TP
+.B exit
+Close the window.
+.PD
+.PP
+Each but snapshot is a write to the feed's
+.BR ctl ,
+as any program's would be: the feed turns or mirrors for every reader,
+and the window follows its size. A still from the shell, without the
+window, is
+.IR read (1)
+of one frame through
+.IR i420 (1)
+and
+.IR topng (1).
+.PP
 The keys
 .B +
 and
 .B -
 move the lens's focus,
 .B a
-runs autofocus once, and
+runs autofocus once,
+.B s
+takes a snapshot, and
 .B q
 exits.
 .PP
@@ -62,6 +103,7 @@ closes it.
 .SH SOURCE
 .B /appl/wm/camera.b
 .SH SEE ALSO
+.IR i420 (1),
 .IR camsrv (4),
 .IR layers (2),
 .IR visionfs (4)

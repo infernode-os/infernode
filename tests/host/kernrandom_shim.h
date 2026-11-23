@@ -57,6 +57,16 @@ void	tsleep(Rendez*, int (*)(void*), void*, ulong);
 uvlong	fastticks(uvlong*);
 int	hwrandom(uchar*, int);
 char*	boardcmdline(void);
+void	error(char*);
+int	iseve(void);
+#define	Eperm	"permission denied"
+
+/* what random.c gives the rest of the kernel (portfns.h) */
+int	rnghw(uchar*, int);
+int	rngassessing(void);
+void	rngassessopen(void);
+long	hwrandomread(void*, long);
+long	hwrandombootread(void*, long, vlong);
 
 /* libsec, as include/libsec.h has them; the test links libsec's own */
 enum { SHA256dlen = 32, SHA384dlen = 48, SHA512dlen = 64, SHA512bsize = 128, Digestbsize = 128 };

@@ -321,9 +321,10 @@ testNdvi(t: ref T)
 		t.fatal(sys->sprint("open ndvi: %r"));
 	nd := array[W*H] of byte;
 	# the next frame, waited for: those made before 0/ndvi was opened
-	# have none, and are refused as expired. A runner that stalls longer
-	# than the window kept can let that number pass before the read is
-	# served (macOS AMD64 CI), as in Rotate: take the newest's next again.
+	# have none, and are refused as expired. The sensor's loop works out
+	# a frame's NDVI before it waits to hand the frame over, so the next
+	# frame may already have been made without it: take the newest's
+	# next again (macOS CI, both machines).
 	got := 0;
 	e := "frame expired";
 	for(try := 0; try < 5 && e == "frame expired"; try++)

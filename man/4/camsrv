@@ -151,6 +151,9 @@ stays where it was.
 A frame as the sensor gave it, 16 bits a sample, little-endian, at the
 size and mosaic in
 .BR status .
+One frame an open: the newest, copied when it was made, so the next
+frame does not overwrite it while it is read; offsets past it are the
+end of the file.
 .TP
 .B 0/ndvi
 Plant health: frames numbered as
@@ -200,6 +203,15 @@ gives the last NDVI frame's mean and its tenth, fiftieth and ninetieth
 percentiles, in thousandths, and
 .B ndvireadings=
 how many of its pixels were readings.
+.B rawformat=
+is the mosaic as the sensor reads it out now
+.RB ( rggb ,
+.BR grbg ,
+.B gbrg
+or
+.BR bggr :
+.B flip
+changes it), the sample width and the raw size.
 .TP
 .B 0/layer/
 Empty as served: where what is drawn over the frames is bound, a file a
@@ -227,7 +239,8 @@ Picture size: 576 324 or 1152 648, or 324 576 or 648 1152 turned a
 quarter. Not while streaming.
 .TP
 .BI fps " n
-1 to 56. Not while streaming.
+1 to the sensor's most, from its timing: 56 for the Camera Module 3,
+41 for the Camera Module 2. Not while streaming.
 .TP
 .BI exposure " lines
 0, the default, is automatic.
@@ -360,6 +373,34 @@ Fixed white balance
 keeps the picture's colours honest beside it; the index is taken from
 the raw channels either way.
 .SH EXAMPLES
+A still picture is one frame, cut from the stream with
+.IR read (1),
+whose
+.I count
+is the frame size,
+.IR w × h ×3/2
+for
+.BR fmt 's
+size: 189420 at 410\(mu308.
+.IP
+.EX
+mount -A {camsrv} /mnt/video
+read 189420 < /mnt/video/0/frame > still.i420
+.EE
+.PP
+The same works for any feed in this schema,
+.IR vid9p 's
+recordings and a camera mounted from another machine alike: the feed
+serves frames and knows nothing of picture formats; converting one is
+a filter's job.
+.PP
+.I Cp
+will not do: a feed's
+.B frame
+is a stream that does not end, and
+.I cp
+copies until it does.
+.PP
 A video with known answers to point the camera at during a soak:
 exposure steps, white balance, a focus chart, motion:
 .IP

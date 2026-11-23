@@ -1189,14 +1189,25 @@ wbal(mean: array of int): (array of byte, array of byte, array of byte)
 		b = 4;
 	if(g < 4)
 		g = 4;
-	gr := clamp(g*256/r, 128, 8*256);
-	gb := clamp(g*256/b, 128, 8*256);
-	gr = lgr + (gr-lgr)/4;
-	gb = lgb + (gb-lgb)/4;
-	if(wlr == nil || abs(gr-lgr)*16 > lgr || abs(gb-lgb)*16 > lgb){
-		(wlr, wlg, wlb) = tables(gr, gb);
-	}
+	tr := clamp(g*256/r, 128, 8*256);
+	tb := clamp(g*256/b, 128, 8*256);
+	# the tables made again while the gains in use are more than 1 in
+	# 64 from the picture's, a quarter of the way at a time.  Asked
+	# of the step, as it was, the balance stopped once a quarter of
+	# what was left was under 1 in 16: a quarter short of the picture
+	# (246:271 in daylight on a NoIR camera, whose grey was 218:321)
+	if(wlr == nil || abs(tr-lgr)*64 > lgr || abs(tb-lgb)*64 > lgb)
+		(wlr, wlg, wlb) = tables(step(lgr, tr), step(lgb, tb));
 	return (wlr, wlg, wlb);
+}
+
+# a quarter of the way from v to w, and at least one
+step(v, w: int): int
+{
+	d := (w-v)/4;
+	if(d == 0 && w != v)
+		d = (w-v)/abs(w-v);
+	return v+d;
 }
 
 clamp(v, lo, hi: int): int

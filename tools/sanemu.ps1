@@ -81,7 +81,7 @@ function Build {
     # what the headless build reads, as it is in the working tree
     $dirs = @("include", "Nt", "utils", "lib9", "libbio", "libmp", "libsec", "libmath",
         "libfreetype", "libmemdraw", "libmemlayer", "libdraw", "libtk", "libinterp",
-        "libkeyring", "libregexp", "limbo", "emu/port", "emu/Nt", "module", "mkfiles")
+        "libkeyring", "libregexp", "limbo", "emu/port", "emu/Nt", "module", "mkfiles", "port")
     Push-Location $ROOT
     $files = & git ls-files -co --exclude-standard -- @dirs
     Pop-Location

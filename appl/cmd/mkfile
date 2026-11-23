@@ -218,6 +218,9 @@ TARG=\
 	vid9p.dis\
 	videnc.dis\
 	vidjpeg.dis\
+	i420.dis\
+	topng.dis\
+	tojpg.dis\
 	visionfs.dis\
 	camsrv.dis\
 	wav2iaf.dis\
@@ -359,6 +362,7 @@ SYSMODULES=\
 	parread.m\
 	mdhtml.m\
 	sdrdsp.m\
+	visrec.m\
 
 DISBIN=$ROOT/dis
 

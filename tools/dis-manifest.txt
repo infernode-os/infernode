@@ -236,6 +236,7 @@ dis/gunzip.dis
 dis/gzip.dis
 dis/history.dis
 dis/hostplumb.dis
+dis/i420.dis
 dis/import.dis
 dis/install/applylog.dis
 dis/install/arch.dis
@@ -1011,8 +1012,10 @@ dis/timesync.dis
 dis/time.dis
 dis/timestamp.dis
 dis/tlsperf.dis
+dis/tojpg.dis
 dis/tokenize.dis
 dis/tone.dis
+dis/topng.dis
 dis/touch.dis
 dis/tr.dis
 dis/trfs.dis

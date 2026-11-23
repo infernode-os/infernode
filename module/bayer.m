@@ -29,4 +29,17 @@ Bayer: module
 	merge:	fn(raw: array of byte, rw, rh, scale, red, rot: int,
 		lr, lg, lb: array of byte,
 		y, cb, cr: array of byte, mean: array of int, clip: int);
+
+	# Plant health, NDVI = (NIR-VIS)/(NIR+VIS), from the same blocks
+	# merge averages, before any white balance: nir and vis say which
+	# channel is which (0 red, 1 green, 2 blue; on a NoIR camera with
+	# its blue filter, red and blue), black is taken from both, and a
+	# pixel whose NIR+VIS is under floor is 0, no reading. Otherwise
+	# 128 + round(127*NDVI): 1 is -1, 128 is 0, 255 is +1. out is the
+	# picture's size, turned by rot as merge turns. stat, four or more
+	# entries, gets the readings' mean and their tenth, fiftieth and
+	# ninetieth percentiles, in thousandths (-1000 to 1000); all 0 and
+	# a fifth entry of 0 if there were none, else the count there.
+	ndvi:	fn(raw: array of byte, rw, rh, scale, red, rot, nir, vis, black, floor: int,
+		out: array of byte, stat: array of int);
 };

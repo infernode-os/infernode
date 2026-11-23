@@ -83,7 +83,7 @@ Camsrv: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
 
-Qroot, Qstream, Qctl, Qfmt, Qframe, Qraw, Qstatus, Qlayer: con iota;
+Qroot, Qstream, Qctl, Qfmt, Qframe, Qraw, Qstatus, Qlayer, Qndvi, Qndvifmt: con iota;
 
 # the sensor's one mode; smaller frames are merged from it. The IMX708's
 # until a probe finds otherwise (sensorprobe), and always for -t.
@@ -127,6 +127,15 @@ base := 0;		# the first frame since the sensor last came on
 Ring: con 8;		# the frames kept, at 30 fps a quarter second
 ring := array[Ring] of (int, array of byte);
 ringdim := array[Ring] of (int, int);	# each kept frame's width and height, as served
+ndviring := array[Ring] of array of byte;	# frame N's plant health, if it was asked for (issue #1244)
+# NDVI from the raw channels, before white balance: which is near-infrared
+# and which visible (0 red, 1 green, 2 blue); on a NoIR camera with its
+# blue filter, red and blue. A pixel whose two sum to less than floor
+# above black is no reading.
+ndvinir := 0;
+ndvivis := 2;
+ndvifloor := 16;
+ndvistat := array[5] of int;	# the last frame's mean, 10th, 50th, 90th percentile, count
 latest: array of byte;
 lastraw: array of byte;
 err := "";
@@ -150,7 +159,7 @@ capstop: chan of int;
 capdone: chan of (int, string);
 cappidc: chan of (int, int);	# a capture's generation and pid, as it starts
 stuckc: chan of int;		# a generation told to stop Stopwait ago
-framec: chan of (array of byte, int, int);
+framec: chan of (array of byte, array of byte, int, int);	# the picture, its NDVI or nil, width, height
 rawc: chan of array of byte;
 ctlc: chan of string;
 capgen := 0;		# the capture now running, or the last
@@ -200,7 +209,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(!sim)
 		sensorprobe();
 	fsize = framesize();
-	framec = chan of (array of byte, int, int);
+	framec = chan of (array of byte, array of byte, int, int);
 	rawc = chan of array of byte;
 	capdone = chan of (int, string);
 	cappidc = chan of (int, int);
@@ -217,6 +226,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("ctl", 8r664, Qctl));
 	tree.create(big Qstream, dir("fmt", 8r444, Qfmt));
 	tree.create(big Qstream, dir("frame", 8r444, Qframe));
+	tree.create(big Qstream, dir("ndvi", 8r444, Qndvi));
+	tree.create(big Qstream, dir("ndvifmt", 8r444, Qndvifmt));
 	tree.create(big Qstream, dir("raw", 8r444, Qraw));
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
 	# empty as served: where the feed's layers are bound (#1095)
@@ -328,9 +339,10 @@ serve(tree: ref Tree)
 		}
 		if(done)
 			return;
-	(fr, fwid, fht) := <-framec =>
+	(fr, nd, fwid, fht) := <-framec =>
 		latest = fr;
 		ring[seq % Ring] = (seq, fr);
+		ndviring[seq % Ring] = nd;
 		ringdim[seq % Ring] = (fwid, fht);
 		seq++;
 		wake();
@@ -426,9 +438,9 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 		path := -1;
 		if(c != nil)
 			path = int c.path;
-		if((path == Qframe || path == Qraw) && err != "" && users == 0)
+		if((path == Qframe || path == Qraw || path == Qndvi) && err != "" && users == 0)
 			err = "";
-		if(srv.open(tm) != nil && (path == Qframe || path == Qraw)){
+		if(srv.open(tm) != nil && (path == Qframe || path == Qraw || path == Qndvi)){
 			sess = ref Fsess(srv, tm.fid, path, seq, nil, fw(), fh()) :: sess;
 			if(users++ == 0)
 				startcapture();
@@ -453,7 +465,7 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 		case int c.path {
 		Qroot or Qstream or Qlayer =>
 			srv.read(tm);
-		Qfmt or Qstatus or Qctl =>
+		Qfmt or Qstatus or Qctl or Qndvifmt =>
 			# One open reads one text, as vid9p's: made at a read at
 			# offset 0 and kept with the fid (made at every read and
 			# cut at its offset, a status that moved between two
@@ -461,12 +473,13 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 			if(tm.offset == big 0 || c.data == nil){
 				case int c.path {
 				Qfmt =>	c.data = array of byte sys->sprint("%d %d i420 %d\n", fw(), fh(), fps);
+				Qndvifmt =>	c.data = array of byte sys->sprint("%d %d ndvi8\n", fw(), fh());
 				Qstatus =>	c.data = array of byte status();
 				Qctl =>	c.data = array of byte settings();
 				}
 			}
 			srv.reply(styxservers->readbytes(tm, c.data));
-		Qframe or Qraw =>
+		Qframe or Qraw or Qndvi =>
 			s := find(tm.fid);
 			if(s == nil)
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
@@ -582,6 +595,8 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 	fs := fsize;
 	if(s.path == Qraw)
 		fs = Sw*Sh*2/simdiv();
+	if(s.path == Qndvi)
+		fs = fw()*fh();
 	if(fs <= 0)
 		return 0;
 	foff := int (tm.offset % big fs);
@@ -589,7 +604,7 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		s.srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
 		return 1;
 	}
-	if(s.path == Qframe){
+	if(s.path == Qframe || s.path == Qndvi){
 		# Frame n, as every reader numbers it; the offset is the
 		# reader's, any 63 bits, so n is found in 64.  It was cut to
 		# an int: an offset near the frame size times 2^32 gave a
@@ -607,6 +622,8 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		if(n >= seq)
 			return 0;	# not made yet: wait for it
 		(sn, fr) := ring[n % Ring];
+		if(s.path == Qndvi)
+			fr = ndviring[n % Ring];	# nil: made before anyone asked
 		if(sn != n || fr == nil || len fr != fs){
 			s.srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
 			return 1;
@@ -616,7 +633,10 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 			# turned since this reader last knew: once, saying how
 			s.w = dw;
 			s.h = dh;
-			s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d i420 %d", dw, dh, fps)));
+			if(s.path == Qndvi)
+				s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d ndvi8", dw, dh)));
+			else
+				s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d i420 %d", dw, dh, fps)));
 			return 1;
 		}
 		k := tm.count;
@@ -686,6 +706,10 @@ status(): string
 		s += " regcheck=" + regcheck;
 	if(afresult != "")
 		s += " autofocus=" + afresult;
+	# the last NDVI frame's figures, while 0/ndvi is read: mean, tenth,
+	# fiftieth and ninetieth percentiles in thousandths, and the readings
+	if(ndviwanted())
+		s += sys->sprint(" ndvi=%d:%d:%d:%d ndvireadings=%d", ndvistat[0], ndvistat[1], ndvistat[2], ndvistat[3], ndvistat[4]);
 	# the gains in use, set or found: red and blue to green, 256 one
 	s += sys->sprint(" wbgains=%d:%d", lgr, lgb);
 	s += sys->sprint(" writes=%d i2cerrors=%d lostwrites=%d", nwrites, i2cerrs, lostw);
@@ -706,8 +730,9 @@ settings(): string
 	wb := "auto";
 	if(wbfixed)
 		wb = sys->sprint("%d %d", wbr, wbb);
-	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\nwb %s\n",
-		fw(), fh(), fps, exposure, gain, flip, rotate, focus, wb);
+	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\nwb %s\nndvi %s %s\nndvifloor %d\n",
+		fw(), fh(), fps, exposure, gain, flip, rotate, focus, wb,
+		channames[ndvinir], channames[ndvivis], ndvifloor);
 }
 
 # a ctl argument: a whole number of at most six digits, or -1
@@ -791,6 +816,20 @@ doctl(s: string): string
 			return "camsrv: flip 0..3";
 		flip = a;
 		tell("flip");
+	"ndvi" =>
+		# ndvi NIR VIS: which raw channels are near-infrared and visible
+		if(n != 3)
+			return "camsrv: ndvi NIR VIS (red, green or blue)";
+		ni := chanindex(hd tl f);
+		vi := chanindex(hd tl tl f);
+		if(ni < 0 || vi < 0 || ni == vi)
+			return "camsrv: ndvi NIR VIS (red, green or blue, not the same)";
+		ndvinir = ni;
+		ndvivis = vi;
+	"ndvifloor" =>
+		if(n != 2 || a < 0 || a > 2046)
+			return "camsrv: ndvifloor 0..2046";
+		ndvifloor = a;
 	"wb" =>
 		if(n == 2 && hd tl f == "auto"){
 			wbfixed = 0;
@@ -1003,7 +1042,7 @@ capture(stop: chan of int): string
 		(y, cb, cr) = planes();
 		rot := rotate;
 		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
-		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
+		framec <-= (y[0:fsize], ndviof(raw, Sw, Sh, scale, mflip, rot/90), turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
 			rawc <-= rawcopy(raw);
 		(lr, lg, lb) = wbal(mean);
@@ -1026,6 +1065,35 @@ capture(stop: chan of int): string
 	}
 	sensoroff();
 	return cerr;
+}
+
+channames := array[] of {"red", "green", "blue"};
+
+chanindex(s: string): int
+{
+	for(i := 0; i < len channames; i++)
+		if(s == channames[i])
+			return i;
+	return -1;
+}
+
+ndviwanted(): int
+{
+	for(l := sess; l != nil; l = tl l)
+		if((hd l).path == Qndvi)
+			return 1;
+	return 0;
+}
+
+# a frame's NDVI, if anyone is reading 0/ndvi, from the raw frame it was
+# merged from; nil otherwise
+ndviof(raw: array of byte, rw, rh, scale, red, rot: int): array of byte
+{
+	if(!ndviwanted())
+		return nil;
+	nd := array[(rw/scale)*(rh/scale)] of byte;
+	bayer->ndvi(raw, rw, rh, scale, red, rot, ndvinir, ndvivis, Black, ndvifloor, nd, ndvistat);
+	return nd;
 }
 
 # A frame for /raw's readers, apart from raw: the next frame is read into
@@ -1386,7 +1454,7 @@ simulate(stop: chan of int)
 		(y, cb, cr) = planes();
 		rot := rotate;
 		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
-		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
+		framec <-= (y[0:fsize], ndviof(raw, w, h, scale, 0, rot/90), turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
 			rawc <-= rawcopy(raw);
 		d := 1000/fps - (sys->millisec()-t0);

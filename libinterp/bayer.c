@@ -61,6 +61,111 @@ bayermodinit(void)
 	builtinmod("$Bayer", Bayermodtab, Bayermodlen);
 }
 
+/*
+ * NDVI over merge's blocks. The cell means are the raw channels' own,
+ * black taken off; the ratio is what grey world would take away, which
+ * is why it is not taken from the merged picture.
+ */
+void
+Bayer_ndvi(void *fp)
+{
+	F_Bayer_ndvi *f;
+	ushort *raw, *c;
+	uchar *out, *o;
+	int rw, rh, s, cells, n, w, h, x, y0, cx, cy, ro, bo, g1, g2, ob, odx, ody, i, k;
+	vlong ch[3], nv, vv, sum, v;
+	vlong hist[256], total, acc;
+	WORD *stat;
+	int pct[3], want[3];
+
+	f = fp;
+	if(f->raw == H || f->out == H || f->stat == H)
+		error(exNilref);
+	rw = f->rw;
+	rh = f->rh;
+	s = f->scale;
+	if(rw <= 0 || rh <= 0 || s < 2 || (s&1) || f->red < 0 || f->red > 3
+	|| f->rot < 0 || f->rot > 3 || f->nir < 0 || f->nir > 2 || f->vis < 0 || f->vis > 2
+	|| f->nir == f->vis || f->black < 0 || f->floor < 0)
+		error(exBounds);
+	w = rw/s;
+	h = rh/s;
+	if(w == 0 || h == 0 || f->raw->len < (vlong)rw*rh*2 || f->out->len < w*h || f->stat->len < 4)
+		error(exBounds);
+	raw = (ushort*)f->raw->data;
+	out = f->out->data;
+	turn(f->rot, w, h, &ob, &odx, &ody);
+	ro = (f->red>>1)*rw + (f->red&1);
+	bo = ((f->red^3)>>1)*rw + ((f->red^3)&1);
+	g1 = ((f->red^1)>>1)*rw + ((f->red^1)&1);
+	g2 = ((f->red^2)>>1)*rw + ((f->red^2)&1);
+	cells = s/2;
+	n = cells*cells;
+	memset(hist, 0, sizeof hist);
+	for(y0 = 0; y0 < h; y0++){
+		o = out + ob + y0*ody;
+		for(x = 0; x < w; x++, o += odx){
+			ch[0] = ch[1] = ch[2] = 0;
+			for(cy = 0; cy < cells; cy++){
+				c = raw + (y0*s + 2*cy)*rw + x*s;
+				for(cx = 0; cx < cells; cx++){
+					ch[0] += c[ro];
+					ch[1] += c[g1] + c[g2];
+					ch[2] += c[bo];
+					c += 2;
+				}
+			}
+			ch[0] = ch[0]/n - f->black;
+			ch[1] = ch[1]/(2*n) - f->black;
+			ch[2] = ch[2]/n - f->black;
+			nv = ch[f->nir] > 0? ch[f->nir]: 0;
+			vv = ch[f->vis] > 0? ch[f->vis]: 0;
+			sum = nv + vv;
+			if(sum < f->floor || sum == 0){
+				*o = 0;
+				continue;
+			}
+			/* 128 + round(127*(nv-vv)/sum), rounding half away from 0 */
+			v = 127*(nv-vv)*2;
+			v = v >= 0? (v + sum)/(2*sum): -((-v + sum)/(2*sum));
+			*o = 128 + v;
+			hist[128+v]++;
+		}
+	}
+	stat = (WORD*)f->stat->data;
+	total = 0;
+	acc = 0;
+	for(i = 1; i < 256; i++){
+		total += hist[i];
+		acc += hist[i]*(i-128);
+	}
+	if(total == 0){
+		for(i = 0; i < 4; i++)
+			stat[i] = 0;
+		if(f->stat->len > 4)
+			stat[4] = 0;
+		return;
+	}
+	stat[0] = acc*1000/(127*total);
+	want[0] = (total+9)/10;
+	want[1] = (total+1)/2;
+	want[2] = (9*total+9)/10;
+	for(k = 0; k < 3; k++){
+		acc = 0;
+		pct[k] = 255;
+		for(i = 1; i < 256; i++){
+			acc += hist[i];
+			if(acc >= want[k]){
+				pct[k] = i;
+				break;
+			}
+		}
+		stat[k+1] = (pct[k]-128)*1000/127;
+	}
+	if(f->stat->len > 4)
+		stat[4] = total;
+}
+
 void
 Bayer_merge(void *fp)
 {

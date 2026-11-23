@@ -9,7 +9,10 @@ SHELLTYPE=sh
 # Auto-detect host system if not set in environment
 # On macOS: uname -s returns "Darwin", we map to "MacOSX"
 # On Linux: uname -s returns "Linux"
-SYSHOST=`{sh -c 'case $(uname -s) in Darwin) echo MacOSX;; *) uname -s;; esac'}
+# On Windows (Git Bash/MSYS2): uname -s returns "MINGW64_NT-..." etc.; we map to "Nt"
+# (mk.exe needs MKSH set to a POSIX sh whose path has no spaces -- see
+# tools/verify-dis-build.sh)
+SYSHOST=`{sh -c 'case $(uname -s) in Darwin) echo MacOSX;; MINGW*|MSYS*|CYGWIN*) echo Nt;; *) uname -s;; esac'}
 SYSTARG=$SYSHOST
 OBJTYPE=`{sh -c 'if [ -n "$OBJTYPE" ]; then echo $OBJTYPE; exit; fi; case $(uname -m) in x86_64) echo amd64;; aarch64|arm64) echo arm64;; riscv64) echo riscv64;; *) echo "unsupported architecture: $(uname -m)" >&2; echo amd64;; esac'}
 OBJDIR=$SYSTARG/$OBJTYPE

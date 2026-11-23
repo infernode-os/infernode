@@ -26,6 +26,11 @@ t=$(mktemp -d "${TMPDIR:-/tmp}/release_smoke.XXXXXX")
 trap 'rm -rf "$t"' EXIT
 cp -a "$pkg" "$t/pkg"
 E="$t/pkg/$emu"; R=$(cd "$t/pkg/$root" && pwd)
+# Windows (Git Bash/MSYS2): the emu is a native program, so -r takes C:/...
+# not /c/..., and MSYS must not rewrite its /dis/... arguments.
+case $(uname -s) in
+MINGW*|MSYS*|CYGWIN*) R=$(cd "$R" && pwd -W); MSYS_NO_PATHCONV=1; export MSYS_NO_PATHCONV;;
+esac
 [ -x "$E" ] || { echo "FAIL: no emulator at $emu"; exit 1; }
 case "$E" in */bin/emu) LD_LIBRARY_PATH="$(dirname "$E")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; export LD_LIBRARY_PATH;; esac
 export SDL_VIDEODRIVER=dummy

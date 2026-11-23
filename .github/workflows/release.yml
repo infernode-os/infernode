@@ -1893,6 +1893,22 @@ jobs:
             $missing | ForEach-Object { Write-Host "missing runtime DLL: $_" }
             throw "Stage-GUI: $Stage imports DLLs it does not ship"
           }
+          # Run what ships, from the stage, before archiving it, as the macOS
+          # and Linux jobs do: v0.10.x and v0.11.0 shipped a Windows emu that
+          # could not load (no libz.dll) on a tree with no /dis/sh.dis.
+          $root = (Resolve-Path $Stage).Path
+          $env:SDL_VIDEODRIVER = "dummy"
+          $p = Start-Process -FilePath "$root\o.emu.exe" -NoNewWindow -PassThru `
+            -ArgumentList @("-c1", "-r$root", "/dis/sh.dis", "-c", '"echo staged-emu-ok"') `
+            -RedirectStandardOutput "$Stage.smoke.out" -RedirectStandardError "$Stage.smoke.err"
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "Stage-GUI: staged o.emu.exe timed out" }
+          $out = (Get-Content "$Stage.smoke.out", "$Stage.smoke.err" -ErrorAction SilentlyContinue) -join "`n"
+          Remove-Item "$Stage.smoke.out", "$Stage.smoke.err" -ErrorAction SilentlyContinue
+          if ($out -notmatch '(?m)^staged-emu-ok\r?$') {
+            Write-Host $out
+            throw "Stage-GUI: staged o.emu.exe did not run /dis/sh.dis"
+          }
+          Write-Host "staged o.emu.exe runs sh"
           Write-Zip $Stage
         }
         Stage-GUI "infernode-$VERSION-windows-amd64-gui" "InferNode.exe"
@@ -1907,6 +1923,16 @@ jobs:
         Stage-Common $HL
         Copy-Item "emu\Nt\o.emu.headless.exe" "$HL\o.emu.exe"
         Write-Zip $HL
+
+    # Charon, Xenith and Lucifer in the staged GUI package, as on macOS and
+    # Linux. Not yet blocking on Windows: run against a mk-built tree it shows
+    # Charon and Xenith dropping a page's last line and Charon not loading in
+    # Lucifer's presentation view -- runtime bugs, tracked separately. Make it
+    # blocking (drop continue-on-error) once they are fixed.
+    - name: Release smoke test (Windows GUI package)
+      continue-on-error: true
+      shell: bash
+      run: sh tests/host/release_smoke_test.sh "infernode-${{ steps.version.outputs.version }}-windows-amd64-gui" o.emu.exe . gui
 
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:

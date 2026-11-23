@@ -536,7 +536,10 @@ $limboFlags = @("/I$ROOT\limbo", "/I$ROOT\include", "/I$ROOT\Nt\amd64\include", 
 Compile-CFiles -Dir "." -Sources $limboSrc -ExtraFlags $limboFlags
 
 $limboObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
-& link.exe /nologo "/OUT:$BinDir\limbo.exe" @limboObjs `
+# 8 MB stack, as limbo gets by default on Linux and macOS: the 1 MB Windows
+# default overflows (0xC00000FD) on large tables such as appl/lib/ida/idatab.b,
+# leaving a 0-byte .dis behind.
+& link.exe /nologo /STACK:8388608 "/OUT:$BinDir\limbo.exe" @limboObjs `
     "$LibDir\libbio.lib" "$LibDir\libmath.lib" "$LibDir\libsec.lib" `
     "$LibDir\libmp.lib" "$LibDir\lib9.lib" `
     advapi32.lib
@@ -813,74 +816,37 @@ Pop-Location
 Write-Host ""
 Write-Host "=== Building Dis Bytecode ===" -ForegroundColor Cyan
 
-$LIMBO = "$BinDir\limbo.exe"
-$MODULE = "$ROOT\module"
-
-# Helper: compile all .b files in a source dir to a target dis dir.
-# Compiles to a temp file first to avoid clobbering existing .dis on failure.
-# Runs limbo with CWD=SrcDir so relative includes (e.g. "../tool.m" in
-# appl/veltro/tools/*.b) resolve the same way mk does them.
-function Build-DisDir {
-    param(
-        [string]$SrcDir,
-        [string]$DisDir
-    )
-    if (-not (Test-Path $SrcDir)) { return 0 }
-    New-Item -ItemType Directory -Force -Path $DisDir | Out-Null
-    $count = 0
-    $prevPref = $ErrorActionPreference
-    $ErrorActionPreference = "SilentlyContinue"
-    Push-Location $SrcDir
-    Get-ChildItem -Path . -Filter "*.b" -File | ForEach-Object {
-        $name = $_.BaseName
-        $tmpDis = "$DisDir\$name.dis.tmp"
-        $output = & $LIMBO -I $MODULE -o $tmpDis $_.Name 2>&1
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpDis)) {
-            Move-Item -Force $tmpDis "$DisDir\$name.dis"
-            $count++
-        } else {
-            Remove-Item -Force $tmpDis -ErrorAction SilentlyContinue
-        }
+# The whole tree with mk, as on Linux and macOS (tools/verify-dis-build.sh:
+# appl, appl/mpeg, appl/veltro and tests, then a check against
+# tools/dis-manifest.txt).  mk is what installs each module where its PATH
+# constant says -- sh.dis to dis/sh.dis, not dis/sh/ -- so no per-directory
+# list here can drift from the mkfiles.  mk runs its recipes with a POSIX sh,
+# so this needs Git for Windows' bash (not WSL's System32\bash.exe).
+$bash = $null
+$gitCmd = Get-Command git.exe -ErrorAction SilentlyContinue
+if ($gitCmd) {
+    $gitRoot = Split-Path (Split-Path $gitCmd.Source -Parent) -Parent
+    foreach ($cand in @("$gitRoot\bin\bash.exe", "$gitRoot\usr\bin\bash.exe")) {
+        if (Test-Path $cand) { $bash = $cand; break }
     }
-    Pop-Location
-    $ErrorActionPreference = $prevPref
-    return $count
 }
+if (-not $bash -and (Test-Path "$env:ProgramFiles\Git\bin\bash.exe")) { $bash = "$env:ProgramFiles\Git\bin\bash.exe" }
 
-$totalDis = 0
-
-# appl/cmd/*.b -> dis/
-Write-Host "  Building commands..."
-$n = Build-DisDir "$ROOT\appl\cmd" "$ROOT\dis"
-$totalDis += $n
-
-# appl/cmd/<subdir>/*.b -> dis/<subdir>/
-$cmdSubdirs = @("auth","auxi","dbm","dict","disk","fs","install","ip","ndb","sh")
-foreach ($sub in $cmdSubdirs) {
-    $n = Build-DisDir "$ROOT\appl\cmd\$sub" "$ROOT\dis\$sub"
-    $totalDis += $n
+$disOk = $false
+if (-not $bash) {
+    Write-Host "ERROR: Git for Windows' bash.exe not found; it is needed to build the Dis tree with mk." -ForegroundColor Red
+} else {
+    $savedPath = $env:PATH
+    $env:PATH = "$BinDir;$env:PATH"
+    & $bash "$ROOT/tools/verify-dis-build.sh"
+    $disOk = ($LASTEXITCODE -eq 0)
+    $env:PATH = $savedPath
+    if ($disOk) {
+        Write-Host "  Dis tree built" -ForegroundColor Green
+    } else {
+        Write-Host "ERROR: Dis tree build failed (see above)" -ForegroundColor Red
+    }
 }
-
-# appl/lib/*.b -> dis/lib/
-Write-Host "  Building libraries..."
-$n = Build-DisDir "$ROOT\appl\lib" "$ROOT\dis\lib"
-$totalDis += $n
-
-# Other top-level appl dirs -> dis/<name>/
-$applDirs = @("acme","charon","grid","math","svc","veltro","wm","xenith")
-foreach ($dir in $applDirs) {
-    $n = Build-DisDir "$ROOT\appl\$dir" "$ROOT\dis\$dir"
-    $totalDis += $n
-}
-
-# appl/veltro subdirs -> dis/veltro/<sub>/
-$veltroSubdirs = @("sources","tools")
-foreach ($sub in $veltroSubdirs) {
-    $n = Build-DisDir "$ROOT\appl\veltro\$sub" "$ROOT\dis\veltro\$sub"
-    $totalDis += $n
-}
-
-Write-Host "  Built $totalDis .dis files" -ForegroundColor Green
 
 # =============================================
 # Build Summary
@@ -890,8 +856,8 @@ Write-Host "=== Build Summary ===" -ForegroundColor Cyan
 Write-Host ""
 
 $emuPath = "$ROOT\emu\Nt\o.emu.exe"
-$buildOk = Test-Path $emuPath
-if ($buildOk) {
+$buildOk = (Test-Path $emuPath) -and $disOk
+if (Test-Path $emuPath) {
     $size = (Get-Item $emuPath).Length / 1KB
     Write-Host "SUCCESS: Emulator built at $emuPath" -ForegroundColor Green
     Write-Host "  Size: $([math]::Round($size, 1)) KB"

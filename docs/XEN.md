@@ -77,9 +77,9 @@ without it opens a window with no title bar on GNOME, which cannot be
 moved or maximised with the mouse. On Windows 11, `xen.ps1` (detached
 and `-Wait`, from a source tree and from a release layout) and
 `Xenith.exe` are verified by hand: files opened, names with blanks,
-plumbing inside Xenith, `C:\` paths through `hostplumb -p`. `-Sam` does
-not work there: the Windows GUI emulator has no Tk. There is no host
-plumbing on Windows (no plan9port). `lib/xen/boot.sh`,
+plumbing inside Xenith, `C:\` paths through `hostplumb -p`, and `-Sam`.
+A file dropped on the window is not. There is no host plumbing on
+Windows (no plan9port). `lib/xen/boot.sh`,
 which all of them run, is tested headless by
 `tests/host/xen_boot_test.sh`.
 

@@ -61,6 +61,14 @@ $CFLAGS = @(
     "/I$ROOT\utils\include"
 )
 
+# Extra compiler and linker flags from the environment, for a build of
+# another kind (tools/sanemu.ps1: /fsanitize=address /DSANMALLOC). Unset,
+# the build is as it was.
+$ExtraCFlags = @()
+if ($env:INFERNODE_CFLAGS) { $ExtraCFlags = @($env:INFERNODE_CFLAGS -split '\s+' | Where-Object { $_ }) }
+$ExtraLDFlags = @()
+if ($env:INFERNODE_LDFLAGS) { $ExtraLDFlags = @($env:INFERNODE_LDFLAGS -split '\s+' | Where-Object { $_ }) }
+
 # Helper function to compile C files
 function Compile-CFiles {
     param(
@@ -68,7 +76,7 @@ function Compile-CFiles {
         [string[]]$Sources,
         [string[]]$ExtraFlags = @()
     )
-    $flags = $CFLAGS + $ExtraFlags
+    $flags = $CFLAGS + $ExtraFlags + $ExtraCFlags
     foreach ($src in $Sources) {
         $srcPath = Join-Path $Dir $src
         if (Test-Path $srcPath) {
@@ -200,7 +208,7 @@ Compile-CFiles -Dir "." -Sources ($mkCommon + $mkPlatform) -ExtraFlags $mkFlags
 
 # Link mk
 $mkObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
-& link.exe /nologo "/OUT:$BinDir\mk.exe" @mkObjs `
+& link.exe /nologo @ExtraLDFlags "/OUT:$BinDir\mk.exe" @mkObjs `
     "$LibDir\libregexp.lib" "$LibDir\libbio.lib" "$LibDir\lib9.lib" `
     advapi32.lib
 if ($LASTEXITCODE -ne 0) {
@@ -561,7 +569,7 @@ $limboObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name 
 # 8 MB stack, as limbo gets by default on Linux and macOS: the 1 MB Windows
 # default overflows (0xC00000FD) on large tables such as appl/lib/ida/idatab.b,
 # leaving a 0-byte .dis behind.
-& link.exe /nologo /STACK:8388608 "/OUT:$BinDir\limbo.exe" @limboObjs `
+& link.exe /nologo @ExtraLDFlags /STACK:8388608 "/OUT:$BinDir\limbo.exe" @limboObjs `
     "$LibDir\libbio.lib" "$LibDir\libmath.lib" "$LibDir\libsec.lib" `
     "$LibDir\libmp.lib" "$LibDir\lib9.lib" `
     advapi32.lib
@@ -666,6 +674,7 @@ $emuCFlags = @(
     "/I$ROOT\include",
     "/I$ROOT\libinterp"
 )
+$emuCFlags += $ExtraCFlags
 
 # Platform-specific source files (from emu/Nt/)
 Write-Host "  Compiling platform sources..."
@@ -732,7 +741,7 @@ $configC = @"
 /*
  * Root filesystem tables.
  * Generated from emu-headless config root section:
- *   /dev /fd /prog /net /chan /env
+ *   /dev /fd /prog /net /chan /env /nvfs /prof
  * All are empty directories under /.
  *
  * qid 0: / (root)
@@ -742,10 +751,12 @@ $configC = @"
  * qid 4: net
  * qid 5: chan
  * qid 6: env
+ * qid 7: nvfs (a mount point: tools/sysfuzz binds its scratch there, as on Linux)
+ * qid 8: prof
  */
-int rootmaxq = 7;
+int rootmaxq = 9;
 
-Dirtab roottab[7] = {
+Dirtab roottab[9] = {
 	"",	{0, 0, QTDIR},	0,	0555,
 	"dev",	{1, 0, QTDIR},	0,	0555,
 	"fd",	{2, 0, QTDIR},	0,	0555,
@@ -753,16 +764,20 @@ Dirtab roottab[7] = {
 	"net",	{4, 0, QTDIR},	0,	0555,
 	"chan",	{5, 0, QTDIR},	0,	0555,
 	"env",	{6, 0, QTDIR},	0,	0555,
+	"nvfs",	{7, 0, QTDIR},	0,	0555,
+	"prof",	{8, 0, QTDIR},	0,	0555,
 };
 
-Rootdata rootdata[7] = {
-	0,	&roottab[1],	6,	nil,	/* / -> children are qids 1-6 */
+Rootdata rootdata[9] = {
+	0,	&roottab[1],	8,	nil,	/* / -> children are qids 1-8 */
 	0,	nil,	0,	nil,	/* dev */
 	0,	nil,	0,	nil,	/* fd */
 	0,	nil,	0,	nil,	/* prog */
 	0,	nil,	0,	nil,	/* net */
 	0,	nil,	0,	nil,	/* chan */
 	0,	nil,	0,	nil,	/* env */
+	0,	nil,	0,	nil,	/* nvfs */
+	0,	nil,	0,	nil,	/* prof */
 };
 
 extern Dev rootdevtab;
@@ -840,7 +855,7 @@ $configC | Set-Content -Path "emu-config.c" -Encoding ASCII
 Write-Host "  Linking o.emu.exe..."
 $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
 
-& link.exe /nologo /subsystem:console `
+& link.exe /nologo @ExtraLDFlags /subsystem:console `
     "/OUT:o.emu.exe" `
     @allObjs `
     "$LibDir\libinterp.lib" `

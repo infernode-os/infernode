@@ -94,17 +94,49 @@ ntquotedcmd(char **argv)
 	return cmd;
 }
 
-static HANDLE
-exporthandle(HANDLE h, int close)
+/*
+ * A pipe to the command: *mine, emu's end, overlapped, so that a read
+ * or write on it can be cancelled when its Prog is killed (os.c's
+ * hostio; an anonymous pipe from CreatePipe is synchronous, and a
+ * ReadFile on it can be broken by nothing short of the command ending),
+ * and *theirs, the command's, inheritable and synchronous, as a
+ * program expects its standard handles to be.  myread: emu reads it.
+ */
+static int
+cmdpipe(HANDLE *mine, HANDLE *theirs, int myread)
 {
-	HANDLE cp, dh;
-	DWORD flags = DUPLICATE_SAME_ACCESS;
-	if (close)
-		flags |= DUPLICATE_CLOSE_SOURCE;
-	cp = GetCurrentProcess();
-	if (!DuplicateHandle(cp, h, cp, &dh, DUPLICATE_SAME_ACCESS, 1, flags))
-		return nil;
-	return dh;
+	static LONG npipe;
+	char buf[96];
+	wchar_t *name;
+	SECURITY_ATTRIBUTES sec;
+	HANDLE m, t;
+
+	snprint(buf, sizeof(buf), "\\\\.\\pipe\\infernode-cmd-%lud-%ld",
+		(ulong)GetCurrentProcessId(), (long)InterlockedIncrement(&npipe));
+	name = widen(buf);
+	if(name == nil)
+		return -1;
+	m = CreateNamedPipe(name,
+		(myread? PIPE_ACCESS_INBOUND: PIPE_ACCESS_OUTBOUND)|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,
+		PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,
+		1, 4096, 4096, 0, nil);
+	if(m == INVALID_HANDLE_VALUE){
+		free(name);
+		return -1;
+	}
+	sec.nLength = sizeof(sec);
+	sec.lpSecurityDescriptor = 0;
+	sec.bInheritHandle = 1;
+	t = CreateFile(name, myread? GENERIC_WRITE|FILE_READ_ATTRIBUTES: GENERIC_READ|FILE_WRITE_ATTRIBUTES,
+		0, &sec, OPEN_EXISTING, 0, nil);
+	free(name);
+	if(t == INVALID_HANDLE_VALUE){
+		CloseHandle(m);
+		return -1;
+	}
+	*mine = m;
+	*theirs = t;
+	return 0;
 }
 
 /* TO DO: check that oserrstr will have the right text on error */
@@ -113,7 +145,6 @@ void*
 oscmd(char **args, int nice, char *dir, int *fd)
 {
 	STARTUPINFO si;
-	SECURITY_ATTRIBUTES sec;
 	HANDLE rh, wh, eh, srh, swh, seh;
 	PROCESS_INFORMATION pinfo;
 	char *cmd;
@@ -129,24 +160,12 @@ oscmd(char **args, int nice, char *dir, int *fd)
 		error(Enomem);
 
 	wcmd = widen(cmd);
-	sec.nLength = sizeof(sec);
-	sec.lpSecurityDescriptor = 0;
-	sec.bInheritHandle = 0;
 	rh = wh = eh = srh = swh = seh = nil;
-	if(!CreatePipe(&rh, &swh, &sec, 0))
+	if(cmdpipe(&swh, &rh, 0) < 0)
 		goto Error;
-	if(!CreatePipe(&srh, &wh, &sec, 0))
+	if(cmdpipe(&srh, &wh, 1) < 0)
 		goto Error;
-	if(!CreatePipe(&seh, &eh, &sec, 0))
-		goto Error;
-	rh = exporthandle(rh, 1);
-	if(rh == nil)
-		goto Error;
-	wh = exporthandle(wh, 1);
-	if(wh == nil)
-		goto Error;
-	eh = exporthandle(eh, 1);
-	if(eh == nil)
+	if(cmdpipe(&seh, &eh, 1) < 0)
 		goto Error;
 
 	memset(&si, 0, sizeof(si));

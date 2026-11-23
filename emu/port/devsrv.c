@@ -352,7 +352,7 @@ srvwstat(Chan *c, uchar *dp, int n)
 		kstrdup(&sf->name, d->name);
 		qunlock(&dev.l);
 	}
-	if(d->mode != ~0UL)
+	if(d->mode != ~(ulong)0)
 		sf->perm = d->mode & (DMEXCL|DMAPPEND|0777);
 	if(d->length != (vlong)-1)
 		sf->length = d->length;

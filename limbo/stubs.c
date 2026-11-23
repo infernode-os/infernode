@@ -396,7 +396,8 @@ constub(Decl *id)
 		print("#define %s %ld\n", buf, (long)id->init->val);
 		break;
 	case Tbig:
-		print("#define %s %ld\n", buf, (long)id->init->val);
+		/* not %ld: a long is 32 bits on Windows (LLP64) */
+		print("#define %s %lld\n", buf, (vlong)id->init->val);
 		break;
 	case Treal:
 		print("#define %s %g\n", buf, id->init->rval);

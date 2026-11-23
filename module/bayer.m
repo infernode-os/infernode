@@ -42,4 +42,13 @@ Bayer: module
 	# a fifth entry of 0 if there were none, else the count there.
 	ndvi:	fn(raw: array of byte, rw, rh, scale, red, rot, nir, vis, black, floor: int,
 		out: array of byte, stat: array of int);
+
+	# Lens shading, corrected in place: table holds a gain for each of
+	# the cell's four samples (in the frame's own order: top left, top
+	# right, bottom left, bottom right) at gw by gh points spread evenly
+	# from corner to corner, 4*gw*gh entries, the four positions apart
+	# (all of the first, then the second...), 1024 a gain of one. Each
+	# sample above black is multiplied by its position's gain there,
+	# found bilinearly, and held at max.
+	shade:	fn(raw: array of byte, rw, rh, black, max: int, table: array of int, gw, gh: int);
 };

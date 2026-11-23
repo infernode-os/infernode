@@ -135,6 +135,19 @@ ndviring := array[Ring] of array of byte;	# frame N's plant health, if it was as
 ndvinir := 0;
 ndvivis := 2;
 ndvifloor := 16;
+# Lens shading: a gain for each of the cell's four positions at Shadegw by
+# Shadegh points from corner to corner ($Bayer->shade), made by shade
+# learn from a flat white field and kept as /lib/camera/SENSOR.shade.
+Shadegw: con 17;
+Shadegh: con 13;
+Shadelearn: con 8;		# frames of the flat field summed
+shadetab: array of int;		# nil: none for this sensor
+shadeon := 1;
+shadelearn := 0;		# frames still to sum, while learning
+shadesum: array of big;
+shadecnt: array of int;
+shadenote := "";		# how the last learn went, for status: learning,
+				# learnt:darkest=N%, refused:dark=N, refused:clipped=N
 ndvistat := array[5] of int;	# the last frame's mean, 10th, 50th, 90th percentile, count
 latest: array of byte;
 lastraw: array of byte;
@@ -710,6 +723,17 @@ status(): string
 	# fiftieth and ninetieth percentiles in thousandths, and the readings
 	if(ndviwanted())
 		s += sys->sprint(" ndvi=%d:%d:%d:%d ndvireadings=%d", ndvistat[0], ndvistat[1], ndvistat[2], ndvistat[3], ndvistat[4]);
+	# lens shading: whether a table is in use, and the last learn
+	if(!sim){
+		if(shadetab == nil)
+			s += " shade=none";
+		else if(shadeon)
+			s += " shade=on";
+		else
+			s += " shade=off";
+		if(shadenote != "")
+			s += " shadelearn=" + shadenote;
+	}
 	# the gains in use, set or found: red and blue to green, 256 one
 	s += sys->sprint(" wbgains=%d:%d", lgr, lgb);
 	s += sys->sprint(" writes=%d i2cerrors=%d lostwrites=%d", nwrites, i2cerrs, lostw);
@@ -730,9 +754,9 @@ settings(): string
 	wb := "auto";
 	if(wbfixed)
 		wb = sys->sprint("%d %d", wbr, wbb);
-	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\nwb %s\nndvi %s %s\nndvifloor %d\n",
+	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\nwb %s\nndvi %s %s\nndvifloor %d\nshade %s\n",
 		fw(), fh(), fps, exposure, gain, flip, rotate, focus, wb,
-		channames[ndvinir], channames[ndvivis], ndvifloor);
+		channames[ndvinir], channames[ndvivis], ndvifloor, (array[] of {"off", "on"})[shadeon]);
 }
 
 # a ctl argument: a whole number of at most six digits, or -1
@@ -826,6 +850,26 @@ doctl(s: string): string
 			return "camsrv: ndvi NIR VIS (red, green or blue, not the same)";
 		ndvinir = ni;
 		ndvivis = vi;
+	"shade" =>
+		if(n != 2)
+			return "camsrv: shade on|off|learn";
+		case hd tl f {
+		"on" =>
+			shadeon = 1;
+		"off" =>
+			shadeon = 0;
+		"learn" =>
+			if(sim)
+				return "camsrv: shade learn needs a camera";
+			if(users == 0)
+				return "camsrv: shade learn needs the camera running (a reader)";
+			shadesum = array[4*Shadegw*Shadegh] of {* => big 0};
+			shadecnt = array[4*Shadegw*Shadegh] of {* => 0};
+			shadenote = "learning";
+			shadelearn = Shadelearn;
+		* =>
+			return "camsrv: shade on|off|learn";
+		}
 	"ndvifloor" =>
 		if(n != 2 || a < 0 || a > 2046)
 			return "camsrv: ndvifloor 0..2046";
@@ -1041,10 +1085,20 @@ capture(stop: chan of int): string
 			mflip = newflip;
 		(y, cb, cr) = planes();
 		rot := rotate;
+		# /raw is the sensor's own: copied before the shading
+		rc: array of byte;
+		if(lastrawwanted()){
+			rc = array[len raw] of byte;
+			rc[0:] = raw;
+		}
+		if(shadelearn > 0)
+			learnshade(raw);
+		else if(shadeon && shadetab != nil)
+			bayer->shade(raw, Sw, Sh, Black, 1023, shadetab, Shadegw, Shadegh);
 		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
 		framec <-= (y[0:fsize], ndviof(raw, Sw, Sh, scale, mflip, rot/90), turnedw(rot), turnedh(rot));
-		if(lastrawwanted())
-			rawc <-= rawcopy(raw);
+		if(rc != nil)
+			rawc <-= rc;
 		(lr, lg, lb) = wbal(mean);
 		focusing := afrun || (af != nil && af.on);
 		if(focusing)
@@ -1788,6 +1842,7 @@ sensoron(): string
 	if(e != nil)
 		return e;
 	r := 0;
+	shadetab = loadshade();
 	if(sensor == Imx219)
 		r = sensormode219();
 	else
@@ -1879,6 +1934,149 @@ chipid(reg, want: int): int
 		id = a<<8 | b;
 	}
 	return id;
+}
+
+# ---- lens shading: learnt from a flat field, kept on the card
+
+shadefile(): string
+{
+	return "/lib/camera/" + sensorname() + ".shade";
+}
+
+# the nearest grid point's index for each column and row, made once
+shadecol, shaderow: array of int;
+
+learnshade(raw: array of byte)
+{
+	if(shadecol == nil || len shadecol != Sw || len shaderow != Sh){
+		shadecol = array[Sw] of int;
+		shaderow = array[Sh] of int;
+		for(x := 0; x < Sw; x++)
+			shadecol[x] = (x*(Shadegw-1) + (Sw-1)/2)/(Sw-1);
+		for(y := 0; y < Sh; y++)
+			shaderow[y] = (y*(Shadegh-1) + (Sh-1)/2)/(Sh-1);
+	}
+	n := Shadegw*Shadegh;
+	for(y := 0; y < Sh; y++){
+		o := y*Sw*2;
+		r := shaderow[y]*Shadegw;
+		q0 := (y&1)*2*n;
+		for(x := 0; x < Sw; x++){
+			v := (int raw[o] | int raw[o+1]<<8) - Black;
+			o += 2;
+			i := q0 + (x&1)*n + r + shadecol[x];
+			if(v > 0)
+				shadesum[i] += big v;
+			shadecnt[i]++;
+		}
+	}
+	if(--shadelearn == 0)
+		finishshade();
+}
+
+# The table from the sums: each position's brightest point over each
+# point, at most eight. A field too dark or nearly clipped is refused and
+# the table left as it was.
+finishshade()
+{
+	n := Shadegw*Shadegh;
+	t := array[4*n] of int;
+	lo := 1024;
+	for(q := 0; q < 4; q++){
+		mx := 0;
+		m := array[n] of int;
+		for(i := 0; i < n; i++){
+			c := shadecnt[q*n+i];
+			if(c > 0)
+				m[i] = int (shadesum[q*n+i] / big c);
+			if(m[i] > mx)
+				mx = m[i];
+		}
+		if(mx < 40){
+			shadenote = sys->sprint("refused:dark=%d", mx);	# above black at its brightest
+			return;
+		}
+		if(mx > 1023-Black-60){
+			shadenote = sys->sprint("refused:clipped=%d", mx);
+			return;
+		}
+		for(i = 0; i < n; i++){
+			g := 8*1024;
+			if(m[i] > 0 && mx*1024/m[i] < g)
+				g = mx*1024/m[i];
+			t[q*n+i] = g;
+			if(m[i]*1024/mx < lo)
+				lo = m[i]*1024/mx;
+		}
+	}
+	e := saveshade(t);
+	shadetab = t;
+	shadenote = sys->sprint("learnt:darkest=%d%%", lo*100/1024);	# of the brightest
+	if(e != nil){
+		sys->fprint(sys->fildes(2), "camsrv: shade: %s\n", e);
+		shadenote += ",notsaved";
+	}
+}
+
+saveshade(t: array of int): string
+{
+	sys->create("/lib/camera", Sys->OREAD, Sys->DMDIR|8r775);
+	fd := sys->create(shadefile(), Sys->OWRITE, 8r664);
+	if(fd == nil)
+		return sys->sprint("%s: %r", shadefile());
+	n := Shadegw*Shadegh;
+	s := sys->sprint("shade %s %d %d\n", sensorname(), Shadegw, Shadegh);
+	for(q := 0; q < 4; q++){
+		for(i := 0; i < n; i++){
+			if(i > 0)
+				s += " ";
+			s += string t[q*n+i];
+		}
+		s += "\n";
+	}
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("%s: %r", shadefile());
+	return nil;
+}
+
+# The sensor's table, if the card has one that fits; nil otherwise.
+loadshade(): array of int
+{
+	fd := sys->open(shadefile(), Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[64*1024] of byte;
+	got := 0;
+	while(got < len b){
+		m := sys->read(fd, b[got:], len b - got);
+		if(m <= 0)
+			break;
+		got += m;
+	}
+	(nl, lines) := sys->tokenize(string b[0:got], "\n");
+	if(nl != 5)
+		return nil;
+	(nh, h) := sys->tokenize(hd lines, " \t");
+	if(nh != 4 || hd h != "shade" || hd tl h != sensorname() || int hd tl tl h != Shadegw || int hd tl tl tl h != Shadegh)
+		return nil;
+	n := Shadegw*Shadegh;
+	t := array[4*n] of int;
+	q := 0;
+	for(lines = tl lines; lines != nil; lines = tl lines){
+		(nv, v) := sys->tokenize(hd lines, " \t");
+		if(nv != n)
+			return nil;
+		for(i := 0; i < n; i++){
+			g := int hd v;
+			v = tl v;
+			if(g < 512 || g > 8*1024)
+				return nil;
+			t[q*n+i] = g;
+		}
+		q++;
+	}
+	return t;
 }
 
 sensorname(): string

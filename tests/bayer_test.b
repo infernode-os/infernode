@@ -52,6 +52,12 @@ put(raw: array of byte, w, x, y, v: int)
 	raw[o+1] = byte (v>>8);
 }
 
+get(raw: array of byte, w, x, y: int): int
+{
+	o := (y*w + x)*2;
+	return int raw[o] | int raw[o+1]<<8;
+}
+
 # a frame of one cell's values, repeated, in the order red says
 frame(w, h, red, r, g, b: int): array of byte
 {
@@ -178,6 +184,61 @@ testNdvi(t: ref T)
 		refused = 1;
 	}
 	t.assert(refused, "figures with fewer than four entries refused");
+}
+
+# Lens shading: gains from a corner-to-corner grid, bilinear, black kept,
+# held at max; refusals
+testShade(t: ref T)
+{
+	w := 32;
+	h := 16;
+	black := 64;
+	gw := 3;
+	gh := 3;
+	n := gw*gh;
+	tab := array[4*n] of {* => 2048};	# a gain of two everywhere
+	raw := frame(w, h, 0, black+100, black+100, black+100);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, 5, 3), black+200, "a gain of two doubles what is above black");
+	t.asserteq(get(raw, w, 0, 0), black+200, "at a corner too");
+	# one at the left, two at the right: the middle about one and a half
+	for(q := 0; q < 4; q++)
+		for(j := 0; j < gh; j++){
+			tab[q*n + j*gw + 0] = 1024;
+			tab[q*n + j*gw + 1] = 1536;
+			tab[q*n + j*gw + 2] = 2048;
+		}
+	raw = frame(w, h, 0, black+400, black+400, black+400);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, 0, 4), black+400, "the left edge: one");
+	t.asserteq(get(raw, w, w-1, 4), black+800, "the right edge: two");
+	mid := get(raw, w, 16, 4) - black;
+	t.assert(mid >= 590 && mid <= 610, sys->sprint("the middle about one and a half: %d above black", mid));
+	# past the top: held there
+	raw = frame(w, h, 0, black+600, black+600, black+600);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, w-1, 4), 1023, "1200 above black held at the top");
+	# at and below black: left alone
+	raw = frame(w, h, 0, black, black-10, black);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, 31, 1), black, "black left as it is");
+	t.asserteq(get(raw, w, 31, 0) , black-10, "below black too");
+	refused := 0;
+	{
+		bayer->shade(raw, w, h, black, 1023, array[4*n-1] of int, gw, gh);
+	} exception {
+	* =>
+		refused = 1;
+	}
+	t.assert(refused, "a short table refused");
+	refused = 0;
+	{
+		bayer->shade(raw, w, h, black, black, tab, gw, gh);
+	} exception {
+	* =>
+		refused = 1;
+	}
+	t.assert(refused, "a max not above black refused");
 }
 
 testOrders(t: ref T)
@@ -375,6 +436,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("LargeScale", testLargeScale);
 		run("Clip", testClip);
 		run("Ndvi", testNdvi);
+		run("Shade", testShade);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

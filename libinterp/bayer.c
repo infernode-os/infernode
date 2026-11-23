@@ -62,6 +62,89 @@ bayermodinit(void)
 }
 
 /*
+ * Lens shading. A lens gives its corners less light than its middle,
+ * more so in some colours: each sample is multiplied up by a gain from
+ * a coarse table made from a flat white field (camsrv's shade learn).
+ * The gain is interpolated in 16.16 along a row from the two grid
+ * columns either side, the rows themselves interpolated once a line.
+ */
+void
+Bayer_shade(void *fp)
+{
+	F_Bayer_shade *f;
+	ushort *raw, *p;
+	WORD *t;
+	int rw, rh, gw, gh, bl, mx, x, yy, q, j, gx, n;
+	vlong gyf, fy, fx, a, b, g, v;
+	int *row, *cgx, *cfx;
+
+	f = fp;
+	if(f->raw == H || f->table == H)
+		error(exNilref);
+	rw = f->rw;
+	rh = f->rh;
+	gw = f->gw;
+	gh = f->gh;
+	bl = f->black;
+	mx = f->max;
+	if(rw < 2 || rh < 2 || gw < 2 || gh < 2 || gw > 1024 || gh > 1024 || bl < 0 || mx <= bl
+	|| f->raw->len < (vlong)rw*rh*2 || f->table->len < 4*gw*gh)
+		error(exBounds);
+	raw = (ushort*)f->raw->data;
+	t = (WORD*)f->table->data;
+	n = gw*gh;
+	row = malloc(4*gw*sizeof(int));
+	cgx = malloc(rw*sizeof(int));
+	cfx = malloc(rw*sizeof(int));
+	if(row == nil || cgx == nil || cfx == nil){
+		free(row);
+		free(cgx);
+		free(cfx);
+		error(exNomem);
+	}
+	/* each column's grid column and how far toward the next, once */
+	for(x = 0; x < rw; x++){
+		fx = ((vlong)x*(gw-1)<<16)/(rw-1);
+		gx = fx>>16;
+		if(gx >= gw-1)
+			gx = gw-2;
+		cgx[x] = gx;
+		cfx[x] = fx - ((vlong)gx<<16);
+	}
+	for(yy = 0; yy < rh; yy++){
+		/* this line's gains at each grid column, for both positions on it */
+		gyf = ((vlong)yy*(gh-1)<<16)/(rh-1);
+		j = gyf>>16;
+		if(j >= gh-1)
+			j = gh-2;
+		fy = gyf - ((vlong)j<<16);
+		for(q = (yy&1)*2; q < (yy&1)*2+2; q++)
+			for(gx = 0; gx < gw; gx++){
+				a = t[q*n + j*gw + gx];
+				b = t[q*n + (j+1)*gw + gx];
+				row[q*gw + gx] = a + (((b-a)*fy)>>16);
+			}
+		p = raw + yy*rw;
+		for(x = 0; x < rw; x++, p++){
+			q = (yy&1)*2 + (x&1);
+			gx = cgx[x];
+			fx = cfx[x];
+			a = row[q*gw + gx];
+			b = row[q*gw + gx + 1];
+			g = a + (((b-a)*fx)>>16);
+			v = *p - bl;
+			if(v <= 0)
+				continue;
+			v = bl + ((v*g + 512)>>10);
+			*p = v > mx? mx: v;
+		}
+	}
+	free(row);
+	free(cgx);
+	free(cfx);
+}
+
+/*
  * NDVI over merge's blocks. The cell means are the raw channels' own,
  * black taken off; the ratio is what grey world would take away, which
  * is why it is not taken from the merged picture.

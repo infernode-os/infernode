@@ -254,10 +254,44 @@ so_recv(int sock, void *va, int len, void *hdr, int hdrlen)
 	return r;
 }
 
+/*
+ * Close a socket so that its peer gets what was written and the end of
+ * it (FIN), and no reset.  A reset loses data at both ends on Windows:
+ * the peer discards what it had received and not yet read, so a
+ * server's answer followed by its close never arrived (an HTTP server
+ * that answers once it has the headers, its client's body unread:
+ * webclient_origin_test's "empty response", the client's recv
+ * WSAECONNRESET; a proxy's refusal of CONNECT, llmclient_proxy_test;
+ * ventisrv's greeting before its handshake deadline, auditprov_test).
+ * Two things make one: an abortive close (SO_LINGER of {1, 0}, which
+ * the POSIX hangup asks for), and a close with received data unread.
+ * So what is waiting unread is taken first, without waiting for more
+ * (a peer still sending more than this gets its reset), and the close
+ * is Windows' own, which does not wait either: with linger off,
+ * closesocket returns at once and the stack sends what is queued,
+ * then the FIN.
+ */
+static int
+closegently(int fd)
+{
+	int n;
+	u_long one;
+	char junk[2048];
+
+	one = 1;
+	if(ioctlsocket(fd, FIONBIO, &one) == 0){
+		for(n = 0; n < 64; n++)	/* at most 128K */
+			if(recv(fd, junk, sizeof junk, 0) <= 0)
+				break;
+	}
+	shutdown(fd, SD_SEND);
+	return closesocket(fd);
+}
+
 void
 so_close(int sock)
 {
-	closesocket(sock);
+	closegently(sock);
 }
 
 void
@@ -441,21 +475,11 @@ int
 so_hangup(int fd, int nolinger)
 {
 	int r;
-	static struct linger l = {1, 0};
 
+	/* no reset: see closegently; nolinger needs none, as the close does not wait */
+	USED(nolinger);
 	osenter();
-	if(nolinger)
-		setsockopt(fd, SOL_SOCKET, SO_LINGER, (char*)&l, sizeof(l));
-	/*
-	 * Shut down first, as the POSIX hangup does: the peer gets what
-	 * was written and the end of it (FIN) before the reset.  Closed
-	 * with no linger alone, the reset was all a Windows peer saw: it
-	 * discards what it had received and not yet read, so a server's
-	 * answer followed by a hangup (a proxy's refusal of CONNECT,
-	 * ventisrv's greeting before its handshake deadline) never arrived.
-	 */
-	shutdown(fd, SD_BOTH);
-	r = closesocket(fd);
+	r = closegently(fd);
 	osleave();
 	return r;
 }

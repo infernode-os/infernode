@@ -44,7 +44,7 @@ if WINDOWS:
 	ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
 
 CRASH = re.compile(r"ACCESS VIOLATION|panic:|unknown trap type|SYS: process .* faults|vmwatchdog: VM token (STUCK|LOST)")
-PASSED = re.compile(r"(?m)^[1-9][0-9]* passed(, 0 failed)?|^PASS$|^[A-Za-z_0-9]+:? PASS\b")
+PASSED = re.compile(r"(?m)^[1-9][0-9]* passed(, 0 failed)?|^PASS\b|^[A-Za-z_0-9]+:? PASS\b")
 SKIPPED = re.compile(r'(?m)Broken: "skip:|^--- SKIP|\bSKIP \(')
 FAILED = re.compile(r"(?m)^FAIL$|^--- FAIL|fail:|Broken: ")
 

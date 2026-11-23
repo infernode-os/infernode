@@ -423,8 +423,13 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 	 * jitfault).  No dump: that is for faults that are emu's bugs.
 	 */
 	if(code == EXCEPTION_ACCESS_VIOLATION
-	&& isnilfault((uintptr)ureg->ExceptionRecord->ExceptionInformation[1]))
+	&& isnilfault((uintptr)ureg->ExceptionRecord->ExceptionInformation[1])){
+		/* disfault panics for this: say where, for the image's map */
+		if(up != nil && up->nlocks > 0)
+			print("nil fault holding a lock: RIP=%p in image at %p\n",
+				ureg->ExceptionRecord->ExceptionAddress, (void*)GetModuleHandleW(NULL));
 		disfault(nil, exNilref);
+	}
 
 	/* x86's integer divide traps on zero: the program's "zero divide" (emu/Linux/os.c:trapFPE) */
 	if(code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
@@ -526,7 +531,20 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 static LONG CALLBACK
 VectorHandler(PEXCEPTION_POINTERS ep)
 {
+	HMODULE m;
+
 	if(up == nil)
+		return EXCEPTION_CONTINUE_SEARCH;
+	/*
+	 * Only a fault in emu's own code or in compiled code (in no module
+	 * at all) is taken here.  A system DLL may fault on purpose and
+	 * catch it with its own handler (probing memory it was given); a
+	 * vectored handler sees that first, and made it emu's fault: a
+	 * panic, or a Limbo exception out of a host call.  Those are left
+	 * to the search, which finds the DLL's handler, as before.
+	 */
+	if(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	   (LPCWSTR)ep->ExceptionRecord->ExceptionAddress, &m) && m != GetModuleHandleW(NULL))
 		return EXCEPTION_CONTINUE_SEARCH;
 	switch(ep->ExceptionRecord->ExceptionCode){
 	case EXCEPTION_ACCESS_VIOLATION:

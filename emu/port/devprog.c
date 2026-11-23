@@ -1221,7 +1221,9 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 	Progctl *ctl;
 	char *b;
 	int i, pc;
-	Cmdbuf *cb;
+	Cmdbuf *volatile cb, scb;
+	char cbuf[128], *cf[8];
+	int m;
 	Cmdtab *ct;
 
 	USED(offset);
@@ -1230,9 +1232,37 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 	if(c->qid.type & QTDIR)
 		error(Eisdir);
 
+	/*
+	 * A control message is parsed before the VM is taken: parsecmd
+	 * allocates with smalloc, whose wait for memory with the VM held
+	 * had no end, as only the Progs held up could give it back
+	 * (tools/sysfuzz -P: "VM token STUCK", in a write to a Prog's ctl).
+	 */
+	cb = nil;
+	if(QID(c->qid) == Qctl && n < sizeof(cbuf)){
+		/*
+		 * A ctl message (kill, killgrp, ...) is parsed on the stack:
+		 * a kill is how memory comes back when it has run out, and
+		 * one that waited in smalloc for memory to parse its message
+		 * waited with every Prog it was to kill (tools/sysfuzz -P).
+		 */
+		m = n;
+		memmove(cbuf, va, m);
+		if(m > 0 && cbuf[m-1] == '\n')
+			m--;
+		cbuf[m] = '\0';
+		scb.buf = cbuf;
+		scb.f = cf;
+		scb.nf = tokenize(cbuf, cf, nelem(cf)-1);
+		cf[scb.nf] = nil;
+		cb = &scb;
+	}else if(QID(c->qid) == Qctl || QID(c->qid) == Qdbgctl)
+		cb = parsecmd(va, n);
 	acquire();
 	if(waserror()) {
 		release();
+		if(cb != &scb)
+			free(cb);
 		nexterror();
 	}
 	p = progpid(PID(c->qid));
@@ -1241,9 +1271,10 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 
 	switch(QID(c->qid)){
 	case Qctl:
-		cb = parsecmd(va, n);
 		if(waserror()){
-			free(cb);
+			if(cb != &scb)
+				free(cb);
+			cb = nil;
 			nexterror();
 		}
 		ct = lookupcmd(cb, progcmd, nelem(progcmd));
@@ -1275,12 +1306,15 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 			break;
 		}
 		poperror();
-		free(cb);
+		if(cb != &scb)
+			free(cb);
+		cb = nil;
 		break;
 	case Qdbgctl:
-		cb = parsecmd(va, n);
 		if(waserror()){
-			free(cb);
+			if(cb != &scb)
+				free(cb);
+			cb = nil;
 			nexterror();
 		}
 		if(cb->nf == 1 && strncmp(cb->f[0], "step", 4) == 0)
@@ -1335,7 +1369,9 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 			break;
 		}
 		poperror();
-		free(cb);
+		if(cb != &scb)
+			free(cb);
+		cb = nil;
 		break;
 	case Qheap:
 		/*

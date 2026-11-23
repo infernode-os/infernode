@@ -607,6 +607,8 @@ newprog(Prog *p, Modlink *m)
 	Heap *h;
 	Prog *n, **ph;
 	Osenv *on, *op;
+	char *user;
+	ulong ulen;
 	static int pidnum;
 
 	if(p != nil){
@@ -627,6 +629,23 @@ newprog(Prog *p, Modlink *m)
 		if(p == nil && (up == nil || up->nerrlab == 0))
 			panic("no memory");
 		error(exNomem);
+	}
+
+	/*
+	 * The child's copy of its user's name, made now, while a refusal
+	 * can still be the spawn's error: kstrdup at the end used smalloc,
+	 * whose wait for memory with the VM held had no end
+	 * (emu/port/dis.c, found by tools/sysfuzz -P).
+	 */
+	user = nil;
+	if(p != nil && ((Osenv*)p->osenv)->user != nil){
+		ulen = strlen(((Osenv*)p->osenv)->user)+1;
+		user = malloc(ulen);
+		if(user == nil){
+			free(n);
+			error(exNomem);
+		}
+		memmove(user, ((Osenv*)p->osenv)->user, ulen);
 	}
 
 	n->vm = up->vm;
@@ -706,8 +725,7 @@ newprog(Prog *p, Modlink *m)
 		incref(&on->egrp->r);
 	if(on->sigs != nil)
 		incref(&on->sigs->r);
-	on->user = nil;
-	kstrdup(&on->user, op->user);
+	on->user = user;
 	on->errstr = on->errbuf0;
 	on->syserrstr = on->errbuf1;
 

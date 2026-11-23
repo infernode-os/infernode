@@ -109,7 +109,19 @@ so_send(int sock, void *va, int len, void *hdr, int hdrlen)
 		}
 		r = sendto(sock, va, len, 0, (struct sockaddr*)sin6, sizeof(*sin6));
 	}
-	osleave();
+	/*
+	 * What was sent or read is the caller's, interrupted or not, as in
+	 * ipif6-posix.c: osleave raised Eintr for a kill that came during a
+	 * send or recv that had done its work, so bytes taken from the
+	 * host were lost (devssl's record cut short: "bad digest") and
+	 * bytes sent were reported unsent (devssl hung up the connection
+	 * and every mount over it: "inappropriate use of fd";
+	 * ninep_disconnect_test).
+	 */
+	if(r > 0)
+		osleavekeep();
+	else
+		osleave();
 	return r;
 }
 
@@ -234,7 +246,11 @@ so_recv(int sock, void *va, int len, void *hdr, int hdrlen)
 			memmove(hdr, h, hdrlen);
 		}
 	}
-	osleave();
+	/* bytes read are the caller's, interrupted or not: see so_send */
+	if(r > 0)
+		osleavekeep();
+	else
+		osleave();
 	return r;
 }
 

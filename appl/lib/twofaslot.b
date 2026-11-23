@@ -342,7 +342,8 @@ unlock(user: string, c: ref Secstore->Creds, recoverypass, pin: string): (array 
 		DK := secstore->decrypt3(s.wrap, kek, nil, nil);
 		if(DK == nil){
 			# a slot made before version 6
-			DK = secstore->decrypt3(s.wrap, secstore->oldkek2fa(c.root3, R), nil, nil);
+			if(secstore->oldkeys(c))
+				DK = secstore->decrypt3(s.wrap, secstore->oldkek2fa(c.root3, R), nil, nil);
 			if(DK != nil)
 				rewrap(s, DK, kek);
 		}

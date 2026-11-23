@@ -104,8 +104,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# for it (keys(6)) is the key server's to say, in its challenge.
 	old: array of byte;
 	for(;;){
-		sys->print("Inferno secret: ");
-		(word, e) := login->readsecret(stdin);
+		(word, e) := login->readsecret(stdin, "Inferno secret: ");
 		if(word == nil)
 			err("can't read the secret: " + e);
 		if(len word == 0)
@@ -125,8 +124,7 @@ init(nil: ref Draw->Context, args: list of string)
 		word: array of byte;
 		e: string;
 		for(;;){
-			sys->print("new secret [default = don't change]: ");
-			(word, e) = login->readsecret(stdin);
+			(word, e) = login->readsecret(stdin, "new secret [default = don't change]: ");
 			if(word == nil){
 				login->zero(old);
 				err("can't read the new secret; nothing changed");
@@ -143,8 +141,7 @@ init(nil: ref Draw->Context, args: list of string)
 			break;
 		}
 		# confirm password change
-		sys->print("confirm: ");
-		(word1, e1) := login->readsecret(stdin);
+		(word1, e1) := login->readsecret(stdin, "confirm: ");
 		if(word1 == nil || !eq(word, word1)){
 			login->zero(word);
 			login->zero(word1);

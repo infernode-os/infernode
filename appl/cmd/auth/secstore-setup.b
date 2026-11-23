@@ -182,11 +182,11 @@ Minpass: con 8;
 
 promptpassword(prompt: string): string
 {
-	sys->fprint(stderr, "%s", prompt);
-
+	# echo off before the prompt, so nothing typed ahead is echoed
 	consctl := sys->open("/dev/consctl", Sys->OWRITE);
 	if(consctl == nil || sys->fprint(consctl, "rawon") < 0)
 		sys->fprint(stderr, "secstore-setup: warning: cannot hide the typed password\n");
+	sys->fprint(stderr, "%s", prompt);
 
 	fd := sys->open("/dev/cons", Sys->OREAD);
 	if(fd == nil)

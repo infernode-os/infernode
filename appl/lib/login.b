@@ -876,13 +876,17 @@ putstring(fd: ref Sys->FD, s: string): string
 # mode, where the console does no editing: a backspace typed to
 # correct a slip was a character of the password, and so was a \r.
 #
-readsecret(io: ref Sys->FD): (array of byte, string)
+readsecret(io: ref Sys->FD, prompt: string): (array of byte, string)
 {
 	if(init() != nil)
 		return (nil, "cannot load Keyring");
 	ctl := sys->open("/dev/consctl", Sys->OWRITE);
 	if(ctl == nil || sys->fprint(ctl, "rawon") < 0)
 		return (nil, sys->sprint("cannot turn the console's echo off: %r"));
+	# only now: a secret typed ahead of rawon was echoed as it arrived,
+	# and a prompt printed first invited just that
+	if(prompt != nil)
+		sys->print("%s", prompt);
 	line := array[Maxsecret] of byte;
 	n := 0;
 	buf := array[256] of byte;

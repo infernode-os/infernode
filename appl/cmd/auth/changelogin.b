@@ -77,12 +77,11 @@ init(nil: ref Draw->Context, args: list of string)
 	# mode, where a backspace or a \r typed became part of it.
 	pwbuf: array of byte;
 	for(;;){
+		prompt := "secret: ";
 		if(secret != nil)
-			sys->print("secret [default = don't change]: ");
-		else
-			sys->print("secret: ");
+			prompt = "secret [default = don't change]: ";
 		rerr: string;
-		(pwbuf, rerr) = login->readsecret(stdin);
+		(pwbuf, rerr) = login->readsecret(stdin, prompt);
 		if(pwbuf == nil){
 			sys->fprint(stderr, "%s: can't read the secret: %s\n", argv0, rerr);
 			raise "fail:read";
@@ -97,8 +96,7 @@ init(nil: ref Draw->Context, args: list of string)
 	newsecret: array of byte;
 	if(len pwbuf != 0){
 		# confirm password change
-		sys->print("confirm: ");
-		(again, nil) := login->readsecret(stdin);
+		(again, nil) := login->readsecret(stdin, "confirm: ");
 		same := again != nil && eq(again, pwbuf);
 		login->zero(again);
 		if(!same){

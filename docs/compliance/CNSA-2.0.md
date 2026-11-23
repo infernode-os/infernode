@@ -254,6 +254,31 @@ attacker nothing to downgrade, leaves less to accredit, and is cheaper
 to establish before there are fleets that depend on compatibility than
 after. The changelog's Security section names each break.
 
+**What they cost, measured in use.** Two nodes, each an emulator with
+a root, home and keys of its own, driven at their consoles
+(`tests/host/twonode_auth_test.sh`), and the login screen driven
+headless, against the build before G4–G9 on the same host (x86-64,
+JIT). Times run from the Enter that ends the password:
+
+| Step | Before | After |
+|------|--------|-------|
+| Log in to a signer (`getauthinfo`) | 0.05–0.07 s | 0.41–0.55 s |
+| The same in CNSA mode | 0.10–0.16 s | 0.44–0.49 s |
+| A wrong password refused | 0.05 s | 0.41–0.47 s (as long as a right one) |
+| An account made (`changelogin`) | ≈0 s | 0.35–0.49 s |
+| Authenticated mount (auth(2)) | 30 ms | 30 ms (56 ms in CNSA mode) |
+| secstore unlocked by factotum | 0.16–0.18 s | 0.38–0.48 s |
+| The login screen: keys in factotum | 0.31–0.34 s | 0.41 s |
+| The login screen: Lucia running | 0.39 s | 0.81 s |
+| First unlock of an account at version 4 (moved once) | — | 2.9 s |
+
+Nearly all of it is the PBKDF2 of G9, paid once per login or unlock;
+ML-KEM adds about 0.2 ms, and each protocol one round trip. Mounts and
+everything after login cost what they did. A slower board pays the
+PBKDF2 several times over. The login screen at first made the keys
+twice, and the old version's each time (1.1 s to the keys); it makes
+them once now, and the old version's only for an old account or file.
+
 ## 6. Disposition
 
 - CNSA 2.0 **algorithm primitives: complete** at Category 5 (FIPS 203/204/205/202; AES-256;

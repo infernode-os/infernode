@@ -1738,12 +1738,13 @@ raw(on: int)
 
 prompt(p: string, def: string, echo: int): string
 {
+	# echo off before the prompt, so a password typed ahead is not echoed
+	if (!echo)
+		raw(1);
 	if (def == nil)
 		sys->print("%s: ", p);
 	else
 		sys->print("%s[%s]: ", p, def);
-	if (!echo)
-		raw(1);
 	b := bufio->fopen(stdin, Sys->OREAD);
 	s := b.gets(int '\n');
 	if (!echo) {

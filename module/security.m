@@ -101,8 +101,10 @@ Login: module
 	# A secret typed on io with the console's echo off: its bytes (the
 	# line edited as typed: backspace, ^U; no \r), or nil and why.  It
 	# is never a string, which cannot be cleared: the caller zeroes it.
+	# The prompt is printed on standard output once echo is off, so
+	# nothing typed ahead of it is echoed.
 	Maxsecret:	con 1024;
-	readsecret:	fn(io: ref Sys->FD): (array of byte, string);
+	readsecret:	fn(io: ref Sys->FD, prompt: string): (array of byte, string);
 	zero:	fn(a: array of byte);
 	runes:	fn(a: array of byte): int;	# characters in UTF-8
 

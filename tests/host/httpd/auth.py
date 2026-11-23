@@ -432,7 +432,10 @@ def wedge():
     per = min(ts) / 100000
     iters = int(45 / max(per, 1e-7))
     saved = open(W + "/pw").read()
-    line = "slow:pbkdf2-sha256:%d:%s:%s\n" % (iters, base64.b64encode(b"saltsaltsaltsalt").decode(), base64.b64encode(b"h" * 32).decode())
+    # in carol's scheme, which her time measured (svc/httpd/passwd
+    # writes pbkdf2-sha384): a pbkdf2-sha256 line, cheaper by the
+    # iteration, finished inside the deadline and was answered
+    line = "slow:pbkdf2-sha384:%d:%s:%s\n" % (iters, base64.b64encode(b"saltsaltsaltsalt").decode(), base64.b64encode(b"h" * 48).decode())
     open(W + "/pw", "a").write(line)
     time.sleep(1.1)
     s = ctx().wrap_socket(socket.create_connection(("127.0.0.1", R), timeout=120), server_hostname="localhost")

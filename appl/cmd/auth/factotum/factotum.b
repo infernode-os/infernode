@@ -85,6 +85,9 @@ syncc: chan of chan of string;	# request sync, reply with persistence error
 secstoreaddr: string;		# secstore server address (e.g. "net!localhost!secstore")
 secstoreuser: string;		# username for secstore auth
 secstorecreds: ref Secstore->Creds;	# every key the password gives (secstore(2) mkcreds)
+keysc: chan of (string, array of byte);	# a secstore password (and data key) for persist to make the keys of
+keyspending: int;	# a password given, its keys not yet made: saving is arranged all the same
+keysvault: int;	# and with a data key
 secstorerootkey: array of byte;	# the root the files are written under: root6, or a second-factor account's data key
 secstorevault: array of byte;	# a second-factor account's vault key, shown before a save
 
@@ -251,12 +254,16 @@ factotumsrv()
 	allkeys = array[0] of ref Key;
 	pidc := chan of int;
 	donec := chan of ref Fid;
+	keysc = chan[1] of (string, array of byte);
 
 	# Load keys from secstore or encrypted keyfile
 	if(secstoreaddr != nil){
 		dirtyc = chan[1] of int;	# one change is always remembered, whatever persist is doing
 		syncc = chan of chan of string;
 		e := secstoreload();
+		# the load moved what was in an old form: the old forms' keys
+		# and the password are not kept for the saves
+		secstore->forgetold(secstorecreds);
 		if(e != nil){
 			# Go on with no keys, but save none either: the keys in
 			# the store were not read, and the first key added
@@ -468,10 +475,12 @@ factotumsrv()
 			}
 			# 2FA: encrypt save-back under the data key (auth still uses the
 			# password); ordinary accounts use the password-derived root key.
-			setsecstorekeys(spass, unhexkey(sdk));
-			secstoreconn = nil;	# a connection kept was another account's, or another password's
-			spass = nil;
-			sdk = nil;
+			# The keys are made by persist, which alone saves: made
+			# here, the serving loop answered nothing for the 0.4 s
+			# PBKDF2 takes (the login screen's own unlock waited on
+			# it, and every reader of ctl, after making the same keys
+			# itself).  A save asked for meanwhile waits for them.
+			secstorecreds = nil;
 			# whoever configured this read the store itself (the
 			# login screen): what a failed load at start forbade
 			# is allowed again
@@ -482,6 +491,11 @@ factotumsrv()
 				syncc = chan of chan of string;
 				spawn persist();
 			}
+			keyspending = 1;
+			keysvault = sdk != "";
+			keysc <-= (spass, unhexkey(sdk));
+			spass = nil;
+			sdk = nil;
 			wc <-= (len data, nil);
 			sys->fprint(sys->fildes(2), "factotum: secstore configured: %s user=%s\n",
 				saddr, suser);
@@ -1824,6 +1838,15 @@ persist()
 	spawn timer(ticker, 30000);
 
 	for(;;) alt {
+	(pass, dk) := <-keysc =>
+		setsecstorekeys(pass, dk);
+		pass = nil;
+		# whoever configured this read the store and moved it: the
+		# old forms' keys, and the password, are not kept
+		secstore->forgetold(secstorecreds);
+		secstoreconn = nil;	# a connection kept was another account's, or another password's
+		keyspending = 0;
+
 	<-dirtyc =>
 		dirty = 1;
 
@@ -1873,10 +1896,12 @@ savestatus(): string
 	if(secstoreaddr != nil){
 		if(nosave != nil)
 			return "notsaving " + nosave + "\n";
-		if(secstorecreds == nil)
+		# while persist makes the keys of a password given, saving is
+		# arranged: what is added now is saved once they are made
+		if(secstorecreds == nil && !keyspending)
 			return "notsaving no secstore password yet\n";
 		s := sys->sprint("saving secstore %q %q", secstoreaddr, secstoreuser);
-		if(secstorevault != nil)
+		if(secstorevault != nil || keyspending && keysvault)
 			s += " 2fa";
 		return s + "\n";
 	}
@@ -1943,12 +1968,11 @@ timer(ch: chan of int, ms: int)
 #
 promptpassword(prompt: string): string
 {
-	sys->fprint(sys->fildes(2), "%s", prompt);
-
-	# Try to disable echo
+	# echo off before the prompt, so nothing typed ahead is echoed
 	consctl := sys->open("/dev/consctl", Sys->OWRITE);
 	if(consctl != nil)
 		sys->fprint(consctl, "rawon");
+	sys->fprint(sys->fildes(2), "%s", prompt);
 
 	fd := sys->open("/dev/cons", Sys->OREAD);
 	if(fd == nil)
@@ -2004,14 +2028,21 @@ secstoreload(): string
 	# Connect and authenticate
 	(conn, sname, diag) := secstore->connect6(secstoreaddr, secstorecreds);
 	if(conn == nil){
-		# Connect failed — auto-create account if it doesn't exist
 		reason := "";
 		if(diag != nil)
 			reason = diag;
 		else
 			reason = sys->sprint("%r");
-		sys->fprint(sys->fildes(2), "factotum: secstore connect failed: %s\n", reason);
-		sys->fprint(sys->fildes(2), "factotum: creating secstore account...\n");
+		# A new account is made only where it can be: the server said
+		# it has none, and it is this machine's, whose store is the
+		# directory written.  Any failure did it before: a wrong
+		# password, a server of another version or another machine's
+		# (the directory made on this machine's disk, or refused, and
+		# the reason the user was told was the setup's, not the
+		# server's).
+		if(!contains(reason, "no account") || !localaddr(secstoreaddr))
+			return reason;
+		sys->fprint(sys->fildes(2), "factotum: secstore has no account for %s: creating it\n", secstoreuser);
 		e := secstoresetup();
 		if(e != nil)
 			return "secstore setup: " + e;
@@ -2128,6 +2159,9 @@ secstoresetup(): string
 
 	storedir := "/usr/inferno/secstore";
 	userdir := storedir + "/" + secstoreuser;
+	# never over an account that is there
+	if(sys->stat(userdir + "/PAK").t0 >= 0)
+		return userdir + "/PAK exists: the account is there";
 
 	# Create directories
 	sys->create(storedir, Sys->OREAD, Sys->DMDIR | 8r700);
@@ -2240,4 +2274,31 @@ secstoresave(): string
 	if(debug)
 		sys->fprint(sys->fildes(2), "factotum: secstore: saved keys\n");
 	return nil;
+}
+
+# s has t in it
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
+}
+
+# a dial string naming this machine's own loopback
+localaddr(addr: string): int
+{
+	(n, f) := sys->tokenize(addr, "!");
+	host: string;
+	if(n == 1)
+		host = hd f;
+	else if(n >= 2)
+		host = hd tl f;
+	else
+		return 0;
+	case host {
+	"localhost" or "127.0.0.1" or "::1" or "$localhost" =>
+		return 1;
+	}
+	return 0;
 }

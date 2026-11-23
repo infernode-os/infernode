@@ -26,13 +26,21 @@ Secstore: module
 	# store and files of any version; openfile opens a file under either
 	# root and says whether it is of the current form (else it is to be
 	# written again, by encrypt3 under root6).
+	# The old forms' keys (h4, root3: 100000 HMAC-SHA-256s) are made
+	# only when an old account or file asks for them (oldkeys), from
+	# the password kept for it; forgetold drops the old forms' keys
+	# and the password, once nothing of the account is in an old form,
+	# for a holder of the keys for long (factotum).
 	Creds: adt {
 		user:	string;
 		h1, h2, h4, h6:	array of byte;	# PAK hashes of verifier versions 1, 3, 4, 6
 		root3, root6:	array of byte;	# the files' roots: SGCM2's, SGCM3's
+		pw:	array of byte;	# the password, for oldkeys; nil once forgotten
 	};
 	mkcreds:	fn(user, pass: string): ref Creds;
 	erasecreds:	fn(c: ref Creds);
+	oldkeys:	fn(c: ref Creds): int;	# h4 and root3 made: 1, or 0 when they cannot be
+	forgetold:	fn(c: ref Creds);
 	connect6:	fn(addr: string, c: ref Creds): (ref Dial->Connection, string, string);
 	openfile:	fn(file: array of byte, c: ref Creds): (array of byte, int);
 	mkfilekey6:	fn(user, pass: string): array of byte;

@@ -307,6 +307,34 @@ All notable changes to InferNode are documented in this file.
 
 ### Fixed
 
+- **A signer set up from a fresh tree now works, end to end.** Found by
+  driving two nodes at their consoles (`tests/host/twonode_auth_test.sh`):
+  `svc/auth` asked for the master key and then served no login, keyfs
+  having no `/mnt/keys` to mount on (no tree ships one: security-check
+  refuses it) — keyfs now makes it, owner-only, before asking for the
+  key; `auth/passwd` was dropped right after authenticating, keysrv
+  having no `/mnt/keysrv` — the tree ships it.
+- **A password typed ahead of its prompt is no longer echoed.**
+  getauthinfo, changelogin, passwd, keyfs, secstore-setup, factotum
+  and ftpfs printed the prompt before turning the console's echo off,
+  so a paste or a quick typist showed the first characters of the
+  password. Echo goes off first; `Login->readsecret` takes the prompt
+  and prints it then (an interface change: its callers are in the tree).
+- **The login screen unlocks in about half the time it took after the
+  PBKDF2 change.** The secstore keys were made twice, by wm/logon and
+  again by factotum (whose serving loop answered nothing meanwhile),
+  and each time the old version's keys too (100000 HMACs), which an
+  account moved to version 6 never uses. factotum makes its keys in the
+  thread that saves, and the old version's keys are made only when an
+  old account or file asks for them; factotum then lets them, and the
+  password, go.
+- **factotum makes a secstore account only where it can.** Any failed
+  unlock made one on the machine's own disk, a wrong password and
+  another machine's server included, and the user was told the setup's
+  error rather than the server's: now only when the server is this
+  machine's and says it has no account, and never over a verifier.
+- **secstore no longer prints its progress** ("step 3: g^x mod p...",
+  "ssl ok") on every connection; its errors are still said.
 - **An idle emu no longer spins or holds memory after Charon, a camera
   or a video window.** Three causes, each enough to keep a core busy
   for as long as emu ran:

@@ -166,6 +166,8 @@ connect6(addr: string, c: ref Creds): (ref Dial->Connection, string, string)
 	# the versions before, newest first, each tried only when the
 	# server refuses the one before as a version; the session had is
 	# where the version 6 verifier is given
+	if(!oldkeys(c))
+		return (nil, nil, "the account is at an older secstore version, and the keys for it were let go: unlock again with the password");
 	vers := array[] of {(VERSION5, c.h4), (VERSION3, c.h2), (VERSION1, c.h1)};
 	for(i := 0; i < len vers; i++){
 		(v, h) := vers[i];
@@ -198,11 +200,43 @@ mkcreds(user, pass: string): ref Creds
 	c.user = user;
 	c.h1 = mkseckey(pass);
 	c.h2 = mkseckey2(pass);
-	c.root3 = mkfilekey3(user, pass);
-	c.h4 = mkseckey4(c.root3);
 	c.root6 = mkfilekey6(user, pass);
 	c.h6 = mkseckey6(c.root6);
+	c.pw = array of byte pass;
 	return c;
+}
+
+# The old forms' keys, made at the first need: an account at version 4
+# or a file in SGCM2.  They were made at every mkcreds, 140 ms of a
+# login for keys an account moved to version 6 never uses again.
+oldkeys(c: ref Creds): int
+{
+	if(c == nil)
+		return 0;
+	if(c.root3 == nil){
+		if(c.pw == nil)
+			return 0;
+		pass := string c.pw;
+		c.root3 = mkfilekey3(c.user, pass);
+		c.h4 = mkseckey4(c.root3);
+	}
+	return 1;
+}
+
+forgetold(c: ref Creds)
+{
+	if(c == nil)
+		return;
+	erasekey(c.pw);
+	erasekey(c.h1);
+	erasekey(c.h2);
+	erasekey(c.h4);
+	erasekey(c.root3);
+	c.pw = nil;
+	c.h1 = nil;
+	c.h2 = nil;
+	c.h4 = nil;
+	c.root3 = nil;
 }
 
 erasecreds(c: ref Creds)
@@ -215,6 +249,7 @@ erasecreds(c: ref Creds)
 	erasekey(c.h6);
 	erasekey(c.root3);
 	erasekey(c.root6);
+	erasekey(c.pw);
 }
 
 #
@@ -231,6 +266,8 @@ openfile(file: array of byte, c: ref Creds): (array of byte, int)
 	pt := decrypt3(file, c.root6, nil, nil);
 	if(pt != nil)
 		return (pt, iscurrent(file));
+	if(!oldkeys(c))
+		return (nil, 0);
 	pt = decrypt3(file, c.root3, nil, nil);
 	if(pt != nil)
 		return (pt, 0);
@@ -363,16 +400,12 @@ connectver(addr: string, user: string, version: string, pwhash: array of byte): 
 	(hexHi, H, nil) := PAK_Hiver(verver(version), user, pwhash);
 	if(H == nil)
 		return (nil, nil, "can't make the verifier");
-	sys->fprint(sys->fildes(2), "secstore: step 2: random...\n");
 	x := mod(IPint.random(exponentbits(version), exponentbits(version)), params.q);
 	if(x.eq(IPint.inttoip(0)))
 		x = IPint.inttoip(1);
-	sys->fprint(sys->fildes(2), "secstore: step 3: g^x mod p...\n");
 	gx := params.g.expmod(x, params.p);
-	sys->fprint(sys->fildes(2), "secstore: step 4: m = gx*H mod p...\n");
 	m := mod(gx.mul(H), params.p);
 	hexm := m.iptostr(64);
-	sys->fprint(sys->fildes(2), "secstore: PAK pre-computed, dialing...\n");
 
 	dconn := dial(addr);
 	if(dconn == nil){
@@ -396,13 +429,11 @@ dial(netaddr: string): ref Dial->Connection
 		sys->fprint(sys->fildes(2), "secstore: dial %s failed: %r\n", netaddr);
 		return nil;
 	}
-	sys->fprint(sys->fildes(2), "secstore: dialed %s, fd=%d\n", netaddr, conn.dfd.fd);
 	(err, sslconn) := ssl->connect(conn.dfd);
 	if(err != nil){
 		sys->fprint(sys->fildes(2), "secstore: ssl connect failed: %s\n", err);
 		sys->werrstr(err);
-	} else
-		sys->fprint(sys->fildes(2), "secstore: ssl ok, dir=%s\n", sslconn.dir);
+	}
 	return sslconn;
 }
 
@@ -1247,12 +1278,10 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 	dfd := conn.dfd;
 
 	# Send hello immediately — crypto was pre-computed
-	sys->fprint(sys->fildes(2), "secstore: PAKclient sending pre-computed hello\n");
 	if(sys->fprint(dfd, "%s\tPAK\nC=%s\nm=%s\n", version, C, hexm) < 0){
 		sys->fprint(sys->fildes(2), "secstore: PAKclient hello write failed: %r\n");
 		return nil;
 	}
-	sys->fprint(sys->fildes(2), "secstore: PAKclient hello sent, waiting for response\n");
 
 	# recv g**y, S, check hash1(g**xy)
 	s := readstr(dfd);
@@ -1568,9 +1597,7 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 	}
 	dfd := conn.dfd;
 
-	sys->fprint(sys->fildes(2), "secstore: PAK_Hi starting...\n");
 	(hexHi, H, nil) := PAK_Hiver(version, C, pwhash);
-	sys->fprint(sys->fildes(2), "secstore: PAK_Hi done, computing m...\n");
 
 	# random 1<=x<=q-1; send C, m=g**x H
 	x := mod(IPint.random(exponentbits(version), exponentbits(version)), params.q);
@@ -1579,12 +1606,10 @@ PAKclientver(conn: ref Dial->Connection, C: string, version: string, pwhash: arr
 	m := mod(params.g.expmod(x, params.p).mul(H), params.p);
 	hexm := m.iptostr(64);
 
-	sys->fprint(sys->fildes(2), "secstore: PAKclient crypto done, writing hello to fd=%d\n", dfd.fd);
 	if(sys->fprint(dfd, "%s\tPAK\nC=%s\nm=%s\n", version, C, hexm) < 0){
 		sys->fprint(sys->fildes(2), "secstore: PAKclient hello write failed: %r\n");
 		return nil;
 	}
-	sys->fprint(sys->fildes(2), "secstore: PAKclient hello sent, waiting for response\n");
 
 	# recv g**y, S, check hash1(g**xy)
 	s := readstr(dfd);

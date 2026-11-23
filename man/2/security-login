@@ -16,7 +16,7 @@ cnsaalg:  fn(alg: string): string;
 cnsahash: fn(ha: string): string;
 cnsakey:  fn(info: ref Keyring->Authinfo): string;
 putstring: fn(fd: ref Sys->FD, s: string): string;
-readsecret: fn(io: ref Sys->FD): (array of byte, string);
+readsecret: fn(io: ref Sys->FD, prompt: string): (array of byte, string);
 secret:   fn(name: string, password: array of byte): array of byte;
 oldsecret: fn(password: array of byte): array of byte;
 secretform: fn(s: array of byte): int;
@@ -164,6 +164,9 @@ and then
 to
 .BR /dev/consctl )
 and returns its bytes, without the newline, or nil and the reason.
+.I Prompt
+(nil for none) is printed on standard output only once echo is off:
+a secret typed ahead of a prompt printed first was echoed as it arrived.
 In raw mode the console edits nothing, so
 .B readsecret
 does: a backspace or delete removes the character before it,

@@ -99,10 +99,14 @@ X509: module {
 	# the CAs a caller names (DER, each a CA certificate), with the
 	# CRLs given (DER) and the time now (seconds since the epoch: a
 	# confined caller has no /dev/time).  Neither store is read.
-	# Every CRL given must be one the call can check, or the call
-	# fails: signed by one of the roots, or by a CA certificate of the
-	# chain, which then signs it with the key the path verifies (and
-	# with cRLSign, if it has a keyUsage).
+	# A CRL is consulted for a certificate its own issuer issued, and
+	# for no other (RFC 5280 6.3.3): it has the issuer's name and is
+	# signed with the issuer's key (the path's, or a root's), by an
+	# issuer whose keyUsage, if it has one, has cRLSign.  One with
+	# the issuer's name that fails that refuses the path; one of a CA
+	# the path does not go through is not looked at.  A CRL that
+	# cannot be read fails the call.  The store's CRLs (/lib/crls)
+	# are held to the same.
 	#
 	# now is an int, as Daytime->now is and every clock in the system
 	# that counts seconds: from 19 January 2038 it is negative, every
@@ -114,6 +118,14 @@ X509: module {
 		crls: list of array of byte, now: int, usage: int): (int, string);
 
 	Usage_Any, Usage_ServerAuth, Usage_ClientAuth: con iota;
+
+	# Is a CRL (DER) the CA's whose certificate (DER) is given?
+	# (1, nil): it has the CA's name, the CA's key signed it, and
+	# the CA's keyUsage, if it has one, has cRLSign.  (0, nil): it
+	# has another issuer's name, and says nothing of what this CA
+	# issued.  (0, why): it has the CA's name and is not the CA's
+	# (a path through the CA is refused for it), or cannot be read.
+	crlof: fn(crl: array of byte, ca: array of byte): (int, string);
 
 	## TBS (Public Key) Certificate
 

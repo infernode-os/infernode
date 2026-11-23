@@ -9,6 +9,10 @@ ftpfs \- file transfer protocol (FTP) file server
 .BI -m " mountpoint"
 ] [
 .BI -a " password"
+] [
+.BI -k " keyspec"
+] [
+.BI -t " seconds"
 ]
 .I ftphost
 .SH DESCRIPTION
@@ -70,6 +74,29 @@ The
 .B \-p
 option forces `active' connection: the local system gives the remote machine
 an address on which to call it back to transfer the data.
+A call from any address but the server's is refused, and the server's is
+waited for no longer than
+.BR -t 's
+time.
+.PP
+While a request is being served the server must show some sign every
+.I seconds
+(default 120;
+.BR -t ):
+a reply, or bytes on the data connection.
+If it does not, its connections are hung up, the request fails, and
+.I ftpfs
+says so on standard error; once the control connection has been hung up
+every later request fails.
+.PP
+A name is found only if its directory's listing has it; a file made
+through
+.I ftpfs
+and not yet stored is found too.
+In a directory the server will not list, only subdirectories can be
+found (files may still be created there).
+What the server answers to a refused remove, make-directory or store is
+the error given.
 .PP
 Other options are:
 .TP
@@ -118,6 +145,14 @@ Temporarily cached files
 .B /appl/cmd/ftpfs.b
 .SH BUGS
 Symbolic links are not supported.
+.br
+A reply is at most 64K bytes in lines of at most 4096; a directory at most
+16384 entries; a file at most 1G bytes (it is kept whole in a temporary
+file).
+.br
+One process serves every request in turn, so a flush cancels nothing: a
+request ends when the server answers, or by
+.BR -t .
 .br
 .I Ftpfs
 does not implement `rename', forcing

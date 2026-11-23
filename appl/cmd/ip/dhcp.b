@@ -141,9 +141,41 @@ leasemon(configs: chan of (ref Bootconf, string), pcfg: int)
 	}
 }
 
+# What the lease set: the address, and what went into net/ndb with it
+# (the names and servers the server gave).  Only the first four were
+# printed, so -p showed nothing of the name servers, time servers, file
+# and authentication servers a server had just put in the database.
 printcfg(cfg: ref Bootconf)
 {
-	sys->print("ip=%s ipmask=%s ipgw=%s iplease=%d\n", cfg.ip, cfg.ipmask, cfg.ipgw, cfg.lease);
+	s := sys->sprint("ip=%s ipmask=%s ipgw=%s iplease=%d", cfg.ip, cfg.ipmask, cfg.ipgw, cfg.lease);
+	if(word(cfg.sys))
+		s += " sys=" + cfg.sys;
+	if(word(cfg.dom))
+		s += " dom=" + cfg.dom;
+	s += ips(cfg, Dhcpclient->Odnsserver, "dns");
+	s += ips(cfg, Dhcpclient->Ontpserver, "ntp");
+	s += ips(cfg, Dhcpclient->OP9fs, "fs");
+	s += ips(cfg, Dhcpclient->OP9auth, "auth");
+	sys->print("%s\n", s);
+}
+
+ips(cfg: ref Bootconf, opt: int, name: string): string
+{
+	s := "";
+	for(l := cfg.getips(opt); l != nil; l = tl l)
+		s += " " + name + "=" + hd l;
+	return s;
+}
+
+# one word, as net/ndb takes a name
+word(s: string): int
+{
+	if(s == nil)
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7f)
+			return 0;
+	return 1;
 }
 
 finddev(ifcdir: string): string

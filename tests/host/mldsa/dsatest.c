@@ -24,6 +24,11 @@
  *		the round it is allowed, with nothing written, and a
  *		signature it does make verifies.  (The loop had no bound.)
  *   dsatest cli	keygen, sign and verify on standard input, for cross.py
+ *   dsatest ct SET	built -DCTGRIND, under valgrind: a signature made
+ *		with the secret key and the randomness undefined to
+ *		memcheck, which reports each branch and address that
+ *		depends on them; mldsa_test.sh holds the reports to the
+ *		decisions the source marks as public
  */
 #include "os.h"
 #include <libsec.h>
@@ -32,6 +37,9 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#ifdef CTGRIND
+#include <valgrind/memcheck.h>
+#endif
 
 /* genrandom: the bytes a test queued (xi, rnd), else the host's */
 static uchar rngq[64];
@@ -53,6 +61,21 @@ genrandom(uchar *p, int n)
 		fd = open("/dev/urandom", O_RDONLY);
 	if(fd < 0 || read(fd, p, n) != n)
 		abort();
+}
+
+/*
+ * the signatures' hedging bytes are asked for here (libsec.h: -1 and
+ * nothing when there is no generator); norng makes that the answer
+ */
+int	norng;
+
+int
+genrandomtry(uchar *p, int n)
+{
+	if(norng)
+		return -1;
+	genrandom(p, n);
+	return 0;
 }
 
 static void
@@ -250,6 +273,15 @@ vectors(const char *file)
 			check(sign(set, mysig, msg, n[3], mysk) == 0 && sign(set, b, msg, n[3], mysk) == 0, "sign fails", set, lineno);
 			check(memcmp(mysig, b, L) != 0, "two signatures of one message are the same: no randomness went into them", set, lineno);
 			check(verify(set, mysig, msg, n[3], pk) == 1 && verify(set, b, msg, n[3], pk) == 1, "own signature refused", set, lineno);
+
+			/* no generator: no signature, said, with nothing written */
+			memset(b, 0xA5, L);
+			norng = 1;
+			check(sign(set, b, msg, n[3], mysk) != 0, "a signature was made with no generator to hedge it", set, lineno);
+			norng = 0;
+			for(i = 0; i < L && b[i] == 0xA5; i++)
+				;
+			check(i == L, "signing with no generator wrote to the signature", set, lineno);
 
 			/* another message, another key, a bit changed */
 			if(n[3] > 0){
@@ -487,9 +519,56 @@ cli(void)
 	return 0;
 }
 
+/*
+ * Signing with the secret key undefined to memcheck, which then
+ * reports every branch and address that depends on it.  The key is
+ * made from a fixed seed and the randomness is fixed, so the reports
+ * are the same from run to run.
+ */
+static int
+ct(int set)
+{
+#ifdef CTGRIND
+	static uchar pk[MLDSA87_PKLEN], sk[MLDSA87_SKLEN], sig[MLDSA87_SIGLEN], msg[64], rnd[32];
+	uchar xi[32];
+	int i, rc;
+
+	for(i = 0; i < 32; i++)
+		xi[i] = i + set;
+	for(i = 0; i < sizeof msg; i++)
+		msg[i] = 3*i;
+	if(mldsa_keygen_internal(set, pk, sk, xi) != 0)
+		return 2;
+	/*
+	 * the secret key less its first 32 bytes (rho, which is in the
+	 * public key) and tr (the public key's digest): K, s1, s2, t0;
+	 * and the signing randomness
+	 */
+	VALGRIND_MAKE_MEM_UNDEFINED(sk + 32, 32);
+	VALGRIND_MAKE_MEM_UNDEFINED(sk + 128, sklen(set) - 128);
+	memset(rnd, 0x5C, sizeof rnd);
+	VALGRIND_MAKE_MEM_UNDEFINED(rnd, sizeof rnd);
+	queue(rnd, 32);
+	rc = sign(set, sig, msg, sizeof msg, sk);
+	VALGRIND_MAKE_MEM_DEFINED(sig, siglen(set));
+	VALGRIND_MAKE_MEM_DEFINED(&rc, sizeof rc);
+	if(rc != 0 || verify(set, sig, msg, sizeof msg, pk) != 1){
+		fprintf(stderr, "FAIL: ML-DSA-%d: signing with the key marked secret\n", set);
+		return 1;
+	}
+	printf("ML-DSA-%d signed\n", set);
+	return 0;
+#else
+	fprintf(stderr, "dsatest: not built with -DCTGRIND\n");
+	return 2;
+#endif
+}
+
 int
 main(int argc, char **argv)
 {
+	if(argc >= 3 && strcmp(argv[1], "ct") == 0)
+		return ct(atoi(argv[2]));
 	if(argc >= 2 && strcmp(argv[1], "rounds") == 0)
 		return rounds();
 	if(argc >= 2 && strcmp(argv[1], "cli") == 0)

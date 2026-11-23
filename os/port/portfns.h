@@ -121,7 +121,7 @@ void		exit(int);
 void		reboot(void);
 void		tryboot(void);
 void		halt(void);
-int		export(int, char*, int);
+int		export(int, char*, int, int);
 uvlong		fastticks(uvlong*);
 uvlong		fastticks2ns(uvlong);
 void		fdclose(Fgrp*, int);

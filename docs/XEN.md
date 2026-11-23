@@ -54,7 +54,11 @@ app or no app, set `INFERNODE_ROOT`.
 On Windows use `tools\xen.ps1` (`-Sam`, `-Wait` in place of `-s`, `-w`).
 It runs the tree it is in, a source tree or an unpacked release zip, or
 the unpacked Xenith zip that `XEN_APP` names. Only `C:` is mounted
-inside InferNode, so files on other drives are refused.
+inside InferNode, so files on other drives are refused. Detached, it
+opens no console window and adds the emu's output to `XEN_LOG`
+(`%TEMP%\xen.log`), as `xen` does; `Xenith.exe` writes the same log, and
+says in a message box when the emu fails to start (a DLL missing beside
+`o.emu.exe`) or stops at once.
 
 Verified on macOS, and on Linux (INFR-522): natively under Wayland
 (Weston at scale 1 and 2, windowed and full screen) and under X11 at
@@ -70,7 +74,12 @@ the window's title bar is drawn by the client, with libdecor:
 `install-sdl3.sh` builds SDL with it, and the desktop needs a libdecor
 plugin (`libdecor-0-plugin-1-gtk`, installed with GNOME). An SDL built
 without it opens a window with no title bar on GNOME, which cannot be
-moved or maximised with the mouse. `xen.ps1` is untested and has no host plumbing. `lib/xen/boot.sh`,
+moved or maximised with the mouse. On Windows 11, `xen.ps1` (detached
+and `-Wait`, from a source tree and from a release layout) and
+`Xenith.exe` are verified by hand: files opened, names with blanks,
+plumbing inside Xenith, `C:\` paths through `hostplumb -p`, and `-Sam`.
+A file dropped on the window is not. There is no host plumbing on
+Windows (no plan9port). `lib/xen/boot.sh`,
 which all of them run, is tested headless by
 `tests/host/xen_boot_test.sh`.
 
@@ -131,7 +140,7 @@ image; Linux, which ships the same PNG, imposes no shape either.
 | `XEN_APP` | the `Xenith.app` to run on macOS; on Windows, an unpacked Xenith zip | macOS: the app `xen` is in, then `/Applications/Xenith.app`, then `~/Applications/Xenith.app` |
 | `XEN_THEME` | the session's theme: any installed theme; `glenda` is Plan 9's acme | `xenith` |
 | `XEN_GEOM` | initial window size | `1400x900` |
-| `XEN_LOG` | where a detached instance's output is added, between a line marking its start and one giving the emu's exit status | `$TMPDIR/xen.log` |
+| `XEN_LOG` | where a detached instance's output is added, between a line marking its start and one giving the emu's exit status (on Windows, `xen.ps1`'s and `Xenith.exe`'s) | `$TMPDIR/xen.log`; Windows `%TEMP%\xen.log` |
 | `INFERNODE_HIDPI` | `0` draws Xenith in points, each doubled on a Retina or HiDPI Linux display, instead of in the display's own pixels | `1` |
 
 On a Retina display Xenith draws in the display's own pixels: the emu

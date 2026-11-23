@@ -17,5 +17,4 @@ tcp=internalreg port=6676	# cpupool registry
 tcp=infkey	port=6677	# key-changing service
 tcp=infsched port=6678	# grid scheduler
 
-udp=virgil port=2202	# naming service
 udp=gossip port=2666	# gossip protocol

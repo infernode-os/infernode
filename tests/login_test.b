@@ -1132,11 +1132,26 @@ auditsrv(f: ref Sys->FileIO)
 	}
 }
 
-audited(s: string): int
+# is there a record with s in it now
+nowaudited(s: string): int
 {
 	for(l := auditlines; l != nil; l = tl l)
 		if(contains(hd l, s))
 			return 1;
+	return 0;
+}
+
+# A record that is expected is waited for: logind writes it after it has
+# answered its client, in a process of its own, so the client could be
+# back here before the record was (one run in six said a certificate
+# issued was not recorded).  Three seconds at the most.
+audited(s: string): int
+{
+	for(i := 0; i < 150; i++){
+		if(nowaudited(s))
+			return 1;
+		sys->sleep(20);
+	}
 	return 0;
 }
 
@@ -1177,7 +1192,7 @@ testNoPassword(t: ref T)
 	}
 	t.asserteq(counted("judy"), len vals, "each is counted against the name and none cleared");
 	t.assert(audited("logind authfail user=judy reason=badvalue"), "and recorded in the audit log");
-	t.assert(!audited("authok"), "no certificate was recorded as issued");
+	t.assert(!nowaudited("authok"), "no certificate was recorded as issued");
 
 	# a message that is no value and proof is refused, not left waiting
 	(cv, err) := begin(logind(t, 0), "judy", Chacha, nil);
@@ -1688,7 +1703,7 @@ testRelay(t: ref T)
 		t.assert(info == nil && err != nil, what + " gets the client no Authinfo: " + err);
 		t.assert(!contains(did, "sent its proof"), what + ": " + did);
 	}
-	t.assert(!audited("authok user=alice"), "and the signer issued nothing");
+	t.assert(!nowaudited("authok user=alice"), "and the signer issued nothing");
 	sys->remove("/keydb/loginfail");
 }
 
@@ -1746,7 +1761,7 @@ testAudit(t: ref T)
 	(err, info) = userlogin(t, User, 0, 0, Wrong);
 	t.assert(info == nil, "a wrong password");
 	t.assert(audited("logind authfail user=alice reason=secret"), "a wrong password is recorded");
-	t.assert(!audited("authok"), "and nothing as issued");
+	t.assert(!nowaudited("authok"), "and nothing as issued");
 	auditlines = nil;
 	(err, info) = userlogin(t, "eve x=y", 0, 0, Password);
 	t.assert(audited("logind authfail user=eve%20x%3Dy reason=unusable"), "a name with a blank and an = is one value of its record");

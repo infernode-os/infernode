@@ -31,6 +31,7 @@ include "gdl90.m";
 Flag: con byte 16r7E;
 Esc: con byte 16r7D;
 Maxframe: con 512;
+Maxsince: con 10;	# own-ship reports a heartbeat's word is good for
 Foot: con 0.3048;
 Knot: con 1852.0 / 3600.0;
 
@@ -82,7 +83,7 @@ frame(msg: array of byte): array of byte
 
 Framer.new(): ref Framer
 {
-	return ref Framer(array[Maxframe] of byte, 0, 0, 0, 0, 0);
+	return ref Framer(array[Maxframe] of byte, 0, 0, 0, 0, 0, 0);
 }
 
 Framer.feed(d: self ref Framer, b: array of byte): (list of ref Fix, list of ref Target)
@@ -151,11 +152,21 @@ message(d: ref Framer, f: array of byte): (ref Fix, ref Target)
 	m := f[0:n];
 	case int m[0] {
 	0 =>
-		if(len m >= 2)
+		if(len m >= 2) {
 			d.gpsvalid = (int m[1] & 16r80) != 0;
+			d.sincehb = 0;
+		}
 	10 =>
-		if(len m >= 28)
+		# The heartbeat's word that the position is good lasts as
+		# long as heartbeats come (one a second, by the
+		# specification; own-ship reports at up to five).  It was
+		# kept for ever: one heartbeat, and every own-ship report
+		# after it was a valid fix whatever the receiver had lost.
+		if(len m >= 28) {
+			if(++d.sincehb > Maxsince)
+				d.gpsvalid = 0;
 			return (ownship(d, m[1:28]), nil);
+		}
 	20 =>
 		if(len m >= 28)
 			return (nil, traffic(m[1:28]));
@@ -196,6 +207,8 @@ Report: adt {
 	addrtype:	int;
 	emitter:	int;
 	callsign:	string;
+	extrapolated:	int;	# the position is reckoned on from an older report
+	priority:	int;	# the emergency/priority code
 };
 
 report(b: array of byte): ref Report
@@ -217,6 +230,8 @@ report(b: array of byte): ref Report
 	r.feet = a * 25 - 1000;
 	misc := int b[11] & 16rF;
 	r.tracktype = misc & 3;
+	r.extrapolated = (misc & 4) != 0;
+	r.priority = int b[26] >> 4;
 	hv := int b[13] << 4 | int b[14] >> 4;
 	r.hasspeed = hv != 16rFFF;
 	r.knots = hv;
@@ -285,10 +300,28 @@ emitters := array[] of {
 	nil, "emergency", "service", "obstacle", "obstacle", "obstacle",
 };
 
+# the emergency/priority codes (3.5.1.12)
+priorities := array[] of {
+	nil, "general", "medical", "fuel", "comms", "unlawful", "downed",
+};
+
 traffic(b: array of byte): ref Target
 {
 	r := report(b);
-	t := Target.new("adsb", sys->sprint("%.6x", r.addr));
+	# An address is one of six kinds (3.5.1.2), and only an ICAO
+	# address (0, or 2 by TIS-B) names an airframe: a self-assigned
+	# address, a TIS-B track file, a surface vehicle and a ground
+	# beacon are numbered apart.  The kind was dropped: a track file
+	# with an airliner's 24 bits was the airliner, the one's name and
+	# place replacing the other's.
+	id := sys->sprint("%.6x", r.addr);
+	if(r.addrtype != 0 && r.addrtype != 2)
+		id = sys->sprint("%d.%s", r.addrtype, id);
+	t := Target.new("adsb", id);
+	# a position reckoned on, and an emergency declared, are said
+	t.extrapolated = r.extrapolated;
+	if(r.priority > 0 && r.priority < len priorities)
+		t.emergency = priorities[r.priority];
 	if(r.haspos) {
 		t.haspos = 1;
 		t.lat = r.lat;

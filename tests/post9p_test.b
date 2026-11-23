@@ -194,6 +194,114 @@ reader(fd: ref Sys->FD, pidc: chan of int, res: chan of string)
 		res <-= "read";
 }
 
+bytesread(fd: ref Sys->FD, res: chan of string)
+{
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		res <-= sys->sprint("error: %r");
+	else
+		res <-= string buf[0:n];
+}
+
+# A reader killed in its read of a posted connection: what the server
+# sends next is for the reader after it.  It went to the request that
+# had been given up, and the next reader waited for what had been spent
+# (the kernel now tells a file2chan server of a request given up).
+testGaveUp(t: ref T)
+{
+	pd := mkpost(t, 1);
+	fd := sys->open(pd.file, Sys->ORDWR);
+	t.assert(fd != nil, sys->sprint("open of the posted file: %r"));
+	pidc := chan of int;
+	res := chan[4] of string;
+	spawn reader(fd, pidc, res);
+	pid := <-pidc;
+	sfd := <-pd.held;	# the server's end of that connection
+	sys->sleep(200);
+	kill(pid);
+	sys->sleep(200);
+	sys->fprint(sfd, "one");
+	spawn bytesread(fd, res);
+	spawn timer(res, 3000);
+	t.assertseq(<-res, "one", "what the server sent after a reader was killed in its read reaches the next reader");
+	sys->fprint(sfd, "two");
+	spawn bytesread(fd, res);
+	spawn timer(res, 3000);
+	t.assertseq(<-res, "two", "and what it sends after that, the one after");
+	fd = nil;
+	sfd = nil;
+	pd.end();
+}
+
+# a server that keeps every connection it is given
+keeper(conns: chan of ref Sys->FD, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	l: list of ref Sys->FD;
+	for(;;)
+		l = <-conns :: l;
+}
+
+# A post has 256 connections at once (post9p.b's Maxconns) and no more:
+# there was no end to them, each a pipe and two processes.
+testManyConns(t: ref T)
+{
+	conns := chan of ref Sys->FD;
+	(p, e) := post9p->post(sys->sprint("post9ptest%d.%d", sys->pctl(0, nil), nspec++), conns);
+	if(p == nil)
+		t.fatal("cannot post: " + e);
+	pidc := chan of int;
+	spawn keeper(conns, pidc);
+	kpid := <-pidc;
+	N: con 256;
+	fds := array[N+1] of ref Sys->FD;
+	ok := 0;
+	for(i := 0; i < N; i++){
+		fds[i] = sys->open(p.path, Sys->ORDWR);
+		if(fds[i] != nil && sys->fprint(fds[i], "x") == 1)
+			ok++;
+	}
+	t.asserteq(ok, N, "connections made");
+	fds[N] = sys->open(p.path, Sys->ORDWR);
+	n := sys->fprint(fds[N], "x");
+	err := sys->sprint("%r");
+	t.assert(n < 0, "one more connection is refused");
+	if(n < 0)
+		t.assert(contains(err, "too many connections"), "and told why: " + err);
+	fds[0] = nil;
+	sys->sleep(200);
+	fd := sys->open(p.path, Sys->ORDWR);
+	t.asserteq(sys->fprint(fd, "x"), 1, "one closed makes room for one");
+	fd = nil;
+	# all at once: the post is told of every close, however many its
+	# channel holds at that moment (the kernel dropped those past
+	# sixteen, and the post went on counting them)
+	for(i = 0; i <= N; i++)
+		fds[i] = nil;
+	sys->sleep(300);
+	ok = 0;
+	for(i = 0; i < N; i++){
+		fds[i] = sys->open(p.path, Sys->ORDWR);
+		if(fds[i] != nil && sys->fprint(fds[i], "x") == 1)
+			ok++;
+	}
+	t.asserteq(ok, N, "all closed at once make room for as many again");
+	for(i = 0; i < N; i++)
+		fds[i] = nil;
+	sys->sleep(100);
+	p.unpost();
+	kill(kpid);
+}
+
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
 testSixReads(t: ref T)
 {
 	pd := mkpost(t, 0);
@@ -429,6 +537,8 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	fd = nil;
 
+	run("GaveUp", testGaveUp);
+	run("ManyConns", testManyConns);
 	run("SixReads", testSixReads);
 	run("StuckWrites", testStuckWrites);
 	run("ManyReads", testManyReads);

@@ -1,17 +1,22 @@
 /*
- * libsec's AES, aes.c's constant-time C (bit planes) and aesarm64.c's
- * ARMv8 instructions, against FIPS-197 and NIST SP 800-38A, against a
- * plain reference written from FIPS 197 here, and against each other.
+ * libsec's AES, aes.c's constant-time C (bit planes) and the
+ * processor's AES instructions (aesarm64.c's ARMv8, aesamd64.c's
+ * AES-NI), against FIPS-197 and NIST SP 800-38A, against a plain
+ * reference written from FIPS 197 here, and against each other.
  * Built by tests/host/armcrypto_test.sh.
  *
  *	aestest		known answers, the S-box circuit on every byte,
- *			random cases against the reference; speeds
+ *			random cases against the reference, by the C and
+ *			by the instructions; the two against each other
+ *			(key schedules, CBC, a block, counter mode); speeds
  *	aestest ct	the C on a key, IV and data valgrind is told are
  *			secret (-DCTGRIND): any branch or address that
  *			depends on them is reported
+ *	aestest ct hw	the same through the instructions
  */
 #include "../../../libsec/aes.c"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +29,27 @@
 #endif
 
 void aesarm64use(int);	/* aesarm64.c, built beside this */
+void aesamd64use(int);	/* and aesamd64.c */
+
+/* the instructions, whichever the processor has: on, or off for aes.c's C */
+static void
+hwuse(int on)
+{
+	aesarm64use(on);
+	aesamd64use(on);
+}
+
+static int
+hwok(void)
+{
+	return aesarm64ok() || aesamd64ok();
+}
+
+static char*
+hwname(void)
+{
+	return aesamd64ok() ? "AES-NI" : "ARMv8";
+}
 
 static int failed;
 
@@ -112,7 +138,7 @@ static void
 cross(void)
 {
 	uchar key[32], iv[16], buf[1000], a[1000], b[1000];
-	AESstate s;
+	AESstate s, s2;
 	int t, i, n, kb, bad;
 
 	srand(1);
@@ -128,26 +154,48 @@ cross(void)
 			buf[i] = rand();
 		memcpy(a, buf, n);
 		memcpy(b, buf, n);
-		aesarm64use(0);
+		hwuse(0);
 		setupAESstate(&s, key, kb, iv);
 		aesCBCencrypt(a, n, &s);
-		aesarm64use(1);
-		setupAESstate(&s, key, kb, iv);
-		aesCBCencrypt(b, n, &s);
+		hwuse(1);
+		setupAESstate(&s2, key, kb, iv);
+		/* the same state from either: round keys as words, for decryption, as bit planes */
+		if(memcmp(&s, &s2, offsetof(AESstate, ivec)) != 0)
+			bad++;
+		aesCBCencrypt(b, n, &s2);
 		if(memcmp(a, b, n) != 0)
 			bad++;
 		/* and back, each with the other's */
-		aesarm64use(t & 1);
+		hwuse(t & 1);
 		setupAESstate(&s, key, kb, iv);
 		aesCBCdecrypt(b, n, &s);
 		if(memcmp(b, buf, n) != 0)
 			bad++;
+		/* a block, and the counter mode, the count near its wrap one time in four */
+		hwuse(0);
+		aesEncryptBlock(&s, buf, a);
+		hwuse(1);
+		aesEncryptBlock(&s, buf, b);
+		if(memcmp(a, b, 16) != 0)
+			bad++;
+		if(t % 4 == 0){
+			iv[12] = iv[13] = iv[14] = 0xff;
+			iv[15] = 0xf0 + t%16;
+		}
+		memcpy(a, buf, n);
+		memcpy(b, buf, n);
+		hwuse(0);
+		aesCTR32(&s, iv, a, n);
+		hwuse(1);
+		aesCTR32(&s, iv, b, n);
+		if(memcmp(a, b, n) != 0)
+			bad++;
 	}
 	if(bad){
-		printf("FAIL: the two paths disagree on %d of 12000 random CBC runs\n", bad);
+		printf("FAIL: the two paths disagree %d times on 6000 random keys, IVs and lengths\n", bad);
 		failed = 1;
 	}else
-		printf("PASS: the two paths agree on 6000 random keys, IVs and lengths, both ways\n");
+		printf("PASS: the two paths agree on 6000 random keys, IVs and lengths: the schedules, CBC both ways, a block, counter mode\n");
 }
 
 /*
@@ -324,7 +372,7 @@ sboxes(void)
  * the short tail), and the counter mode across its 32-bit wrap.
  */
 static void
-reference(void)
+reference(const char *path)
 {
 	uchar key[32], iv[16], buf[300], a[300], want[300], prev[16], ks[16], ctr[16];
 	uchar rk[15][16], blk[16];
@@ -403,10 +451,10 @@ reference(void)
 			bad++;
 	}
 	if(bad){
-		printf("FAIL: aes.c and the reference disagree %d times in 3000 random keys, IVs and lengths\n", bad);
+		printf("FAIL: %s and the reference disagree %d times in 3000 random keys, IVs and lengths\n", path, bad);
 		failed = 1;
 	}else
-		printf("PASS: aes.c is the reference's cipher on 3000 random keys, IVs and lengths: round keys, CBC both ways, counter mode\n");
+		printf("PASS: %s is the reference's cipher on 3000 random keys, IVs and lengths: round keys, CBC both ways, counter mode\n", path);
 }
 
 /*
@@ -467,6 +515,25 @@ speed(int dec)
 	return n * (double)sizeof buf / 1e6 / ((double)(clock() - t0) / CLOCKS_PER_SEC);
 }
 
+/* key setups a second, in thousands: what a short message mostly costs */
+static double
+setups(void)
+{
+	uchar key[32] = {1}, iv[16] = {0};
+	AESstate s;
+	clock_t t0;
+	int n;
+
+	t0 = clock();
+	n = 0;
+	while(clock() - t0 < CLOCKS_PER_SEC/4){
+		key[0] = n;
+		setupAESstate(&s, key, 32, iv);
+		n++;
+	}
+	return n / 1e3 / ((double)(clock() - t0) / CLOCKS_PER_SEC);
+}
+
 /*
  * A key is 16, 24 or 32 bytes.  Any other length made a state with no
  * rounds, which gave the block exclusive-ored with the key's first 16
@@ -518,15 +585,35 @@ keylengths(const char *path)
 		aesarm64cbcdecrypt(buf, 3, s.dkey, 15, ct);
 		check("aesarm64cbcdecrypt with 15 rounds", buf, zero, 48);
 	}
+	if(aesamd64ok()){
+		memset(ct, 0xee, sizeof ct);
+		aesamd64encryptblock(s.ekey, 0, pt, ct);
+		check("aesamd64encryptblock with no rounds", ct, zero, 16);
+		memmove(buf, pt, sizeof buf);
+		aesamd64cbcencrypt(buf, 3, s.ekey, 0, ct);
+		check("aesamd64cbcencrypt with no rounds", buf, zero, 48);
+		memmove(buf, pt, sizeof buf);
+		aesamd64cbcdecrypt(buf, 3, s.dkey, 15, ct);
+		check("aesamd64cbcdecrypt with 15 rounds", buf, zero, 48);
+		memmove(buf, pt, sizeof buf);
+		aesamd64ctr32(s.ekey, 11, pt, buf, 53);
+		check("aesamd64ctr32 with 11 rounds", buf, zero, 53);
+	}
 }
 
 int
 main(int argc, char **argv)
 {
-	double te, td, ae, ad;
+	double te, td, ts, ae, ad, as;
+	char *hw;
 
-	aesarm64use(0);
+	hwuse(0);
 	if(argc > 1 && strcmp(argv[1], "ct") == 0){
+		if(argc > 2 && strcmp(argv[2], "hw") == 0){
+			hwuse(1);
+			if(!hwok())
+				return 2;	/* no instructions here: nothing was checked */
+		}
 		ct();
 		return 0;
 	}
@@ -535,20 +622,26 @@ main(int argc, char **argv)
 	fips197("C");
 	sp80038a("C");
 	keylengths("C");
-	reference();
+	reference("aes.c");
 	te = speed(0);
 	td = speed(1);
-	if(aesarm64ok() || (aesarm64use(1), aesarm64ok())){
-		aesarm64use(1);
-		fips197("ARMv8");
-		sp80038a("ARMv8");
-		keylengths("ARMv8");
+	ts = setups();
+	hwuse(1);
+	if(hwok()){
+		hw = hwname();
+		fips197(hw);
+		sp80038a(hw);
+		keylengths(hw);
+		reference(hw);
 		cross();
+		hwuse(1);
 		ae = speed(0);
 		ad = speed(1);
-		printf("AES-256-CBC MB/s: C %.0f encrypt %.0f decrypt; ARMv8 %.0f encrypt %.0f decrypt\n", te, td, ae, ad);
+		as = setups();
+		printf("AES-256-CBC MB/s: C %.0f encrypt %.0f decrypt; %s %.0f encrypt %.0f decrypt\n", te, td, hw, ae, ad);
+		printf("AES-256 key setups, thousands a second: C %.0f; %s %.0f\n", ts, hw, as);
 	}else
-		printf("SKIP: no ARMv8 AES here; AES-256-CBC in C %.0f encrypt %.0f decrypt MB/s\n", te, td);
+		printf("SKIP: no AES instructions here; AES-256-CBC in C %.0f encrypt %.0f decrypt MB/s, %.0f thousand key setups a second\n", te, td, ts);
 	if(!failed)
 		printf("PASS: FIPS-197 and SP 800-38A vectors on every path; a key that is none gives zeros\n");
 	return failed;

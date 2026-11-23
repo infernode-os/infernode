@@ -19,7 +19,7 @@
 #define FLT_ROUNDS 1
 #endif
 #ifndef Storeinc
-#define Storeinc(a,b,c) (*a++ = b << 16 | c & 0xffff)
+#define Storeinc(a,b,c) (*a++ = (ulong)(b) << 16 | (c) & 0xffff)
 #endif
 
 #define Sign_Extend(a,b) if (b < 0) a |= 0xffff0000;

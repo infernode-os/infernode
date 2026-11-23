@@ -19,8 +19,8 @@ respectively, on a machine acting as authentication server for a network.
 They are not started by
 .IR svc (8):
 no program in this system is their client (the
-.IR register (8)
-that page describes is not here), they answer anybody who connects, and
+.B register
+command of the set-top boxes they were written for is not here), they answer anybody who connects, and
 the certificates they issue have no expiry time.
 A realm that wants this enrolment starts them on purpose, after
 .B svc/auth
@@ -126,9 +126,11 @@ for
 .I Verify
 is run on the signing server
 by the agency running the authentication server, in response to
-a call from a remote user who has invoked
-.IR register (8)
-or an equivalent.
+a call from a remote user who has run a client of
+.I signer
+(the set-top boxes'
+.B register
+command, which is not in this system, or an equivalent).
 .I Verify
 checks a caller's identity using information from the file
 .BI /keydb/signed/ set-top-box-id
@@ -159,8 +161,7 @@ as input for
 if the operator of
 .I verify
 accepts the identity, the set-top-box owner should be requested
-to answer `yes' to the prompt displayed by
-.IR register (8).
+to answer `yes' to the prompt displayed by that client.
 The order of
 acceptance\-first on the signer, then on the client\-is essential,
 to produce the countersigned certificate before invoking
@@ -206,5 +207,4 @@ Repository of `unblinded' certificates.
 .SH SEE ALSO
 .IR login (6),
 .IR createsignerkey (8),
-.IR register (8),
 .IR svc (8)

@@ -37,8 +37,7 @@ The
 .B -s
 option tells
 .I 9win
-to run in server mode. Used by
-.IR 9cpu (1),
+to run in server mode:
 it exports on its standard input
 a namespace
 suitable for a graphical Plan 9 program to run
@@ -46,7 +45,6 @@ within. With this option, no command may be given.
 .SH SOURCE
 .B /appl/cmd/9win.b
 .SH SEE ALSO
-.IR 9cpu (1),
 .IR import (4)
 .SH FILES
 .B /dev/winname

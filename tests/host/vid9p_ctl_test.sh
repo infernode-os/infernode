@@ -20,6 +20,11 @@
 #    y4m output), -r (a file replayed)
 #  - a header saying 65536 by 65536 (a frame size of -2^31) is refused,
 #    static and replayed, and the server answers
+#  - a file past what an array holds (3GB, sparse) is refused by its
+#    length and the server answers (the length was cut to an int: a
+#    negative size, an exception before the mount was served)
+#  - with no /dev/null to give it for standard input, a -c command is
+#    not run (it went on with the 9P channel as its input)
 #  - a client that is not a mount (listen -A {vid9p ...}) reading with a
 #    count of ff ff ff ff is answered with an error, and its server is
 #    gone with it (the slice raised in the serve loop, which left the
@@ -56,12 +61,24 @@ with open(d + '/c.y4m', 'wb') as f:
 with open(d + '/big.y4m', 'wb') as f:
     f.write(b'YUV4MPEG2 W65536 H65536 F10:1 Ip A1:1 C420jpeg\n')
     f.write(b'FRAME\n' + bytes(4096))
+try:
+    with open(d + '/huge.y4m', 'wb') as f:
+        f.write(b'YUV4MPEG2 W%d H%d F10:1 Ip A1:1 C420jpeg\n' % (w, h))
+        f.seek(3 << 30)
+        f.write(b'0')
+except OSError:
+    pass
+with open(d + '/src.sh', 'w') as f:
+    f.write('touch %s/RAN\ncat %s/c.y4m\n' % (d, d))
 PY
+mkdir -p "$W/empty"
+HUGE='#'
+if [ -f "$W/huge.y4m" ] && [ "$(wc -c < "$W/huge.y4m")" -gt 3000000000 ]; then HUGE=; fi
 
 cat > "$W/run.sh" <<ISH
 load std
 ndb/cs
-mkdir -p /n/v /n/x /n/live /n/rep /n/big /n/bigr
+mkdir -p /n/v /n/x /n/live /n/rep /n/big /n/bigr /n/nonull /n/huge
 mount {vid9p $E/c.y4m} /n/v
 listen -A tcp!127.0.0.1!$PORT {export /n/v}
 sleep 1
@@ -92,6 +109,9 @@ mount {vid9p $E/big.y4m} /n/big
 cat /n/big/0/status > $E/st.big
 mount {vid9p -r $E/big.y4m} /n/bigr
 cat /n/bigr/0/status > $E/st.bigr
+@{pctl forkns; bind $E/empty /dev; mount {vid9p -c /bin/sh $W/src.sh} /n/nonull; cat /n/nonull/0/status > $E/st.nonull}
+$HUGE mount {vid9p $E/huge.y4m} /n/huge
+$HUGE cat /n/huge/0/status > $E/st.huge
 unmount /n/live
 unmount /n/rep
 unmount /n/big
@@ -188,6 +208,26 @@ for f in big bigr; do
 	*) fail "a 65536 by 65536 header ($f): status '$(cat "$W/st.$f" 2>/dev/null)'" ;;
 	esac
 done
+
+# a file too long to hold
+if [ -z "$HUGE" ]; then
+	case "$(cat "$W/st.huge" 2>/dev/null)" in
+	"no source"*frames=0*) pass "a 3GB file is refused by its length and the server answers" ;;
+	*) fail "a 3GB file: status '$(cat "$W/st.huge" 2>/dev/null)' $(grep -i 'broken\|vid9p:' "$W/log" | tail -2 | tr '\n' ' ')" ;;
+	esac
+else
+	echo "SKIP: no sparse 3GB file here"
+fi
+
+# no /dev/null for a host command's input
+if [ -e "$W/RAN" ]; then
+	fail "with no /dev/null a -c command was run, the 9P channel its standard input"
+else
+	case "$(cat "$W/st.nonull" 2>/dev/null)" in
+	"no source"*) pass "with no /dev/null a -c command is not run, and the server answers" ;;
+	*) fail "with no /dev/null: status '$(cat "$W/st.nonull" 2>/dev/null)'" ;;
+	esac
+fi
 
 # a client that is not a mount
 if [ ! -f "$W/raw" ]; then

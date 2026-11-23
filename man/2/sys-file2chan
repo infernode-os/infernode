@@ -174,6 +174,26 @@ A server typically ignores the former and uses the latter as a signal to stop pr
 Note that the
 .I fid
 can later be re-used by another client.
+.PP
+The server is told of every close.
+Each of its channels holds sixteen requests;
+a notice that finds its channel full waits in the system
+and arrives as the server receives,
+so a server need not keep up with its clients
+to keep count of them,
+and a close never waits for the server.
+A request for a
+.I fid
+arrives after the notice of the close of the open that last had that
+.IR fid ,
+on the same channel;
+nothing orders the two channels with each other.
+While the notice of a
+.IR fid 's
+close waits on a channel,
+a later close of the same
+.I fid
+by an open that asked nothing on that channel adds no second notice there.
 .SH SOURCE
 .B /emu/port/devsrv.c
 .br

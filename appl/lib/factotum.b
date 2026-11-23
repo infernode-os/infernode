@@ -62,20 +62,6 @@ open(): ref Sys->FD
 	return sys->open("/mnt/factotum/rpc", Sys->ORDWR);
 }
 
-mount(fd: ref Sys->FD, mnt: string, flags: int, aname: string, keyspec: string): (int, ref Authinfo)
-{
-	ai: ref Authinfo;
-	afd := sys->fauth(fd, aname);
-	if(afd != nil){
-		ai = proxy(afd, open(), "proto=p9any role=client "+keyspec);
-		if(debug && ai == nil){
-			sys->print("proxy failed: %r\n");
-			return (-1, nil);
-		}
-	}
-	return (sys->mount(fd, afd, mnt, flags, aname), ai);
-}
-
 dump(a: array of byte): string
 {
 	s := sys->sprint("[%d]", len a);

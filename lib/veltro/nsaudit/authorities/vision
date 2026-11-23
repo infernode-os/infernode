@@ -1,4 +1,4 @@
 tool=vision
 	description='What is in a picture, from vision(4) at /mnt/vision'
 	authorities='reads_fs'
-	notes='The picture goes only to whatever server is mounted at /mnt/vision, the fixed-function grant this tool alone receives; no network egress of its own, no credentials, never /mnt/video. The grant is the whole mount, so the tool can also write its ctl (load or unload a model).'
+	notes='The picture goes only to whatever server is mounted at /mnt/vision, the fixed-function grant this tool alone receives; no network egress of its own, no credentials, never /mnt/video. The grant is the models (read) and one session made for the call: its image, detections and status. Never the server ctl (load or unload a model), clone, a session ctl (src: have the server open a feed, a camera among them) or another session.'

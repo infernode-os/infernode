@@ -107,6 +107,7 @@ Rule: adt {
 	depth:	int;	# its names: / is 0, /admin 1
 	terms:	list of ref Term;	# any one of them will do
 	# what it names, if that was there when httpd started (findrule)
+	line:	int;	# in the rules file
 	resolved:	int;
 	qpath:	big;
 	dtype:	int;
@@ -150,6 +151,7 @@ Entry: adt {
 	w:	ref Watch;
 	cfd:	ref FD;
 	ip:	string;
+	src:	string;	# the source it is counted under: netof(ip)
 };
 
 admitc: chan of (string, ref FD, chan of ref Watch);
@@ -362,9 +364,14 @@ watchdog()
 	n := 0;
 	for(;;) alt {
 	(ip, cfd, rc) := <-admitc =>
+		# A source is what wrong passwords are counted by: an IPv4
+		# address, an IPv6 /64.  (It was the address: a host with
+		# a /64, which is every IPv6 host, took all the connections
+		# there are, persource at a time from each of its addresses.)
+		src := netof(ip);
 		k := 0;
 		for(l := conns; l != nil; l = tl l)
-			if((hd l).ip == ip)
+			if((hd l).src == src)
 				k++;
 		if(n >= maxconns || k >= maxpersource) {
 			if(verbose)
@@ -373,19 +380,20 @@ watchdog()
 			continue;
 		}
 		w := ref Watch(sys->millisec() + TLSWAIT + HDRWAIT, 0, 0, ip, 0, chan[1] of int, 0, nil);
-		conns = ref Entry(w, cfd, ip) :: conns;
+		conns = ref Entry(w, cfd, ip, src) :: conns;
 		n++;
 		rc <-= w;
 	(sw, src) := <-streamc =>
 		# event streams have no deadline: at most half the
-		# connections, and half of one address's, so a few clients
+		# connections, and half of one source's, so a few clients
 		# holding streams leave room for the rest
 		ns := 0;
 		nip := 0;
+		ssrc := netof(sw.ip);
 		for(l := conns; l != nil; l = tl l)
 			if((hd l).w.stream) {
 				ns++;
-				if((hd l).ip == sw.ip)
+				if((hd l).src == ssrc)
 					nip++;
 			}
 		if(ns >= max(1, maxconns / 2) || nip >= max(1, maxpersource / 2))
@@ -1110,8 +1118,17 @@ eventstream0(io: ref Io, r: ref Req, fd: ref FD): (int, big, int)
 		return (200, big 0, 0);
 
 	c := chan of array of byte;
-	io.w.orphans = 1;	# the reader, and a sleeper: killed when the connection ends
+	io.w.orphans = 1;	# the reader, a sleeper and a watcher: killed when the connection ends
 	spawn eventreader(fd, c);
+	# The client's side of the connection is read while the stream
+	# goes, by a watcher: its end is the client gone, known at once.
+	# (It was learnt from a write that failed: after the next event,
+	# or the comment after 15 s of silence, and of a file whose read
+	# never answers the first of those is a second comment, 30 s on:
+	# until then the client's slot of the streams was held.)
+	gonec := chan[1] of int;
+	spawn streamwatch(io, gonec);
+	watching := 1;
 	# One sleeper at a time, for the silence: a comment goes out at
 	# most 15 s after the last thing sent.  (There was one to an
 	# event, each alive 15 s: a stream of many events a second had
@@ -1130,13 +1147,24 @@ eventstream0(io: ref Io, r: ref Req, fd: ref FD): (int, big, int)
 		b := <-c =>
 			if(b == nil) {
 				# (the reader saw the end, and has gone)
+				# A watcher still in its read has the connection's
+				# next bytes to come: the connection is not kept.
 				if(chunked) {
 					io.puts("0\r\n\r\n");
+					if(watching)
+						keep = 0;
 					return (200, sent, keep);
 				}
 				return (200, sent, 0);
 			}
 			ev = sseevent(b);
+		n := <-gonec =>
+			watching = 0;
+			if(n <= 0)
+				return (200, sent, 0);
+			# bytes: the client's next request, which waits its
+			# turn in the buffer; its going is then not seen
+			continue;
 		<-beat =>
 			sleeping = 0;
 			ev = ": keep-alive\n\n";
@@ -1166,6 +1194,20 @@ eventreader(fd: ref FD, c: chan of array of byte)
 		b[0:] = buf[0:n];
 		c <-= b;
 	}
+}
+
+# One read of the connection, for an event stream: what it gave (0 or
+# less: the client has closed, or the connection has failed)
+streamwatch(io: ref Io, c: chan of int)
+{
+	n := -1;
+	{
+		n = io.fill();
+	} exception {
+	"*" =>
+		n = -1;
+	}
+	c <-= n;
 }
 
 sleeper(ms: int, c: chan of int)
@@ -2533,11 +2575,46 @@ loadtrust()
 	crls := tls->pemblocks(text, "X509 CRL");
 	if(roots == nil)
 		fatal(trustfile + ": no PEM CA certificate");
-	# the roots and CRLs as a handshake will take them, now: a CRL no
-	# root signed would refuse every client
+	# The CAs and CRLs as a handshake will take them, now.  Every CA
+	# of the file is one clients are trusted under, an intermediate
+	# among them.  A CRL counts for what its own CA issued (x509(2)):
+	# one in the name of a CA of the file must be that CA's, since a
+	# path through the CA is refused for one that is not, and that is
+	# every client of it: it is refused here.  One in no such name is
+	# another CA's: an intermediate's whose certificate the clients
+	# send, and it then revokes what the intermediate issued, or one
+	# no chain here will come to.  It is taken, and named, since
+	# which it is cannot be told until a client's chain is seen.  (It
+	# stopped httpd starting: a CRL that was no root's failed every
+	# handshake that did not go through its CA, so an intermediate's
+	# CRL needed the intermediate made a CA of the file.)
 	x := load X509 X509->PATH;
 	if(x == nil || x->init() != nil)
 		fatal(sys->sprint("cannot load %s: %r", X509->PATH));
+	Signed, CRL, Name: import x;
+	for(cl := crls; cl != nil; cl = tl cl) {
+		(serr, sg) := Signed.decode(hd cl);
+		if(serr != nil)
+			fatal(trustfile + ": a CRL: " + serr);
+		(cerr, crl) := CRL.decode(sg.tobe_signed);
+		if(cerr != nil)
+			fatal(trustfile + ": a CRL: " + cerr);
+		is := 0;
+		why := "";
+		for(l := roots; l != nil && !is; l = tl l) {
+			(ok, e) := x->crlof(hd cl, hd l);
+			is = ok;
+			if(e != nil && why == nil)
+				why = e;
+		}
+		if(!is && why != nil)
+			fatal(trustfile + ": " + why);
+		if(!is)
+			sys->fprint(stderr, "httpd: %s: a CRL of %s, which is no CA of the file: it revokes what a CA of that name on a client's chain has issued, and nothing else\n",
+				trustfile, crl.issuer.tostring());
+	}
+	# and each CA with the file's CRLs: a CA the file's own CRLs
+	# revoke, one out of date
 	for(l := roots; l != nil; l = tl l) {
 		(ok, err) := x->verify_certchain_roots(hd l :: nil, roots, crls, now(), X509->Usage_Any);
 		if(!ok)
@@ -2579,6 +2656,7 @@ loadrules()
 			continue;
 		}
 		ru := ref Rule;
+		ru.line = n;
 		if(hd f == "GET" || hd f == "POST") {
 			ru.meth = hd f;
 			f = tl f;
@@ -2634,6 +2712,25 @@ loadrules()
 		rev = ru :: rev;
 	}
 	rules = rev;
+	# A protecting rule for a directory that was there at start holds
+	# for everything below it, by identity, whatever deeper rule there
+	# is: a none below it opens nothing.  The request is still asked
+	# for what the directory asks (it fails closed), and nothing said
+	# so: said here, once, for each.
+	for(nl := rules; nl != nil; nl = tl nl) {
+		nr := hd nl;
+		if(protects(nr.terms))
+			continue;
+		for(pl := rules; pl != nil; pl = tl pl) {
+			pr := hd pl;
+			if(pr.resolved && protects(pr.terms) && pr.prefix != nr.prefix && under(nr.prefix, pr.prefix) &&
+			   (pr.meth == nil || nr.meth == nil || pr.meth == nr.meth)) {
+				sys->fprint(stderr, "httpd: %s:%d: %s none opens nothing: it is under %s (line %d), whose rule holds for all below it\n",
+					rulesfile, nr.line, nr.orig, pr.orig, pr.line);
+				break;
+			}
+		}
+	}
 }
 
 # ---------------------------------------------------------------- passwords
@@ -2653,9 +2750,9 @@ pwbad := 0;	# the file could not be read when last looked at: looked at again ea
 pwsaid: string;	# what was last said of it, said once
 
 DEFITERS: con 100000;
-WINDOW: con 600;	# seconds a source's failures are counted, and it is refused for after ten
+WINDOW: con 600*1000;	# ms a source's failures are counted, and it is refused for after ten
 MAXFAIL: con 10;
-CACHETIME: con 300;	# seconds a checked password is taken again without its hash
+CACHETIME: con 300*1000;	# ms a checked password is taken again without its hash
 
 # user:pbkdf2-sha256:iterations:salt:hash, the last two base64.
 #
@@ -2728,87 +2825,185 @@ nousers(why: string)
 Fail: adt {
 	ip:	string;
 	n:	int;
-	first:	int;
+	first:	int;	# sys->millisec() of the first of them
 };
 
 Cached: adt {
 	key:	array of byte;	# SHA-256 of user, NUL, password
-	until:	int;
+	at:	int;		# sys->millisec() when it was found right
 };
 
-# Passwords are checked here, one at a time: a guess costs its
-# PBKDF2 whatever it guesses (an unknown user's too, against a salt of
-# no one's and as many iterations as the file's most, so a name is not
-# learnt by the time).  Ten wrong from one network (an IPv4 address, an
-# IPv6 /64) in ten minutes and it is refused for the rest of them;
-# fifty wrong for one user from anywhere and that user is.  A password
-# found right is taken again for five minutes without its hash (a
-# browser sends it with every request), lockout or not, so one guesser
-# behind a NAT does not lock out those already in.  The password file
-# is read again when it changes, and what was found right under the
-# old one is forgotten.
+# A password to be hashed, and everyone waiting to hear of it
+Job: adt {
+	user:	string;
+	pass:	string;
+	ip:	string;
+	key:	array of byte;
+	net:	string;	# what its failure is counted under
+	ukey:	string;
+	u:	ref User;	# the user's line when it was asked, if there is one
+	most:	int;	# the rounds every guess costs
+	gen:	int;	# the password file's reading it was asked under
+	rcs:	list of chan of int;
+	good:	int;
+};
+
+# Passwords are checked by two processes.  The authenticator answers
+# what costs nothing: a password found right in the last five minutes
+# (a browser sends it with every request), and a source or a user
+# that is locked out.  The rest it gives, one at a time, to the
+# hasher: a guess costs its PBKDF2 whatever it guesses (an unknown
+# user's too, against a salt of no one's and as many iterations as the
+# file's most, so a name is not learnt by the time).  (There was one
+# process, so a user already in waited behind every guess being
+# hashed: enough guessers and nobody's request was answered before
+# its deadline.)  A guess is counted against its source and its user
+# when it is asked, before the work, and uncounted if it proves right:
+# what a source can have waiting is what it may get wrong.  The same
+# user and password asked again while it waits is hashed once.
+#
+# Ten wrong from one network (an IPv4 address, an IPv6 /64) in ten
+# minutes and it is refused for the rest of them; fifty wrong for one
+# user from anywhere and that user is.  A password found right is
+# taken again for five minutes without its hash, lockout or not, so
+# one guesser behind a NAT does not lock out those already in.  The
+# password file is read again when it changes, and what was found
+# right under the old one is forgotten.
+#
+# The ten minutes and the five are counted by sys->millisec(), which
+# only goes forward.  (They were counted by the time of day, which is
+# set: by timesync(8), or by anyone who can make it wrong.  A step
+# forward forgot every lockout, a step back kept one.)
+fails: list of ref Fail;
+cache: list of ref Cached;
+pwgen := 0;	# counts the readings of the password file
+waiting: list of ref Job;	# in the order they came
+hashing: ref Job;
+jobc: chan of ref Job;
+
 authenticator()
 {
-	fails: list of ref Fail;
-	cache: list of ref Cached;
-	dummysalt := array of byte "no one's salt, for no one";
-	for(;;) {
-		(user, pass, ip, rc) := <-authc;
+	jobc = chan[1] of ref Job;	# (it is sent to only when the hasher is idle)
+	resc := chan of ref Job;
+	spawn hasher(jobc, resc);
+	tick := chan of int;
+	spawn authticker(tick);
+	for(;;) alt {
+	(user, pass, ip, rc) := <-authc =>
 		{
-			rc <-= check(user, pass, ip, fails, cache, dummysalt);
+			ask(user, pass, ip, rc);
 		} exception e {
 		"*" =>
 			sys->fprint(stderr, "httpd: checking a password: %s\n", e);
 			rc <-= Bad;	# (rc holds one: this does not wait)
 		}
-		(fails, cache) = (cfails, ccache);
+	j := <-resc =>
+		hashing = nil;
+		{
+			hashed(j);
+		} exception e {
+		"*" =>
+			sys->fprint(stderr, "httpd: checking a password: %s\n", e);
+			for(l := j.rcs; l != nil; l = tl l)
+				alt {
+				hd l <-= Bad =>
+					;
+				* =>
+					;
+				}
+		}
+		if(waiting != nil) {
+			hashing = hd waiting;
+			waiting = tl waiting;
+			jobc <-= hashing;
+		}
+	<-tick =>
+		# (so that none is left to be met again when the
+		# millisecond clock comes round, after 49 days)
+		forget(sys->millisec());
 	}
 }
 
-# check's lists, as it leaves them (Limbo has no reference parameters)
-cfails: list of ref Fail;
-ccache: list of ref Cached;
+authticker(c: chan of int)
+{
+	for(;;) {
+		sys->sleep(30*1000);
+		c <-= 1;
+	}
+}
+
+# The failures and cached passwords past their time, dropped
+forget(t: int)
+{
+	nc: list of ref Cached;
+	for(cl := cache; cl != nil; cl = tl cl)
+		if(t - (hd cl).at < CACHETIME)
+			nc = hd cl :: nc;
+	cache = nc;
+	nf: list of ref Fail;
+	for(l := fails; l != nil; l = tl l)
+		if((hd l).n > 0 && t - (hd l).first < WINDOW)
+			nf = hd l :: nf;
+	fails = nf;
+}
+
+failof(key: string): ref Fail
+{
+	for(l := fails; l != nil; l = tl l)
+		if((hd l).ip == key)
+			return hd l;
+	return nil;
+}
+
+count(key: string, t: int)
+{
+	f := failof(key);
+	if(f == nil)
+		fails = ref Fail(key, 1, t) :: fails;
+	else
+		f.n++;
+}
 
 USERFAIL: con 50;
 
-check(user, pass, ip: string, fails: list of ref Fail, cache: list of ref Cached, dummysalt: array of byte): int
+# A password asked about: answered at once from the cache or the
+# lockouts, or counted and left for the hasher
+ask(user, pass, ip: string, rc: chan of int)
 {
-	cfails = fails;
-	ccache = cache;
-	t := now();
+	t := sys->millisec();
 	(ok, d) := sys->stat(pwfile);
 	if(ok < 0 || pwbad || d.mtime != pwmtime || d.qid.vers != pwqid.vers || d.qid.path != pwqid.path || d.length != pwlen) {
 		loadpasswords();
 		cache = nil;	# a password found right was the old file's
+		pwgen++;
 	}
+	forget(t);
 	key := sha256(array of byte (user + "\0" + pass));
-	nc: list of ref Cached;
-	hit := 0;
 	for(cl := cache; cl != nil; cl = tl cl)
-		if((hd cl).until > t) {
-			nc = hd cl :: nc;
-			if(bytesame((hd cl).key, key))
-				hit = 1;
+		if(bytesame((hd cl).key, key)) {
+			rc <-= Ok;
+			return;
 		}
-	ccache = cache = nc;
-	if(hit)
-		return Ok;
 
 	net := netof(ip);
 	ukey := "user " + user;
-	nf: list of ref Fail;
-	fnet, fuser: ref Fail;
-	for(l := fails; l != nil; l = tl l)
-		if(t - (hd l).first < WINDOW) {
-			nf = hd l :: nf;
-			if((hd l).ip == net)
-				fnet = hd l;
-			if((hd l).ip == ukey)
-				fuser = hd l;
+	fnet := failof(net);
+	fuser := failof(ukey);
+	if(fnet != nil && fnet.n >= MAXFAIL || fuser != nil && fuser.n >= USERFAIL) {
+		rc <-= Locked;
+		return;
+	}
+
+	# asked already, and not yet answered: one hash answers both
+	if(hashing != nil && hashing.gen == pwgen && bytesame(hashing.key, key)) {
+		hashing.rcs = rc :: hashing.rcs;
+		return;
+	}
+	for(wl := waiting; wl != nil; wl = tl wl)
+		if((hd wl).gen == pwgen && bytesame((hd wl).key, key)) {
+			(hd wl).rcs = rc :: (hd wl).rcs;
+			return;
 		}
-	cfails = fails = nf;
-	if(fnet != nil && fnet.n >= MAXFAIL || fuser != nil && fuser.n >= USERFAIL)
-		return Locked;
 
 	u: ref User;
 	most := DEFITERS;
@@ -2818,33 +3013,71 @@ check(user, pass, ip: string, fails: list of ref Fail, cache: list of ref Cached
 		if((hd ul).iters > most)
 			most = (hd ul).iters;
 	}
-	# Every guess costs most rounds: a user whose line has fewer makes
-	# up the rest against no one's salt.  (A known user cost its own
-	# rounds and an unknown one the most, so a name whose line was made
-	# with fewer was told from one that is no user by the time.)
-	good := 0;
-	if(u != nil) {
-		good = bytesame(pbkdf2(array of byte pass, u.salt, u.iters), u.hash);
-		if(u.iters < most)
-			pbkdf2(array of byte pass, dummysalt, most - u.iters);
-	} else
-		pbkdf2(array of byte pass, dummysalt, most);
-	if(good) {
-		if(len cache < 64)
-			ccache = ref Cached(key, t + CACHETIME) :: cache;
-		return Ok;
+	count(net, t);
+	count(ukey, t);
+	j := ref Job(user, pass, ip, key, net, ukey, u, most, pwgen, rc :: nil, 0);
+	if(hashing == nil) {
+		hashing = j;
+		jobc <-= j;
+	} else {
+		rev: list of ref Job;
+		for(wl = waiting; wl != nil; wl = tl wl)
+			rev = hd wl :: rev;
+		rev = j :: rev;
+		waiting = nil;
+		for(; rev != nil; rev = tl rev)
+			waiting = hd rev :: waiting;
 	}
-	if(fnet == nil)
-		cfails = fails = ref Fail(net, 1, t) :: fails;
-	else
-		fnet.n++;
-	if(fuser == nil)
-		cfails = ref Fail(ukey, 1, t) :: fails;
-	else
-		fuser.n++;
-	if(verbose)
-		sys->fprint(stderr, "httpd: %s: a wrong password for %s\n", ip, logname(user));
-	return Bad;
+}
+
+# The hasher's answer: told to everyone who asked
+hashed(j: ref Job)
+{
+	ans := Bad;
+	if(j.good) {
+		ans = Ok;
+		# it was counted when it was asked
+		for(k := j.net :: j.ukey :: nil; k != nil; k = tl k) {
+			f := failof(hd k);
+			if(f != nil)
+				f.n--;
+		}
+		# (found right under a file since read again, it is not
+		# kept: what that file says of it is not known)
+		if(j.gen == pwgen && len cache < 64)
+			cache = ref Cached(j.key, sys->millisec()) :: cache;
+	} else if(verbose)
+		sys->fprint(stderr, "httpd: %s: a wrong password for %s\n", j.ip, logname(j.user));
+	for(l := j.rcs; l != nil; l = tl l)
+		hd l <-= ans;	# (each holds one: this does not wait)
+}
+
+# PBKDF2s, one at a time
+hasher(jobs: chan of ref Job, res: chan of ref Job)
+{
+	dummysalt := array of byte "no one's salt, for no one";
+	for(;;) {
+		j := <-jobs;
+		{
+			# Every guess costs most rounds: a user whose line has
+			# fewer makes up the rest against no one's salt.  (A
+			# known user cost its own rounds and an unknown one the
+			# most, so a name whose line was made with fewer was
+			# told from one that is no user by the time.)
+			pass := array of byte j.pass;
+			if(j.u != nil) {
+				j.good = bytesame(pbkdf2(pass, j.u.salt, j.u.iters), j.u.hash);
+				if(j.u.iters < j.most)
+					pbkdf2(pass, dummysalt, j.most - j.u.iters);
+			} else
+				pbkdf2(pass, dummysalt, j.most);
+		} exception e {
+		"*" =>
+			sys->fprint(stderr, "httpd: checking a password: %s\n", e);
+			j.good = 0;
+		}
+		res <-= j;
+	}
 }
 
 # The network an address's guesses are counted for: an IPv4 address

@@ -1,4 +1,4 @@
-# xen.ps1 — Windows counterpart of tools/xen: open host files in a
+# xen.ps1 - Windows counterpart of tools/xen: open host files in a
 # standalone InferNode editor, Acme-SAC style.
 #
 #	xen.ps1 [-Sam] [-Wait] [file ...]
@@ -73,6 +73,27 @@ if ($Wait) {
 	$p = Start-Process -FilePath $emu -ArgumentList $argline -NoNewWindow -Wait -PassThru
 	exit $p.ExitCode
 }
+# Detached, as tools/xen does with nohup: each instance appends to the
+# log, with when it started and how it ended. o.emu.exe is a console
+# program; started straight from here it would get a console window of
+# its own (a terminal beside Xenith's), and it would end with this one.
+# A waiter with no window (CreateNoWindow) runs it instead, through cmd
+# for the redirection. The command line is passed in the environment:
+# cmd expands %XEN_CMDLINE% once and does not expand what it holds.
 $log = if ($env:XEN_LOG) { $env:XEN_LOG } else { Join-Path $env:TEMP 'xen.log' }
-Start-Process -FilePath $emu -ArgumentList $argline `
-	-RedirectStandardOutput $log -RedirectStandardError "$log.err" | Out-Null
+$env:XEN_CMDLINE = "`"$emu`" $argline"
+$env:XEN_LOGFILE = $log
+$waiter = @'
+$l = $env:XEN_LOGFILE
+Add-Content -LiteralPath $l -Value ("=== {0:yyyy-MM-dd HH:mm:ss} xen {1}" -f (Get-Date), $env:XEN_CMDLINE)
+$p = Start-Process $env:ComSpec -ArgumentList '/d /s /c "%XEN_CMDLINE% 1>>"%XEN_LOGFILE%" 2>&1"' -NoNewWindow -Wait -PassThru
+Add-Content -LiteralPath $l -Value ("=== {0:yyyy-MM-dd HH:mm:ss} emu exit status {1}" -f (Get-Date), $p.ExitCode)
+'@
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = Join-Path $PSHOME 'powershell.exe'
+if (-not (Test-Path $psi.FileName)) { $psi.FileName = (Get-Process -Id $PID).Path }
+$psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' +
+	[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($waiter))
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+[System.Diagnostics.Process]::Start($psi) | Out-Null

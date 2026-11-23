@@ -32,7 +32,6 @@ TARG=\
 	attrdb.dis\
 	attrhash.dis\
 	auth.dis\
-	auth9.dis\
 	bloomfilter.dis\
 	bthci.dis\
 	btmock.dis\
@@ -64,7 +63,6 @@ TARG=\
 	env.dis\
 	ethcrypto.dis\
 	ethrpc.dis\
-	ether.dis\
 	exception.dis\
 	factotum.dis\
 	fdrun.dis\
@@ -117,8 +115,6 @@ TARG=\
 	gdl90.dis\
 	sdrdsp.dis\
 	garminav.dis\
-	ninep.dis\
-	oldauth.dis\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
@@ -163,7 +159,6 @@ TARG=\
 	styxpersist.dis\
 	styxservers.dis\
 	tables.dis\
-	tftp.dis\
 	timers.dis\
 	titlebar.dis\
 	tkclient.dis\
@@ -174,7 +169,6 @@ TARG=\
 	url.dis\
 	vac.dis\
 	venti.dis\
-	virgil.dis\
 	wait.dis\
 	wallet.dis\
 	watchvars.dis\
@@ -220,14 +214,12 @@ SYSMODULES=\
 	imagefile.m\
 	woff2.m\
 	brotli.m\
-	9p.m\
 	acmewin.m\
 	agentlib.m\
 	arg.m\
 	xenithwin.m\
 	asn1.m\
 	attrdb.m\
-	auth9.m\
 	bloomfilter.m\
 	bthci.m\
 	btmock.m\
@@ -242,7 +234,6 @@ SYSMODULES=\
 	cfgfile.m\
 	complete.m\
 	crc.m\
-	crypt.m\
 	csv.m\
 	daytime.m\
 	dbm.m\
@@ -260,7 +251,6 @@ SYSMODULES=\
 	env.m\
 	ethcrypto.m\
 	ethrpc.m\
-	ether.m\
 	exception.m\
 	factotum.m\
 	fdrun.m\
@@ -312,7 +302,6 @@ SYSMODULES=\
 	gdl90.m\
 	sdrdsp.m\
 	garminav.m\
-	oldauth.m\
 	pkcs.m\
 	plumbing.m\
 	plumbmsg.m\
@@ -347,7 +336,6 @@ SYSMODULES=\
 	tables.m\
 	testing.m\
 	textwidget.m\
-	tftp.m\
 	timers.m\
 	titlebar.m\
 	tk.m\

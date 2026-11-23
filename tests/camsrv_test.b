@@ -18,6 +18,19 @@ implement CamsrvTest;
 # one out of range ("exposure -1") are refused; ctl is not writable by
 # others.
 #
+# And the capture's own life (Settle, Stall), each against a camsrv of
+# its own:
+#   - a mode written just after the last close was taken while the
+#     capture was still making its last frame, which it then merged at
+#     one size into planes of another: the capture raised, never said it
+#     had gone, and no capture was started again (the next reader waited
+#     for ever).  The change waits for the capture.
+#   - a capture told to stop looks between frames; with a frame that
+#     never comes (a dead sensor link; "stall" with -t) it never went,
+#     and nor did anything after it.  It is given three seconds.
+#   - status said stream=on from the count of readers; it says what the
+#     capture is.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -255,8 +268,22 @@ testFrames(t: ref T)
 
 testStop(t: ref T)
 {
-	sys->sleep(300);
+	# the frame being made when the last reader went is finished first
+	# ("stopping"): how long that takes is the host's
+	for(i := 0; i < 50 && !has(file("status"), "stream=off"); i++)
+		sys->sleep(100);
 	t.assert(has(file("status"), "stream=off"), "the last close stops the stream: " + file("status"));
+}
+
+# the status at dir once it has stream=want, waiting at most ms for it
+waitstatus(dir, want: string, ms: int): string
+{
+	s := rd(dir + "/0/status");
+	for(; ms > 0 && !has(s, "stream=" + want); ms -= 100){
+		sys->sleep(100);
+		s = rd(dir + "/0/status");
+	}
+	return s;
 }
 
 testCtl(t: ref T)
@@ -269,8 +296,69 @@ testCtl(t: ref T)
 	t.assert(ctl("focus 700") > 0, "focus taken with nothing running");
 	t.assert(has(file("ctl"), "focus 700"), "and reads back");
 	t.assert(ctl("mode 144 80") < 0, "a mode that does not divide the sensor refused");
+	# white balance: fixed gains taken and read back, auto again, and
+	# what is not a pair of gains refused
+	# lens shading: on and off taken and read back; learning needs a camera
+	t.assert(ctl("shade off") > 0, "shade off taken");
+	t.assert(has(file("ctl"), "shade off\n"), "and reads back");
+	t.assert(ctl("shade on") > 0, "shade on taken");
+	t.assert(ctl("shade learn") < 0, "learning refused on the simulated sensor");
+	t.assert(ctl("shade maybe") < 0, "nonsense refused");
+	t.assert(ctl("wb 300 512") > 0, "fixed white balance taken");
+	t.assert(has(file("ctl"), "wb 300 512\n"), "and reads back");
+	t.assert(ctl("wb auto") > 0, "auto white balance taken");
+	t.assert(has(file("ctl"), "wb auto\n"), "and reads back");
+	t.assert(ctl("wb 100 300") < 0, "a gain under a half refused");
+	t.assert(ctl("wb 300 3000") < 0, "a gain over eight refused");
+	t.assert(ctl("wb 300") < 0, "one gain refused");
+	t.assert(ctl("wb red blue") < 0, "words refused");
+	t.assert(has(file("status"), " wbgains="), "status says the gains in use");
+	# the sensor's own limit, from its timing: the IMX708's 56 (the
+	# simulated sensor's); more was taken and silently held to it
+	t.assert(ctl("fps 57") < 0, "fps past the sensor's timing refused");
+	t.assert(ctl("fps 56") > 0, "the sensor's most taken");
 	t.assert(ctl("fps 10") > 0, "fps taken");
 	t.assert(has(file("fmt"), " i420 10"), "fmt says so");
+	t.assert(has(file("status"), " rawformat=rggb10:"), "the simulated sensor's mosaic, whatever the flip");
+}
+
+# 0/ndvi (issue #1244) over the simulated bars: red alone +1, blue alone
+# -1, both 0, neither no reading; ndvifmt, its controls, status
+testNdvi(t: ref T)
+{
+	t.assert(has(file("ndvifmt"), sys->sprint("%d %d ndvi8", W, H)), "ndvifmt: " + file("ndvifmt"));
+	fd := sys->open(MNT + "/0/ndvi", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("open ndvi: %r"));
+	nd := array[W*H] of byte;
+	# the next frame, waited for: those made before 0/ndvi was opened
+	# have none, and are refused as expired. The sensor's loop works out
+	# a frame's NDVI before it waits to hand the frame over, so the next
+	# frame may already have been made without it: take the newest's
+	# next again (macOS CI, both machines).
+	got := 0;
+	e := "frame expired";
+	for(try := 0; try < 5 && e == "frame expired"; try++)
+		(got, e) = readat(fd, nd, newest() + 1);
+	t.asserteq(got, W*H, "a whole NDVI frame: " + e);
+	row := H-8;
+	bar := array[] of {128, 255, 1, 0};	# white, red alone, blue alone, neither
+	for(i := 0; i < len bar; i++){
+		v := int nd[row*W + (2*i+1)*W/16];
+		t.asserteq(v, bar[i], sys->sprint("bar %d", i));
+	}
+	t.assert(has(file("status"), " ndvi="), "status has the figures while it is read: " + file("status"));
+	t.assert(ctl("ndvi green blue") > 0, "other channels taken");
+	t.assert(has(file("ctl"), "ndvi green blue\n"), "and read back");
+	t.assert(ctl("ndvi red red") < 0, "the same channel twice refused");
+	t.assert(ctl("ndvi red") < 0, "one channel refused");
+	t.assert(ctl("ndvi infrared blue") < 0, "no such channel refused");
+	t.assert(ctl("ndvi red blue") > 0, "back to red and blue");
+	t.assert(ctl("ndvifloor 3000") < 0, "a floor past two channels refused");
+	t.assert(ctl("ndvifloor 16") > 0, "the floor taken");
+	fd = nil;
+	sys->sleep(200);
+	t.assert(!has(file("status"), " ndvi="), "no figures with nobody reading");
 }
 
 testRaw(t: ref T)
@@ -362,6 +450,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sys = load Sys Sys->PATH;
 	testing = load Testing Testing->PATH;
 	testing->init();
+	testing->own();	# what this starts is killed at the end (reap)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
@@ -380,11 +469,17 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Stop", testStop);
 		run("Ctl", testCtl);
 		run("Raw", testRaw);
+		run("Ndvi", testNdvi);
 		run("Rotate", testRotate);
 		run("Posted", testPosted);
 		run("HostileRead", testHostileRead);
 		run("HostileCtl", testHostileCtl);
+		run("Settle", testSettle);
+		run("Stall", testStall);
 	}
+	# nothing of the test's is left running: run as emu's own program
+	# it never exited, for the servers and waiting procs it left
+	testing->reap();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }
@@ -579,6 +674,126 @@ hostilectl(out: chan of string)
 	check(out, has(c, "fps 12\n") && has(c, "gain 300\n") && has(c, "flip 1\n") && has(c, "exposure 0\n") &&
 		has(c, "focus 400\n") && has(c, "mode 576 324\n") && has(c, "rotate 180\n"), "and read back: " + c);
 	check(out, try(dir, "status", nil, big 0) == "ok", "status reads after them");
+	sys->unmount(nil, dir);
+	out <-= "END";
+}
+
+testSettle(t: ref T)
+{
+	hostile(t, settle);
+}
+
+# one frame read of the camsrv at dir, whole: "ok", an error, or "hung"
+oneframe(dir: string, fs: int): string
+{
+	done := chan[1] of string;
+	pidc := chan of int;
+	spawn frameop(dir, fs, done, pidc);
+	pid := <-pidc;
+	tc := chan[1] of int;
+	spawn timer(tc, 8000);
+	alt {
+	r := <-done =>
+		return r;
+	<-tc =>
+		k := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+		if(k != nil)
+			sys->fprint(k, "kill");
+		return "hung";
+	}
+}
+
+frameop(dir: string, fs: int, done: chan of string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	fd := sys->open(dir + "/0/frame", Sys->OREAD);
+	if(fd == nil){
+		done <-= sys->sprint("open: %r");
+		return;
+	}
+	b := array[fs] of byte;
+	for(try := 0; try < 5; try++){
+		n := postednewest(dir);
+		(got, e) := readat(fd, b, n);
+		if(e == "frame expired")
+			continue;
+		if(e != nil)
+			done <-= e;
+		else if(got != fs)
+			done <-= sys->sprint("short frame: %d of %d", got, fs);
+		else
+			done <-= "ok";
+		return;
+	}
+	done <-= "frame expired, five times";
+}
+
+settle(out: chan of string)
+{
+	dir := MNT + ".s";
+	if(own(dir) < 0){
+		out <-= sys->sprint("FAIL mount: %r");
+		out <-= "END";
+		return;
+	}
+	check(out, try(dir, "ctl", "fps 56", big 0) == "ok", "fps 56");
+	big1 := 576*324*3/2;
+	small := 288*162*3/2;
+	for(i := 0; i < 12; i++){
+		r := try(dir, "ctl", "mode 576 324", big 0);
+		check(out, r == "ok", sys->sprint("round %d: mode 576 324 after the close: %s", i, r));
+		r = oneframe(dir, big1);
+		if(r == "hung"){
+			out <-= sys->sprint("FAIL round %d: no frame at 576x324: the capture never started again", i);
+			break;
+		}
+		check(out, r == "ok", sys->sprint("round %d: a frame at 576x324: %s", i, r));
+		# the reader has just closed: its capture is still in a frame
+		r = try(dir, "ctl", "mode 288 162", big 0);
+		check(out, r == "ok", sys->sprint("round %d: mode 288 162 after the close: %s", i, r));
+		r = oneframe(dir, small);
+		if(r == "hung"){
+			out <-= sys->sprint("FAIL round %d: no frame at 288x162: the capture never started again", i);
+			break;
+		}
+		check(out, r == "ok", sys->sprint("round %d: a frame at 288x162: %s", i, r));
+	}
+	sys->unmount(nil, dir);
+	out <-= "END";
+}
+
+testStall(t: ref T)
+{
+	hostile(t, stall);
+}
+
+stall(out: chan of string)
+{
+	dir := MNT + ".t";
+	if(own(dir) < 0){
+		out <-= sys->sprint("FAIL mount: %r");
+		out <-= "END";
+		return;
+	}
+	hold := sys->open(dir + "/0/frame", Sys->OREAD);
+	check(out, hold != nil, "frame opens");
+	sys->sleep(300);
+	check(out, has(rd(dir + "/0/status"), "stream=on"), "streaming: " + rd(dir + "/0/status"));
+	check(out, try(dir, "ctl", "stall", big 0) == "ok", "stall is taken by the simulated sensor");
+	sys->sleep(300);
+	hold = nil;
+	sys->sleep(300);
+	# the capture is in a frame that will not come: not off, and it says so
+	s := rd(dir + "/0/status");
+	check(out, has(s, "stream=stopping"), "a capture told to stop and not yet gone: " + s);
+	# Stopwait (3 s), and the host's time to kill it and say so
+	s = waitstatus(dir, "off", 8000);
+	check(out, has(s, "stream=off"), "given up after three seconds: " + s);
+	r := oneframe(dir, FS);
+	if(r == "hung")
+		out <-= "FAIL after a capture that never stopped, no capture starts: a reader waits for ever";
+	else
+		check(out, r == "ok", "a reader after it gets a frame: " + r);
 	sys->unmount(nil, dir);
 	out <-= "END";
 }

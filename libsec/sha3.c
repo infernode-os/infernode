@@ -290,6 +290,24 @@ sha3_256(const uchar *in, ulong inlen, uchar out[32])
 }
 
 /*
+ * Keccak-256, as Ethereum has it: SHA3-256's sponge with the padding of
+ * the Keccak submission (0x01) where FIPS 202 has 0x06.  It had a file
+ * of its own with a second Keccak-f in it, the permutation by tables
+ * that this file's was before it was written out.
+ */
+void
+keccak256(const uchar *in, ulong inlen, uchar out[32])
+{
+	SHA3state s;
+
+	sha3_init(&s, 136, 32);
+	sha3_update(&s, in, inlen);
+	sha3_pad(&s, 0x01);
+	memmove(out, s.a, 32);
+	secureZero(&s, sizeof s);
+}
+
+/*
  * Public API: SHA3-512
  */
 void

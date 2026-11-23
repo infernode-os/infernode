@@ -16,8 +16,9 @@ With no -a, the default account is read from /mnt/wallet/default (or
 /mnt/wallet/ctl); an error is returned if none is set. The payment
 option is chosen to match the wallet's active network; -c overrides
 (default preference: base). If the account requires approval, the
-tool waits up to 90s for a trusted controller to approve, then
-returns "payment pending approval" — retry the fetch after approval.
+tool waits up to 90s for a trusted controller to approve. If nobody
+does, the request is withdrawn and the tool returns an error saying
+so: nothing is left to approve later, and a fetch again asks anew.
 What was paid is reported in a leading "[Paid ...]" line before the
 content. Requests to internal/private network addresses are blocked;
 requests time out after 30s and bodies are truncated at 512KB (the

@@ -6,8 +6,7 @@ implement Newns;
 #	fork	split the namespace before modification
 #	nodev	disallow device attaches
 #	bind	[-abrci] from to
-#	mount	[-abrci9] [net!]machine[!svc] to [spec]
-#	import [-abrci9] [net!]machine[!svc] [remotedir] dir
+#	mount	[-abrci] [net!]machine[!svc] to [spec]
 #	unmount	[-i] [from] to
 #   	cd	directory
 #
@@ -34,7 +33,6 @@ include "keyring.m";
 include "security.m";
 	au: Auth;
 
-include "factotum.m";
 
 include "arg.m";
 	arg: Arg;
@@ -85,14 +83,13 @@ newns(user: string, file: string): string
 		setenv("home", "/usr/"+user);
 	}
 
-	facfd := sys->open("/mnt/factotum/rpc", Sys->ORDWR);
-	return nsfile(mfp, facfd, 0);
+	return nsfile(mfp, 0);
 }
 
 # A file may read another (.), which may read it: no deeper than this.
 MAXDEPTH: con 16;
 
-nsfile(b: ref Iobuf, facfd: ref Sys->FD, depth: int): string
+nsfile(b: ref Iobuf, depth: int): string
 {
 	e := "";
 	while((l := b.gets('\n')) != nil){
@@ -108,7 +105,7 @@ nsfile(b: ref Iobuf, facfd: ref Sys->FD, depth: int): string
 		(argv, xerr) := expand(slist);
 		if(xerr != nil)
 			return xerr;
-		e = nsop(argv, facfd, depth);
+		e = nsop(argv, depth);
 		if(e != "")
 			break;
    	}
@@ -141,7 +138,7 @@ expand(l: list of string): (list of string, string)
 	return (l, nil);
 }
 
-nsop(argv: list of string, facfd: ref Sys->FD, depth: int): string
+nsop(argv: list of string, depth: int): string
 {
 	# ignore comments 
 	if(argv == nil)
@@ -166,7 +163,7 @@ nsop(argv: list of string, facfd: ref Sys->FD, depth: int): string
 		mfp := bio->open(nsf, bio->OREAD);
 		if(mfp==nil)
       			return sys->sprint("can't open %q for read %r", nsf);
-		e = nsfile(mfp, facfd, depth + 1);
+		e = nsfile(mfp, depth + 1);
 	"new" =>
 		c = Sys->NEWNS | Sys->FORKENV;
 	"clear" =>
@@ -183,11 +180,13 @@ nsop(argv: list of string, facfd: ref Sys->FD, depth: int): string
 	"bind" =>
 		e = bind(argv);
 	"mount" =>
-		e = mount(argv, facfd);
+		e = mount(argv);
 	"unmount" =>
 		e = unmount(argv);
 	"import" =>
-		e = import9(argv, facfd);
+		# it imported from a Plan 9 system with Plan 9's own
+		# authentication, which this system no longer has
+		e = "import: Plan 9 authentication (p9sk1) is not in this system; mount an InferNode machine with mount";
    	"cd" =>
    		if(len argv != 2)
 			return "cd: must have one argument";   
@@ -209,12 +208,11 @@ Moptres: adt {
 	alg: string;
 	keyfile: string;
 	ignore: int;
-	use9: int;
 };
 
 mopt(argv: list of string): (ref Moptres, string)
 {
-	r := ref Moptres(nil, 0, "aes_256_gcm", nil, 0, 0);
+	r := ref Moptres(nil, 0, "aes_256_gcm", nil, 0);
 
 	arg->init(argv);
 	while ((opt := arg->opt()) != 0) {
@@ -232,7 +230,9 @@ mopt(argv: list of string): (ref Moptres, string)
 			if((r.alg = arg->arg()) == nil)
 				return (nil, "mount: missing arg to -C option");
 		'9' =>
-			r.use9 = 1;
+			# Plan 9's authentication through factotum's p9any,
+			# which could only fail once p9sk1 (DES) had gone
+			return (nil, "mount: -9: Plan 9 authentication (p9sk1) is not in this system");
 		 *  =>
 			return (nil, sys->sprint("mount: bad option -%c", opt));
 		}
@@ -262,7 +262,7 @@ bind(argv: list of string): string
 	return nil;
 }
 
-mount(argv: list of string, facfd: ref Sys->FD): string
+mount(argv: list of string): string
 {
 	fd: ref Sys->FD;
 
@@ -287,20 +287,6 @@ mount(argv: list of string, facfd: ref Sys->FD): string
 	if(ok < 0)
 		return ig(r, sys->sprint("dial: %s: %r", dest));
 	
-	if(r.use9){
-		factotum := load Factotum Factotum->PATH;
-		if(factotum == nil)
-			return ig(r, sys->sprint("cannot load %s: %r", Factotum->PATH));
-		factotum->init();
-		fd = c.dfd;	# it was never set: every mount -9 failed, "fd out of range"
-		afd := sys->fauth(fd, spec);
-		if(afd != nil)
-			factotum->proxy(afd, facfd, "proto=p9any role=client");	# ignore result; if it fails, mount will fail
-		if(sys->mount(fd, afd, dir, r.flags, spec) < 0)
-			return ig(r, sys->sprint("mount %q %q: %r", addr, dir));
-		return nil;
-	}
-
 	user := user();
 	kd := "/usr/" + user + "/keyring/";
 	cert: string;
@@ -337,51 +323,6 @@ mount(argv: list of string, facfd: ref Sys->FD): string
 	if(sys->mount(fd, nil, dir, r.flags, spec) < 0)
 		return ig(r, sys->sprint("mount %q %q: %r", addr, dir));
 
-	return nil;
-}
-
-import9(argv: list of string, facfd: ref Sys->FD): string
-{
-	(r, err) := mopt(argv);
-	if(err != nil)
-		return err;
-
-	if(len r.argv < 2)
-		return "import: too few args";
-	if(facfd == nil)
-		return ig(r, "import: no factotum");
-	factotum := load Factotum Factotum->PATH;
-	if(factotum == nil)
-		return ig(r, sys->sprint("cannot load %s: %r", Factotum->PATH));
-	factotum->init();
-	addr := hd r.argv;
-	r.argv = tl r.argv;
-	rdir := hd r.argv;
-	r.argv = tl r.argv;
-	dir := rdir;
-	if(r.argv != nil)
-		dir = hd r.argv;
-	dest := netmkaddr(addr, "net", "17007");	# exportfs; might not be in inferno's ndb yet
-	(ok, c) := sys->dial(dest, nil);
-	if(ok < 0)
-		return ig(r, sys->sprint("import: %s: %r", dest));
-	fd := c.dfd;
-	if(factotum->proxy(fd, facfd, "proto=p9any role=client") == nil)
-		return ig(r, sys->sprint("import: %s: %r", dest));
-	if(sys->fprint(fd, "%s", rdir) < 0)
-		return ig(r, sys->sprint("import: %s: %r", dest));
-	buf := array[256] of byte;
-	if((n := sys->read(fd, buf, len buf)) != 2 || buf[0] != byte 'O' || buf[1] != byte 'K'){
-		if(n >= 4)
-			sys->werrstr(string buf[0:n]);
-		return ig(r, sys->sprint("import: %s: %r", dest));
-	}
-	# TO DO: new style: impo aan|nofilter clear|ssl|tls\n
-	afd := sys->fauth(fd, "");
-	if(afd != nil)
-		factotum->proxy(afd, facfd, "proto=p9any role=client");
-	if(sys->mount(fd, afd, dir, r.flags, "") < 0)
-		return ig(r, sys->sprint("import %q %q: %r", addr, dir));
 	return nil;
 }
 

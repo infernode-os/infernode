@@ -126,10 +126,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	setmode(ModeList);
 	refreshkeys();
 
-	if(secstorelocked())
-		flashstatus("Keys are in-memory only (login was skipped)");
-	else
-		flashstatus("Keys persist to secstore");
+	flashstatus(keystore());
 
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
@@ -558,10 +555,38 @@ keylabel(ke: ref KeyEntry): string
 	return s;
 }
 
-secstorelocked(): int
+# Where a key added now is kept, from the one program that knows:
+# factotum's secstore file (factotum(4)).  It was whether a file in
+# /tmp existed, which anything could make and which stayed from boot
+# to boot: "Keys persist to secstore" over keys that were in memory
+# only.
+keystore(): string
 {
-	(ok, nil) := sys->stat("/tmp/.secstore-unlocked");
-	return ok < 0;
+	fd := sys->open("/mnt/factotum/secstore", Sys->OREAD);
+	if(fd == nil)
+		return "Keys are in-memory only (factotum does not say where they are kept)";
+	buf := array[512] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "Keys are in-memory only (factotum does not say where they are kept)";
+	s := string buf[0:n];
+	while(len s > 0 && s[len s-1] == '\n')
+		s = s[0:len s-1];
+	(nil, f) := sys->tokenize(s, " ");
+	if(f == nil)
+		return "Keys are in-memory only";
+	case hd f {
+	"saving" =>
+		if(tl f != nil && hd tl f == "keyfile")
+			return "Keys persist to a key file";
+		return "Keys persist to secstore";
+	"notsaving" =>
+		why := "";
+		if(len s > len "notsaving ")
+			why = ": " + s[len "notsaving ":];
+		return "Keys are NOT being saved" + why;
+	}
+	return "Keys are in-memory only (login was skipped)";
 }
 
 # ── Keyboard ──────────────────────────────────────────────────

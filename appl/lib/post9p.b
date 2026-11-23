@@ -92,6 +92,13 @@ Post.unpost(p: self ref Post)
 #
 Maxpending: con 1024;
 
+# A post has so many connections at once and no more: each is a pipe,
+# two processes here and whatever its server keeps for it, and there
+# was no end to them.  One more is refused in answer to its first
+# request, so its client is told why.
+Maxconns: con 256;
+Etoomany: con "too many connections to this post";
+
 Rd, Wr: con iota;
 
 Readreq: adt {
@@ -155,9 +162,10 @@ poster(io: ref Sys->FileIO, conns: chan of ref Sys->FD, quit: chan of int)
 			continue;
 		}
 		c: ref Conn;
-		(cl, c) = conn(cl, fid, conns, idle);
+		why: string;
+		(cl, c, why) = conn(cl, fid, conns, idle);
 		if(c == nil)
-			rc <-= (nil, "cannot connect");
+			rc <-= (nil, why);
 		else if(!c.rbusy){
 			c.rbusy = 1;
 			c.rc <-= ref Readreq(count, rc);	# its reader is waiting for it
@@ -173,9 +181,10 @@ poster(io: ref Sys->FileIO, conns: chan of ref Sys->FD, quit: chan of int)
 			continue;
 		}
 		c: ref Conn;
-		(cl, c) = conn(cl, fid, conns, idle);
+		why: string;
+		(cl, c, why) = conn(cl, fid, conns, idle);
 		if(c == nil)
-			wc <-= (0, "cannot connect");
+			wc <-= (0, why);
 		else if(!c.wbusy){
 			c.wbusy = 1;
 			c.wc <-= ref Writereq(data, wc);
@@ -201,14 +210,19 @@ last[T](l: list of T): (T, list of T)
 	return (x, l);
 }
 
-conn(l: list of ref Conn, fid: int, conns: chan of ref Sys->FD, idle: chan of (ref Conn, int)): (list of ref Conn, ref Conn)
+conn(l: list of ref Conn, fid: int, conns: chan of ref Sys->FD, idle: chan of (ref Conn, int)): (list of ref Conn, ref Conn, string)
 {
-	for(t := l; t != nil; t = tl t)
+	n := 0;
+	for(t := l; t != nil; t = tl t){
 		if((hd t).fid == fid)
-			return (l, hd t);
+			return (l, hd t, nil);
+		n++;
+	}
+	if(n >= Maxconns)
+		return (l, nil, Etoomany);
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0)
-		return (l, nil);
+		return (l, nil, sys->sprint("cannot connect: %r"));
 	c := ref Conn;
 	c.fid = fid;
 	c.fd = fds[1];
@@ -220,7 +234,7 @@ conn(l: list of ref Conn, fid: int, conns: chan of ref Sys->FD, idle: chan of (r
 	c.rpid = <-pidc;
 	spawn connwriter(c, c.fd, idle, pidc);
 	c.wpid = <-pidc;
-	return (c :: l, c);
+	return (c :: l, c, nil);
 }
 
 hangup(l: list of ref Conn, fid: int): list of ref Conn
@@ -259,14 +273,56 @@ kill(pid: int)
 connreader(c: ref Conn, fd: ref Sys->FD, idle: chan of (ref Conn, int), pidc: chan of int)
 {
 	pidc <-= sys->pctl(0, nil);
+	# What the pipe gave for a read whose client had gone by then (it
+	# was killed, or its request flushed) is the next read's: it is a
+	# piece of the connection's 9P replies, and sent to the request
+	# that had been given up it reached nobody, so the reader after it
+	# waited for a reply that had been spent.  The kernel leaves word
+	# on a given-up request's channel (sys-file2chan(2)).
+	kept: array of byte;
 	for(;;) {
 		r := <-c.rc;
-		buf := array[r.count] of byte;
-		n := sys->read(fd, buf, len buf);
-		if(n < 0)
-			r.rc <-= (nil, sys->sprint("%r"));
-		else
-			r.rc <-= (buf[0:n], nil);
+		alt {
+		<-r.rc =>
+			idle <-= (c, Rd);	# given up while it waited its turn
+			continue;
+		* =>
+			;
+		}
+		buf: array of byte;
+		err: string;
+		if(kept != nil){
+			n := len kept;
+			if(n > r.count)
+				n = r.count;
+			buf = kept[0:n];
+			if(n < len kept)
+				kept = kept[n:];
+			else
+				kept = nil;
+		}else{
+			buf = array[r.count] of byte;
+			n := sys->read(fd, buf, len buf);
+			if(n < 0){
+				err = sys->sprint("%r");
+				buf = nil;
+			}else
+				buf = buf[0:n];
+		}
+		alt {
+		<-r.rc =>
+			if(err == nil && len buf > 0){
+				if(kept != nil){	# what was cut from it comes after it
+					b := array[len buf + len kept] of byte;
+					b[0:] = buf;
+					b[len buf:] = kept;
+					buf = b;
+				}
+				kept = buf;
+			}
+		* =>
+			r.rc <-= (buf, err);
+		}
 		idle <-= (c, Rd);
 	}
 }
@@ -276,6 +332,15 @@ connwriter(c: ref Conn, fd: ref Sys->FD, idle: chan of (ref Conn, int), pidc: ch
 	pidc <-= sys->pctl(0, nil);
 	for(;;) {
 		w := <-c.wc;
+		# a write given up while it waited its turn was refused to
+		# its client: it is not then sent to the server
+		alt {
+		<-w.wc =>
+			idle <-= (c, Wr);
+			continue;
+		* =>
+			;
+		}
 		# a write on a pipe whose server has closed its end is an
 		# exception: the writer went with it, the client's write
 		# was never answered, nor any after it

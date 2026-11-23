@@ -124,11 +124,17 @@ rd(path: string): string
 
 # One-fid round trip: write the request, read the result back on the
 # same fd. Returns ("", err) if the write itself was refused.
+# The requests' files, kept open: an x402 request is withdrawn when the
+# file it was written to is closed, and these tests go on to approve or
+# deny what they asked for.
+held: list of ref Sys->FD;
+
 roundtrip(path, data: string): (string, string)
 {
 	fd := sys->open(path, Sys->ORDWR);
 	if(fd == nil)
 		return ("", sys->sprint("open %s: %r", path));
+	held = fd :: held;
 	b := array of byte data;
 	if(sys->write(fd, b, len b) <= 0)
 		return ("", sys->sprint("%r"));
@@ -405,7 +411,11 @@ testWaitForOutcome(t: ref T)
 
 #
 # x402's authorize, as payfetch calls it: it waits on its read for the
-# controller's decision, and gives up with the pending id at its limit.
+# controller's decision; at its limit it gives up, and the request is
+# withdrawn with it.  (It said "pending:<id>" and left the request in
+# the approver's list: an approval after that signed an authorization
+# and took its amount from the budget for a file that had been closed,
+# and the requester's next try was a new request.)
 #
 testX402Waits(t: ref T)
 {
@@ -421,9 +431,10 @@ testX402Waits(t: ref T)
 	t0 := sys->millisec();
 	(payload, err) := x402->authorize(req, nil, "policy", 1);
 	dt := sys->millisec() - t0;
-	t.assertseq(payload, "", "no authorization while pending");
-	t.assert(hasprefix(err, "pending:"), "still pending at the limit: " + err);
+	t.assert(payload == nil, "no authorization while pending");
+	t.assert(contains(err, "not approved within 1 seconds") && contains(err, "withdrawn"), "at the limit it says the request is withdrawn: " + err);
 	t.assert(dt >= 900 && dt < 4000, sys->sprint("it waited its limit (%dms)", dt));
+	t.assert(!contains(rd(W + "/pending"), " 400 "), "and the approver's list no longer has it");
 
 	# denied while it waits: told at once, not at the next poll
 	spawn denynext();
@@ -499,6 +510,60 @@ evtimeout(c: chan of string)
 #
 # Denial and expiry are reported to the requester on its own fid.
 #
+# An x402 request whose requester has closed its file is withdrawn:
+# gone from the approver's list, and an approval of it signs nothing
+# and takes nothing from the budget.  A payment (pay) asked for the
+# same way stays to be approved.
+testWithdrawn(t: ref T)
+{
+	before := strip(rd(W + "/policy/ctl"));
+	fd := sys->open(W + "/policy/authorize", Sys->ORDWR);
+	if(fd == nil) {
+		t.fatal(sys->sprint("open authorize: %r"));
+		return;
+	}
+	b := array of byte authreq("eip155:11155111", "321");
+	t.assert(sys->write(fd, b, len b) > 0, "an authorization asked for");
+	buf := array[256] of byte;
+	n := sys->pread(fd, buf, len buf, big 0);
+	res := "";
+	if(n > 0)
+		res = strip(string buf[0:n]);
+	t.assert(hasprefix(res, "pending:"), "queued: " + res);
+	if(!hasprefix(res, "pending:"))
+		return;
+	id := res[8:];
+	line := pendingline(id);
+	t.assert(line != "", "and in the approver's list");
+	# what the wallet knows the token to be, with its decimals
+	(nf, f) := sys->tokenize(line, " ");
+	t.asserteq(nf, 10, "its line has ten fields: " + line);
+	t.assert(nf == 10 && hd tl tl tl tl tl tl tl tl f == "USDC" && hd tl tl tl tl tl tl tl tl tl f == "6",
+		"the last two say the asset is the network's USDC, of 6 decimals");
+
+	fd = nil;	# the requester stops waiting
+	sys->sleep(100);
+	t.assertseq(pendingline(id), "", "its file closed: no longer in the approver's list");
+	cfd := sys->open(W + "/ctl", Sys->OWRITE);
+	cb := array of byte ("approve " + id);
+	r := sys->write(cfd, cb, len cb);
+	e := sys->sprint("%r");
+	t.assert(r < 0 && contains(e, "withdrawn"), sys->sprint("an approval of it is refused, saying why (%d, %s)", r, e));
+	t.assertseq(strip(rd(W + "/policy/ctl")), before, "and nothing is taken from the budget");
+
+	# an asset the wallet does not know is said to be unknown
+	other := "0x00000000000000000000000000000000000000A1";
+	(res, nil) = roundtrip(W + "/policy/authorize", authreqto(other, PAYTO, "5"));
+	if(hasprefix(res, "pending:")) {
+		line = pendingline(res[8:]);
+		(nf, f) = sys->tokenize(line, " ");
+		t.assert(nf == 10 && hd tl tl tl tl tl tl tl tl f == "unknown" && hd tl tl tl tl tl tl tl tl tl f == "-",
+			"an asset that is not the network's USDC is unknown, its decimals not given: " + line);
+		wr(W + "/ctl", "deny " + res[8:]);
+	} else
+		t.log("another asset is not queued here: " + res);
+}
+
 testDenial(t: ref T)
 {
 	fd := sys->open(W + "/policy/authorize", Sys->ORDWR);
@@ -796,6 +861,30 @@ testApprovalShownWhole(t: ref T)
 	t.assert(contains(all, "\nto " + PAYTO[0:10]), "the payee begins a line");
 	t.assert(!contains(all, "..."), "nothing cut");
 
+	# with what the wallet knows of the token: the amount in its units
+	(nil, lines) = ui->pendingdesc(ln + " USDC 6");
+	all = "";
+	for(l = lines; l != nil; l = tl l) {
+		t.assert(len hd l <= 40, "no line too long for the pane: " + hd l);
+		all += hd l + "\n";
+	}
+	t.log(all);
+	t.assert(contains(all, "\namount 0.01 USDC\n"), "a known token: the amount in its units, with its name");
+	t.assert(contains(all, "\n(10000 base units)\n"), "and in base units beside it");
+	(nil, lines) = ui->pendingdesc("108 pay captest eth 1500000000000000000 " + PAYTO + " eip155:11155111 agent ETH 18");
+	all = "";
+	for(l = lines; l != nil; l = tl l)
+		all += hd l + "\n";
+	t.assert(contains(all, "\namount 1.5 ETH\n"), "wei as ether");
+	(nil, lines) = ui->pendingdesc(ln + " unknown -");
+	all = "";
+	for(l = lines; l != nil; l = tl l) {
+		t.assert(len hd l <= 40, "no line too long for the pane: " + hd l);
+		all += hd l + "\n";
+	}
+	t.assert(contains(all, "\namount 10000\n") && contains(all, "does not know"), "an unknown token: base units, and said to be unknown");
+	t.assert(!contains(all, "USDC"), "and no name given it");
+
 	# a payee of any length is all there
 	long := "";
 	while(len long < 300)
@@ -921,6 +1010,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Authorize/InjectionRejected", testInjectionRejected);
 	run("Authorize/ApprovalFlow", testApprovalFlow);
 	run("Authorize/Denial", testDenial);
+	run("Authorize/Withdrawn", testWithdrawn);
 	run("Approval/Event", testPendingEvent);
 	run("Authorize/WaitForOutcome", testWaitForOutcome);
 	run("Authorize/X402Waits", testX402Waits);

@@ -22,6 +22,12 @@
 #     verified elsewhere.  rho'' used to be H(K || mu), with no rnd.)
 #   - the rejection loop is bounded: built to allow one round, signing
 #     gives up most of the time, with nothing written (it had no bound)
+#   - constant time (ctgrind): with valgrind, a signature is made with
+#     the secret key and the randomness undefined, and the only branches
+#     and addresses that depend on them are the decisions the standard
+#     makes public: whether a candidate is rejected (lines the source
+#     marks), the challenge's sampling and the hints' packing; with each
+#     compiler here, at -O and -O2
 #   - where Python's cryptography package has ML-DSA, random keys,
 #     messages and context strings against OpenSSL both ways, through
 #     the package's own sign and verify
@@ -102,6 +108,62 @@ else
 	tail -20 "$TMP/out" | sed 's/^/  /'
 	echo "FAIL: the rejection loop's bound"
 	fails=$((fails+1))
+fi
+
+# ctgrind: a signature made with the secret key and the randomness
+# undefined to memcheck.  Every branch or address it reports must be in
+# the two functions that work on the signature's own parts (the
+# challenge's sampling, the hints' packing) or on a line of the signing
+# loop that the source marks "public": whether a candidate is rejected.
+if ! command -v valgrind >/dev/null 2>&1 || [ ! -f /usr/include/valgrind/memcheck.h ]; then
+	if [ -n "${CI:-}" ]; then
+		echo "FAIL: CI has no valgrind (and valgrind's memcheck.h): the constant-time check did not run"
+		exit 1
+	fi
+	echo "SKIP: constant-time check (needs valgrind and its headers)"
+else
+	ccs="$CC"
+	command -v clang >/dev/null 2>&1 && [ "$CC" != clang ] && ccs="$ccs clang"
+	for cc in $ccs; do
+		for opt in -O -O2; do
+			$cc -g $opt -fno-strict-aliasing -fcommon -w -DCTGRIND $INC -o "$TMP/dsatest-ct" "$D/dsatest.c" $SRC || { echo "FAIL: dsatest -DCTGRIND does not compile with $cc $opt"; exit 1; }
+			bad=""
+			n=0
+			for set in 65 87; do
+				if ! valgrind --error-limit=no --read-inline-info=yes --log-file="$TMP/vg" "$TMP/dsatest-ct" ct $set >/dev/null 2>&1; then
+					bad="$bad
+ML-DSA-$set: signing failed"
+					continue
+				fi
+				# the place each report is at: "function (file:line)"
+				awk '/depends on uninitialised|Use of uninitialised/ { getline; sub(/.*: /, ""); print }' "$TMP/vg" | sort -u >"$TMP/places"
+				while read -r fn where; do
+					n=$((n+1))
+					fn=${fn%%.*}	# sign_core.constprop.0 is sign_core
+					case $fn in
+					sample_challenge|mldsa_pack_hint|lowbitsover)
+						continue ;;
+					esac
+					file=$(echo "$where" | sed -n 's/^(\(.*\):\([0-9]*\))$/\1/p')
+					line=$(echo "$where" | sed -n 's/^(\(.*\):\([0-9]*\))$/\2/p')
+					if [ -f "$ROOT/libsec/$file" ] && [ -n "$line" ] && sed -n "${line}p" "$ROOT/libsec/$file" | grep -q 'public'; then
+						continue
+					fi
+					bad="$bad
+ML-DSA-$set: $fn $where"
+				done <"$TMP/places"
+			done
+			if [ -n "$bad" ]; then
+				echo "FAIL: $cc $opt: signing has branches or addresses that depend on the key outside its public decisions:$bad" | sed '2,$s/^/    /'
+				fails=$((fails+1))
+			elif [ $n -eq 0 ]; then
+				echo "FAIL: $cc $opt: valgrind reported nothing: the key was not marked secret"
+				fails=$((fails+1))
+			else
+				echo "PASS: $cc $opt: signing is constant time but for its public decisions ($n places: rejections, the challenge, the hints)"
+			fi
+		done
+	done
 fi
 
 # OpenSSL, live

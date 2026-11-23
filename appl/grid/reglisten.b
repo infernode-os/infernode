@@ -120,7 +120,14 @@ init(drawctxt: ref Draw->Context, argv: list of string)
 			raise "fail:bad keyfile";
 		}
 	}
+	# /mnt/keys is hidden from the command in a name space of the
+	# listener's own, as listen(1) does: with none taken, the unmount
+	# took it from whoever started the listener as well.
 	if(!trusted){
+		if(sys->pctl(Sys->FORKNS, nil) < 0){
+			sys->fprint(stderr(), "listen: cannot fork the name space: %r\n");
+			raise "fail:key namespace";
+		}
 		sys->unmount(nil, "/mnt/keys");	# should do for now
 		# become none?
 	}
@@ -198,7 +205,12 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 	addr = myaddr;
 	acon := *conn;
 
-	spawn regmonitor(myaddr, Attributes.new(regattrs), 0);
+	# only with something to register (-r): with none the registry
+	# module is not loaded, and making the attributes through it ended
+	# this process before it had told init it had started, which then
+	# waited for good
+	if(regattrs != nil)
+		spawn regmonitor(myaddr, Attributes.new(regattrs), 0);
 
 	ctxt.set("user", nil);
 	if (initscript != nil) {

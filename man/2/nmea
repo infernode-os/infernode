@@ -90,6 +90,10 @@ estimates (PGRMZ in feet or metres; PGRME, unless GST is sent), AIS
 sentences put together; VDO, a ship's own, is passed over) and FLARM's
 traffic (PFLAA, placed from the fix).
 Other sentences are taken and passed over.
+A heading, a pressure altitude and the error estimates are in a fix
+while they are being sent: one not heard for ten seconds of the
+receiver's own time is no longer in it.
+A GGA is a fix only with one of the qualities there are (1 to 8).
 .PP
 A sentence is bytes from a wire, so each number in one is held to what
 its field can mean, and a field that says otherwise is as one not

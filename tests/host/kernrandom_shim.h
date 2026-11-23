@@ -97,6 +97,7 @@ int	hmacdrbgcheck(void);
 void	randominit(void);
 ulong	randomread(void*, ulong);
 void	genrandom(uchar*, int);
+int	genrandomtry(uchar*, int);
 void	prng(uchar*, int);
 int	prngtry(uchar*, int);
 #endif

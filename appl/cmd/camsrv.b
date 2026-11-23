@@ -83,7 +83,7 @@ Camsrv: module {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
 
-Qroot, Qstream, Qctl, Qfmt, Qframe, Qraw, Qstatus, Qlayer: con iota;
+Qroot, Qstream, Qctl, Qfmt, Qframe, Qraw, Qstatus, Qlayer, Qndvi, Qndvifmt: con iota;
 
 # the sensor's one mode; smaller frames are merged from it. The IMX708's
 # until a probe finds otherwise (sensorprobe), and always for -t.
@@ -92,6 +92,7 @@ sensor := Imx708;
 Sw := 2304;
 Sh := 1296;
 Black: con 64;
+Clip: con 1000;		# a sample this high is taken to have clipped: left out of white balance
 Maxsample: con 1023;
 Maxexposure: con 65535;	# lines: the register's sixteen bits
 Aetarget: con 180;	# above black, of 959: near a grey card's 18%
@@ -126,6 +127,28 @@ base := 0;		# the first frame since the sensor last came on
 Ring: con 8;		# the frames kept, at 30 fps a quarter second
 ring := array[Ring] of (int, array of byte);
 ringdim := array[Ring] of (int, int);	# each kept frame's width and height, as served
+ndviring := array[Ring] of array of byte;	# frame N's plant health, if it was asked for (issue #1244)
+# NDVI from the raw channels, before white balance: which is near-infrared
+# and which visible (0 red, 1 green, 2 blue); on a NoIR camera with its
+# blue filter, red and blue. A pixel whose two sum to less than floor
+# above black is no reading.
+ndvinir := 0;
+ndvivis := 2;
+ndvifloor := 16;
+# Lens shading: a gain for each of the cell's four positions at Shadegw by
+# Shadegh points from corner to corner ($Bayer->shade), made by shade
+# learn from a flat white field and kept as /lib/camera/SENSOR.shade.
+Shadegw: con 17;
+Shadegh: con 13;
+Shadelearn: con 8;		# frames of the flat field summed
+shadetab: array of int;		# nil: none for this sensor
+shadeon := 1;
+shadelearn := 0;		# frames still to sum, while learning
+shadesum: array of big;
+shadecnt: array of int;
+shadenote := "";		# how the last learn went, for status: learning,
+				# learnt:darkest=N%, refused:dark=N, refused:clipped=N
+ndvistat := array[5] of int;	# the last frame's mean, 10th, 50th, 90th percentile, count
 latest: array of byte;
 lastraw: array of byte;
 err := "";
@@ -149,7 +172,7 @@ capstop: chan of int;
 capdone: chan of (int, string);
 cappidc: chan of (int, int);	# a capture's generation and pid, as it starts
 stuckc: chan of int;		# a generation told to stop Stopwait ago
-framec: chan of (array of byte, int, int);
+framec: chan of (array of byte, array of byte, int, int);	# the picture, its NDVI or nil, width, height
 rawc: chan of array of byte;
 ctlc: chan of string;
 capgen := 0;		# the capture now running, or the last
@@ -199,7 +222,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(!sim)
 		sensorprobe();
 	fsize = framesize();
-	framec = chan of (array of byte, int, int);
+	framec = chan of (array of byte, array of byte, int, int);
 	rawc = chan of array of byte;
 	capdone = chan of (int, string);
 	cappidc = chan of (int, int);
@@ -216,6 +239,8 @@ init(nil: ref Draw->Context, args: list of string)
 	tree.create(big Qstream, dir("ctl", 8r664, Qctl));
 	tree.create(big Qstream, dir("fmt", 8r444, Qfmt));
 	tree.create(big Qstream, dir("frame", 8r444, Qframe));
+	tree.create(big Qstream, dir("ndvi", 8r444, Qndvi));
+	tree.create(big Qstream, dir("ndvifmt", 8r444, Qndvifmt));
 	tree.create(big Qstream, dir("raw", 8r444, Qraw));
 	tree.create(big Qstream, dir("status", 8r444, Qstatus));
 	# empty as served: where the feed's layers are bound (#1095)
@@ -327,9 +352,10 @@ serve(tree: ref Tree)
 		}
 		if(done)
 			return;
-	(fr, fwid, fht) := <-framec =>
+	(fr, nd, fwid, fht) := <-framec =>
 		latest = fr;
 		ring[seq % Ring] = (seq, fr);
+		ndviring[seq % Ring] = nd;
 		ringdim[seq % Ring] = (fwid, fht);
 		seq++;
 		wake();
@@ -425,9 +451,9 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 		path := -1;
 		if(c != nil)
 			path = int c.path;
-		if((path == Qframe || path == Qraw) && err != "" && users == 0)
+		if((path == Qframe || path == Qraw || path == Qndvi) && err != "" && users == 0)
 			err = "";
-		if(srv.open(tm) != nil && (path == Qframe || path == Qraw)){
+		if(srv.open(tm) != nil && (path == Qframe || path == Qraw || path == Qndvi)){
 			sess = ref Fsess(srv, tm.fid, path, seq, nil, fw(), fh()) :: sess;
 			if(users++ == 0)
 				startcapture();
@@ -452,7 +478,7 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 		case int c.path {
 		Qroot or Qstream or Qlayer =>
 			srv.read(tm);
-		Qfmt or Qstatus or Qctl =>
+		Qfmt or Qstatus or Qctl or Qndvifmt =>
 			# One open reads one text, as vid9p's: made at a read at
 			# offset 0 and kept with the fid (made at every read and
 			# cut at its offset, a status that moved between two
@@ -460,12 +486,13 @@ request(tree: ref Tree, csrv: ref Styxserver, tmsg: ref Tmsg): int
 			if(tm.offset == big 0 || c.data == nil){
 				case int c.path {
 				Qfmt =>	c.data = array of byte sys->sprint("%d %d i420 %d\n", fw(), fh(), fps);
+				Qndvifmt =>	c.data = array of byte sys->sprint("%d %d ndvi8\n", fw(), fh());
 				Qstatus =>	c.data = array of byte status();
 				Qctl =>	c.data = array of byte settings();
 				}
 			}
 			srv.reply(styxservers->readbytes(tm, c.data));
-		Qframe or Qraw =>
+		Qframe or Qraw or Qndvi =>
 			s := find(tm.fid);
 			if(s == nil)
 				srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Ebadfid));
@@ -581,6 +608,8 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 	fs := fsize;
 	if(s.path == Qraw)
 		fs = Sw*Sh*2/simdiv();
+	if(s.path == Qndvi)
+		fs = fw()*fh();
 	if(fs <= 0)
 		return 0;
 	foff := int (tm.offset % big fs);
@@ -588,7 +617,7 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		s.srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
 		return 1;
 	}
-	if(s.path == Qframe){
+	if(s.path == Qframe || s.path == Qndvi){
 		# Frame n, as every reader numbers it; the offset is the
 		# reader's, any 63 bits, so n is found in 64.  It was cut to
 		# an int: an offset near the frame size times 2^32 gave a
@@ -606,6 +635,8 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 		if(n >= seq)
 			return 0;	# not made yet: wait for it
 		(sn, fr) := ring[n % Ring];
+		if(s.path == Qndvi)
+			fr = ndviring[n % Ring];	# nil: made before anyone asked
 		if(sn != n || fr == nil || len fr != fs){
 			s.srv.reply(ref Rmsg.Error(tm.tag, "frame expired"));
 			return 1;
@@ -615,7 +646,10 @@ reply(tm: ref Tmsg.Read, s: ref Fsess): int
 			# turned since this reader last knew: once, saying how
 			s.w = dw;
 			s.h = dh;
-			s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d i420 %d", dw, dh, fps)));
+			if(s.path == Qndvi)
+				s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d ndvi8", dw, dh)));
+			else
+				s.srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("format changed: %d %d i420 %d", dw, dh, fps)));
 			return 1;
 		}
 		k := tm.count;
@@ -685,6 +719,23 @@ status(): string
 		s += " regcheck=" + regcheck;
 	if(afresult != "")
 		s += " autofocus=" + afresult;
+	# the last NDVI frame's figures, while 0/ndvi is read: mean, tenth,
+	# fiftieth and ninetieth percentiles in thousandths, and the readings
+	if(ndviwanted())
+		s += sys->sprint(" ndvi=%d:%d:%d:%d ndvireadings=%d", ndvistat[0], ndvistat[1], ndvistat[2], ndvistat[3], ndvistat[4]);
+	# lens shading: whether a table is in use, and the last learn
+	if(!sim){
+		if(shadetab == nil)
+			s += " shade=none";
+		else if(shadeon)
+			s += " shade=on";
+		else
+			s += " shade=off";
+		if(shadenote != "")
+			s += " shadelearn=" + shadenote;
+	}
+	# the gains in use, set or found: red and blue to green, 256 one
+	s += sys->sprint(" wbgains=%d:%d", lgr, lgb);
 	s += sys->sprint(" writes=%d i2cerrors=%d lostwrites=%d", nwrites, i2cerrs, lostw);
 	if(err != "")
 		s += " error=" + err;
@@ -700,8 +751,12 @@ simdivr(): int
 
 settings(): string
 {
-	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\n",
-		fw(), fh(), fps, exposure, gain, flip, rotate, focus);
+	wb := "auto";
+	if(wbfixed)
+		wb = sys->sprint("%d %d", wbr, wbb);
+	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\nwb %s\nndvi %s %s\nndvifloor %d\nshade %s\n",
+		fw(), fh(), fps, exposure, gain, flip, rotate, focus, wb,
+		channames[ndvinir], channames[ndvivis], ndvifloor, (array[] of {"off", "on"})[shadeon]);
 }
 
 # a ctl argument: a whole number of at most six digits, or -1
@@ -785,6 +840,55 @@ doctl(s: string): string
 			return "camsrv: flip 0..3";
 		flip = a;
 		tell("flip");
+	"ndvi" =>
+		# ndvi NIR VIS: which raw channels are near-infrared and visible
+		if(n != 3)
+			return "camsrv: ndvi NIR VIS (red, green or blue)";
+		ni := chanindex(hd tl f);
+		vi := chanindex(hd tl tl f);
+		if(ni < 0 || vi < 0 || ni == vi)
+			return "camsrv: ndvi NIR VIS (red, green or blue, not the same)";
+		ndvinir = ni;
+		ndvivis = vi;
+	"shade" =>
+		if(n != 2)
+			return "camsrv: shade on|off|learn";
+		case hd tl f {
+		"on" =>
+			shadeon = 1;
+		"off" =>
+			shadeon = 0;
+		"learn" =>
+			if(sim)
+				return "camsrv: shade learn needs a camera";
+			if(users == 0)
+				return "camsrv: shade learn needs the camera running (a reader)";
+			shadesum = array[4*Shadegw*Shadegh] of {* => big 0};
+			shadecnt = array[4*Shadegw*Shadegh] of {* => 0};
+			shadenote = "learning";
+			shadelearn = Shadelearn;
+		* =>
+			return "camsrv: shade on|off|learn";
+		}
+	"ndvifloor" =>
+		if(n != 2 || a < 0 || a > 2046)
+			return "camsrv: ndvifloor 0..2046";
+		ndvifloor = a;
+	"wb" =>
+		if(n == 2 && hd tl f == "auto"){
+			wbfixed = 0;
+			wlr = nil;
+		}else{
+			if(n != 3)
+				return "camsrv: wb auto|RED BLUE";
+			r := arg(hd tl f);
+			b := arg(hd tl tl f);
+			if(r < 128 || r > 8*256 || b < 128 || b > 8*256)
+				return "camsrv: wb gains 128..2048 (256 is one)";
+			wbr = r;
+			wbb = b;
+			wbfixed = 1;
+		}
 	"rotate" =>
 		if(n != 2)
 			return "camsrv: rotate 0|90|180|270";
@@ -924,7 +1028,7 @@ capture(stop: chan of int): string
 	raw := array[Sw*Sh*2] of byte;
 	scale := Sw/width;
 	(y, cb, cr) := planes();
-	mean := array[3] of int;
+	mean := array[6] of int;
 	(lr, lg, lb) := tables(256, 256);
 	aelines := framelen - Exposureoff;
 	aegain := gaintoq(gain);
@@ -981,10 +1085,20 @@ capture(stop: chan of int): string
 			mflip = newflip;
 		(y, cb, cr) = planes();
 		rot := rotate;
-		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean);
-		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
-		if(lastrawwanted())
-			rawc <-= rawcopy(raw);
+		# /raw is the sensor's own: copied before the shading
+		rc: array of byte;
+		if(lastrawwanted()){
+			rc = array[len raw] of byte;
+			rc[0:] = raw;
+		}
+		if(shadelearn > 0)
+			learnshade(raw);
+		else if(shadeon && shadetab != nil)
+			bayer->shade(raw, Sw, Sh, Black, 1023, shadetab, Shadegw, Shadegh);
+		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
+		framec <-= (y[0:fsize], ndviof(raw, Sw, Sh, scale, mflip, rot/90), turnedw(rot), turnedh(rot));
+		if(rc != nil)
+			rawc <-= rc;
 		(lr, lg, lb) = wbal(mean);
 		focusing := afrun || (af != nil && af.on);
 		if(focusing)
@@ -1005,6 +1119,35 @@ capture(stop: chan of int): string
 	}
 	sensoroff();
 	return cerr;
+}
+
+channames := array[] of {"red", "green", "blue"};
+
+chanindex(s: string): int
+{
+	for(i := 0; i < len channames; i++)
+		if(s == channames[i])
+			return i;
+	return -1;
+}
+
+ndviwanted(): int
+{
+	for(l := sess; l != nil; l = tl l)
+		if((hd l).path == Qndvi)
+			return 1;
+	return 0;
+}
+
+# a frame's NDVI, if anyone is reading 0/ndvi, from the raw frame it was
+# merged from; nil otherwise
+ndviof(raw: array of byte, rw, rh, scale, red, rot: int): array of byte
+{
+	if(!ndviwanted())
+		return nil;
+	nd := array[(rw/scale)*(rh/scale)] of byte;
+	bayer->ndvi(raw, rw, rh, scale, red, rot, ndvinir, ndvivis, Black, ndvifloor, nd, ndvistat);
+	return nd;
 }
 
 # A frame for /raw's readers, apart from raw: the next frame is read into
@@ -1086,29 +1229,58 @@ tables(gr, gb: int): (array of byte, array of byte, array of byte)
 
 lgr := 0;
 lgb := 0;
+# wb RED BLUE: fixed gains, 256 a gain of one, green's fixed at one;
+# wb auto: grey world (the default)
+wbfixed := 0;
+wbr := 256;
+wbb := 256;
 wlr, wlg, wlb: array of byte;
 
 # Grey world, moved a quarter of the way a frame, so that a passing
 # colour does not swing the picture.
 wbal(mean: array of int): (array of byte, array of byte, array of byte)
 {
-	r := mean[0]-Black;
-	g := mean[1]-Black;
-	b := mean[2]-Black;
+	if(wbfixed){
+		# the gains set: the channels keep their own ratio, as plant
+		# health from a NoIR camera needs (grey world takes it away)
+		if(wlr == nil || lgr != wbr || lgb != wbb)
+			(wlr, wlg, wlb) = tables(wbr, wbb);
+		return (wlr, wlg, wlb);
+	}
+	# the means over cells with nothing clipped, if there are any: a
+	# highlight clipped in one colour is that colour at its ceiling,
+	# and pulled the balance away from it
+	o := 0;
+	if(len mean >= 6 && mean[4] > 0)
+		o = 3;
+	r := mean[o]-Black;
+	g := mean[o+1]-Black;
+	b := mean[o+2]-Black;
 	if(r < 4)
 		r = 4;
 	if(b < 4)
 		b = 4;
 	if(g < 4)
 		g = 4;
-	gr := clamp(g*256/r, 128, 8*256);
-	gb := clamp(g*256/b, 128, 8*256);
-	gr = lgr + (gr-lgr)/4;
-	gb = lgb + (gb-lgb)/4;
-	if(wlr == nil || abs(gr-lgr)*16 > lgr || abs(gb-lgb)*16 > lgb){
-		(wlr, wlg, wlb) = tables(gr, gb);
-	}
+	tr := clamp(g*256/r, 128, 8*256);
+	tb := clamp(g*256/b, 128, 8*256);
+	# the tables made again while the gains in use are more than 1 in
+	# 64 from the picture's, a quarter of the way at a time.  Asked
+	# of the step, as it was, the balance stopped once a quarter of
+	# what was left was under 1 in 16: a quarter short of the picture
+	# (246:271 in daylight on a NoIR camera, whose grey was 218:321)
+	if(wlr == nil || abs(tr-lgr)*64 > lgr || abs(tb-lgb)*64 > lgb)
+		(wlr, wlg, wlb) = tables(step(lgr, tr), step(lgb, tb));
 	return (wlr, wlg, wlb);
+}
+
+# a quarter of the way from v to w, and at least one
+step(v, w: int): int
+{
+	d := (w-v)/4;
+	if(d == 0 && w != v)
+		d = (w-v)/abs(w-v);
+	return v+d;
 }
 
 clamp(v, lo, hi: int): int
@@ -1310,7 +1482,7 @@ simulate(stop: chan of int)
 	raw := array[w*h*2] of byte;
 	scale := w/width;
 	(y, cb, cr) := planes();
-	mean := array[3] of int;
+	mean := array[6] of int;
 	(lr, lg, lb) := (tone(256), tone(256), tone(256));
 	lgr = lgb = 256;
 	band := 0;
@@ -1335,8 +1507,8 @@ simulate(stop: chan of int)
 		band = (band+4) % h;
 		(y, cb, cr) = planes();
 		rot := rotate;
-		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean);
-		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
+		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
+		framec <-= (y[0:fsize], ndviof(raw, w, h, scale, 0, rot/90), turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
 			rawc <-= rawcopy(raw);
 		d := 1000/fps - (sys->millisec()-t0);
@@ -1670,6 +1842,7 @@ sensoron(): string
 	if(e != nil)
 		return e;
 	r := 0;
+	shadetab = loadshade();
 	if(sensor == Imx219)
 		r = sensormode219();
 	else
@@ -1761,6 +1934,149 @@ chipid(reg, want: int): int
 		id = a<<8 | b;
 	}
 	return id;
+}
+
+# ---- lens shading: learnt from a flat field, kept on the card
+
+shadefile(): string
+{
+	return "/lib/camera/" + sensorname() + ".shade";
+}
+
+# the nearest grid point's index for each column and row, made once
+shadecol, shaderow: array of int;
+
+learnshade(raw: array of byte)
+{
+	if(shadecol == nil || len shadecol != Sw || len shaderow != Sh){
+		shadecol = array[Sw] of int;
+		shaderow = array[Sh] of int;
+		for(x := 0; x < Sw; x++)
+			shadecol[x] = (x*(Shadegw-1) + (Sw-1)/2)/(Sw-1);
+		for(y := 0; y < Sh; y++)
+			shaderow[y] = (y*(Shadegh-1) + (Sh-1)/2)/(Sh-1);
+	}
+	n := Shadegw*Shadegh;
+	for(y := 0; y < Sh; y++){
+		o := y*Sw*2;
+		r := shaderow[y]*Shadegw;
+		q0 := (y&1)*2*n;
+		for(x := 0; x < Sw; x++){
+			v := (int raw[o] | int raw[o+1]<<8) - Black;
+			o += 2;
+			i := q0 + (x&1)*n + r + shadecol[x];
+			if(v > 0)
+				shadesum[i] += big v;
+			shadecnt[i]++;
+		}
+	}
+	if(--shadelearn == 0)
+		finishshade();
+}
+
+# The table from the sums: each position's brightest point over each
+# point, at most eight. A field too dark or nearly clipped is refused and
+# the table left as it was.
+finishshade()
+{
+	n := Shadegw*Shadegh;
+	t := array[4*n] of int;
+	lo := 1024;
+	for(q := 0; q < 4; q++){
+		mx := 0;
+		m := array[n] of int;
+		for(i := 0; i < n; i++){
+			c := shadecnt[q*n+i];
+			if(c > 0)
+				m[i] = int (shadesum[q*n+i] / big c);
+			if(m[i] > mx)
+				mx = m[i];
+		}
+		if(mx < 40){
+			shadenote = sys->sprint("refused:dark=%d", mx);	# above black at its brightest
+			return;
+		}
+		if(mx > 1023-Black-60){
+			shadenote = sys->sprint("refused:clipped=%d", mx);
+			return;
+		}
+		for(i = 0; i < n; i++){
+			g := 8*1024;
+			if(m[i] > 0 && mx*1024/m[i] < g)
+				g = mx*1024/m[i];
+			t[q*n+i] = g;
+			if(m[i]*1024/mx < lo)
+				lo = m[i]*1024/mx;
+		}
+	}
+	e := saveshade(t);
+	shadetab = t;
+	shadenote = sys->sprint("learnt:darkest=%d%%", lo*100/1024);	# of the brightest
+	if(e != nil){
+		sys->fprint(sys->fildes(2), "camsrv: shade: %s\n", e);
+		shadenote += ",notsaved";
+	}
+}
+
+saveshade(t: array of int): string
+{
+	sys->create("/lib/camera", Sys->OREAD, Sys->DMDIR|8r775);
+	fd := sys->create(shadefile(), Sys->OWRITE, 8r664);
+	if(fd == nil)
+		return sys->sprint("%s: %r", shadefile());
+	n := Shadegw*Shadegh;
+	s := sys->sprint("shade %s %d %d\n", sensorname(), Shadegw, Shadegh);
+	for(q := 0; q < 4; q++){
+		for(i := 0; i < n; i++){
+			if(i > 0)
+				s += " ";
+			s += string t[q*n+i];
+		}
+		s += "\n";
+	}
+	b := array of byte s;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("%s: %r", shadefile());
+	return nil;
+}
+
+# The sensor's table, if the card has one that fits; nil otherwise.
+loadshade(): array of int
+{
+	fd := sys->open(shadefile(), Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[64*1024] of byte;
+	got := 0;
+	while(got < len b){
+		m := sys->read(fd, b[got:], len b - got);
+		if(m <= 0)
+			break;
+		got += m;
+	}
+	(nl, lines) := sys->tokenize(string b[0:got], "\n");
+	if(nl != 5)
+		return nil;
+	(nh, h) := sys->tokenize(hd lines, " \t");
+	if(nh != 4 || hd h != "shade" || hd tl h != sensorname() || int hd tl tl h != Shadegw || int hd tl tl tl h != Shadegh)
+		return nil;
+	n := Shadegw*Shadegh;
+	t := array[4*n] of int;
+	q := 0;
+	for(lines = tl lines; lines != nil; lines = tl lines){
+		(nv, v) := sys->tokenize(hd lines, " \t");
+		if(nv != n)
+			return nil;
+		for(i := 0; i < n; i++){
+			g := int hd v;
+			v = tl v;
+			if(g < 512 || g > 8*1024)
+				return nil;
+			t[q*n+i] = g;
+		}
+		q++;
+	}
+	return t;
 }
 
 sensorname(): string

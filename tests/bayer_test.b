@@ -52,6 +52,12 @@ put(raw: array of byte, w, x, y, v: int)
 	raw[o+1] = byte (v>>8);
 }
 
+get(raw: array of byte, w, x, y: int): int
+{
+	o := (y*w + x)*2;
+	return int raw[o] | int raw[o+1]<<8;
+}
+
 # a frame of one cell's values, repeated, in the order red says
 frame(w, h, red, r, g, b: int): array of byte
 {
@@ -77,6 +83,164 @@ identity(): array of byte
 	return t;
 }
 
+# The means over unclipped cells: a block with a sample at or above
+# clip is left out of mean[3..5], and only of them
+testClip(t: ref T)
+{
+	lut := identity();
+	w := 16;
+	h := 8;
+	raw := frame(w, h, 0, 300, 400, 500);
+	# one red sample clipped, in the output pixel at (0,0)
+	put(raw, w, 0, 0, 1023);
+	y := array[(w/2)*(h/2)] of byte;
+	cb := array[(w/4)*(h/4)] of byte;
+	cr := array[(w/4)*(h/4)] of byte;
+	mean := array[6] of int;
+	bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 1000);
+	t.assert(mean[0] > 300, "the plain red mean counts the clipped sample");
+	t.asserteq(mean[3], 300, "the unclipped red mean does not");
+	t.asserteq(mean[4], 400, "green over the unclipped");
+	t.asserteq(mean[5], 500, "blue over the unclipped");
+	bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
+	t.asserteq(mean[3], mean[0], "clip 0 leaves none out");
+	# everything clipped: the unclipped means are 0
+	raw = frame(w, h, 0, 1023, 1023, 1023);
+	bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 1000);
+	t.asserteq(mean[4], 0, "nothing unclipped: 0");
+	# three entries are still enough, as before
+	m3 := array[3] of int;
+	bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, m3, 1000);
+	t.asserteq(m3[1], 1023, "a three-entry mean still works");
+	refused := 0;
+	{
+		bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, -1);
+	} exception {
+	* =>
+		refused = 1;
+	}
+	t.assert(refused, "a negative clip is refused");
+}
+
+# NDVI from the raw channels: (NIR-VIS)/(NIR+VIS) as 128 + 127 times it,
+# black taken off, the floor, the turn, the figures, the refusals
+testNdvi(t: ref T)
+{
+	w := 16;
+	h := 8;
+	black := 64;
+	# red (near-infrared) 300 above black, blue (visible) 100: NDVI 0.5
+	raw := frame(w, h, 0, black+300, black+50, black+100);
+	out := array[(w/2)*(h/2)] of byte;
+	st := array[5] of int;
+	bayer->ndvi(raw, w, h, 2, 0, 0, 0, 2, black, 16, out, st);
+	t.asserteq(int out[0], 192, "0.5 is 128 + 64");
+	t.asserteq(int out[len out - 1], 192, "and so is every pixel");
+	t.asserteq(st[0], 503, "the mean in thousandths (64/127)");
+	t.asserteq(st[2], 503, "the median");
+	t.asserteq(st[4], len out, "every pixel a reading");
+	# visible over infrared: negative
+	raw = frame(w, h, 0, black+100, black+50, black+300);
+	bayer->ndvi(raw, w, h, 2, 0, 0, 0, 2, black, 16, out, st);
+	t.asserteq(int out[0], 64, "-0.5 is 128 - 64");
+	t.asserteq(st[0], -503, "a negative mean");
+	# equal: 128; under the floor: 0, no reading
+	raw = frame(w, h, 0, black+200, black+200, black+200);
+	bayer->ndvi(raw, w, h, 2, 0, 0, 0, 2, black, 16, out, st);
+	t.asserteq(int out[3], 128, "equal channels: 0, 128");
+	raw = frame(w, h, 0, black+5, black, black+5);
+	bayer->ndvi(raw, w, h, 2, 0, 0, 0, 2, black, 16, out, st);
+	t.asserteq(int out[3], 0, "under the floor: no reading");
+	t.asserteq(st[4], 0, "no readings");
+	t.asserteq(st[0], 0, "and figures of 0");
+	# channels chosen: green as visible
+	raw = frame(w, h, 0, black+300, black+100, black+300);
+	bayer->ndvi(raw, w, h, 2, 0, 0, 0, 1, black, 16, out, st);
+	t.asserteq(int out[0], 192, "red over green");
+	# the turn: a quarter turn writes the picture h by w
+	raw = frame(w, h, 0, black+300, black+50, black+100);
+	put(raw, w, 0, 0, black+100);		# the top left pixel's red: NDVI 0
+	o2 := array[(w/2)*(h/2)] of byte;
+	bayer->ndvi(raw, w, h, 2, 0, 1, 0, 2, black, 16, o2, st);
+	t.asserteq(int o2[h/2 - 1], 128, "turned: the top left pixel is at the top right");
+	# refused
+	bad := array[] of {(3, 2), (0, 0), (0, -1)};
+	for(i := 0; i < len bad; i++){
+		(ni, vi) := bad[i];
+		refused := 0;
+		{
+			bayer->ndvi(raw, w, h, 2, 0, 0, ni, vi, black, 16, out, st);
+		} exception {
+		* =>
+			refused = 1;
+		}
+		t.assert(refused, sys->sprint("channels %d %d refused", ni, vi));
+	}
+	refused := 0;
+	{
+		bayer->ndvi(raw, w, h, 2, 0, 0, 0, 2, black, 16, out, array[3] of int);
+	} exception {
+	* =>
+		refused = 1;
+	}
+	t.assert(refused, "figures with fewer than four entries refused");
+}
+
+# Lens shading: gains from a corner-to-corner grid, bilinear, black kept,
+# held at max; refusals
+testShade(t: ref T)
+{
+	w := 32;
+	h := 16;
+	black := 64;
+	gw := 3;
+	gh := 3;
+	n := gw*gh;
+	tab := array[4*n] of {* => 2048};	# a gain of two everywhere
+	raw := frame(w, h, 0, black+100, black+100, black+100);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, 5, 3), black+200, "a gain of two doubles what is above black");
+	t.asserteq(get(raw, w, 0, 0), black+200, "at a corner too");
+	# one at the left, two at the right: the middle about one and a half
+	for(q := 0; q < 4; q++)
+		for(j := 0; j < gh; j++){
+			tab[q*n + j*gw + 0] = 1024;
+			tab[q*n + j*gw + 1] = 1536;
+			tab[q*n + j*gw + 2] = 2048;
+		}
+	raw = frame(w, h, 0, black+400, black+400, black+400);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, 0, 4), black+400, "the left edge: one");
+	t.asserteq(get(raw, w, w-1, 4), black+800, "the right edge: two");
+	mid := get(raw, w, 16, 4) - black;
+	t.assert(mid >= 590 && mid <= 610, sys->sprint("the middle about one and a half: %d above black", mid));
+	# past the top: held there
+	raw = frame(w, h, 0, black+600, black+600, black+600);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, w-1, 4), 1023, "1200 above black held at the top");
+	# at and below black: left alone
+	raw = frame(w, h, 0, black, black-10, black);
+	bayer->shade(raw, w, h, black, 1023, tab, gw, gh);
+	t.asserteq(get(raw, w, 31, 1), black, "black left as it is");
+	t.asserteq(get(raw, w, 31, 0) , black-10, "below black too");
+	refused := 0;
+	{
+		bayer->shade(raw, w, h, black, 1023, array[4*n-1] of int, gw, gh);
+	} exception {
+	* =>
+		refused = 1;
+	}
+	t.assert(refused, "a short table refused");
+	refused = 0;
+	{
+		bayer->shade(raw, w, h, black, black, tab, gw, gh);
+	} exception {
+	* =>
+		refused = 1;
+	}
+	t.assert(refused, "a max not above black refused");
+}
+
 testOrders(t: ref T)
 {
 	lut := identity();
@@ -86,7 +250,7 @@ testOrders(t: ref T)
 		cb := array[4*4] of byte;
 		cr := array[4*4] of byte;
 		mean := array[3] of int;
-		bayer->merge(raw, 16, 16, 2, red, 0, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 16, 16, 2, red, 0, lut, lut, lut, y, cb, cr, mean, 0);
 		t.asserteq(mean[0], 800, sys->sprint("red %d: red mean", red));
 		t.asserteq(mean[1], 400, sys->sprint("red %d: green mean", red));
 		t.asserteq(mean[2], 200, sys->sprint("red %d: blue mean", red));
@@ -107,10 +271,10 @@ testSaturated(t: ref T)
 	cb := array[4*4] of byte;
 	cr := array[4*4] of byte;
 	mean := array[3] of int;
-	bayer->merge(frame(16, 16, 0, 1023, 0, 0), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(frame(16, 16, 0, 1023, 0, 0), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	t.asserteq(int cr[0], 255, "full red: cr");
 	t.assert(int cb[0] < 128, "full red: cb");
-	bayer->merge(frame(16, 16, 0, 0, 0, 1023), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(frame(16, 16, 0, 0, 0, 1023), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	t.asserteq(int cb[0], 255, "full blue: cb");
 	t.assert(int cr[0] < 128, "full blue: cr");
 }
@@ -125,7 +289,7 @@ testScale(t: ref T)
 	cb := array[2*2] of byte;
 	cr := array[2*2] of byte;
 	mean := array[3] of int;
-	bayer->merge(raw, 16, 16, 4, 0, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(raw, 16, 16, 4, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	t.assert(int y[0] > int y[1], "the pixel over the hot sample is the brighter");
 	t.asserteq(int cb[3], 128, "grey has no colour");
 	t.asserteq(int cr[3], 128, "grey has no colour");
@@ -147,7 +311,7 @@ testRotate(t: ref T)
 		y := array[w*h] of byte;
 		cb := array[(w/2)*(h/2)] of byte;
 		cr := array[(w/2)*(h/2)] of byte;
-		bayer->merge(raw, 2*w, 2*h, 2, 0, rot, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 2*w, 2*h, 2, 0, rot, lut, lut, lut, y, cb, cr, mean, 0);
 		ow := w;
 		if(rot&1)
 			ow = h;
@@ -177,13 +341,13 @@ testRotate(t: ref T)
 	y := array[w*h] of byte;
 	cb := array[(w/2)*(h/2)] of byte;
 	cr := array[(w/2)*(h/2)] of byte;
-	bayer->merge(raw, 2*w, 2*h, 2, 0, 1, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(raw, 2*w, 2*h, 2, 0, 1, lut, lut, lut, y, cb, cr, mean, 0);
 	t.assert(int cr[h/2-1] > 200, sys->sprint("rot 1: red at the top right: cr %d", int cr[h/2-1]));
 	t.asserteq(int cr[0], 128, "rot 1: grey at the top left");
 	t.assert(int y[h-1] < int y[0], "rot 1: the red corner's luma, top right");
 	refused := 0;
 	{
-		bayer->merge(raw, 2*w, 2*h, 2, 0, 4, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 2*w, 2*h, 2, 0, 4, lut, lut, lut, y, cb, cr, mean, 0);
 	} exception {
 	* =>
 		refused = 1;
@@ -201,7 +365,7 @@ testBounds(t: ref T)
 	mean := array[3] of int;
 	refused := 0;
 	{
-		bayer->merge(raw, 8, 8, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 8, 8, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	} exception {
 	* =>
 		refused = 1;
@@ -209,7 +373,7 @@ testBounds(t: ref T)
 	t.assert(refused, "planes too small are refused");
 	refused = 0;
 	{
-		bayer->merge(raw, 8, 8, 3, 0, 0, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 8, 8, 3, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	} exception {
 	* =>
 		refused = 1;
@@ -244,7 +408,7 @@ testLargeScale(t: ref T)
 	lg[255] = byte 255;
 	lb[255] = byte 255;
 	bigg[100000+gi] = byte 77;
-	bayer->merge(raw, rw, rh, s, 0, 0, lr, lg, lb, y, cb, cr, mean);
+	bayer->merge(raw, rw, rh, s, 0, 0, lr, lg, lb, y, cb, cr, mean, 0);
 	for(i := 0; i < 4; i++)
 		t.asserteq(int y[i], 255, sys->sprint("saturated samples at scale 258: luma %d is the table's last entry", i));
 	t.asserteq(mean[0], 65535, "mean red");
@@ -270,6 +434,9 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Rotate", testRotate);
 		run("Bounds", testBounds);
 		run("LargeScale", testLargeScale);
+		run("Clip", testClip);
+		run("Ndvi", testNdvi);
+		run("Shade", testShade);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

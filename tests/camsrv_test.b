@@ -296,6 +296,23 @@ testCtl(t: ref T)
 	t.assert(ctl("focus 700") > 0, "focus taken with nothing running");
 	t.assert(has(file("ctl"), "focus 700"), "and reads back");
 	t.assert(ctl("mode 144 80") < 0, "a mode that does not divide the sensor refused");
+	# white balance: fixed gains taken and read back, auto again, and
+	# what is not a pair of gains refused
+	# lens shading: on and off taken and read back; learning needs a camera
+	t.assert(ctl("shade off") > 0, "shade off taken");
+	t.assert(has(file("ctl"), "shade off\n"), "and reads back");
+	t.assert(ctl("shade on") > 0, "shade on taken");
+	t.assert(ctl("shade learn") < 0, "learning refused on the simulated sensor");
+	t.assert(ctl("shade maybe") < 0, "nonsense refused");
+	t.assert(ctl("wb 300 512") > 0, "fixed white balance taken");
+	t.assert(has(file("ctl"), "wb 300 512\n"), "and reads back");
+	t.assert(ctl("wb auto") > 0, "auto white balance taken");
+	t.assert(has(file("ctl"), "wb auto\n"), "and reads back");
+	t.assert(ctl("wb 100 300") < 0, "a gain under a half refused");
+	t.assert(ctl("wb 300 3000") < 0, "a gain over eight refused");
+	t.assert(ctl("wb 300") < 0, "one gain refused");
+	t.assert(ctl("wb red blue") < 0, "words refused");
+	t.assert(has(file("status"), " wbgains="), "status says the gains in use");
 	# the sensor's own limit, from its timing: the IMX708's 56 (the
 	# simulated sensor's); more was taken and silently held to it
 	t.assert(ctl("fps 57") < 0, "fps past the sensor's timing refused");
@@ -303,6 +320,45 @@ testCtl(t: ref T)
 	t.assert(ctl("fps 10") > 0, "fps taken");
 	t.assert(has(file("fmt"), " i420 10"), "fmt says so");
 	t.assert(has(file("status"), " rawformat=rggb10:"), "the simulated sensor's mosaic, whatever the flip");
+}
+
+# 0/ndvi (issue #1244) over the simulated bars: red alone +1, blue alone
+# -1, both 0, neither no reading; ndvifmt, its controls, status
+testNdvi(t: ref T)
+{
+	t.assert(has(file("ndvifmt"), sys->sprint("%d %d ndvi8", W, H)), "ndvifmt: " + file("ndvifmt"));
+	fd := sys->open(MNT + "/0/ndvi", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("open ndvi: %r"));
+	nd := array[W*H] of byte;
+	# the next frame, waited for: those made before 0/ndvi was opened
+	# have none, and are refused as expired. The sensor's loop works out
+	# a frame's NDVI before it waits to hand the frame over, so the next
+	# frame may already have been made without it: take the newest's
+	# next again (macOS CI, both machines).
+	got := 0;
+	e := "frame expired";
+	for(try := 0; try < 5 && e == "frame expired"; try++)
+		(got, e) = readat(fd, nd, newest() + 1);
+	t.asserteq(got, W*H, "a whole NDVI frame: " + e);
+	row := H-8;
+	bar := array[] of {128, 255, 1, 0};	# white, red alone, blue alone, neither
+	for(i := 0; i < len bar; i++){
+		v := int nd[row*W + (2*i+1)*W/16];
+		t.asserteq(v, bar[i], sys->sprint("bar %d", i));
+	}
+	t.assert(has(file("status"), " ndvi="), "status has the figures while it is read: " + file("status"));
+	t.assert(ctl("ndvi green blue") > 0, "other channels taken");
+	t.assert(has(file("ctl"), "ndvi green blue\n"), "and read back");
+	t.assert(ctl("ndvi red red") < 0, "the same channel twice refused");
+	t.assert(ctl("ndvi red") < 0, "one channel refused");
+	t.assert(ctl("ndvi infrared blue") < 0, "no such channel refused");
+	t.assert(ctl("ndvi red blue") > 0, "back to red and blue");
+	t.assert(ctl("ndvifloor 3000") < 0, "a floor past two channels refused");
+	t.assert(ctl("ndvifloor 16") > 0, "the floor taken");
+	fd = nil;
+	sys->sleep(200);
+	t.assert(!has(file("status"), " ndvi="), "no figures with nobody reading");
 }
 
 testRaw(t: ref T)
@@ -413,6 +469,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Stop", testStop);
 		run("Ctl", testCtl);
 		run("Raw", testRaw);
+		run("Ndvi", testNdvi);
 		run("Rotate", testRotate);
 		run("Posted", testPosted);
 		run("HostileRead", testHostileRead);

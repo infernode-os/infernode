@@ -642,8 +642,19 @@ muxclose(Mnt *m)
 {
 	Mntrpc *q, *r;
 
-	for(q = m->queue; q; q = r) {
+	/*
+	 * The queue is taken from the mount before any of it is freed, and
+	 * each call forgets the mount: mntfree looks along r->m's queue for
+	 * a flush naming its tag, and walked the calls freed before it here
+	 * (a use after free, sysfuzz -d under AddressSanitizer on Windows;
+	 * a nil fault holding m->l without it), and a call its caller still
+	 * holds had r->m left naming this Mnt, which mntpntfree frees below.
+	 */
+	q = m->queue;
+	m->queue = nil;
+	for(; q; q = r) {
 		r = q->list;
+		q->m = nil;
 		if(q->orphan == 1){
 			/* abandoned, its caller still holding it: that caller frees it */
 			q->orphan = 0;

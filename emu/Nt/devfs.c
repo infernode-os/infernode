@@ -607,8 +607,17 @@ fsopen(Chan *c, int mode)
 	else {
 		m = fsomode(mode & 3);
 		cflag = OPEN_EXISTING;
-		if(mode & OTRUNC)
+		if(mode & OTRUNC){
+			/*
+			 * TRUNCATE_EXISTING needs a handle that may write: OREAD|OTRUNC
+			 * was "The parameter is incorrect", where the other hosts
+			 * truncate (export_readonly_test).  checksec asked for
+			 * write permission above; the channel is still opened
+			 * OREAD, so nothing writes through it.
+			 */
 			cflag = TRUNCATE_EXISTING;
+			m |= GENERIC_WRITE;
+		}
 		aflag = FILE_FLAG_RANDOM_ACCESS;
 		if(mode & ORCLOSE)
 			aflag |= FILE_FLAG_DELETE_ON_CLOSE;
@@ -702,8 +711,17 @@ fscreate(Chan *c, char *name, int mode, ulong perm)
 			aflag = FILE_FLAG_DELETE_ON_CLOSE;
 		if (winfileclash(path))
 			error(Eexist);
+		/*
+		 * A device's create is create(5): it fails if the file is
+		 * there, and namec opens it with OTRUNC in its place for a
+		 * create(2) that is not OEXCL (emu/port/chan.c's Acreate), as
+		 * devfs-posix.c's O_CREAT|O_EXCL does.  CREATE_ALWAYS
+		 * truncated the file that was there and succeeded, so OEXCL
+		 * never failed: two takers of a lock file both had it (sdg's
+		 * handshake counter gave one value twice, sdg_test).
+		 */
 		wpath = fswiden(path);
-		h = CreateFile(wpath, m, FILE_SHARE_READ|FILE_SHARE_WRITE|file_share_delete, &sa, CREATE_ALWAYS, aflag, 0);
+		h = CreateFile(wpath, m, FILE_SHARE_READ|FILE_SHARE_WRITE|file_share_delete, &sa, CREATE_NEW, aflag, 0);
 		free(wpath);
 		if(h == INVALID_HANDLE_VALUE) {
 			free(acl);

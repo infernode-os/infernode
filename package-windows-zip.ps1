@@ -3,7 +3,7 @@
 #
 # Creates a self-contained folder that users extract and double-click
 # InferNode.exe to launch.  LLM service is handled by the native Limbo
-# llmsrv inside the emulator — no external binary needed.
+# llmsrv inside the emulator - no external binary needed.
 #
 # Prerequisites:
 #   - Run build-windows-sdl3.ps1 first (builds o.emu.exe + SDL3.dll)

@@ -1,4 +1,4 @@
-# xen.ps1 — Windows counterpart of tools/xen: open host files in a
+# xen.ps1 - Windows counterpart of tools/xen: open host files in a
 # standalone InferNode editor, Acme-SAC style.
 #
 #	xen.ps1 [-Sam] [-Wait] [file ...]

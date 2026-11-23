@@ -15,7 +15,7 @@
       CRASH if NTSTATUS exit code matches a known JIT crash signature.
       TIMEOUT if the test ran longer than -TimeoutSec without exiting.
               (Treated as "ran without crashing" unless the test
-              normally exits — distinguishing those is left to authors
+              normally exits - distinguishing those is left to authors
               who can supply -PassPattern.)
 
 .PARAMETER Root
@@ -105,7 +105,7 @@ foreach ($t in $tests) {
         $crash++
         $failures += "$name (NTSTATUS 0x$hex)"
     } elseif ($timedOut -and -not $sawFail) {
-        # Long-running tests (daemons) — treat as ok if no FAIL marker.
+        # Long-running tests (daemons) - treat as ok if no FAIL marker.
         Write-Host ("  TIMEOUT {0,-30} (>${TimeoutSec}s, no FAIL marker)" -f $name) -ForegroundColor DarkYellow
         $timeout++
     } elseif ($sawFail -or ($code -ne 0 -and -not $sawPass)) {

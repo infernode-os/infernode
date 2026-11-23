@@ -455,7 +455,7 @@ function Find-WinBison {
         }
     }
 
-    # 2. PATH lookup last — Get-Command may return a shim that won't
+    # 2. PATH lookup last - Get-Command may return a shim that won't
     #    work, but it may also be the only thing a user-built install
     #    surfaces. APPEND the registry PATH to the current $env:Path
     #    (don't replace) so we pick up winget's just-installed entries
@@ -480,7 +480,7 @@ function Find-WinBison {
     }
 
     # 4. Stash rejection log so the caller's error message can include
-    #    it — useful when a user's only install is broken.
+    #    it - useful when a user's only install is broken.
     $script:BisonRejectionLog = $rejected
     return $null
 }

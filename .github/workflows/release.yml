@@ -1869,10 +1869,29 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$Stage\tools" | Out-Null
           Copy-Item "tools\xen.ps1" "$Stage\tools\"
           # FIDO2 runtime DLLs (present only when libfido2 was linked). The build
-          # script copied them next to o.emu.exe; bundle whichever exist so
-          # /dev/2fa works without a separate libfido2 install.
-          foreach ($dll in @("fido2.dll", "cbor.dll", "libcrypto-3-x64.dll", "zlib1.dll")) {
-            if (Test-Path "emu\Nt\$dll") { Copy-Item "emu\Nt\$dll" "$Stage\" }
+          # script walked fido2.dll's imports and copied every non-system DLL
+          # next to o.emu.exe; bundle all of them. A name list here once missed
+          # libz.dll and v0.11.0's emu would not start.
+          Get-ChildItem "emu\Nt\*.dll" | Where-Object { $_.Name -ne "SDL3.dll" } |
+            ForEach-Object { Copy-Item $_.FullName "$Stage\" }
+          # Refuse a bundle whose binaries import a DLL that is neither staged
+          # nor part of Windows. vcruntime/UCRT are allowed: they come with the
+          # VC++ redistributable, which is not bundled.
+          $staged = @{}
+          Get-ChildItem "$Stage\*.dll" | ForEach-Object { $staged[$_.Name.ToLower()] = $true }
+          $missing = @()
+          foreach ($bin in Get-ChildItem "$Stage\*.exe", "$Stage\*.dll") {
+            foreach ($line in (& dumpbin /nologo /dependents $bin.FullName)) {
+              if ($line -notmatch '^\s+(\S+\.dll)\s*$') { continue }
+              $dep = $Matches[1].ToLower()
+              if ($staged[$dep] -or $dep -like 'api-ms-win-*' -or $dep -like 'vcruntime*' -or $dep -like 'msvcp*') { continue }
+              if (Test-Path "$env:SystemRoot\System32\$dep") { continue }
+              $missing += "$($bin.Name) -> $dep"
+            }
+          }
+          if ($missing) {
+            $missing | ForEach-Object { Write-Host "missing runtime DLL: $_" }
+            throw "Stage-GUI: $Stage imports DLLs it does not ship"
           }
           Write-Zip $Stage
         }

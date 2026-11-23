@@ -123,7 +123,7 @@ if (-not $sdl3Found) {
 }
 
 # =============================================
-# Find libfido2 (optional — for /dev/2fa, YubiKey/FIDO2)
+# Find libfido2 (optional - for /dev/2fa, YubiKey/FIDO2)
 # =============================================
 # Mirrors the SDL3 discovery above but is OPTIONAL: when libfido2 is not found
 # the emu still builds, with the #h (2fa) device degraded to its stub bridge
@@ -165,7 +165,7 @@ foreach ($cand in $fido2Candidates) {
     }
 }
 if (-not $fido2Found) {
-    Write-Host "libfido2 not found — building /dev/2fa as a stub (available=0)." -ForegroundColor Yellow
+    Write-Host "libfido2 not found - building /dev/2fa as a stub (available=0)." -ForegroundColor Yellow
     Write-Host "  Install with: vcpkg install fido2:x64-windows  (then re-run, or pass -Fido2Dir)" -ForegroundColor Yellow
 }
 Write-Host ""
@@ -428,14 +428,26 @@ if ($sdl3DllDir -ne "" -and (Test-Path "$sdl3DllDir\SDL3.dll")) {
 }
 
 # Copy fido2.dll (+ its runtime deps) next to the executable if libfido2 was
-# linked. vcpkg lays the dependency DLLs (cbor, crypto/zlib1) alongside
-# fido2.dll in the same bin/ dir, so copy whatever runtime DLLs are present
-# there. The release packaging step bundles these next to o.emu.exe.
+# linked. o.emu.exe imports fido2.dll directly, so a missing dependency stops
+# the emulator from starting at all. The dependency names are not fixed (vcpkg's
+# zlib has shipped as both zlib1.dll and libz.dll; other libfido2 builds use
+# LibreSSL's crypto-NN.dll), so walk the import tables with dumpbin and copy
+# every DLL that resolves in the libfido2 bin dir; anything not found there is
+# a system DLL. The release packaging step bundles emu\Nt\*.dll.
 if ($fido2Found -and $fido2DllDir -ne "") {
-    foreach ($dll in @("fido2.dll", "cbor.dll", "libcrypto-3-x64.dll", "zlib1.dll")) {
-        if (Test-Path "$fido2DllDir\$dll") {
-            Copy-Item "$fido2DllDir\$dll" "$ROOT\emu\Nt\$dll" -Force
-            Write-Host "  Copied $dll to emu\Nt\" -ForegroundColor Green
+    $queue = New-Object System.Collections.Generic.Queue[string]
+    $queue.Enqueue("fido2.dll")
+    $seen = @{}
+    while ($queue.Count -gt 0) {
+        $dll = $queue.Dequeue()
+        if ($seen.ContainsKey($dll.ToLower())) { continue }
+        $seen[$dll.ToLower()] = $true
+        $src = Join-Path $fido2DllDir $dll
+        if (-not (Test-Path $src)) { continue }
+        Copy-Item $src "$ROOT\emu\Nt\$dll" -Force
+        Write-Host "  Copied $dll to emu\Nt\" -ForegroundColor Green
+        foreach ($line in (& dumpbin /nologo /dependents $src)) {
+            if ($line -match '^\s+(\S+\.dll)\s*$') { $queue.Enqueue($Matches[1]) }
         }
     }
 }

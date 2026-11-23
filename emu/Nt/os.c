@@ -528,6 +528,9 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
  * overflow (too little stack left to be handled here), and anything
  * that is not a hardware fault (C++ exceptions, debug output).
  */
+/* INFERNODE_FAULTLOG set: what the handler leaves to the search, said, to find what ended emu */
+static int faultlog;
+
 static LONG CALLBACK
 VectorHandler(PEXCEPTION_POINTERS ep)
 {
@@ -535,6 +538,11 @@ VectorHandler(PEXCEPTION_POINTERS ep)
 
 	if(up == nil)
 		return EXCEPTION_CONTINUE_SEARCH;
+	if(faultlog && up->type != Interp
+	&& GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	   (LPCWSTR)ep->ExceptionRecord->ExceptionAddress, &m) && m != GetModuleHandleW(NULL))
+		print("faultlog: a DLL's code %#lux pc %p on kproc %s, to the search\n",
+			(ulong)ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress, up->text);
 	/*
 	 * A fault in a system DLL on a proc with no compiled code under it
 	 * (an export's slave, the other kprocs) is left to the search: the
@@ -569,6 +577,10 @@ VectorHandler(PEXCEPTION_POINTERS ep)
 	case EXCEPTION_ILLEGAL_INSTRUCTION:
 		return TrapHandler(ep);
 	}
+	if(faultlog)
+		print("faultlog: passed on code %#lux pc %p (image %p) proc %s type %d\n",
+			(ulong)ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress,
+			(void*)GetModuleHandleW(NULL), up->text, up->type);
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -675,6 +687,7 @@ libinit(char *imod)
 		 * (AddressSanitizer commits its shadow memory on an access
 		 * violation).
 		 */
+		faultlog = getenv("INFERNODE_FAULTLOG") != nil;
 		AddVectoredExceptionHandler(0, VectorHandler);
 		SetUnhandledExceptionFilter((LPTOP_LEVEL_EXCEPTION_FILTER)TrapHandler);
 	}

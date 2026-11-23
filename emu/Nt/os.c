@@ -536,14 +536,17 @@ VectorHandler(PEXCEPTION_POINTERS ep)
 	if(up == nil)
 		return EXCEPTION_CONTINUE_SEARCH;
 	/*
-	 * Only a fault in emu's own code or in compiled code (in no module
-	 * at all) is taken here.  A system DLL may fault on purpose and
-	 * catch it with its own handler (probing memory it was given); a
-	 * vectored handler sees that first, and made it emu's fault: a
-	 * panic, or a Limbo exception out of a host call.  Those are left
-	 * to the search, which finds the DLL's handler, as before.
+	 * A fault in a system DLL on a proc with no compiled code under it
+	 * (an export's slave, the other kprocs) is left to the search: the
+	 * stack is C to its start and can be searched, so a DLL that
+	 * faults on purpose finds its own handler, and one that does not
+	 * reaches the unhandled-exception filter, as before the vectored
+	 * handler.  On a Dis proc compiled frames lie below any host call,
+	 * the search cannot pass them, and Windows ended emu (0xc0000005,
+	 * silent: sysfuzz -P), so every fault there is taken here.
 	 */
-	if(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	if(up->type != Interp
+	&& GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 	   (LPCWSTR)ep->ExceptionRecord->ExceptionAddress, &m) && m != GetModuleHandleW(NULL))
 		return EXCEPTION_CONTINUE_SEARCH;
 	switch(ep->ExceptionRecord->ExceptionCode){

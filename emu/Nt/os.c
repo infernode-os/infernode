@@ -58,10 +58,65 @@ char *cputype = "amd64";
 char *cputype = "386";
 #endif
 
+/*
+ * A Proc's host state (p->os): the event osblock waits on, and a
+ * socket of its own that interrupts its select (doselect in ipif6.c).
+ * Nothing interrupts a thread's select on Windows; a POSIX host's
+ * signal does.  Without the socket a Prog killed while it read or
+ * listened on the network stayed in the host until select's timeout,
+ * a second, and its socket stayed open as long: a server killed and
+ * started again on its port found the port still taken.
+ */
+typedef struct Osproc Osproc;
+struct Osproc
+{
+	HANDLE	ev;
+	SOCKET	volatile wake;	/* INVALID_SOCKET until the Proc first selects */
+};
+
+#define	OSEV(p)	(((Osproc*)(p)->os)->ev)
+
+/*
+ * The calling Proc's wake socket, made the first time: a UDP socket
+ * on the loopback connected to itself, non-blocking.  INVALID_SOCKET
+ * if it cannot be made (doselect then waits out its timeout as before).
+ */
+SOCKET
+oswakesock(void)
+{
+	Osproc *o;
+	SOCKET s;
+	struct sockaddr_in sin;
+	int l;
+	u_long one;
+
+	o = up->os;
+	if(o->wake != INVALID_SOCKET)
+		return o->wake;
+	s = socket(AF_INET, SOCK_DGRAM, 0);
+	if(s == INVALID_SOCKET)
+		return s;
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_family = AF_INET;
+	sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	l = sizeof(sin);
+	one = 1;
+	if(bind(s, (struct sockaddr*)&sin, sizeof(sin)) < 0 ||
+	   getsockname(s, (struct sockaddr*)&sin, &l) < 0 ||
+	   connect(s, (struct sockaddr*)&sin, sizeof(sin)) < 0 ||
+	   ioctlsocket(s, FIONBIO, &one) < 0){
+		closesocket(s);
+		return INVALID_SOCKET;
+	}
+	o->wake = s;
+	return s;
+}
+
 static void
 pfree(Proc *p)
 {
 	Osenv *e;
+	Osproc *o;
 
 	lock(&procs.l);
 	if(p->prev)
@@ -84,7 +139,11 @@ pfree(Proc *p)
 		free(e->user);
 	}
 	free(p->prog);
-	CloseHandle((HANDLE)p->os);
+	o = p->os;
+	CloseHandle(o->ev);
+	if(o->wake != INVALID_SOCKET)
+		closesocket(o->wake);
+	free(o);
 	/* forget p before freeing it: lock() counts into up->nlocks (see kproc-pthreads.c:/^pexit) */
 	if(p == up)
 		up = nil;
@@ -94,14 +153,14 @@ pfree(Proc *p)
 void
 osblock(void)
 {
-	if(WaitForSingleObject((HANDLE)up->os, INFINITE) != WAIT_OBJECT_0)
+	if(WaitForSingleObject(OSEV(up), INFINITE) != WAIT_OBJECT_0)
 		panic("osblock failed");
 }
 
 void
 osready(Proc *p)
 {
-	if(SetEvent((HANDLE)p->os) == FALSE)
+	if(SetEvent(OSEV(p)) == FALSE)
 		panic("osready failed");
 }
 
@@ -144,13 +203,19 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 	Pgrp *pg;
 	Fgrp *fg;
 	Egrp *eg;
+	Osproc *o;
 
 	p = newproc();
 	if(p == nil)
 		panic("out of kernel processes");
-	p->os = CreateEvent(NULL, FALSE, FALSE, NULL);
-	if(p->os == NULL)
+	o = malloc(sizeof(Osproc));
+	if(o == nil)
+		panic("out of kernel processes");
+	o->wake = INVALID_SOCKET;
+	o->ev = CreateEvent(NULL, FALSE, FALSE, NULL);
+	if(o->ev == NULL)
 		panic("can't allocate os event");
+	p->os = o;
 		
 	if(flags & KPDUPPG) {
 		pg = up->env->pgrp;
@@ -205,8 +270,15 @@ void APIENTRY sleepintr(DWORD param)
 void
 oshostintr(Proc *p)
 {
-	if (p->syscall == SOCK_SELECT)
+	SOCKET w;
+
+	if (p->syscall == SOCK_SELECT){
+		/* intwait stays set: doselect sees it once select returns */
+		w = ((Osproc*)p->os)->wake;
+		if(w != INVALID_SOCKET)
+			send(w, "", 1, 0);
 		return;
+	}
 	p->intwait = 0;
 #if(_WIN32_WINNT >= 0x0400)
 	if(p->syscall == SYS_SLEEP) {

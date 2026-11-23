@@ -16,6 +16,7 @@
 #include	"error.h"
 
 extern int SOCK_SELECT;
+extern SOCKET oswakesock(void);
 
 int
 so_socket(int type)
@@ -93,19 +94,39 @@ doselect(int sock)
 {
 	fd_set	waitr;
 	struct timeval seltime;
+	SOCKET wake;
+	char buf[16];
 
+	/*
+	 * oshostintr sends a byte to wake when it interrupts a Proc in
+	 * SOCK_SELECT, which ends the select at once.  The timeout is
+	 * kept for an interrupt that came before syscall said SOCK_SELECT
+	 * (swipend is then set), or with no wake socket to be had.
+	 */
+	wake = oswakesock();
+	lock(&up->sysio);
 	up->syscall = SOCK_SELECT;
+	unlock(&up->sysio);
 	FD_ZERO(&waitr);
 	FD_SET(sock, &waitr);
+	if(wake != INVALID_SOCKET)
+		FD_SET(wake, &waitr);
 	for(;;){
 		int nfds;
 		fd_set in, exc;
 
+		if(up->intwait || up->swipend) {
+			up->intwait = 0;
+			return -1;
+		}
 		in = waitr;
 		exc = waitr;
 		seltime.tv_sec = 1;
 		seltime.tv_usec = 0L;
 		nfds = select(sizeof(fd_set)*8, &in, (fd_set*)0, &exc, &seltime);
+		if(wake != INVALID_SOCKET && FD_ISSET(wake, &in))
+			while(recv(wake, buf, sizeof(buf), 0) > 0)
+				;
 		if(up->intwait) {
 			up->intwait = 0;
 			return -1;

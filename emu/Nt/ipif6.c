@@ -403,6 +403,15 @@ so_hangup(int fd, int nolinger)
 	osenter();
 	if(nolinger)
 		setsockopt(fd, SOL_SOCKET, SO_LINGER, (char*)&l, sizeof(l));
+	/*
+	 * Shut down first, as the POSIX hangup does: the peer gets what
+	 * was written and the end of it (FIN) before the reset.  Closed
+	 * with no linger alone, the reset was all a Windows peer saw: it
+	 * discards what it had received and not yet read, so a server's
+	 * answer followed by a hangup (a proxy's refusal of CONNECT,
+	 * ventisrv's greeting before its handshake deadline) never arrived.
+	 */
+	shutdown(fd, SD_BOTH);
 	r = closesocket(fd);
 	osleave();
 	return r;

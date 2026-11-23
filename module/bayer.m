@@ -21,8 +21,12 @@ Bayer: module
 	# has an entry for every value a sample can have. y is w by h, cb
 	# and cr w/2 by h/2, full range, as $I420 and remap24 take them.
 	#
-	# mean gets the mean samples before the tables: red, green, blue.
+	# mean gets the mean samples before the tables: red, green, blue;
+	# and, if it has six or more entries, the same over the cells with
+	# no sample at or above clip in 3 to 5 (each 0 if there are none),
+	# for a white balance that a highlight clipped in one colour does
+	# not pull: clip is in the samples' own units; 0 leaves none out.
 	merge:	fn(raw: array of byte, rw, rh, scale, red, rot: int,
 		lr, lg, lb: array of byte,
-		y, cb, cr: array of byte, mean: array of int);
+		y, cb, cr: array of byte, mean: array of int, clip: int);
 };

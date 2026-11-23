@@ -92,6 +92,7 @@ sensor := Imx708;
 Sw := 2304;
 Sh := 1296;
 Black: con 64;
+Clip: con 1000;		# a sample this high is taken to have clipped: left out of white balance
 Maxsample: con 1023;
 Maxexposure: con 65535;	# lines: the register's sixteen bits
 Aetarget: con 180;	# above black, of 959: near a grey card's 18%
@@ -685,6 +686,8 @@ status(): string
 		s += " regcheck=" + regcheck;
 	if(afresult != "")
 		s += " autofocus=" + afresult;
+	# the gains in use, set or found: red and blue to green, 256 one
+	s += sys->sprint(" wbgains=%d:%d", lgr, lgb);
 	s += sys->sprint(" writes=%d i2cerrors=%d lostwrites=%d", nwrites, i2cerrs, lostw);
 	if(err != "")
 		s += " error=" + err;
@@ -700,8 +703,11 @@ simdivr(): int
 
 settings(): string
 {
-	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\n",
-		fw(), fh(), fps, exposure, gain, flip, rotate, focus);
+	wb := "auto";
+	if(wbfixed)
+		wb = sys->sprint("%d %d", wbr, wbb);
+	return sys->sprint("mode %d %d\nfps %d\nexposure %d\ngain %d\nflip %d\nrotate %d\nfocus %d\nwb %s\n",
+		fw(), fh(), fps, exposure, gain, flip, rotate, focus, wb);
 }
 
 # a ctl argument: a whole number of at most six digits, or -1
@@ -785,6 +791,21 @@ doctl(s: string): string
 			return "camsrv: flip 0..3";
 		flip = a;
 		tell("flip");
+	"wb" =>
+		if(n == 2 && hd tl f == "auto"){
+			wbfixed = 0;
+			wlr = nil;
+		}else{
+			if(n != 3)
+				return "camsrv: wb auto|RED BLUE";
+			r := arg(hd tl f);
+			b := arg(hd tl tl f);
+			if(r < 128 || r > 8*256 || b < 128 || b > 8*256)
+				return "camsrv: wb gains 128..2048 (256 is one)";
+			wbr = r;
+			wbb = b;
+			wbfixed = 1;
+		}
 	"rotate" =>
 		if(n != 2)
 			return "camsrv: rotate 0|90|180|270";
@@ -924,7 +945,7 @@ capture(stop: chan of int): string
 	raw := array[Sw*Sh*2] of byte;
 	scale := Sw/width;
 	(y, cb, cr) := planes();
-	mean := array[3] of int;
+	mean := array[6] of int;
 	(lr, lg, lb) := tables(256, 256);
 	aelines := framelen - Exposureoff;
 	aegain := gaintoq(gain);
@@ -981,7 +1002,7 @@ capture(stop: chan of int): string
 			mflip = newflip;
 		(y, cb, cr) = planes();
 		rot := rotate;
-		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean);
+		bayer->merge(raw, Sw, Sh, scale, mflip, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
 		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
 			rawc <-= rawcopy(raw);
@@ -1086,29 +1107,58 @@ tables(gr, gb: int): (array of byte, array of byte, array of byte)
 
 lgr := 0;
 lgb := 0;
+# wb RED BLUE: fixed gains, 256 a gain of one, green's fixed at one;
+# wb auto: grey world (the default)
+wbfixed := 0;
+wbr := 256;
+wbb := 256;
 wlr, wlg, wlb: array of byte;
 
 # Grey world, moved a quarter of the way a frame, so that a passing
 # colour does not swing the picture.
 wbal(mean: array of int): (array of byte, array of byte, array of byte)
 {
-	r := mean[0]-Black;
-	g := mean[1]-Black;
-	b := mean[2]-Black;
+	if(wbfixed){
+		# the gains set: the channels keep their own ratio, as plant
+		# health from a NoIR camera needs (grey world takes it away)
+		if(wlr == nil || lgr != wbr || lgb != wbb)
+			(wlr, wlg, wlb) = tables(wbr, wbb);
+		return (wlr, wlg, wlb);
+	}
+	# the means over cells with nothing clipped, if there are any: a
+	# highlight clipped in one colour is that colour at its ceiling,
+	# and pulled the balance away from it
+	o := 0;
+	if(len mean >= 6 && mean[4] > 0)
+		o = 3;
+	r := mean[o]-Black;
+	g := mean[o+1]-Black;
+	b := mean[o+2]-Black;
 	if(r < 4)
 		r = 4;
 	if(b < 4)
 		b = 4;
 	if(g < 4)
 		g = 4;
-	gr := clamp(g*256/r, 128, 8*256);
-	gb := clamp(g*256/b, 128, 8*256);
-	gr = lgr + (gr-lgr)/4;
-	gb = lgb + (gb-lgb)/4;
-	if(wlr == nil || abs(gr-lgr)*16 > lgr || abs(gb-lgb)*16 > lgb){
-		(wlr, wlg, wlb) = tables(gr, gb);
-	}
+	tr := clamp(g*256/r, 128, 8*256);
+	tb := clamp(g*256/b, 128, 8*256);
+	# the tables made again while the gains in use are more than 1 in
+	# 64 from the picture's, a quarter of the way at a time.  Asked
+	# of the step, as it was, the balance stopped once a quarter of
+	# what was left was under 1 in 16: a quarter short of the picture
+	# (246:271 in daylight on a NoIR camera, whose grey was 218:321)
+	if(wlr == nil || abs(tr-lgr)*64 > lgr || abs(tb-lgb)*64 > lgb)
+		(wlr, wlg, wlb) = tables(step(lgr, tr), step(lgb, tb));
 	return (wlr, wlg, wlb);
+}
+
+# a quarter of the way from v to w, and at least one
+step(v, w: int): int
+{
+	d := (w-v)/4;
+	if(d == 0 && w != v)
+		d = (w-v)/abs(w-v);
+	return v+d;
 }
 
 clamp(v, lo, hi: int): int
@@ -1310,7 +1360,7 @@ simulate(stop: chan of int)
 	raw := array[w*h*2] of byte;
 	scale := w/width;
 	(y, cb, cr) := planes();
-	mean := array[3] of int;
+	mean := array[6] of int;
 	(lr, lg, lb) := (tone(256), tone(256), tone(256));
 	lgr = lgb = 256;
 	band := 0;
@@ -1335,7 +1385,7 @@ simulate(stop: chan of int)
 		band = (band+4) % h;
 		(y, cb, cr) = planes();
 		rot := rotate;
-		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean);
+		bayer->merge(raw, w, h, scale, 0, rot/90, lr, lg, lb, y, cb, cr, mean, Clip);
 		framec <-= (y[0:fsize], turnedw(rot), turnedh(rot));
 		if(lastrawwanted())
 			rawc <-= rawcopy(raw);

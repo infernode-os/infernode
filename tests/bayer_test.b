@@ -77,6 +77,45 @@ identity(): array of byte
 	return t;
 }
 
+# The means over unclipped cells: a block with a sample at or above
+# clip is left out of mean[3..5], and only of them
+testClip(t: ref T)
+{
+	lut := identity();
+	w := 16;
+	h := 8;
+	raw := frame(w, h, 0, 300, 400, 500);
+	# one red sample clipped, in the output pixel at (0,0)
+	put(raw, w, 0, 0, 1023);
+	y := array[(w/2)*(h/2)] of byte;
+	cb := array[(w/4)*(h/4)] of byte;
+	cr := array[(w/4)*(h/4)] of byte;
+	mean := array[6] of int;
+	bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 1000);
+	t.assert(mean[0] > 300, "the plain red mean counts the clipped sample");
+	t.asserteq(mean[3], 300, "the unclipped red mean does not");
+	t.asserteq(mean[4], 400, "green over the unclipped");
+	t.asserteq(mean[5], 500, "blue over the unclipped");
+	bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
+	t.asserteq(mean[3], mean[0], "clip 0 leaves none out");
+	# everything clipped: the unclipped means are 0
+	raw = frame(w, h, 0, 1023, 1023, 1023);
+	bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 1000);
+	t.asserteq(mean[4], 0, "nothing unclipped: 0");
+	# three entries are still enough, as before
+	m3 := array[3] of int;
+	bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, m3, 1000);
+	t.asserteq(m3[1], 1023, "a three-entry mean still works");
+	refused := 0;
+	{
+		bayer->merge(raw, w, h, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, -1);
+	} exception {
+	* =>
+		refused = 1;
+	}
+	t.assert(refused, "a negative clip is refused");
+}
+
 testOrders(t: ref T)
 {
 	lut := identity();
@@ -86,7 +125,7 @@ testOrders(t: ref T)
 		cb := array[4*4] of byte;
 		cr := array[4*4] of byte;
 		mean := array[3] of int;
-		bayer->merge(raw, 16, 16, 2, red, 0, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 16, 16, 2, red, 0, lut, lut, lut, y, cb, cr, mean, 0);
 		t.asserteq(mean[0], 800, sys->sprint("red %d: red mean", red));
 		t.asserteq(mean[1], 400, sys->sprint("red %d: green mean", red));
 		t.asserteq(mean[2], 200, sys->sprint("red %d: blue mean", red));
@@ -107,10 +146,10 @@ testSaturated(t: ref T)
 	cb := array[4*4] of byte;
 	cr := array[4*4] of byte;
 	mean := array[3] of int;
-	bayer->merge(frame(16, 16, 0, 1023, 0, 0), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(frame(16, 16, 0, 1023, 0, 0), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	t.asserteq(int cr[0], 255, "full red: cr");
 	t.assert(int cb[0] < 128, "full red: cb");
-	bayer->merge(frame(16, 16, 0, 0, 0, 1023), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(frame(16, 16, 0, 0, 0, 1023), 16, 16, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	t.asserteq(int cb[0], 255, "full blue: cb");
 	t.assert(int cr[0] < 128, "full blue: cr");
 }
@@ -125,7 +164,7 @@ testScale(t: ref T)
 	cb := array[2*2] of byte;
 	cr := array[2*2] of byte;
 	mean := array[3] of int;
-	bayer->merge(raw, 16, 16, 4, 0, 0, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(raw, 16, 16, 4, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	t.assert(int y[0] > int y[1], "the pixel over the hot sample is the brighter");
 	t.asserteq(int cb[3], 128, "grey has no colour");
 	t.asserteq(int cr[3], 128, "grey has no colour");
@@ -147,7 +186,7 @@ testRotate(t: ref T)
 		y := array[w*h] of byte;
 		cb := array[(w/2)*(h/2)] of byte;
 		cr := array[(w/2)*(h/2)] of byte;
-		bayer->merge(raw, 2*w, 2*h, 2, 0, rot, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 2*w, 2*h, 2, 0, rot, lut, lut, lut, y, cb, cr, mean, 0);
 		ow := w;
 		if(rot&1)
 			ow = h;
@@ -177,13 +216,13 @@ testRotate(t: ref T)
 	y := array[w*h] of byte;
 	cb := array[(w/2)*(h/2)] of byte;
 	cr := array[(w/2)*(h/2)] of byte;
-	bayer->merge(raw, 2*w, 2*h, 2, 0, 1, lut, lut, lut, y, cb, cr, mean);
+	bayer->merge(raw, 2*w, 2*h, 2, 0, 1, lut, lut, lut, y, cb, cr, mean, 0);
 	t.assert(int cr[h/2-1] > 200, sys->sprint("rot 1: red at the top right: cr %d", int cr[h/2-1]));
 	t.asserteq(int cr[0], 128, "rot 1: grey at the top left");
 	t.assert(int y[h-1] < int y[0], "rot 1: the red corner's luma, top right");
 	refused := 0;
 	{
-		bayer->merge(raw, 2*w, 2*h, 2, 0, 4, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 2*w, 2*h, 2, 0, 4, lut, lut, lut, y, cb, cr, mean, 0);
 	} exception {
 	* =>
 		refused = 1;
@@ -201,7 +240,7 @@ testBounds(t: ref T)
 	mean := array[3] of int;
 	refused := 0;
 	{
-		bayer->merge(raw, 8, 8, 2, 0, 0, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 8, 8, 2, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	} exception {
 	* =>
 		refused = 1;
@@ -209,7 +248,7 @@ testBounds(t: ref T)
 	t.assert(refused, "planes too small are refused");
 	refused = 0;
 	{
-		bayer->merge(raw, 8, 8, 3, 0, 0, lut, lut, lut, y, cb, cr, mean);
+		bayer->merge(raw, 8, 8, 3, 0, 0, lut, lut, lut, y, cb, cr, mean, 0);
 	} exception {
 	* =>
 		refused = 1;
@@ -244,7 +283,7 @@ testLargeScale(t: ref T)
 	lg[255] = byte 255;
 	lb[255] = byte 255;
 	bigg[100000+gi] = byte 77;
-	bayer->merge(raw, rw, rh, s, 0, 0, lr, lg, lb, y, cb, cr, mean);
+	bayer->merge(raw, rw, rh, s, 0, 0, lr, lg, lb, y, cb, cr, mean, 0);
 	for(i := 0; i < 4; i++)
 		t.asserteq(int y[i], 255, sys->sprint("saturated samples at scale 258: luma %d is the table's last entry", i));
 	t.asserteq(mean[0], 65535, "mean red");
@@ -270,6 +309,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("Rotate", testRotate);
 		run("Bounds", testBounds);
 		run("LargeScale", testLargeScale);
+		run("Clip", testClip);
 	}
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

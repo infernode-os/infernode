@@ -1928,14 +1928,14 @@ jobs:
         Copy-Item "emu\Nt\o.emu.headless.exe" "$HL\o.emu.exe"
         Write-Zip $HL
 
-    # Charon, Xenith and Lucifer in the staged GUI package, as on macOS and
-    # Linux. Not yet blocking on Windows: it passes there, but not every run
-    # (locally, Lucifer's Charon once and Xenith once printed nothing in
-    # time). Make it blocking (drop continue-on-error) once that is found.
-    - name: Release smoke test (Windows GUI package)
-      continue-on-error: true
+    # Charon, Xenith and Lucifer in the staged packages, as on macOS and
+    # Linux: fails the release if not. (Its one-time "intermittent" failure on
+    # Windows was another process killing every o.emu.exe on the machine.)
+    - name: Release smoke test (Windows GUI and headless packages)
       shell: bash
-      run: sh tests/host/release_smoke_test.sh "infernode-${{ steps.version.outputs.version }}-windows-amd64-gui" o.emu.exe . gui
+      run: |
+        sh tests/host/release_smoke_test.sh "infernode-${{ steps.version.outputs.version }}-windows-amd64-gui" o.emu.exe . gui
+        sh tests/host/release_smoke_test.sh "infernode-${{ steps.version.outputs.version }}-windows-amd64" o.emu.exe .
 
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:

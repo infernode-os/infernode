@@ -147,8 +147,11 @@ if (-not (Test-Path "$Bundle\o.emu.exe")) {
     exit 1
 }
 
-# Kill any stale emu from previous runs.
-Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Stop-Process -Force
+# Kill any stale emu from previous runs of this bundle.
+# Only this tree's emulators: a machine-wide Stop-Process -Name o.emu also
+# killed other checkouts' runs and a user's running InferNode (it was
+# the "intermittent" release smoke failure: exit 1, no output).
+Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$((Resolve-Path $Bundle).Path)\*" } | Stop-Process -Force
 
 Write-Host ""
 Write-Host "=== Windows JIT regression tests ===" -ForegroundColor Yellow
@@ -215,7 +218,7 @@ Test-JitCommand `
     -ExpectStdout "loads-ok"
 
 # -- Cleanup ----------------------------------------------------
-Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$((Resolve-Path $Bundle).Path)\*" } | Stop-Process -Force
 
 Write-Host ""
 Write-Host "=== Summary ===" -ForegroundColor Yellow

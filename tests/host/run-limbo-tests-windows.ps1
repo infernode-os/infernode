@@ -66,8 +66,8 @@ foreach ($t in $tests) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($t.Name)
     $logFile = "$env:TEMP\limbo-test-$name.log"
 
-    # Skip pre-existing emu instances.
-    Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Stop-Process -Force
+    # Skip pre-existing emu instances of this tree.
+    Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Root\*" } | Stop-Process -Force
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $emu
@@ -118,7 +118,10 @@ foreach ($t in $tests) {
     }
 }
 
-Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Stop-Process -Force
+# Only this tree's emulators: a machine-wide Stop-Process -Name o.emu also
+# killed other checkouts' runs and a user's running InferNode (it was
+# the "intermittent" release smoke failure: exit 1, no output).
+Get-Process -Name "o.emu" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Root\*" } | Stop-Process -Force
 
 Write-Host ""
 Write-Host "=== Summary ===" -ForegroundColor Yellow

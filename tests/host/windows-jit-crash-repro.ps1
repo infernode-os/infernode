@@ -69,8 +69,12 @@ if (-not (Test-Path "$Bundle\o.emu.exe")) {
     Fail "no o.emu.exe at $Bundle. Build a dev bundle first: .\build-dev-bundle.ps1"
 }
 
-# Kill any stale o.emu that might be holding files / state.
+# Kill any stale o.emu of this bundle that might be holding files / state.
+# Only this tree's emulators: a machine-wide Stop-Process -Name o.emu also
+# killed other checkouts' runs and a user's running InferNode (it was
+# the "intermittent" release smoke failure: exit 1, no output).
 Get-Process -Name "o.emu", "InferNode" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like "$((Resolve-Path $Bundle).Path)\*" } |
     ForEach-Object { Stop-Process -Id $_.Id -Force }
 
 # Note pre-test latest crash log entry so we can detect a new one.

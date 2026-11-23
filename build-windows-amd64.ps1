@@ -706,6 +706,7 @@ $portSources = @(
     "devcons.c", "devdup.c", "devenv.c", "devip.c",
     "devmnt.c", "devpipe.c", "devprog.c", "devroot.c",
     "devsrv.c", "devssl.c", "devcmd.c",
+    "devdraw.c", "devpointer.c", "devsnarf.c", "devwmsz.c",
     "ipaux.c", "srv.c"
 )
 foreach ($src in $portSources) {
@@ -776,6 +777,10 @@ extern Dev ssldevtab;
 extern Dev fsdevtab;
 extern Dev cmddevtab;
 extern Dev ipdevtab;
+extern Dev drawdevtab;
+extern Dev pointerdevtab;
+extern Dev snarfdevtab;
+extern Dev wmszdevtab;
 
 Dev* devtab[]={
 	&rootdevtab,
@@ -790,6 +795,10 @@ Dev* devtab[]={
 	&fsdevtab,
 	&cmddevtab,
 	&ipdevtab,
+	&drawdevtab,
+	&pointerdevtab,
+	&snarfdevtab,
+	&wmszdevtab,
 	nil,
 };
 
@@ -801,12 +810,24 @@ extern void mathmodinit(void);
 extern void srvmodinit(void);
 extern void keyringmodinit(void);
 extern void ipintsmodinit(void);
+extern void drawmodinit(void);
+extern void tkmodinit(void);
+extern void i420modinit(void);
+extern void tensormodinit(void);
+extern void bayermodinit(void);
+/* The same modules as the GUI emu and Linux's headless one: headless
+ * Charon (wm/charon -h) and other Draw/Tk programs run without a display. */
 void modinit(void){
 	sysmodinit();
+	drawmodinit();
+	tkmodinit();
 	mathmodinit();
 	srvmodinit();
 	keyringmodinit();
 	ipintsmodinit();
+	i420modinit();
+	tensormodinit();
+	bayermodinit();
 }
 
 char* conffile = "emu-headless";
@@ -823,6 +844,7 @@ $allObjs = Get-ChildItem -Path "." -Filter "*.obj" | ForEach-Object { $_.Name }
     "/OUT:o.emu.exe" `
     @allObjs `
     "$LibDir\libinterp.lib" `
+    "$LibDir\libtk.lib" `
     "$LibDir\libkeyring.lib" `
     "$LibDir\libsec.lib" `
     "$LibDir\libmp.lib" `

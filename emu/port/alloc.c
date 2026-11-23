@@ -845,7 +845,13 @@ getrealloctag(void *v)
 	return ~0;
 }
 
+#ifdef _WIN32
+/* the C runtime's, which MSVC's AddressSanitizer answers for its blocks */
+extern size_t _msize(void*);
+#define	malloc_usable_size	_msize
+#else
 extern size_t malloc_usable_size(void*);
+#endif
 
 ulong
 msize(void *v)

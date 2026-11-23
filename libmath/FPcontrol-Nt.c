@@ -5,7 +5,17 @@
 void
 FPinit(void)
 {
-	_controlfp(_EM_INEXACT,_MCW_EM);	// abort on underflow, etc.
+	/*
+	 * Every exception quiet, as the other hosts have it: Linux's
+	 * FPinit reaches only the x87 (reals are SSE2 on amd64) and macOS's
+	 * setfcr does nothing, so a NaN or an overflow is a value there,
+	 * and the tests (jit_real_test) and Limbo programs are written to
+	 * that.  On x64 _controlfp sets MXCSR, which the reals do use:
+	 * unmasked, a real overflow was an exception on Windows alone.
+	 * FPcontrol still unmasks them for a program that asks.
+	 */
+	_clearfp();
+	_controlfp(_MCW_EM, _MCW_EM);
 }
 
 ulong

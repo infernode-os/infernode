@@ -226,7 +226,7 @@ gcm_ctr(AESGCMstate *s, uchar *dat, ulong ndat)
 static int
 gcmok(AESGCMstate *s)
 {
-	return s->a.setup == 0xcafebabe && (s->a.rounds == 10 || s->a.rounds == 12 || s->a.rounds == 14);
+	return s->a.setup == AESset && (s->a.rounds == 10 || s->a.rounds == 12 || s->a.rounds == 14);
 }
 
 void

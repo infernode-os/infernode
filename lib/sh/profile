@@ -264,7 +264,7 @@ if {! ftest -f /mnt/factotum/proto}{
 	if {~ $emuhost Nt} {
 		# Windows: secstore password not yet supported via env var
 		# (os cmd in backticks hangs). Use GUI login or setup script.
-		havesecpass=''
+		havesecpass=()
 	}{
 		havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
 	}

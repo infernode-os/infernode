@@ -5506,11 +5506,11 @@ RNGOUT="$(QEMUARGS="$VIRTARGS -append rngassess" shell_session "$BUILD/$PLAT-ker
         'rngdump -b /tmp/b1.bin' \
         'rngdump -b /tmp/b2.bin' \
         'ls -l /tmp/raw.bin /tmp/b1.bin' \
-        'read 32 < /dev/random | wc -c')"
+        'read 32 < /dev/random | wc -b')"
 printf '%s\n' "$RNGOUT" > "$BUILD/$PLAT-rngassess.txt"
 NORNG="$(shell_session "$BUILD/$PLAT-kernel.img" 'rngdump -n 10 /tmp/x' 'rngdump -b /tmp/y')"
-if grep -aq 'src=/dev/hwrandom bytes=300000 ' <<<"$RNGOUT" && grep -aq ' 300000 .*/tmp/raw.bin' <<<"$RNGOUT"; then
-    pass "virt: rngassess: rngdump writes exactly the bytes of #c/hwrandom asked for"
+if grep -aq 'src=/dev/hwrandom bytes=300000 .* throttled0=none cputemp0=none throttled1=none cputemp1=none' <<<"$RNGOUT" && grep -aq ' 300000 .*/tmp/raw.bin' <<<"$RNGOUT"; then
+    pass "virt: rngassess: rngdump writes exactly the bytes of #c/hwrandom asked for, and says this board has no #P"
 else
     fail "virt: rngassess: #c/hwrandom -- $(grep -a 'rngdump\|hwrandom' <<<"$RNGOUT" | head -3)"
 fi
@@ -5529,6 +5529,59 @@ if [[ "$(grep -ac 'does not say rngassess' <<<"$NORNG")" -ge 2 ]] && ! grep -aq 
     pass "virt: without rngassess neither file opens, and says why"
 else
     fail "virt: without rngassess -- $(grep -a 'rngdump' <<<"$NORNG" | head -3)"
+fi
+
+# The restart collection, unattended, as a board runs it: the command
+# line's rngrestart=2 and a card, nothing typed. Each boot appends its
+# first bytes and a line of the board's health, the first resets, the
+# second says it is done and boots on; a third (reset by hand) finds two
+# and adds nothing. (A file written at the shell and
+# followed at once by a reset was not on the card after it, which is why
+# the command line starts it.)
+cp "$VSD" "$BUILD/$PLAT-rng-sd.img"
+RSTOUT="$(python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-rng-sd.img" <<'PYEOF'
+import os, select, subprocess, sys, time
+qemu, img, extra, sd = sys.argv[1:5]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % sd, "-device", "virtio-blk-device,drive=sd",
+    "-append", "rngassess rngrestart=2"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+out = b""
+def until(pat, n, secs):
+    global out
+    end = time.time() + secs
+    while time.time() < end and out.count(pat) < n:
+        r, _, _ = select.select([p.stdout], [], [], 0.2)
+        if r:
+            d = os.read(p.stdout.fileno(), 65536)
+            if not d:
+                break
+            out += d
+until(b"init: starting the shell", 1, 300)     # the second boot, done, boots on
+time.sleep(2)
+p.stdin.write(b"echo reboot > /dev/sysctl\r")
+p.stdin.flush()
+until(b"init: starting the shell", 2, 200)     # a third, which must add nothing
+time.sleep(2)
+p.stdin.write(b"cat /n/dos/rngboot.log; ls -l /n/dos/rngboot.bin; echo rNgDoNe\r")
+p.stdin.flush()
+until(b"rNgDoNe", 2, 30)
+p.kill()
+sys.stdout.write(out.decode(errors="replace"))
+PYEOF
+)"
+printf '%s\n' "$RSTOUT" > "$BUILD/$PLAT-rngrestart.txt"
+if grep -aq 'rngrestart: boot 1 of 2 kept; resetting' <<<"$RSTOUT" \
+   && grep -aq 'rngrestart: 2 boots collected' <<<"$RSTOUT" \
+   && grep -aq 'rngboot.bin already holds 2 boots' <<<"$RSTOUT" \
+   && grep -aqE ' 8192 .*/n/dos/rngboot.bin' <<<"$RSTOUT"; then
+    pass "virt: rngassess: rngrestart=2 collects two boots unattended, and a third adds nothing"
+else
+    fail "virt: rngassess: restart collection -- $(grep -a 'rngrestart' <<<"$RSTOUT" | head -4)"
+fi
+if [[ "$(grep -ac '^boot [12] throttled=none cputemp=none' <<<"$(tr -d '\r' <<<"$RSTOUT")")" -eq 2 ]]; then
+    pass "virt: rngassess: each boot's line in rngboot.log, and this board has no #P"
+else
+    fail "virt: rngassess: rngboot.log -- $(grep -a '^boot ' <<<"$RSTOUT" | head -3)"
 fi
 
 #

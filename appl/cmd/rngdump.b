@@ -21,6 +21,13 @@ implement Rngdump;
 #	chisq		chi-square of the byte counts, 255 degrees of freedom
 #	bit0..bit7	ones in each bit position, per million
 #	lag1		bytes equal to the one before, per million
+#	throttled0 cputemp0, throttled1 cputemp1
+#			the firmware's flag word and the SoC's temperature
+#			(#P, os/bcm/devarch.c) before and after the capture,
+#			"none" where the board has no #P. Bits 0 and 16 are
+#			under-voltage now and since boot; a capture with
+#			either set is said on standard error too, as a
+#			sample taken on a bad supply
 #
 # None of these says the source is good. They say quickly when it is
 # plainly not; the estimate is NIST's tools' on the host.
@@ -89,6 +96,7 @@ init(nil: ref Draw->Context, args: list of string)
 	if(fd == nil)
 		fatal(sys->sprint("%s: %r", out));
 
+	(thr0, temp0) := health();
 	counts := array[256] of {* => big 0};
 	bits := array[8] of {* => big 0};
 	lag := big 0;
@@ -122,6 +130,7 @@ init(nil: ref Draw->Context, args: list of string)
 		got += big n;
 	}
 	ms := sys->millisec() - t0;
+	(thr1, temp1) := health();
 	if(got == big 0)
 		fatal(src+": no bytes");
 
@@ -145,7 +154,58 @@ init(nil: ref Draw->Context, args: list of string)
 	for(j := 0; j < 8; j++)
 		s += sys->sprint(" bit%d=%bd", j, bits[j] * big 1000000 / got);
 	s += sys->sprint(" lag1=%bd", lag * big 1000000 / got);
+	s += " throttled0=" + thr0 + " cputemp0=" + temp0 + " throttled1=" + thr1 + " cputemp1=" + temp1;
 	sys->print("%s\n", s);
+	if(undervolt(thr0) || undervolt(thr1))
+		sys->fprint(sys->fildes(2), "rngdump: the firmware reports under-voltage (throttled %s, %s): this capture was taken on a bad supply\n", thr0, thr1);
+}
+
+# #P/throttled's word and #P/cputemp, or "none" each
+health(): (string, string)
+{
+	t := "none";
+	(nil, w) := sys->tokenize(readline("#P/throttled"), " \t\n");
+	if(w != nil)
+		t = hd w;
+	c := "none";
+	(nil, w) = sys->tokenize(readline("#P/cputemp"), " \t\n");
+	if(w != nil)
+		c = hd w;
+	return (t, c);
+}
+
+# bit 0 (under-voltage now) or 16 (since boot) of "0x....."
+undervolt(t: string): int
+{
+	if(len t < 3 || t[0:2] != "0x")
+		return 0;
+	v := 0;
+	for(i := 2; i < len t; i++){
+		c := t[i];
+		d: int;
+		if(c >= '0' && c <= '9')
+			d = c - '0';
+		else if(c >= 'a' && c <= 'f')
+			d = c - 'a' + 10;
+		else if(c >= 'A' && c <= 'F')
+			d = c - 'A' + 10;
+		else
+			return 0;
+		v = v*16 + d;
+	}
+	return (v & (1|1<<16)) != 0;
+}
+
+readline(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
 }
 
 hex(a: array of byte): string

@@ -4,7 +4,7 @@ tools/entropy/assess.py - SP 800-90B's assessment of a hardware
 generator's bytes, as a board's rngassess boot gives them
 (docs/ENTROPY-ASSESSMENT.md).
 
-    assess.py [-n DIR] [-c CLAIM] [-b BOOTS] [-o REPORT] RAW [RAW...]
+    assess.py [-n DIR] [-c CLAIM] [-b BOOTS] [-l BOOTLOG] [-d DUMPS] [-o REPORT] RAW [RAW...]
 
 RAW is a file of #c/hwrandom bytes (rngdump -n 1000000 or more), one a
 board; several RAW files are several boards (or several runs) and are
@@ -23,6 +23,14 @@ What it does, each estimate NIST's own tool's (build-nist.sh):
     entropy found above; and no two boots beginning with the same 32
     bytes;
   - across RAW files, no 32-byte block of one in another.
+
+BOOTLOG is the restart collection's rngboot.log (taken from beside
+BOOTS when not given), and DUMPS a file of the lines rngdump printed for
+the RAW files: the board's own record of power and heat (#P/throttled,
+#P/cputemp) for each boot and capture. They do not change the verdict,
+which is about the bytes; a CONDITIONS line says whether any sample
+was taken under under-voltage or throttling, or that nothing recorded
+it, so that a result on a bad supply is not taken for a clean one.
 
 It ends with one line a verdict: PASS when every RAW credits at least
 CLAIM bits a byte, the restart test passes and nothing repeats; FAIL
@@ -113,6 +121,58 @@ def restart(nist, boots, h, tmp):
     return res
 
 
+Flags = {0: "under-voltage", 1: "arm-capped", 2: "throttled", 3: "soft-temp-limit"}
+
+
+def health(path, key):
+    """Records of #P/throttled and #P/cputemp in a file: rngboot.log's
+    'throttled=0x... cputemp=...' lines, or rngdump's lines with
+    throttled0/1 and cputemp0/1. Returns (records, flagged, temps):
+    flagged maps each condition to the records that had it, now or since
+    boot."""
+    recs = 0
+    flagged = {}
+    temps = []
+    for line in open(path, errors="replace"):
+        f = dict(w.split("=", 1) for w in line.split() if "=" in w)
+        words = [k for k in f if k.startswith("throttled")]
+        if not words:
+            continue
+        recs += 1
+        for k in words:
+            v = f[k]
+            if not v.startswith("0x"):
+                continue
+            n = int(v, 16)
+            for bit, name in Flags.items():
+                if n & (1 << bit) or n & (1 << (16 + bit)):
+                    flagged.setdefault(name, set()).add(recs)
+        for k in f:
+            if k.startswith("cputemp"):
+                try:
+                    temps.append(float(f[k]))
+                except ValueError:
+                    pass
+    return recs, flagged, temps
+
+
+def conditions(say, label, path):
+    if path is None or not os.path.exists(path):
+        say("conditions (%s): not recorded" % label)
+        return "%s: no record of power and heat" % label
+    recs, flagged, temps = health(path, label)
+    t = " (SoC %.1f to %.1f C)" % (min(temps), max(temps)) if temps else ""
+    if recs == 0:
+        say("conditions (%s): %s holds no records" % (label, path))
+        return "%s: no record of power and heat" % label
+    if not flagged:
+        say("conditions (%s): %d records, no under-voltage or throttling%s" % (label, recs, t))
+        return None
+    parts = ["%s in %d" % (k, len(v)) for k, v in sorted(flagged.items())]
+    say("conditions (%s): %d records: %s%s" % (label, recs, ", ".join(parts), t))
+    return "%s: %s of %d records" % (label, ", ".join(parts), recs)
+
+
 def crossrepeats(paths):
     seen = {}
     found = []
@@ -133,6 +193,8 @@ def main():
     ap.add_argument("-n", "--nist", help="directory of ea_non_iid, ea_iid, ea_restart")
     ap.add_argument("-c", "--claim", type=float, default=4.0, help="bits a byte the kernel assumes")
     ap.add_argument("-b", "--boots", help="a restart collection (rngboot.bin)")
+    ap.add_argument("-l", "--bootlog", help="the restart collection's rngboot.log")
+    ap.add_argument("-d", "--dumps", help="the lines rngdump printed for the RAW files")
     ap.add_argument("-o", "--report", help="write the report here as well")
     ap.add_argument("raw", nargs="+")
     a = ap.parse_args()
@@ -206,6 +268,18 @@ def main():
             if not r["passed"]:
                 bad.append("SP 800-90B's restart test failed")
         say()
+
+    cond = []
+    c = conditions(say, "captures", a.dumps)
+    if c:
+        cond.append(c)
+    if a.boots:
+        log = a.bootlog or os.path.join(os.path.dirname(os.path.abspath(a.boots)), "rngboot.log")
+        c = conditions(say, "boots", log)
+        if c:
+            cond.append(c)
+    say("CONDITIONS: " + ("clean" if not cond else "; ".join(cond)))
+    say()
 
     if bad:
         say("VERDICT: FAIL")

@@ -51,15 +51,28 @@ take the word off afterwards.
 `rngdump(1)` (`appl/cmd/rngdump.b`) writes them to a file, exactly the bytes
 asked for, and prints a line of quick statistics (rate, SHA-256, most common
 byte, chi-square, ones a bit position, equal neighbours). The statistics are
-a smoke test, not the assessment.
+a smoke test, not the assessment. The same line carries the board's own
+record of power and heat before and after the capture (`throttled0`,
+`cputemp0`, `throttled1`, `cputemp1`, from `#P/throttled` and `#P/cputemp`;
+`none` on a board without them), and a capture during which the firmware
+saw under-voltage says so on standard error.
 
 For the restart test, `osinit` collects without anyone watching: with
-`rngassess` on the command line and a file **`/n/dos/rngrestart`** holding the
-number of boots wanted, each boot appends its 4096 first bytes to
-**`/n/dos/rngboot.bin`**, checks the file grew by exactly that, and resets the
-board (the PM watchdog's full reset) until it holds that many boots. Then it
-says `rngrestart: N boots collected ... done` and boots on. Anything that goes
-wrong stops the loop instead of resetting again.
+`rngassess` and **`rngrestart=N`** on the command line (N the boots wanted),
+each boot appends its 4096 first bytes to **`/n/dos/rngboot.bin`**, checks the
+file grew by exactly that, and resets the board (the PM watchdog's full reset)
+until it holds N boots. Then it says `rngrestart: N boots collected ... done`
+and boots on; a boot after that adds nothing. A file `/n/dos/rngrestart`
+holding N does the same, but is not the way to start it: written at the
+shell and followed at once by `echo reboot > /dev/sysctl`, it was not on the
+card after the reset (under QEMU; five seconds later it was), and the loop
+never began. Edit `cmdline.txt` with the card out instead. Anything that goes
+wrong stops the loop instead of resetting again. Each boot also appends a line
+to **`/n/dos/rngboot.log`**, `boot 17 throttled=0x00000 ok cputemp=51.2`: the
+firmware's flags (under-voltage, clock capped, throttled, soft temperature
+limit, now and since boot) and the SoC's temperature, so that a sample taken
+on a sagging supply is known from the evidence, not from whoever happened to
+be watching the screen.
 
 ## The procedure, a board
 
@@ -67,6 +80,8 @@ wrong stops the loop instead of resetting again.
    `tools/mkpiimage.sh`). Note the board's serial number
    (`/dev/sysname` or the firmware's) for the results.
 2. **`rngassess`** added to `cmdline.txt` on the card's boot partition.
+   Run each capture on the board's normal supply, and keep `rngboot.log`
+   and the printed lines: they say whether it sagged.
 3. **The raw sample**, at the console:
 
    ```
@@ -76,14 +91,11 @@ wrong stops the loop instead of resetting again.
    ```
 
    Three runs, so a result that changes between runs shows. Keep each
-   printed line. A board kept somewhere cold or hot can have a run there
+   printed line, in a file (`dumps.txt`) for the assessment. A board kept somewhere cold or hot can have a run there
    too: the noise of a physical source moves with temperature and voltage.
-4. **The restart collection**:
-
-   ```
-   echo 1000 > /n/dos/rngrestart
-   echo reboot > /dev/sysctl
-   ```
+4. **The restart collection**: power off, put the card in another machine,
+   and make `cmdline.txt` say `rngassess rngrestart=1000` (with whatever
+   else it said). Put the card back and power on.
 
    A thousand resets: hours, at a boot's length each. Watch the first few
    on the console (`rngrestart: boot 2 of 1000 kept; resetting`). These are
@@ -91,20 +103,25 @@ wrong stops the loop instead of resetting again.
    a generator that keeps state; with a relay or a switched USB hub on the
    board's power, cycle it instead, waiting 10 s off each time, and the same
    file grows by one boot a power-on.
-5. **When it says done**: `rm /n/dos/rngrestart`, take `rngassess` off
+5. **When it says done**: take `rngassess` and `rngrestart=1000` off
    `cmdline.txt`, power off, and copy `raw*.bin` and `rngboot.bin` from the
-   card's boot partition.
+   card's boot partition, with `rngboot.log`.
 6. **The assessment**, on any Linux or macOS host:
 
    ```
-   tools/entropy/assess.py -c 4 -o report.txt -b rngboot.bin raw1.bin raw2.bin raw3.bin
+   tools/entropy/assess.py -c 4 -o report.txt -b rngboot.bin -d dumps.txt raw1.bin raw2.bin raw3.bin
    ```
 
    It builds NIST's tools at a pinned commit (`tools/entropy/build-nist.sh`)
    and runs the non-IID estimators, the IID tests, and the restart test on
    the first 1000 bytes of the first 1000 boots, and looks for any 32-byte
    block repeated between files or at the start of two boots. The last line
-   is `VERDICT: PASS` or `VERDICT: FAIL` with reasons. Give two boards' raw
+   is `VERDICT: PASS` or `VERDICT: FAIL` with reasons; the line before it,
+   `CONDITIONS:`, is `clean` or says which samples were taken under
+   under-voltage or throttling, or that nothing recorded it (`rngboot.log`
+   is read from beside `rngboot.bin`; `-l` names another). A verdict is
+   about the bytes and conditions do not change it, but a PASS whose
+   conditions are not clean is not a clean baseline. Give two boards' raw
    files together to check they are not the same stream.
 
 `tests/host/entropy_assess_test.sh` checks the assessment itself: the host's

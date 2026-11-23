@@ -15,6 +15,14 @@ enum
 	AESmaxrounds=	14
 };
 
+/*
+ * What setupAESstate leaves in a state's setup: unsigned, not an enum
+ * constant, which MSVC makes an int; 0xcafebabe then sign-extended into
+ * the 64-bit ulong (Windows' ulong) and matched aes.c's own check but
+ * not aesgcm.c's literal, so every AES-GCM state was refused there.
+ */
+#define	AESset	0xcafebabeU
+
 typedef struct AESstate AESstate;
 struct AESstate
 {

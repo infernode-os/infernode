@@ -23,6 +23,7 @@
 
 int	SYS_SLEEP = 2;
 int SOCK_SELECT = 3;
+
 #define	MAXSLEEPERS	1500
 
 extern	int	cflag;
@@ -58,10 +59,69 @@ char *cputype = "amd64";
 char *cputype = "386";
 #endif
 
+/*
+ * A Proc's host state (p->os): the event osblock waits on, and a
+ * socket of its own that interrupts its select (doselect in ipif6.c).
+ * Nothing interrupts a thread's select on Windows; a POSIX host's
+ * signal does.  Without the socket a Prog killed while it read or
+ * listened on the network stayed in the host until select's timeout,
+ * a second, and its socket stayed open as long: a server killed and
+ * started again on its port found the port still taken.
+ */
+typedef struct Osproc Osproc;
+struct Osproc
+{
+	HANDLE	ev;	/* what osblock waits on and osready sets */
+	SOCKET	volatile wake;	/* INVALID_SOCKET until the Proc first selects */
+	HANDLE	intr;	/* set by oshostintr, for a proc in a host call: hostio */
+	HANDLE	io;	/* the event a pipe read or write waits on: hostio */
+};
+
+#define	OSEV(p)	(((Osproc*)(p)->os)->ev)
+
+/*
+ * The calling Proc's wake socket, made the first time: a UDP socket
+ * on the loopback connected to itself, non-blocking.  INVALID_SOCKET
+ * if it cannot be made (doselect then waits out its timeout as before).
+ */
+SOCKET
+oswakesock(void)
+{
+	Osproc *o;
+	SOCKET s;
+	struct sockaddr_in sin;
+	int l;
+	u_long one;
+
+	o = up->os;
+	if(o == nil)
+		return INVALID_SOCKET;	/* libinit's and the SDL3 worker's procs have no Osproc */
+	if(o->wake != INVALID_SOCKET)
+		return o->wake;
+	s = socket(AF_INET, SOCK_DGRAM, 0);
+	if(s == INVALID_SOCKET)
+		return s;
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_family = AF_INET;
+	sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	l = sizeof(sin);
+	one = 1;
+	if(bind(s, (struct sockaddr*)&sin, sizeof(sin)) < 0 ||
+	   getsockname(s, (struct sockaddr*)&sin, &l) < 0 ||
+	   connect(s, (struct sockaddr*)&sin, sizeof(sin)) < 0 ||
+	   ioctlsocket(s, FIONBIO, &one) < 0){
+		closesocket(s);
+		return INVALID_SOCKET;
+	}
+	o->wake = s;
+	return s;
+}
+
 static void
 pfree(Proc *p)
 {
 	Osenv *e;
+	Osproc *o;
 
 	lock(&procs.l);
 	if(p->prev)
@@ -84,7 +144,17 @@ pfree(Proc *p)
 		free(e->user);
 	}
 	free(p->prog);
-	CloseHandle((HANDLE)p->os);
+	if(p->pid != 0)
+		CloseHandle((HANDLE)(intptr_t)p->pid);	/* kproc's thread handle; the thread runs on */
+	o = p->os;
+	if(o != nil){
+		CloseHandle(o->ev);
+		CloseHandle(o->intr);
+		CloseHandle(o->io);
+		if(o->wake != INVALID_SOCKET)
+			closesocket(o->wake);
+		free(o);
+	}
 	/* forget p before freeing it: lock() counts into up->nlocks (see kproc-pthreads.c:/^pexit) */
 	if(p == up)
 		up = nil;
@@ -94,14 +164,14 @@ pfree(Proc *p)
 void
 osblock(void)
 {
-	if(WaitForSingleObject((HANDLE)up->os, INFINITE) != WAIT_OBJECT_0)
+	if(WaitForSingleObject(OSEV(up), INFINITE) != WAIT_OBJECT_0)
 		panic("osblock failed");
 }
 
 void
 osready(Proc *p)
 {
-	if(SetEvent((HANDLE)p->os) == FALSE)
+	if(SetEvent(OSEV(p)) == FALSE)
 		panic("osready failed");
 }
 
@@ -144,13 +214,25 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 	Pgrp *pg;
 	Fgrp *fg;
 	Egrp *eg;
+	Osproc *o;
 
-	p = newproc();
-	if(p == nil)
-		panic("out of kernel processes");
-	p->os = CreateEvent(NULL, FALSE, FALSE, NULL);
-	if(p->os == NULL)
+	/*
+	 * Waited for, not panicked over, as kproc-pthreads.c does: kproc
+	 * gives its callers no error to raise, and a main pool set too
+	 * small (-pmain, tools/sysfuzz -P) took the emulator down here
+	 * ("out of kernel processes").
+	 */
+	while((p = newproc()) == nil)
+		waitmem();
+	while((o = malloc(sizeof(Osproc))) == nil)
+		waitmem();
+	o->wake = INVALID_SOCKET;
+	o->ev = CreateEvent(NULL, FALSE, FALSE, NULL);
+	o->intr = CreateEvent(NULL, FALSE, FALSE, NULL);	/* auto-reset: one wakeup per SetEvent */
+	o->io = CreateEvent(NULL, TRUE, FALSE, NULL);	/* manual-reset, as OVERLAPPED wants */
+	if(o->ev == NULL || o->intr == NULL || o->io == NULL)
 		panic("can't allocate os event");
+	p->os = o;
 		
 	if(flags & KPDUPPG) {
 		pg = up->env->pgrp;
@@ -189,10 +271,17 @@ kproc(char *name, void (*func)(void*), void *arg, int flags)
 
 	{
 		HANDLE th;
-		th = CreateThread(0, 16384, tramp, p, 0, &h);
-		p->pid = (int)(intptr_t)th;
+		/*
+		 * Suspended until pid is set: oshostintr's APC and pfree
+		 * use it, and a thread that ran first could be done before.
+		 * The handle is pfree's to close (it was never closed: one
+		 * leaked for each kproc, an export's slave each request).
+		 */
+		th = CreateThread(0, 16384, tramp, p, CREATE_SUSPENDED, &h);
 		if(th == NULL)
 			panic("ran out of  kernel processes");
+		p->pid = (int)(intptr_t)th;
+		ResumeThread(th);
 	}
 }
 
@@ -202,12 +291,32 @@ void APIENTRY sleepintr(DWORD param)
 }
 #endif
 
+/*
+ * swiproc has set p->swipend and wants p out of the host call it is in
+ * (or about to enter: it is past osenter).  A synchronous ReadFile or
+ * WriteFile cannot be interrupted, so pipes to host commands are
+ * overlapped and hostio waits on its I/O and on os->intr together;
+ * the event stays set until a wait takes it, so an interrupt that comes
+ * before the wait is not lost.
+ */
 void
 oshostintr(Proc *p)
 {
-	if (p->syscall == SOCK_SELECT)
+	SOCKET w;
+	Osproc *os;
+
+	if (p->syscall == SOCK_SELECT){
+		/* intwait stays set: doselect sees it once select returns */
+		os = p->os;
+		w = os != nil ? os->wake : INVALID_SOCKET;
+		if(w != INVALID_SOCKET)
+			send(w, "", 1, 0);
 		return;
+	}
 	p->intwait = 0;
+	os = p->os;
+	if(os != nil)
+		SetEvent(os->intr);
 #if(_WIN32_WINNT >= 0x0400)
 	if(p->syscall == SYS_SLEEP) {
 		QueueUserAPC(sleepintr, (HANDLE)(intptr_t) p->pid, (ULONG_PTR) p->pid);
@@ -274,6 +383,8 @@ struct ecodes {
 	EXCEPTION_STACK_OVERFLOW,		"stack overflow",
 	EXCEPTION_INVALID_DISPOSITION,		"invalid disposition",
 	EXCEPTION_GUARD_PAGE,			"guard page violation",
+	STATUS_FLOAT_MULTIPLE_FAULTS,		"floating point exception",
+	STATUS_FLOAT_MULTIPLE_TRAPS,		"floating point exception",
 	0,					nil
 };
 
@@ -290,25 +401,40 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 	// pc = ureg->ContextRecord->Eip;
 
 	/*
+	 * A fault in compiled code: R.PC and R.FP are stale there (the JIT
+	 * stores them only where it leaves compiled code), so handler()
+	 * must be told the faulting instruction and the frame it ran in,
+	 * which the JIT keeps in RBX (RRFP, comp-amd64.c), as
+	 * emu/Linux/os.c does with jitfaultfp.  With R.FP stale, a fault
+	 * in a function called from compiled code was caught in its
+	 * caller's frame, which then freed the wrong frames ("alloc:D2B",
+	 * jit_ownhandler_test), or no handler matched and the program died.
+	 */
+#if defined(_AMD64_)
+	jitfaultfp((uintptr)ureg->ContextRecord->Rip, (uintptr)ureg->ContextRecord->Rbx);
+#elif defined(_ARM64_)
+	jitfault((uintptr)ureg->ContextRecord->Pc);
+#endif
+
+	/*
 	 * A nil address is a Limbo nil dereference: the program's
 	 * "dereference of nil", with R.PC set from the faulting instruction
 	 * so an exception block around it catches it under the JIT (see
 	 * jitfault).  No dump: that is for faults that are emu's bugs.
 	 */
 	if(code == EXCEPTION_ACCESS_VIOLATION
-	&& isnilfault((uintptr)ureg->ExceptionRecord->ExceptionInformation[1])) {
-#if defined(_AMD64_)
-		jitfault((uintptr)ureg->ContextRecord->Rip);
-#elif defined(_ARM64_)
-		jitfault((uintptr)ureg->ContextRecord->Pc);
-#endif
+	&& isnilfault((uintptr)ureg->ExceptionRecord->ExceptionInformation[1])){
+		/* disfault panics for this: say where, for the image's map */
+		if(up != nil && up->nlocks > 0)
+			print("nil fault holding a lock: RIP=%p in image at %p\n",
+				ureg->ExceptionRecord->ExceptionAddress, (void*)GetModuleHandleW(NULL));
 		disfault(nil, exNilref);
 	}
 
 	/* x86's integer divide traps on zero: the program's "zero divide" (emu/Linux/os.c:trapFPE) */
 	if(code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
 #if defined(_AMD64_)
-		if(jitfault((uintptr)ureg->ContextRecord->Rip))
+		if(jitfaultfp((uintptr)ureg->ContextRecord->Rip, (uintptr)ureg->ContextRecord->Rbx))
 			disfault(nil, exZdiv);
 #endif
 	}
@@ -371,6 +497,8 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 	case EXCEPTION_FLT_OVERFLOW:
 	case EXCEPTION_FLT_STACK_CHECK:
 	case EXCEPTION_FLT_UNDERFLOW:
+	case STATUS_FLOAT_MULTIPLE_FAULTS:
+	case STATUS_FLOAT_MULTIPLE_TRAPS:
 		/* clear exception flags and ensure safe empty state */
 #ifdef _AMD64_
 		_clearfp();
@@ -382,6 +510,78 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 	disfault(nil, name);
 	/* not reached */
 	return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+/*
+ * The unhandled-exception filter is reached only after Windows has
+ * looked for a handler in every frame on the stack, unwinding each by
+ * its function table.  Compiled code has none (emu/Nt/jit-unwind.c's
+ * is not right yet), so a fault in C called from compiled code (a
+ * builtin, or the VM's C for an instruction compiled code punts, such
+ * as cvtca of a nil ref's string) could not be unwound past the
+ * compiled frame, and Windows ended emu (0xC0000005) before the filter
+ * ran; a fault in compiled code itself survived only as a leaf.  A
+ * vectored handler is called before that search.  It takes the
+ * faults that are a program's (or emu's own bug, as before) on emu's
+ * own procs, and leaves the rest to the search: other threads (SDL's,
+ * the host's), breakpoints and single steps (a debugger's), a stack
+ * overflow (too little stack left to be handled here), and anything
+ * that is not a hardware fault (C++ exceptions, debug output).
+ */
+/* INFERNODE_FAULTLOG set: what the handler leaves to the search, said, to find what ended emu */
+static int faultlog;
+
+static LONG CALLBACK
+VectorHandler(PEXCEPTION_POINTERS ep)
+{
+	HMODULE m;
+
+	if(up == nil)
+		return EXCEPTION_CONTINUE_SEARCH;
+	if(faultlog && up->type != Interp
+	&& GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	   (LPCWSTR)ep->ExceptionRecord->ExceptionAddress, &m) && m != GetModuleHandleW(NULL))
+		print("faultlog: a DLL's code %#lux pc %p on kproc %s, to the search\n",
+			(ulong)ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress, up->text);
+	/*
+	 * A fault in a system DLL on a proc with no compiled code under it
+	 * (an export's slave, the other kprocs) is left to the search: the
+	 * stack is C to its start and can be searched, so a DLL that
+	 * faults on purpose finds its own handler, and one that does not
+	 * reaches the unhandled-exception filter, as before the vectored
+	 * handler.  On a Dis proc compiled frames lie below any host call,
+	 * the search cannot pass them, and Windows ended emu (0xc0000005,
+	 * silent: sysfuzz -P), so every fault there is taken here.
+	 */
+	if(up->type != Interp
+	&& GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+	   (LPCWSTR)ep->ExceptionRecord->ExceptionAddress, &m) && m != GetModuleHandleW(NULL))
+		return EXCEPTION_CONTINUE_SEARCH;
+	switch(ep->ExceptionRecord->ExceptionCode){
+	case EXCEPTION_ACCESS_VIOLATION:
+	case EXCEPTION_DATATYPE_MISALIGNMENT:
+	case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+	case EXCEPTION_FLT_DENORMAL_OPERAND:
+	case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+	case EXCEPTION_FLT_INEXACT_RESULT:
+	case EXCEPTION_FLT_INVALID_OPERATION:
+	case EXCEPTION_FLT_OVERFLOW:
+	case EXCEPTION_FLT_STACK_CHECK:
+	case EXCEPTION_FLT_UNDERFLOW:
+	case STATUS_FLOAT_MULTIPLE_FAULTS:
+	case STATUS_FLOAT_MULTIPLE_TRAPS:
+	case EXCEPTION_INT_DIVIDE_BY_ZERO:
+	case EXCEPTION_INT_OVERFLOW:
+	case EXCEPTION_PRIV_INSTRUCTION:
+	case EXCEPTION_IN_PAGE_ERROR:
+	case EXCEPTION_ILLEGAL_INSTRUCTION:
+		return TrapHandler(ep);
+	}
+	if(faultlog)
+		print("faultlog: passed on code %#lux pc %p (image %p) proc %s type %d\n",
+			(ulong)ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress,
+			(void*)GetModuleHandleW(NULL), up->text, up->type);
+	return EXCEPTION_CONTINUE_SEARCH;
 }
 
 static void
@@ -480,8 +680,17 @@ libinit(char *imod)
 
 	gethostname(sys, sizeof(sys));
 	kstrdup(&ossysname, sys);
-	if(sflag == 0)
+	if(sflag == 0){
+		/*
+		 * Last among vectored handlers, which all run before the
+		 * search: an earlier one may take a fault that is its own
+		 * (AddressSanitizer commits its shadow memory on an access
+		 * violation).
+		 */
+		faultlog = getenv("INFERNODE_FAULTLOG") != nil;
+		AddVectoredExceptionHandler(0, VectorHandler);
 		SetUnhandledExceptionFilter((LPTOP_LEVEL_EXCEPTION_FILTER)TrapHandler);
+	}
 
 	path = getenv("PATH");
 	if(path == nil)
@@ -572,20 +781,92 @@ close(int fd)
 	return 0;
 }
 
+/*
+ * Read or write h, which may be overlapped (cmd.c's pipes to host
+ * commands are), for a proc inside osenter: a kill (swiproc, then
+ * oshostintr) cancels the I/O, and the call fails with errno EINTR,
+ * as a signal makes a POSIX read or write fail, so that osleave raises
+ * Eintr.  A synchronous ReadFile on an anonymous pipe could not be
+ * interrupted at all: a Prog killed reading a host command that wrote
+ * nothing, or writing to one that read nothing, stayed in /prog until
+ * the command ended.  Any other failure sets errno to EIO.  An
+ * interrupt with swipend clear is one left from a call already over,
+ * and is ignored.  On a handle that is not overlapped the call
+ * completes before it returns, as before.
+ */
+static int
+hostio(HANDLE h, void *buf, uint n, int iswrite)
+{
+	OVERLAPPED ov;
+	HANDLE w[2];
+	Osproc *os;
+	DWORD r, got;
+	BOOL ok;
+
+	os = nil;
+	if(up != nil)
+		os = up->os;
+	memset(&ov, 0, sizeof(ov));
+	if(os != nil)
+		ov.hEvent = os->io;
+	if(iswrite)
+		ok = WriteFile(h, buf, n, nil, &ov);
+	else
+		ok = ReadFile(h, buf, n, nil, &ov);
+	if(!ok && GetLastError() != ERROR_IO_PENDING){
+		errno = EIO;
+		return -1;
+	}
+	if(!ok && os != nil){
+		w[0] = os->io;
+		w[1] = os->intr;
+		for(;;){
+			r = WaitForMultipleObjects(2, w, FALSE, INFINITE);
+			if(r == WAIT_OBJECT_0)
+				break;
+			if(r == WAIT_OBJECT_0+1){
+				if(up->swipend){
+					CancelIoEx(h, &ov);
+					break;
+				}
+				continue;	/* stale: an interrupt for a call already over */
+			}
+			CancelIoEx(h, &ov);
+			break;
+		}
+	}
+	/* the OVERLAPPED must live until the I/O is over, cancelled or not */
+	if(!GetOverlappedResult(h, &ov, &got, TRUE)){
+		/*
+		 * errno every time: devcmd retries while it is EINTR, and one
+		 * left from a cancelled call had it retry a broken pipe for ever
+		 */
+		if(GetLastError() == ERROR_OPERATION_ABORTED)
+			errno = EINTR;
+		else
+			errno = EIO;
+		return -1;
+	}
+	return got;
+}
+
 int
 read(int fd, void *buf, uint n)
 {
 	HANDLE h;
 
-	if(fd == 0)
+	if(fd == 0){
 		h = kbdh;
-	else
-		h = ntfd2h(fd);
+		if(h == INVALID_HANDLE_VALUE)
+			return -1;
+		if(!ReadFile(h, buf, n, &n, NULL))
+			return -1;
+		return n;
+	}
+	h = ntfd2h(fd);
 	if(h == INVALID_HANDLE_VALUE)
 		return -1;
-	if(!ReadFile(h, buf, n, &n, NULL))
-		return -1;
-	return n;
+	return hostio(h, buf, n, 0);
 }
 
 int
@@ -606,9 +887,7 @@ write(int fd, void *buf, uint n)
 			return -1;
 		return n;
 	}
-	if(!WriteFile(ntfd2h(fd), buf, n, &n, NULL))
-		return -1;
-	return n;
+	return hostio(ntfd2h(fd), buf, n, 1);
 }
 
 /*

@@ -68,9 +68,7 @@ void	aesamd64ctr32(const u32int*, int, const uchar*, uchar*, ulong);
  * back.  The state of such a key is left unset, and what is asked of an
  * unset state gives zeros, not the data and not a cipher of it.
  */
-enum {
-	AESset=	0xcafebabe,
-};
+/* AESset is libsec.h's */
 
 static int
 aesok(AESstate *s)

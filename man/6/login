@@ -16,17 +16,25 @@ A shared secret must previously be agreed between
 user and certifying authority (CA).
 It is used by the protocol to establish a secure channel between user and CA.
 .PP
-This page describes version 2 of the exchange.
+This page describes version 3 of the exchange.
 It is Bellovin and Merritt's encrypted key exchange
 with the CA's Diffie-Hellman value alone encrypted,
-and it is meant to have that protocol's properties:
+run beside the same construction over ML-KEM (FIPS 203),
+with the seed of the client's encapsulation key alone encrypted;
+the session's keys and both proofs are made from both secrets.
+It is meant to have that protocol's properties:
 somebody who watches a login, or takes either end's part in one
 without the password, learns nothing that a guessed password can
 be checked against, except that each login he takes part in lets him
 try one guess; and each end knows the other had the password before
 it sends anything more.
-The reason for each step is given with it, because the exchange this
-replaces lost those properties one step at a time.
+They are meant to hold against a party that can take discrete logarithms
+(one with a quantum computer) as long as ML-KEM holds, and against one that
+can break ML-KEM as long as discrete logarithms are hard:
+version 2, which had the Diffie-Hellman half alone, gave a party that could
+take logarithms every password, from each login whose CA's part it took.
+The reason for each step is given with it, because the exchange before
+version 2 lost those properties one step at a time.
 .SS Names
 .TF secret
 .PD
@@ -65,10 +73,10 @@ keeps it.
 .TP
 .I suite
 is 1 or 2.
-Suite 1 is ChaCha20 as the keystream and SHA-256 as the hash H, with a group of
-2048 bits or more.
-Suite 2 is AES-256 in counter mode (as GCM runs it) and SHA-384, with a group of
-3072 bits or more.
+Suite 1 is ChaCha20 as the keystream, SHA-256 as the hash H and ML-KEM-768,
+with a group of 2048 bits or more.
+Suite 2 is AES-256 in counter mode (as GCM runs it), SHA-384 and ML-KEM-1024
+(CNSA 2.0's key establishment), with a group of 3072 bits or more.
 A client in CNSA mode (\f5/env/cnsamode\fP set) offers and takes only suite 2,
 and a CA in CNSA mode refuses suite 1, saying so.
 A CA not in CNSA mode takes either.
@@ -116,6 +124,24 @@ in
 .IB len ( p )
 bytes.
 .TP
+.I ek, dk
+are an ML-KEM key pair the client makes for this login
+(FIPS 203's ML-KEM.KeyGen, of the suite's parameter set).
+.I Ek
+ends in the 32-byte seed
+.I rho
+from which the matrix is made; the rest of it,
+.IR ek\-rho ,
+is the encoded vector, whose coefficients are below
+.IR q .
+.TP
+.I ct, k
+are the CA's ML-KEM ciphertext and the 32-byte secret it encapsulates,
+which the client has from
+.I ct
+and
+.IR dk .
+.TP
 .BI L( m )
 is the length of
 .I m
@@ -131,10 +157,12 @@ point to terminate the protocol.
 user→CA	name
 CA→user	name
 .sp 1v
-user→CA	hello = 2, suite, Nc
-CA→user	reply = 2, suite, group, Ns, mask(±2**r0 mod p)
+user→CA	hello = 3, suite, Nc
+CA→user	reply = 3, suite, group, Ns, mask(±2**r0 mod p)
 .sp 1v
-user→CA	2**r1 mod p, proofc
+user→CA	share = 2**r1 mod p, ek\-rho, kemmask(rho)
+CA→user	ct
+user→CA	proofc
 CA→user	proofs
 .sp 1v
 CA→user	CA's public key, alpha, p
@@ -142,7 +170,7 @@ user→CA	user's public key
 CA→user	user's public key certificate
 .EE
 .PP
-The numbers 2,
+The numbers 3,
 .I suite
 and
 .I group
@@ -161,7 +189,7 @@ less it, under a keystream:
 .EX
 PRK = HMAC-H(Nc || Ns, pw)
 key || nonce = HKDF-Expand(PRK,
-    "infernode login 2 mask" || 0 || suite || group || name, 44)
+    "infernode login 3 mask" || 0 || suite || group || name, 44)
 mask(x) = x XOR stream(key, nonce)
 .EE
 .PP
@@ -222,10 +250,32 @@ the secret would be a number anybody knows.
 It reports
 .B "name or secret incorrect"
 and sends nothing more.
-.SS "The proofs"
+.SS "The masked key"
 The client sends
 .BI 2** r1 " mod " p
-in clear, with a proof that it has the secret.
+in clear, and its encapsulation key with the seed under a keystream of the
+password and the secret:
+.IP
+.EX
+PRK = HMAC-H(Nc || Ns, secret || pw)
+key || nonce = HKDF-Expand(PRK,
+    "infernode login 3 kem mask" || 0 || suite || group || name, 44)
+kemmask(rho) = rho XOR stream(key, nonce)
+.EE
+.PP
+Only the seed is masked.
+Any 32 bytes are a seed, so every password unmasks the message to a key of
+the right form; the vector, which has a form (a wrong password would unmask
+it to coefficients of
+.I q
+and above most of the time), is sent as it is, and whether it goes with a
+given seed is the problem ML-KEM's security rests on.
+.I Secret
+is in the keystream so that a guess at the seed needs the Diffie-Hellman
+secret too: a party that can break ML-KEM and not take logarithms has no seed
+to try, and one that can take logarithms has, for each password, a seed and
+ML-KEM's problem.
+.PP
 The CA refuses a value outside
 .RI 2.. p \-2
 (the range is SP 800-56A's, 5.6.2.3.1):
@@ -244,24 +294,49 @@ and the exponent
 .BI 2* r0
 leaves one of order
 .IR q .
-.PP
-Both ends then compute
+It then unmasks the seed with the password it has and encapsulates to the key
+(ML-KEM.Encaps).
+A key that is not one (FIPS 203's check of the vector's coefficients) is refused
+as
+.BR "bad ML-KEM key" ,
+and the attempt counted; the check is of the part in clear, and says nothing of
+the password.
+The CA sends
+.IR ct .
+It is made for the key the password unmasked, not from either secret:
+a client that had the password opens it, and one that did not has ML-KEM's
+implicit rejection, a value nobody knows.
+.SS "The proofs"
+The client opens
+.I ct
+(ML-KEM.Decaps) and sends a proof that it has both secrets.
+Both ends compute
 .IP
 .EX
-th = H("infernode login 2 transcript" ||
-       L(name) || L(hello) || L(reply) || L(2**r1 mod p))
-PRK = HMAC-H(th, secret || pw)
-proofc = HKDF-Expand(PRK, "infernode login 2 client proof", len H)
-proofs = HKDF-Expand(PRK, "infernode login 2 signer proof", len H)
-key    = HKDF-Expand(PRK, "infernode login 2 session", len H)
+th = H("infernode login 3 transcript" ||
+       L(name) || L(hello) || L(reply) || L(share) || L(ct))
+PRK = HMAC-H(th, k || secret || pw)
+proofc = HKDF-Expand(PRK, "infernode login 3 client proof", len H)
+proofs = HKDF-Expand(PRK, "infernode login 3 signer proof", len H)
+key    = HKDF-Expand(PRK, "infernode login 3 session", len H)
 .EE
 .PP
 .I Th
 covers everything said, so the two ends agree on the name, the suite, the group,
-both nonces and both values, or their proofs differ: a party between them that
-changes any of it gets nothing.
+both nonces, both values, the key and the ciphertext, or their proofs differ:
+a party between them that changes any of it gets nothing.
+.I Secret
+and
+.I k
+are both in the key material, so the session holds while either problem does:
+it is SP 800-56C rev. 2's
+.IR Z || T ,
+the ML-KEM secret (an approved key establishment, SP 800-227) the
+.I Z
+and the rest the
+.IR T .
 .I Pw
-is with the secret so that a secret somebody has contrived to know is still not enough.
+is with them so that a secret somebody has contrived to know is still not enough.
 .PP
 The CA checks
 .I proofc
@@ -311,11 +386,13 @@ outside
 It makes a key of the CA's kind, sends the public part, and checks that
 what comes back is a certificate for that key that verifies with the CA's.
 .SS Versions
-There is no negotiation, and neither end goes back to the exchange before this one,
+There is no negotiation, and neither end goes back to an exchange before this one:
+version 2, which was this one without ML-KEM, nor the one before it,
 whose third message was an initialization vector of 32 or 44 bytes.
-A CA sent one answers
-.BR "signer speaks login version 2" ;
-a client whose hello is refused as that exchange's CA refused anything that was not
+A CA sent either's hello answers
+.BR "signer speaks login version 3; update the client" ;
+a client answered in version 2 reports that the signer speaks version 2, which has no ML-KEM,
+and one whose hello is refused as the oldest exchange's CA refused anything that was not
 its vector reports that the signer speaks the old exchange.
 Both ends of a realm must be of the same version.
 .SS "What is not claimed"
@@ -329,6 +406,16 @@ The exchange protects the password on the network, not on the CA.
 Someone who takes the client's part can try one password in each login,
 which is what the CA's count of failed attempts is for;
 someone who takes the CA's part can try one in each login a user makes to him.
+That is meant to hold for a party that can take logarithms, because a guess at the
+password is checked only through
+.IR k ,
+and the CA's one ciphertext is for the one key its guess unmasked;
+.B tests/login_test.b
+plays such a party (it is given the client's exponent) and finds the Diffie-Hellman
+secret of every password it tries and none of them against the client's proof
+but the one it guessed.
+The masked-seed construction is this exchange's own, by the reasoning above;
+it has no published proof, and wants a cryptographer's review as such.
 .PP
 The certificate lasts as long as the account's entry does, and there is no revocation.
 .SH SEE ALSO

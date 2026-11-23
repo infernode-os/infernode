@@ -233,7 +233,11 @@ is
 .B mkseckey4
 of the file key's root,
 .BI mkfilekey3( user,\ pass ) :
-version 4 of the exchange, whose verifier costs as much to guess against as the files do.
+the version 4 verifier, whose verifier costs as much to guess against as the files do,
+spoken to in version 5 of the exchange (ML-KEM-1024 and SHA-384 beside the PAK;
+see PAK5 in the source and
+.IR secstored (8)).
+In CNSA mode version 5 alone is spoken.
 .I Pwhash
 .RB ( mkseckey )
 and
@@ -242,7 +246,7 @@ and
 are for an account not yet at version 4:
 it is logged in to at its own version, given its version 4 verifier
 .RB ( setverifier ),
-and logged in to again, so that the connection returned is a version 4 session.
+and logged in to again, so that the connection returned is a version 5 session.
 In such a session
 .B putfile
 and

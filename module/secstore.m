@@ -62,4 +62,11 @@ Secstore: module
 	iscurrent:	fn(a: array of byte): int;
 
 	lines:	fn(file: array of byte): list of array of byte;
+
+	# version 5's exchange (secstore(2)'s PAK5), for the server: the
+	# ML-KEM key's seed under sigma and the verifier (and back), and the
+	# server's proof, the client's and the session's secret
+	pak5mask:	fn(C, S, m, mu, sigma, Hi: string, rho: array of byte): array of byte;
+	pak5keys:	fn(C, S, m, mu, sigma, Hi: string, ek, ct, k: array of byte): (array of byte, array of byte, array of byte);
+	samebytes:	fn(a, b: array of byte): int;
 };

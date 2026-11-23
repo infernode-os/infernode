@@ -18,6 +18,7 @@ include "keyring.m";
 include "security.m";
 	ssl: SSL;
 	random: Random;
+	login: Login;
 
 include "encoding.m";
 	base64: Encoding;
@@ -71,19 +72,33 @@ connect2(addr: string, user: string, pwhash: array of byte, pwhash2: array of by
 }
 
 #
-# Version 4 is tried first, with the key mkseckey4 makes from the file
-# key's root.  An account not yet at version 4 is logged in to at its
-# own version (as above), given its version 4 verifier, and logged in
-# to again at version 4: so a connection from here is a version 4
-# session, whose stores and removes are answered, unless the server
-# knows nothing of version 4 (and then it is what connect2 gives).
+# Version 5 is tried first, with the version 4 verifier, the key
+# mkseckey4 makes from the file key's root: version 5 is version 4's
+# account and verifier with ML-KEM-1024 and SHA-384 in its exchange
+# (see PAK5 below), and the version 4 exchange is no longer spoken.  An
+# account not yet at version 4 is logged in to at its own version (as
+# above), given its version 4 verifier, and logged in to again at
+# version 5: so a connection from here is a version 5 session, whose
+# stores and removes are answered.  In CNSA mode nothing but version 5
+# is spoken, and an account at an older version is not moved: it is
+# refused, saying so.
 #
 connect4(addr: string, user: string, pwhash, pwhash2, pwhash4: array of byte): (ref Dial->Connection, string, string)
 {
 	conn: ref Dial->Connection;
 	sname, diag: string;
+	if(cnsamode()){
+		if(pwhash4 == nil)
+			return (nil, nil, "CNSA mode: secstore version 5 alone, and no version 4 key");
+		(conn, sname, diag) = connectver(addr, user, VERSION5, pwhash4);
+		if(conn != nil)
+			acked = conn :: acked;
+		else if(hassuffix(diag, Eacctver))
+			diag = "CNSA mode: the account is at a version before 4 and is not moved in CNSA mode; log in once outside it";
+		return (conn, sname, diag);
+	}
 	if(pwhash4 != nil){
-		(conn, sname, diag) = connectver(addr, user, VERSION4, pwhash4);
+		(conn, sname, diag) = connectver(addr, user, VERSION5, pwhash4);
 		if(conn != nil){
 			acked = conn :: acked;
 			return (conn, sname, diag);
@@ -112,13 +127,13 @@ connect4(addr: string, user: string, pwhash, pwhash2, pwhash4: array of byte): (
 		return (conn, sname, diag);
 	}
 	bye(conn);
-	(conn, sname, diag) = connectver(addr, user, VERSION4, pwhash4);
+	(conn, sname, diag) = connectver(addr, user, VERSION5, pwhash4);
 	if(conn != nil)
 		acked = conn :: acked;
 	return (conn, sname, diag);
 }
 
-# the connections that are version 4 sessions
+# the connections that are version 5 sessions
 acked: list of ref Dial->Connection;
 
 isacked(conn: ref Dial->Connection): int
@@ -245,12 +260,14 @@ connectver(addr: string, user: string, version: string, pwhash: array of byte): 
 	params := pakparams(version);
 	if(params == nil)
 		return (nil, nil, "unsupported verifier version");
+	if(version != VERSION5 && cnsamode())
+		return (nil, nil, "CNSA mode: secstore version 5 alone, not " + version);
 
 	# Pre-compute PAK crypto before dialing to avoid TCP idle timeout.
 	# (The verifier was kept in the module from one connection to the
 	# next, with the password's hash beside it: it is an exponentiation
 	# to make again, and is password-equivalent to keep.)
-	(hexHi, H, nil) := PAK_Hiver(version, user, pwhash);
+	(hexHi, H, nil) := PAK_Hiver(verver(version), user, pwhash);
 	if(H == nil)
 		return (nil, nil, "can't make the verifier");
 	sys->fprint(sys->fildes(2), "secstore: step 2: random...\n");
@@ -319,6 +336,10 @@ authprecompver(conn: ref Dial->Connection, user: string, version: string, hexHi:
 
 auth(conn: ref Dial->Connection, user: string, pwhash: array of byte): (string, string)
 {
+	if(cnsamode()){
+		sys->werrstr("CNSA mode: secstore version 5 alone, not " + VERSION1);
+		return (nil, sys->sprint("%r"));
+	}
 	sname := PAKclientver(conn, user, VERSION1, pwhash);
 	if(sname == nil)
 		return (nil, sys->sprint("%r"));
@@ -956,7 +977,13 @@ lines(file: array of byte): list of array of byte
 #
 readstr(fd: ref Sys->FD): string
 {
-	buf := array[500] of byte;
+	return readmsg(fd, 500);
+}
+
+# a message of at most max bytes (version 5's ciphertext is 2092 in base 64)
+readmsg(fd: ref Sys->FD, max: int): string
+{
+	buf := array[max] of byte;
 	n := sys->read(fd, buf, len buf);
 	if(n < 0)
 		return nil;
@@ -1043,6 +1070,8 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 		sys->werrstr("unsupported verifier version");
 		return nil;
 	}
+	if(version == VERSION5)
+		return pak5client(conn, C, hexHi, x, hexm, params);
 	dfd := conn.dfd;
 
 	# Send hello immediately — crypto was pre-computed
@@ -1115,8 +1144,17 @@ PAKclientprecompver(conn: ref Dial->Connection, C: string, version: string, hexH
 #
 
 VERSION1: con "secstore";		# legacy: 1024-bit group, pre-SHA-256 hash
-VERSION3: con "secstore3";		# CNSA: 2048-bit group + SHA-256 (VERSION2 retired)
+VERSION3: con "secstore3";		# 2048-bit group + SHA-256 (VERSION2 retired)
 VERSION4: con "secstore4";		# the same, its verifier from the file key's root (mkseckey4)
+VERSION5: con "secstore5";		# version 4's verifier; ML-KEM-1024 and SHA-384 in the exchange
+
+# the verifier a version's exchange uses: version 5's is version 4's
+verver(version: string): string
+{
+	if(version == VERSION5)
+		return VERSION4;
+	return version;
+}
 
 PAKparams: adt {
 	q:	ref IPint;
@@ -1183,7 +1221,7 @@ initPAKparams()
 pakparams(version: string): ref PAKparams
 {
 	initPAKparams();
-	if(version == VERSION3 || version == VERSION4)
+	if(version == VERSION3 || version == VERSION4 || version == VERSION5)
 		return pak3;
 	if(version == VERSION1)
 		return paklegacy;
@@ -1197,7 +1235,7 @@ hashis256(version: string): int
 
 exponentbits(version: string): int
 {
-	if(version == VERSION3 || version == VERSION4)
+	if(version == VERSION3 || version == VERSION4 || version == VERSION5)
 		return 320;
 	return 240;
 }
@@ -1444,4 +1482,259 @@ ex(tag: string, s: string): string
 	if(len s < len tag || s[0:len tag] != tag)
 		return nil;
 	return s[len tag:];
+}
+
+#
+# PAK5: the version 5 exchange.  Version 4's PAK (Boyko, MacKenzie and
+# Patel's, as Plan 9's secstore has it) is over a 2048-bit group alone:
+# a party that can take logarithms (a quantum computer) and has a
+# recording of one login finds the password by trying each guess
+# against the server's k, and then reads the session.  Version 5 runs
+# beside it the construction login(6) version 3 has: the client sends
+# an ML-KEM-1024 encapsulation key whose 32-byte seed is under a
+# keystream of the PAK's secret sigma and the verifier, the server
+# encapsulates to the key as it unmasks it, and both proofs and the
+# session are made from the ML-KEM secret, sigma and the verifier, by
+# HKDF over HMAC-SHA-384.  So the exchange holds while either problem
+# does: a guess at the password is checked only through the ML-KEM
+# secret, which the server's one ciphertext gives for the one key the
+# real verifier unmasks.
+#
+#	client->server	secstore5\tPAK\nC=C\nm=m\n		(as before)
+#	server->client	mu=mu\nS=S\n
+#	client->server	ek=base64(ek less its seed || kemmask(seed))\n
+#	server->client	ct=base64(ct)\nk=base64(proofs)\n
+#	client->server	k'=base64(proofc)\n
+#
+#	tr0 = "secstore5 transcript" || L(C) || L(S) || L(m) || L(mu)
+#	kemmask: PRK = HMAC-SHA-384(SHA-384(tr0), sigma || Hi)
+#		key || nonce = HKDF-Expand(PRK, "secstore5 kem mask", 44)
+#		AES-256-CTR (GCM's stream, its tag dropped) of the seed
+#	keys: th = SHA-384(tr0 || L(ek) || L(ct))
+#		PRK = HMAC-SHA-384(th, k || sigma || Hi)
+#		proofs, proofc, session = HKDF-Expand(PRK, label, 48)
+#
+# L(x) is x's length in two bytes, big-endian, and x; m, mu, sigma and
+# Hi are the base64 texts the exchange has always used.  k first is SP
+# 800-56C rev. 2's Z || T, the ML-KEM secret the approved Z.
+#
+PAK5: con "secstore5";
+Pak5eklen: con Keyring->MLKEM1024_PKLEN;
+Pak5ctlen: con Keyring->MLKEM1024_CTLEN;
+Pak5rholen: con 32;
+
+lp(a: array of byte): array of byte
+{
+	b := array[2+len a] of byte;
+	b[0] = byte (len a >> 8);
+	b[1] = byte len a;
+	b[2:] = a;
+	return b;
+}
+
+catb(a, b: array of byte): array of byte
+{
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
+}
+
+pak5tr0(C, S, m, mu: string): array of byte
+{
+	tr := array of byte "secstore5 transcript";
+	tr = catb(tr, lp(array of byte C));
+	tr = catb(tr, lp(array of byte S));
+	tr = catb(tr, lp(array of byte m));
+	return catb(tr, lp(array of byte mu));
+}
+
+hmac384(data, key: array of byte): array of byte
+{
+	d := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(data, len data, key, d, nil);
+	return d;
+}
+
+expand384(prk, info: array of byte, n: int): array of byte
+{
+	out := array[0] of byte;
+	t := array[0] of byte;
+	for(i := 1; len out < n; i++){
+		t = hmac384(catb(catb(t, info), array[] of {byte i}), prk);
+		old := out;
+		out = catb(out, t);
+		erasekey(old);
+	}
+	r := array[n] of byte;
+	r[0:] = out[0:n];
+	erasekey(out);
+	erasekey(t);
+	return r;
+}
+
+pak5mask(C, S, m, mu, sigma, Hi: string, rho: array of byte): array of byte
+{
+	tr := pak5tr0(C, S, m, mu);
+	th := array[Keyring->SHA384dlen] of byte;
+	kr->sha384(tr, len tr, th, nil);
+	ikm := catb(array of byte sigma, array of byte Hi);
+	prk := hmac384(ikm, th);
+	erasekey(ikm);
+	okm := expand384(prk, array of byte "secstore5 kem mask", 32+12);
+	(out, nil) := kr->aesgcmencrypt(kr->aesgcmsetup(okm[0:32], okm[32:]), rho, nil);
+	erasekey(prk);
+	erasekey(okm);
+	return out;
+}
+
+pak5keys(C, S, m, mu, sigma, Hi: string, ek, ct, k: array of byte): (array of byte, array of byte, array of byte)
+{
+	tr := catb(catb(pak5tr0(C, S, m, mu), lp(ek)), lp(ct));
+	th := array[Keyring->SHA384dlen] of byte;
+	kr->sha384(tr, len tr, th, nil);
+	ks := catb(k, array of byte sigma);
+	ikm := catb(ks, array of byte Hi);
+	erasekey(ks);
+	prk := hmac384(ikm, th);
+	erasekey(ikm);
+	n := Keyring->SHA384dlen;
+	proofs := expand384(prk, array of byte "secstore5 server proof", n);
+	proofc := expand384(prk, array of byte "secstore5 client proof", n);
+	sess := expand384(prk, array of byte "secstore5 session", n);
+	erasekey(prk);
+	return (proofs, proofc, sess);
+}
+
+# equal, in a time that does not say where not
+samebytes(a, b: array of byte): int
+{
+	if(a == nil || b == nil || len a != len b)
+		return 0;
+	d := 0;
+	for(i := 0; i < len a; i++)
+		d |= int (a[i] ^ b[i]);
+	return d == 0;
+}
+
+pak5client(conn: ref Dial->Connection, C: string, hexHi: string, x: ref IPint, hexm: string, params: ref PAKparams): string
+{
+	dfd := conn.dfd;
+	if(sys->fprint(dfd, "%s\tPAK\nC=%s\nm=%s\n", PAK5, C, hexm) < 0)
+		return nil;
+
+	# mu and S, and no k: the server's proof comes with its ciphertext
+	s := readstr(dfd);
+	if(s == nil){
+		e := sys->sprint("%r");
+		writerr(dfd, "couldn't read g**y");
+		sys->werrstr(e);
+		return nil;
+	}
+	(nf, flds) := sys->tokenize(s, "\n");
+	if(nf != 2){
+		writerr(dfd, "verifier syntax error");
+		return nil;
+	}
+	hexmu := ex("mu=", hd flds);
+	S := ex("S=", hd tl flds);
+	if(hexmu == nil || S == nil){
+		writerr(dfd, "verifier syntax error");
+		return nil;
+	}
+	mu := IPint.strtoip(hexmu, 64);
+	if(!goodmu(mu, params)){
+		writerr(dfd, "bad mu");
+		sys->werrstr("secstore: server's mu is outside the group");
+		return nil;
+	}
+	sigma := mu.expmod(x, params.p);
+	hexsigma := sigma.iptostr(64);
+
+	# the client's ML-KEM-1024 key, its seed under sigma and the verifier
+	ek, dk: array of byte;
+	{
+		(ek, dk) = kr->mlkem1024_keygen();
+	} exception {
+	"*" =>
+		ek = nil;
+	}
+	if(ek == nil || dk == nil || len ek != Pak5eklen){
+		writerr(dfd, "no ML-KEM key");
+		sys->werrstr("secstore: can't make an ML-KEM key");
+		return nil;
+	}
+	msg := array[Pak5eklen] of byte;
+	msg[0:] = ek[0:Pak5eklen-Pak5rholen];
+	msg[Pak5eklen-Pak5rholen:] = pak5mask(C, S, hexm, hexmu, hexsigma, hexHi, ek[Pak5eklen-Pak5rholen:]);
+	if(sys->fprint(dfd, "ek=%s\n", base64->enc(msg)) < 0)
+		return nil;
+
+	# the server's ciphertext for the key as it unmasked it, and its proof
+	s = readmsg(dfd, Maxmsg);
+	if(s == nil){
+		e := sys->sprint("%r");
+		erasekey(dk);
+		sys->werrstr(e);
+		return nil;
+	}
+	(nf, flds) = sys->tokenize(s, "\n");
+	cts, ks: string;
+	if(nf == 2){
+		cts = ex("ct=", hd flds);
+		ks = ex("k=", hd tl flds);
+	}
+	ct: array of byte;
+	if(cts != nil)
+		ct = base64->dec(cts);
+	if(ks == nil || ct == nil || len ct != Pak5ctlen){
+		erasekey(dk);
+		writerr(dfd, "verifier syntax error");
+		return nil;
+	}
+	k: array of byte;
+	{
+		k = kr->mlkem1024_decaps(dk, ct);
+	} exception {
+	"*" =>
+		k = nil;
+	}
+	erasekey(dk);
+	if(k == nil){
+		writerr(dfd, "bad ciphertext");
+		return nil;
+	}
+	(proofs, proofc, sess) := pak5keys(C, S, hexm, hexmu, hexsigma, hexHi, msg, ct, k);
+	erasekey(k);
+	for(i := 0; i < len hexsigma; i++)
+		hexsigma[i] = 0;
+	if(!samebytes(base64->dec(ks), proofs)){
+		erasekey(sess);
+		writerr(dfd, "verifier didn't match");
+		return nil;
+	}
+	if(sys->fprint(dfd, "k'=%s\n", base64->enc(proofc)) < 0){
+		erasekey(sess);
+		return nil;
+	}
+	err := setsecretver(conn, sess, 0, PAK5);
+	erasekey(sess);
+	if(err != nil){
+		sys->werrstr("can't set the session's secrets: " + err);
+		return nil;
+	}
+	if(sys->fprint(conn.cfd, "alg aes_256_gcm") < 0)
+		return nil;
+	return S;
+}
+
+# CNSA 2.0 mode (/env/cnsamode), as login(2) reads it
+cnsamode(): int
+{
+	if(login == nil){
+		login = load Login Login->PATH;
+		if(login == nil)
+			return 1;	# cannot tell: the stricter side
+	}
+	return login->cnsamode();
 }

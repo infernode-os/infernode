@@ -84,7 +84,7 @@ After these changes:
 - **Signatures:** Ed25519 provides 128-bit security with deterministic signatures
 - **Certificates:** SHA-256 hash prevents collision attacks
 - **Key exchange:** 2048-bit DH provides ~112-bit security
-- **Login EKE:** login(6) version 2: nothing a guessed password can be tested against (see "Login: version 2")
+- **Login EKE:** login(6) version 3: nothing a guessed password can be tested against, by a party that can take logarithms too (see "Login: version 3")
 - **TLS:** 1.3 and 1.2 with AEAD suites only (the SSL 3.0 client and its suites are gone)
 - **Revocation:** CRL-based certificate revocation checking
 - **Transport:** WireGuard + Rosenpass handles (external to Inferno)
@@ -181,8 +181,9 @@ RFC 5246; what follows replaces the earlier descriptions of both.
   empty one (it has none to give under TLS 1.2).
 - **The node-to-node exchange.** After `Keyring->auth`, the client's choice of ssl
   algorithm is confirmed by both ends with the shared secret and made part of ssl's keys
-  (`appl/lib/auth.b`, version 2 of the exchange): it used to be one unauthenticated
-  message. Both ends of a connection must be of this version.
+  (`appl/lib/auth.b`, version 3 of the exchange, under HMAC-SHA-384; version 2 had
+  HMAC-SHA-256): it used to be one unauthenticated message. Both ends of a connection
+  must be of this version.
 
 See [`compliance/X509-mTLS.md`](compliance/X509-mTLS.md) for the evidence, test by test.
 
@@ -477,8 +478,9 @@ code), it uses a **mutual ML-KEM-768 exchange**:
    SHA3-512("infernode-pq-sts-v2" || dh || kem_lo || kem_hi || ek_lo || ek_hi)
    ```
 
-   where the two KEM secrets and `ek`s are ordered canonically by comparing
-   the public keys, so both peers derive the identical 64-byte secret. That
+   (in CNSA mode `SHA-512("infernode-pq-sts-v3-cnsa" || kem_lo || kem_hi || dh || ek_lo || ek_hi)`,
+   the hash CNSA 2.0 takes, the ML-KEM-1024 secrets first), where the two KEM
+   secrets and `ek`s are ordered canonically by comparing the public keys, so both peers derive the identical 64-byte secret. That
    secret feeds the `ssl` device (since 0.10.1 split into a secret for each
    direction for AES-256-GCM; see section 11).
 
@@ -678,6 +680,38 @@ the old; wrong proofs are counted in `logind`'s throttle.
 
 `signer(8)`, `countersigner`, `keysrv(4)` and `changelogin(8)` take a name by
 the same rule as `logind`.
+
+## Login: version 3, and secstore version 5
+
+Version 2's properties held against a party that cannot take discrete
+logarithms. One that can (a quantum computer) and takes the signer's part
+in a login learns the client's exponent from `2**r1`, has the
+Diffie-Hellman secret for every password it guesses, and tests each
+against the client's proof: the password, from one login. secstore's PAK
+had the same exposure from a recording alone.
+
+Version 3 runs ML-KEM beside the EKE (ML-KEM-768 in suite 1, ML-KEM-1024
+in suite 2, CNSA mode's). The client sends a fresh encapsulation key with
+its 32-byte seed under a keystream of the password and the Diffie-Hellman
+secret; the rest of the key goes in clear, and whether it goes with a seed
+is ML-KEM's own problem, so every password unmasks to a key of the right
+form. The signer encapsulates to the key as the password unmasks it; the
+proofs and session are HKDF-SHA-384 (or SHA-256 in suite 1) over
+`k || z || pw` and a transcript with the key and ciphertext in it. A
+guess at the password is checked only through `k`, which the signer's one
+ciphertext gives for one key; a party that can break ML-KEM and not take
+logarithms has no `z` and so no seed to try. There are two messages more
+(the ciphertext, then the client's proof). `tests/login_test.b`
+*Logarithms* plays a signer given the client's exponent.
+
+secstore version 5 (`secstore5`) is the same construction beside the PAK,
+with ML-KEM-1024 and HMAC-SHA-384 in every mode, and the account's version
+4 verifier unchanged; secstored refuses the version 4 exchange.
+
+The construction is this tree's own and has no published proof.
+
+**Breaking change:** login's ends must both speak version 3, secstore's
+version 5; an old end is told which version is spoken.
 
 Tests: `tests/login_test.b`, `tests/host/login_test.sh`,
 `tests/signer_test.b`, `tests/passwd_test.b`.

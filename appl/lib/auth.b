@@ -12,18 +12,19 @@ implement Auth;
 # having turned its cipher on, and knew nothing of it.
 #
 # The choice is now confirmed with the secret, and the keys are made of
-# it (version 2 of the exchange):
+# it (version 3 of the exchange; version 2 was the same under
+# HMAC-SHA256, which is not CNSA 2.0's):
 #
-#	client:	"infernode-auth 2" \n algorithms \n
-#		hex HMAC-SHA256(kc, "client" \n algorithms)
+#	client:	"infernode-auth 3" \n algorithms \n
+#		hex HMAC-SHA384(kc, "client" \n algorithms)
 #	server:	"ok" \n its list \n
-#		hex HMAC-SHA256(kc, "server" \n "ok" \n algorithms \n its list)
+#		hex HMAC-SHA384(kc, "server" \n "ok" \n algorithms \n its list)
 #	   or:	"no" \n why \n its list \n
-#		hex HMAC-SHA256(kc, "server" \n "no" \n why \n algorithms \n its list)
+#		hex HMAC-SHA384(kc, "server" \n "no" \n why \n algorithms \n its list)
 #
-# each a Keyring->sendmsg message, where kc = HMAC-SHA256(secret,
-# "infernode auth 2 confirm"), and ssl's secret is HMAC-SHA384(secret,
-# "infernode auth 2 ssl" \n algorithms \n the server's list).  A
+# each a Keyring->sendmsg message, where kc = HMAC-SHA384(secret,
+# "infernode auth 3 confirm"), and ssl's secret is HMAC-SHA384(secret,
+# "infernode auth 3 ssl" \n algorithms \n the server's list).  A
 # server acts on a choice only when the client's tag says it is the
 # client's; a client goes on only when the server's says the server
 # took that choice, so a choice changed on the way fails at both ends,
@@ -48,7 +49,7 @@ include "security.m";
 
 encalgs, hashalgs: list of string;
 
-VERSION: con "infernode-auth 2";
+VERSION: con "infernode-auth 3";
 
 init(): string
 {
@@ -236,15 +237,15 @@ choose(algs: list of string, algbuf: string): (string, string)
 # two ends said as well
 confirmkey(kr: Keyring, secret: array of byte): array of byte
 {
-	l := array of byte "infernode auth 2 confirm";
-	k := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(l, len l, secret, k, nil);
+	l := array of byte "infernode auth 3 confirm";
+	k := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(l, len l, secret, k, nil);
 	return k;
 }
 
 sslsecret(kr: Keyring, secret: array of byte, algbuf, offered: string): array of byte
 {
-	l := array of byte ("infernode auth 2 ssl\n" + algbuf + "\n" + offered);
+	l := array of byte ("infernode auth 3 ssl\n" + algbuf + "\n" + offered);
 	k := array[Keyring->SHA384dlen] of byte;
 	kr->hmac_sha384(l, len l, secret, k, nil);
 	return k;
@@ -253,8 +254,8 @@ sslsecret(kr: Keyring, secret: array of byte, algbuf, offered: string): array of
 mac(kr: Keyring, key: array of byte, text: string): string
 {
 	b := array of byte text;
-	d := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(b, len b, key, d, nil);
+	d := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(b, len b, key, d, nil);
 	return dump(d);
 }
 

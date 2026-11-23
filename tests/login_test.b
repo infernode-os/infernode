@@ -4,12 +4,12 @@ implement LoginTest;
 # login(2) against a real auth/logind over loopback TCP: the client and
 # the signer each in an environment of their own, so each can be in CNSA
 # mode (/env/cnsamode) or not. In CNSA mode the client offers suite 2
-# (AES-256-GCM's stream, SHA-384, a group of 3072 bits) and a signer in
+# (AES-256-GCM's stream, SHA-384, ML-KEM-1024, a group of 3072 bits) and a signer in
 # CNSA mode refuses suite 1. The signer's files are made here, in a name
 # space of the test's own: /keydb/signerkey and /mnt/keys/<user>/secret
 # (the password's SHA-256) and expire, as keyfs(4) serves them.
 #
-# The exchange is login(6)'s version 2, and the second half of this file
+# The exchange is login(6)'s version 3, and the second half of this file
 # is about what the exchange before it gave away. It has clients and
 # signers of its own, written from the manual page and not through the
 # Login module, that do what a peer without the password can do:
@@ -26,7 +26,11 @@ implement LoginTest;
 #   - stand between the two and change one thing;
 #   - give a name that is a path (carol/. was carol to keyfs and
 #     another name to the throttle);
-#   - speak the old exchange, to either end.
+#   - speak the old exchange, or version 2, to either end;
+#   - send an ML-KEM key that is none, or a ciphertext of its own;
+#   - take logarithms: a signer that knows the client's exponent, as
+#     one with a quantum computer would, still has the one guess it
+#     made its ciphertext for (version 2 gave it every guess).
 # Each is refused, counted where a password was tried, and recorded in
 # the audit log, whose sink (/mnt/audit/log) the test serves.
 # tests/host/login_test.sh checks the groups and the key derivation's
@@ -674,10 +678,51 @@ testUnknownLikeWrong(t: ref T)
 # second reading of the page, and tests/host/login/mkvectors.py's known
 # answers (testVectors) a third.
 #
-Version: con 2;
+Version: con 3;
 Chacha: con 1;
 Aesgcm: con 2;
 Noncelen: con 32;
+Rholen: con 32;
+
+# ML-KEM-768 for suite 1, ML-KEM-1024 for suite 2: encapsulation key,
+# ciphertext
+xkemsizes(suite: int): (int, int)
+{
+	if(suite == Aesgcm)
+		return (1568, 1568);
+	return (1184, 1088);
+}
+
+xkeygen(suite: int): (array of byte, array of byte)
+{
+	if(suite == Aesgcm)
+		return kr->mlkem1024_keygen();
+	return kr->mlkem768_keygen();
+}
+
+xencaps(suite: int, ek: array of byte): (array of byte, array of byte)
+{
+	{
+		if(suite == Aesgcm)
+			return kr->mlkem1024_encaps(ek);
+		return kr->mlkem768_encaps(ek);
+	} exception {
+	"*" =>
+		return (nil, nil);
+	}
+}
+
+xdecaps(suite: int, dk, ct: array of byte): array of byte
+{
+	{
+		if(suite == Aesgcm)
+			return kr->mlkem1024_decaps(dk, ct);
+		return kr->mlkem768_decaps(dk, ct);
+	} exception {
+	"*" =>
+		return nil;
+	}
+}
 
 # RFC 3526's groups 14 and 15 (tests/host/login/mkgroups.py -c checks them)
 P14: con
@@ -756,11 +801,8 @@ xexpand(suite: int, prk, info: array of byte, n: int): array of byte
 	return out[0:n];
 }
 
-xmask(suite, gid: int, name: string, pw, cnonce, snonce, x: array of byte): array of byte
+xstream(suite: int, okm, x: array of byte): array of byte
 {
-	prk := xhmac(suite, pw, xcat(cnonce, snonce));
-	info := xcat(array of byte "infernode login 2 mask", array[] of {byte 0, byte suite, byte gid});
-	okm := xexpand(suite, prk, xcat(info, array of byte name), 44);
 	out: array of byte;
 	if(suite == Aesgcm)
 		(out, nil) = kr->aesgcmencrypt(kr->aesgcmsetup(okm[0:32], okm[32:]), x, nil);
@@ -769,18 +811,35 @@ xmask(suite, gid: int, name: string, pw, cnonce, snonce, x: array of byte): arra
 	return out;
 }
 
+xmask(suite, gid: int, name: string, pw, cnonce, snonce, x: array of byte): array of byte
+{
+	prk := xhmac(suite, pw, xcat(cnonce, snonce));
+	info := xcat(array of byte "infernode login 3 mask", array[] of {byte 0, byte suite, byte gid});
+	okm := xexpand(suite, prk, xcat(info, array of byte name), 44);
+	return xstream(suite, okm, x);
+}
+
+xkemmask(suite, gid: int, name: string, pw, cnonce, snonce, z, rho: array of byte): array of byte
+{
+	prk := xhmac(suite, xcat(z, pw), xcat(cnonce, snonce));
+	info := xcat(array of byte "infernode login 3 kem mask", array[] of {byte 0, byte suite, byte gid});
+	okm := xexpand(suite, prk, xcat(info, array of byte name), 44);
+	return xstream(suite, okm, rho);
+}
+
 xlen(a: array of byte): array of byte
 {
 	return xcat(array[] of {byte (len a>>8), byte len a}, a);
 }
 
-xkeys(suite: int, name: string, pw, hello, reply, share, z: array of byte): (array of byte, array of byte, array of byte)
+xkeys(suite: int, name: string, pw, hello, reply, share, ct, z, k: array of byte): (array of byte, array of byte, array of byte)
 {
-	tr := array of byte "infernode login 2 transcript";
+	tr := array of byte "infernode login 3 transcript";
 	tr = xcat(tr, xlen(array of byte name));
 	tr = xcat(tr, xlen(hello));
 	tr = xcat(tr, xlen(reply));
 	tr = xcat(tr, xlen(share));
+	tr = xcat(tr, xlen(ct));
 	th: array of byte;
 	if(suite == Aesgcm){
 		th = array[Keyring->SHA384dlen] of byte;
@@ -789,11 +848,11 @@ xkeys(suite: int, name: string, pw, hello, reply, share, z: array of byte): (arr
 		th = array[Keyring->SHA256dlen] of byte;
 		kr->sha256(tr, len tr, th, nil);
 	}
-	prk := xhmac(suite, xcat(z, pw), th);
+	prk := xhmac(suite, xcat(xcat(k, z), pw), th);
 	n := len th;
-	return (xexpand(suite, prk, array of byte "infernode login 2 client proof", n),
-		xexpand(suite, prk, array of byte "infernode login 2 signer proof", n),
-		xexpand(suite, prk, array of byte "infernode login 2 session", n));
+	return (xexpand(suite, prk, array of byte "infernode login 3 client proof", n),
+		xexpand(suite, prk, array of byte "infernode login 3 signer proof", n),
+		xexpand(suite, prk, array of byte "infernode login 3 session", n));
 }
 
 pwdigest(password: string): array of byte
@@ -840,24 +899,27 @@ inrange(x, p: ref IPint): int
 testVectors(t: ref T)
 {
 	v := array[] of {
-		(Chacha, 14, "bd4c6a604395623acb6a96ab8f1251e2",
-			"520fa7458b35863304f1d3fa43ba580bbcc748d9bbaaaea7b84971e20480847a",
-			"7dbbea4cbd2c0f67bc777e216e72670628e13d073da2312b0137f923c8965477",
-			"bcf00399bd138a40459846efb60cfd9ef9bc671862ecb905765f1235a8f6e78e",
-			"ffec534b5604a8dd5120f6bae645f899f11acb8641b4ce73c994758738ca0743"),
-		(Aesgcm, 15, "81b1dd47513210dd77179b922e70bb8d",
-			"9b364bbf94baea7f934f11df9307ae36f45742ab96485b926b3ee35eb0fe5893",
-			"2c573fc8d0f407586482565a2e4940de452bf71209cedfafbf00da3e9e5a62b7c02697e01bf6de1888a4ab0658db73e0",
-			"65ac26450890c9b4165511de31cf9a3c2c5b549af65c7b170cf268c16b301836b84d67433ef7fb4d5b1afdc7ed3465ac",
-			"131162e9f9473dd2367c31fa64a11be21bb155b56e58aa440120c79adbdcac2236b06758f5d2207d5c647dc7af421a44"),
+		(Chacha, 14, "e01cc240f014baaa6594b1143533ca1e",
+			"eadfe4c1019cb37b760704eacb8370c5f865ebd162a01b58ded633e630016dcd",
+			"d59c91963a607d675ac2ebd93b8026529bdc4b08af2f81f084b4833cc9261246",
+			"985cb32008baaca846bbbdbdd13b60cac40c17f96a16856bc0ac842b8416f803",
+			"b5af178e23eab41a3be6990cececd59519128b6f9975deef3ae608dd6a7c9b81",
+			"80b3abda810703ec98fbb95cabe38c353fe8b1c279d36938b5fed3092cf6bc86"),
+		(Aesgcm, 15, "92c2389540145519861251b157c9b119",
+			"f18457aad2461d29ed2db488450f72f49eaea89e2fba2fb70a72c0e45f8cc51f",
+			"070c40b76e30ace197c3ab47b2832424113c2025f3772d24f5bb964dcc9b0f24",
+			"d4f94558eb373dab328021881d1af352ab914069e9c3c097e491fae036c091ad0e0e65101e0abe5ae2e22bd22099c32e",
+			"ac165b9c48ca3a38f2ae71e8c4ea82fcb5d0161df0896c5b62dcb3011b22e1013d010d04eed45a2a9097014ef01cb8c9",
+			"2645e9352f3216639edf87cfe24fe7465efe3085d22ad96227a9638cb70b67629e80f3a9ca4ca2015d97e8a9463a60e0"),
 	};
 	pw := pwdigest(Password);
 	cnonce := ramp(1, 0, Noncelen);
 	snonce := ramp(1, Noncelen, Noncelen);
 	for(i := 0; i < len v; i++){
-		(suite, gid, m16, msum, cproof, sproof, sk) := v[i];
+		(suite, gid, m16, msum, km, cproof, sproof, sk) := v[i];
 		what := sys->sprint("suite %d", suite);
 		(nil, n) := xgroup(gid);
+		(eklen, ctlen) := xkemsizes(suite);
 		x := ramp(7, 1, n);
 		m := xmask(suite, gid, "alice", pw, cnonce, snonce, x);
 		t.assertseq(hex(m[0:16]), m16, what + ": the masked value's first bytes");
@@ -865,12 +927,24 @@ testVectors(t: ref T)
 		kr->sha256(m, len m, sum, nil);
 		t.assertseq(hex(sum), msum, what + ": the masked value");
 		t.assert(eq(xmask(suite, gid, "alice", pw, cnonce, snonce, m), x), what + ": masked again it is the value");
+		z := ramp(11, 2, n);
+		rho := ramp(19, 6, Rholen);
+		mrho := xkemmask(suite, gid, "alice", pw, cnonce, snonce, z, rho);
+		t.assertseq(hex(mrho), km, what + ": the masked ML-KEM seed");
+		t.assert(eq(xkemmask(suite, gid, "alice", pw, cnonce, snonce, z, mrho), rho), what + ": masked again it is the seed");
+		# and login(2)'s own, which the signer uses
+		t.assertseq(hex(login->kemmask(suite, gid, "alice", pw, cnonce, snonce, z, rho)), km, what + ": login(2)'s masked seed");
 		hello := xcat(array[] of {byte Version, byte suite}, cnonce);
 		reply := xcat(xcat(array[] of {byte Version, byte suite, byte gid}, snonce), m);
-		(c, s, k) := xkeys(suite, "alice", pw, hello, reply, ramp(5, 3, n), ramp(11, 2, n));
+		share := ramp(5, 3, n+eklen);
+		ct := ramp(13, 4, ctlen);
+		k := ramp(17, 5, 32);
+		(c, s, key) := xkeys(suite, "alice", pw, hello, reply, share, ct, z, k);
 		t.assertseq(hex(c), cproof, what + ": the client's proof");
 		t.assertseq(hex(s), sproof, what + ": the signer's proof");
-		t.assertseq(hex(k), sk, what + ": the session's secret");
+		t.assertseq(hex(key), sk, what + ": the session's secret");
+		(lc, ls, lk) := login->keys(suite, "alice", pw, hello, reply, share, ct, z, k);
+		t.assert(eq(lc, c) && eq(ls, s) && eq(lk, key), what + ": login(2)'s keys are the page's");
 	}
 }
 
@@ -915,6 +989,8 @@ Conv: adt {
 	p:	ref IPint;
 	hello:	array of byte;
 	reply:	array of byte;
+	eklen:	int;	# the suite's ML-KEM
+	ctlen:	int;
 };
 
 # A read from a signer or a client that may never answer (the code
@@ -995,7 +1071,8 @@ begin(addr, name: string, suite: int, hello: array of byte): (ref Conv, string)
 		return (nil, "reply: " + err);
 	if(len reply < 3+Noncelen)
 		return (nil, sys->sprint("reply of %d bytes", len reply));
-	cv := ref Conv(c, name, suite, int reply[2], 0, nil, hello, reply);
+	cv := ref Conv(c, name, suite, int reply[2], 0, nil, hello, reply, 0, 0);
+	(cv.eklen, cv.ctlen) = xkemsizes(suite);
 	(cv.p, cv.n) = xgroup(cv.gid);
 	if(cv.p == nil)
 		return (nil, sys->sprint("reply names group %d", cv.gid));
@@ -1008,6 +1085,20 @@ unmask(cv: ref Conv, password: string): ref IPint
 	return IPint.bytestoip(xmask(cv.suite, cv.gid, cv.name, pwdigest(password), cv.hello[2:], cv.reply[3:3+Noncelen], cv.reply[3+Noncelen:]));
 }
 
+# The client's third message as login(6) has it: 2**r1 mod p and an
+# ML-KEM key whose seed is under pw and z; and the key's other half.
+share(cv: ref Conv, pw, y, z: array of byte): (array of byte, array of byte)
+{
+	(ek, dk) := xkeygen(cv.suite);
+	msg := xcat(y, ek);
+	msg[cv.n+cv.eklen-Rholen:] = xkemmask(cv.suite, cv.gid, cv.name, pw, cv.hello[2:], cv.reply[3:3+Noncelen], z, ek[cv.eklen-Rholen:]);
+	return (msg, dk);
+}
+
+# The value 2**r1 mod p is r1 of the client's choosing: what it chose is
+# leakr1, for a signer of the test's own that is to take logarithms.
+leakr1: ref IPint;
+
 # The rest of a login, as login(6) has it, with password.
 finish(cv: ref Conv, password: string): (string, ref Keyring->Authinfo)
 {
@@ -1015,12 +1106,22 @@ finish(cv: ref Conv, password: string): (string, ref Keyring->Authinfo)
 	if(!inrange(x, cv.p))
 		return ("signer's value out of range", nil);
 	r1 := IPint.random(0, 256).add(IPint.inttoip(2));
+	leakr1 = r1;
 	y := xbe(IPint.inttoip(2).expmod(r1, cv.p), cv.n);
 	z := xbe(x.expmod(r1.shl(1), cv.p), cv.n);
-	(cproof, sproof, sk) := xkeys(cv.suite, cv.name, pwdigest(password), cv.hello, cv.reply, y, z);
-	msg := xcat(y, cproof);
+	pw := pwdigest(password);
+	(msg, dk) := share(cv, pw, y, z);
 	kr->putbytearray(cv.c.dfd, msg, len msg);
-	(proof, err) := getbytes(cv.c.dfd);
+	(ct, err) := getbytes(cv.c.dfd);
+	if(err != nil)
+		return ("signer's ciphertext: " + err, nil);
+	if(len ct != cv.ctlen)
+		return (sys->sprint("signer's ciphertext has %d bytes, not %d", len ct, cv.ctlen), nil);
+	k := xdecaps(cv.suite, dk, ct);
+	(cproof, sproof, sk) := xkeys(cv.suite, cv.name, pw, cv.hello, cv.reply, msg, ct, z, k);
+	kr->putbytearray(cv.c.dfd, cproof, len cproof);
+	proof: array of byte;
+	(proof, err) = getbytes(cv.c.dfd);
 	if(err != nil)
 		return ("signer's proof: " + err, nil);
 	if(!eq(proof, sproof))
@@ -1066,6 +1167,7 @@ testManual(t: ref T)
 	t.asserteq(int cv.reply[1], Chacha, "ChaCha20: the reply's suite");
 	t.asserteq(cv.gid, 14, "ChaCha20: group 14");
 	t.asserteq(len cv.reply, 3+Noncelen+256, "ChaCha20: version, suite, group, nonce and a value of len(p) bytes: no tag");
+	t.asserteq(cv.ctlen, 1088, "ChaCha20: ML-KEM-768's ciphertext is expected");
 	info: ref Keyring->Authinfo;
 	(err, info) = finish(cv, Password);
 	loggedin(t, "a client written from login(6), ChaCha20", err, info);
@@ -1077,6 +1179,7 @@ testManual(t: ref T)
 		t.fatal("AES-256-GCM: " + err);
 	t.asserteq(cv.gid, 15, "AES-256-GCM: group 15 (3072 bits)");
 	t.asserteq(len cv.reply, 3+Noncelen+384, "AES-256-GCM: the reply's length");
+	t.asserteq(cv.ctlen, 1568, "AES-256-GCM: ML-KEM-1024's ciphertext is expected (CNSA 2.0)");
 	cnsacv := cv;
 
 	# a signer not in CNSA mode gives a client offering suite 2 no less
@@ -1182,9 +1285,8 @@ testNoPassword(t: ref T)
 		if(cv == nil)
 			t.fatal(what + ": " + err);
 		y := xbe(v, n);
-		# the proof a client could make if the secret were what it wants
-		(cproof, nil, nil) := xkeys(Chacha, "judy", zeros, cv.hello, cv.reply, y, xbe(secret, n));
-		msg := xcat(y, cproof);
+		# the message a client could send if the secret were what it wants
+		(msg, nil) := share(cv, zeros, y, xbe(secret, n));
 		kr->putbytearray(cv.c.dfd, msg, len msg);
 		(b, e) := getbytes(cv.c.dfd);
 		t.assert(b == nil, "a client sending " + what + " is sent nothing");
@@ -1194,7 +1296,7 @@ testNoPassword(t: ref T)
 	t.assert(audited("logind authfail user=judy reason=badvalue"), "and recorded in the audit log");
 	t.assert(!nowaudited("authok"), "no certificate was recorded as issued");
 
-	# a message that is no value and proof is refused, not left waiting
+	# a message that is no value and key is refused, not left waiting
 	(cv, err) := begin(logind(t, 0), "judy", Chacha, nil);
 	if(cv == nil)
 		t.fatal("short message: " + err);
@@ -1208,9 +1310,12 @@ testNoPassword(t: ref T)
 	if(cv == nil)
 		t.fatal("2: " + err);
 	y := xbe(IPint.inttoip(2), n);
-	(cproof, nil, nil) := xkeys(Chacha, "judy", zeros, cv.hello, cv.reply, y, xbe(one, n));
-	msg := xcat(y, cproof);
+	(msg, dk) := share(cv, zeros, y, xbe(one, n));
 	kr->putbytearray(cv.c.dfd, msg, len msg);
+	(ct, nil) := getbytes(cv.c.dfd);
+	t.asserteq(len ct, cv.ctlen, "a value in range is sent the ML-KEM ciphertext, of ML-KEM-768's length");
+	(cproof, nil, nil) := xkeys(Chacha, "judy", zeros, cv.hello, cv.reply, msg, ct, xbe(one, n), xdecaps(Chacha, dk, ct));
+	kr->putbytearray(cv.c.dfd, cproof, len cproof);
 	(b, e) = getbytes(cv.c.dfd);
 	t.assert(b == nil && e != nil && contains(e, "name or secret incorrect"), "a value in range and no password: " + e);
 	t.assert(audited("logind authfail user=judy reason=secret"), "a proof that is not one is recorded");
@@ -1221,11 +1326,30 @@ testNoPassword(t: ref T)
 	if(cv == nil)
 		t.fatal("CNSA: " + err);
 	y = xbe(one, cv.n);
-	(cproof, nil, nil) = xkeys(Aesgcm, "judy", zeros, cv.hello, cv.reply, y, y);
-	msg = xcat(y, cproof);
+	(msg, nil) = share(cv, zeros, y, y);
+	t.asserteq(len msg, cv.n+1568, "CNSA mode: the value and an ML-KEM-1024 key");
 	kr->putbytearray(cv.c.dfd, msg, len msg);
 	(b, e) = getbytes(cv.c.dfd);
 	t.assert(b == nil && e != nil && contains(e, "bad Diffie-Hellman value"), "CNSA mode: a client sending 1 is refused: " + e);
+
+	# a key that is no ML-KEM key (its coefficients at q and past it,
+	# which FIPS 203's check refuses) is refused, counted, and given no
+	# ciphertext, whatever the password
+	sys->remove("/keydb/loginfail");
+	auditlines = nil;
+	for(suite := Chacha; suite <= Aesgcm; suite++){
+		what := sys->sprint("suite %d", suite);
+		(cv, err) = begin(logind(t, suite-1), "judy", suite, nil);
+		if(cv == nil)
+			t.fatal("bad key, " + what + ": " + err);
+		r1 := IPint.random(0, 256).add(IPint.inttoip(2));
+		y = xbe(IPint.inttoip(2).expmod(r1, cv.p), cv.n);
+		msg = xcat(y, array[cv.eklen] of {* => byte 16rFF});
+		kr->putbytearray(cv.c.dfd, msg, len msg);
+		(b, e) = getbytes(cv.c.dfd);
+		t.assert(b == nil && e != nil && contains(e, "bad ML-KEM key"), what + ": a key that is none is refused: " + e);
+	}
+	t.assert(audited("logind authfail user=judy reason=badvalue"), "and recorded in the audit log");
 	sys->remove("/keydb/loginfail");
 }
 
@@ -1437,8 +1561,10 @@ ownparams(c: ref Sys->Connection, arg: string): string
 		n = 1;	# a modulus of its own: what a relay sent for p
 	"version1" =>
 		version = 1;
-	"version3" =>
-		version = 3;
+	"version2" =>
+		version = 2;
+	"version4" =>
+		version = 4;
 	"suite" =>
 		suite = 3 - suite;
 	"group14" =>
@@ -1482,13 +1608,32 @@ pwsigner(c: ref Sys->Connection, arg: string): string
 	hlen := Keyring->SHA256dlen;
 	if(suite == Aesgcm)
 		hlen = Keyring->SHA384dlen;
-	if(len msg != n+hlen)
-		return "the client's message is not a value and a proof";
+	(eklen, ctlen) := xkemsizes(suite);
+	if(len msg != n+eklen)
+		return "the client's message is not a value and an ML-KEM key";
 	y := IPint.bytestoip(msg[0:n]);
 	z := xbe(y.expmod(r0.shl(1), p), n);
-	(cproof, sproof, sk) := xkeys(suite, name, pw, hello, reply, msg[0:n], z);
-	if(!eq(cproof, msg[n:]))
+	ek := msg[n:];
+	ek = xcat(ek[0:eklen-Rholen], xkemmask(suite, gid, name, pw, hello[2:], snonce, z, ek[eklen-Rholen:]));
+	(ct, k) := xencaps(suite, ek);
+	if(ct == nil)
+		return "the client's ML-KEM key is refused";
+	case arg {
+	"badct" =>
+		ct = randombytes(ctlen);	# of the right length: implicit rejection
+	"shortct" =>
+		ct = ct[0:ctlen-1];
+	}
+	kr->putbytearray(c.dfd, ct, len ct);
+	cp: array of byte;
+	(cp, err) = getbytes(c.dfd);
+	if(cp == nil)
+		return "the client sent nothing more: " + err;
+	(cproof, sproof, sk) := xkeys(suite, name, pw, hello, reply, msg, ct, z, k);
+	if(!eq(cproof, cp)){
+		kr->puterror(c.dfd, "name or secret incorrect");
 		return "the client's proof is not the proof";
+	}
 	if(arg == "badproof"){
 		sproof = randombytes(hlen);
 		kr->putbytearray(c.dfd, sproof, len sproof);
@@ -1576,8 +1721,9 @@ testOwnParams(t: ref T)
 		("group2", 0, "group 2"),
 		("group0", 0, "group 0"),
 		("p=2", 0, "length of its group"),
-		("version1", 0, "not login version 2"),
-		("version3", 0, "not login version 2"),
+		("version1", 0, "not login version 3"),
+		("version2", 0, "speaks login version 2, which has no ML-KEM"),
+		("version4", 0, "not login version 3"),
 		("suite", 0, "suite not offered"),
 		("suite", 1, "CNSA mode"),
 		("group14", 1, "3072"),
@@ -1610,6 +1756,7 @@ testSignerValues(t: ref T)
 		t.assert(contains(did, "nothing more"), what + ": " + did);
 	}
 	cases := array[] of {
+		("shortct", "ciphertext is not the length"),
 		("badproof", "did not prove"),
 		("smallp", "1024 bits"),
 		("evenp", "bogus"),
@@ -1625,8 +1772,14 @@ testSignerValues(t: ref T)
 		t.assert(info == nil, what + " gives no Authinfo");
 		t.assert(err != nil && contains(err, want), what + " is refused saying why: " + err);
 	}
+	# a ciphertext of the right length that is not the key's: the
+	# client's KEM secret is ML-KEM's implicit rejection, its proof
+	# not the signer's, and it gets nothing
+	(err, info, did) := fakelogin(t, pwsigner, "badct", 0);
+	t.assert(info == nil && err != nil && contains(err, "name or secret incorrect"), "a signer whose ciphertext is not for the key: " + err);
+	t.assert(contains(did, "not the proof"), "the client's proof shows it opened something else: " + did);
 	# and the script is a signer when it does nothing wrong
-	(err, info, nil) := fakelogin(t, pwsigner, "", 0);
+	(err, info, nil) = fakelogin(t, pwsigner, "", 0);
 	loggedin(t, "a signer written from login(6)", err, info);
 	# a client in CNSA mode: refused for the Ed25519 key, and for a
 	# CNSA key whose certificate is under SHA-256
@@ -1680,7 +1833,27 @@ relay(c: ref Sys->Connection, arg: string): string
 		(p, n) := xgroup(int reply[2]);
 		msg[0:] = xbe(IPint.inttoip(2).expmod(IPint.inttoip(5), p), n);
 	}
+	case arg {
+	"key" =>
+		# a byte of the key's clear half
+		(nil, n) := xgroup(int reply[2]);
+		msg[n+100] ^= byte 1;
+	"seed" =>
+		msg[len msg-1] ^= byte 1;
+	}
 	kr->putbytearray(sv.dfd, msg, len msg);
+	(ct, e5) := getbytes(sv.dfd);
+	if(ct == nil){
+		kr->puterror(c.dfd, e5);
+		return "the signer refused: " + e5;
+	}
+	if(arg == "ct")
+		ct[10] ^= byte 1;
+	kr->putbytearray(c.dfd, ct, len ct);
+	(cp, e6) := getbytes(c.dfd);
+	if(cp == nil)
+		return "the client sent nothing more: " + e6;
+	kr->putbytearray(sv.dfd, cp, len cp);
 	(proof, e4) := getbytes(sv.dfd);
 	if(proof == nil){
 		kr->puterror(c.dfd, e4);
@@ -1690,12 +1863,125 @@ relay(c: ref Sys->Connection, arg: string): string
 	return "the signer sent its proof";
 }
 
+#
+# A signer that has no password and can take logarithms, as one with a
+# quantum computer could: the client's exponent is given it (leakr1, by
+# the test's own client), so for every password on its list it has the
+# Diffie-Hellman secret that password gives, the right one's among them
+# (version 2 then had the client's proof to try each against, and every
+# login it took the signer's part in gave it the password).  It
+# encapsulates to the key its one guess (arg) unmasks, and then tries
+# every password against the client's proof.  What it says is what it
+# found.
+#
+logwords := array[] of {"password", "letmein", "hunter2", Password, "trustno1"};
+leakz: array of byte;
+
+logsigner(c: ref Sys->Connection, arg: string): string
+{
+	(name, hello) := fakehello(c);
+	if(len hello != 2+Noncelen)
+		return "no hello";
+	suite := int hello[1];
+	gid := 14;
+	if(suite == Aesgcm)
+		gid = 15;
+	(p, n) := xgroup(gid);
+	snonce := randombytes(Noncelen);
+	reply := xcat(xcat(array[] of {byte Version, byte suite, byte gid}, snonce), randombytes(n));
+	kr->putbytearray(c.dfd, reply, len reply);
+	(msg, err) := getbytes(c.dfd);
+	if(msg == nil)
+		return "the client sent nothing more: " + err;
+	(eklen, nil) := xkemsizes(suite);
+	if(len msg != n+eklen)
+		return "the client's message is not a value and a key";
+	r1 := leakr1;
+	zs := array[len logwords] of array of byte;
+	gotz := 0;
+	formed := 0;
+	guess := -1;
+	for(w := 0; w < len logwords; w++){
+		x := IPint.bytestoip(xmask(suite, gid, name, pwdigest(logwords[w]), hello[2:], snonce, reply[3+Noncelen:]));
+		zs[w] = xbe(x.expmod(r1.shl(1), p), n);
+		if(logwords[w] == Password && eq(zs[w], leakz))
+			gotz = 1;
+		rho := xkemmask(suite, gid, name, pwdigest(logwords[w]), hello[2:], snonce, zs[w], msg[n+eklen-Rholen:]);
+		(ct, nil) := xencaps(suite, xcat(msg[n:n+eklen-Rholen], rho));
+		if(ct != nil)
+			formed++;
+		if(logwords[w] == arg)
+			guess = w;
+	}
+	if(guess < 0)
+		return "no such guess";
+	ek := xcat(msg[n:n+eklen-Rholen], xkemmask(suite, gid, name, pwdigest(arg), hello[2:], snonce, zs[guess], msg[n+eklen-Rholen:]));
+	(ct, k) := xencaps(suite, ek);
+	kr->putbytearray(c.dfd, ct, len ct);
+	(cp, e2) := getbytes(c.dfd);
+	if(cp == nil)
+		return "the client sent no proof: " + e2;
+	found := "";
+	for(w = 0; w < len logwords; w++){
+		(cproof, nil, nil) := xkeys(suite, name, pwdigest(logwords[w]), hello, reply, msg, ct, zs[w], k);
+		if(eq(cproof, cp))
+			found += " " + logwords[w];
+	}
+	kr->puterror(c.dfd, "name or secret incorrect");
+	if(found == "")
+		found = " nothing";
+	return sys->sprint("z=%d formed=%d found%s", gotz, formed, found);
+}
+
+testLogarithms(t: ref T)
+{
+	for(suite := Chacha; suite <= Aesgcm; suite++){
+		guesses := array[] of {("hunter2", "found nothing"), (Password, "found " + Password)};
+		for(i := 0; i < len guesses; i++){
+			(guess, want) := guesses[i];
+			what := sys->sprint("suite %d, a signer that takes logarithms and guesses %q", suite, guess);
+			(addr, resc) := fakesigner(t, logsigner, guess);
+			(cv, err) := begin(addr, User, suite, nil);
+			if(cv == nil)
+				t.fatal(what + ": " + err);
+			# r1 and the secret are left where the signer finds them
+			# before the client's message is sent
+			(err, nil) = finishleak(cv, unmask(cv, Password));
+			t.assert(err != nil, what + ": the client gets nothing");
+			did := <-resc;
+			t.assert(contains(did, "z=1"), what + ": it has the Diffie-Hellman secret of the right password: " + did);
+			t.assert(contains(did, sys->sprint("formed=%d", len logwords)), what + ": every password unmasks to a key of the right form: " + did);
+			t.assert(contains(did, want), what + ": against the client's proof it " + want + ": " + did);
+		}
+	}
+}
+
+# finish, with the Diffie-Hellman secret it makes left in leakz
+finishleak(cv: ref Conv, x: ref IPint): (string, ref Keyring->Authinfo)
+{
+	r1 := IPint.random(0, 256).add(IPint.inttoip(2));
+	leakz = xbe(x.expmod(r1.shl(1), cv.p), cv.n);
+	leakr1 = r1;
+	y := xbe(IPint.inttoip(2).expmod(r1, cv.p), cv.n);
+	pw := pwdigest(Password);
+	(msg, dk) := share(cv, pw, y, leakz);
+	kr->putbytearray(cv.c.dfd, msg, len msg);
+	(ct, err) := getbytes(cv.c.dfd);
+	if(err != nil)
+		return ("signer's ciphertext: " + err, nil);
+	k := xdecaps(cv.suite, dk, ct);
+	(cproof, nil, nil) := xkeys(cv.suite, cv.name, pw, cv.hello, cv.reply, msg, ct, leakz, k);
+	kr->putbytearray(cv.c.dfd, cproof, len cproof);
+	(nil, err) = getbytes(cv.c.dfd);
+	return (err, nil);
+}
+
 relayto: string;
 
 testRelay(t: ref T)
 {
 	sys->remove("/keydb/loginfail");
-	cases := array[] of {"cnonce", "snonce", "value", "group", "share"};
+	cases := array[] of {"cnonce", "snonce", "value", "group", "share", "key", "seed", "ct"};
 	for(i := 0; i < len cases; i++){
 		relayto = logind(t, 0);
 		what := "a relay changing the " + cases[i];
@@ -1727,11 +2013,25 @@ testOldExchange(t: ref T)
 		(ct, e) := getbytes(c.dfd);
 		what := sys->sprint("a client of the old exchange (an ivec of %d bytes)", lens[i]);
 		t.assert(ct == nil, what + " is sent nothing sealed under the password");
-		t.assert(e != nil && contains(e, "login version 2"), what + " is told the signer's version: " + e);
+		t.assert(e != nil && contains(e, "login version 3"), what + " is told the signer's version: " + e);
 	}
+	# version 2's hello, which is version 3's but for its first byte
+	(c, err) := rawdial(logind(t, 0));
+	if(c == nil)
+		t.fatal("version 2 client: " + err);
+	kr->putstring(c.dfd, "ken");
+	(s, why) := getstr(c.dfd);
+	if(s != "ken")
+		t.fatal("version 2 client: ack: " + why);
+	hello := xcat(array[] of {byte 2, byte Chacha}, randombytes(Noncelen));
+	kr->putbytearray(c.dfd, hello, len hello);
+	(r, e) := getbytes(c.dfd);
+	t.assert(r == nil, "a client of version 2 gets no reply: it would answer with no ML-KEM key");
+	t.assert(e != nil && contains(e, "login version 3; update the client"), "and is told to update: " + e);
 	t.asserteq(counted("ken"), 0, "and is not counted: no password was tried");
 
-	(err, info, nil) := fakelogin(t, oldsigner, nil, 0);
+	info: ref Keyring->Authinfo;
+	(err, info, nil) = fakelogin(t, oldsigner, nil, 0);
 	t.assert(info == nil, "a signer of the old exchange gives login(2) nothing");
 	t.assert(err != nil && contains(err, "old login exchange"), "and login(2) says which exchange it speaks: " + err);
 }
@@ -1886,6 +2186,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Login/SignerValues", testSignerValues);
 	run("Login/Relay", testRelay);
 	run("Login/OldExchange", testOldExchange);
+	run("Login/Logarithms", testLogarithms);
 	run("Login/SignerName", testSignerName);
 	run("Login/StaleLock", testStaleLock);
 	run("Login/Idle", testIdle);

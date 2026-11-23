@@ -194,11 +194,21 @@ sign(): (string, string)
 
 	# The digest the caller reads to the operator: the two keys and
 	# the blinded certificate under SHA-256 (it was MD5; what it must
-	# resist is somebody else's request showing this caller's digest).
-	state = kr->sha256(mypkbuf, len mypkbuf, nil, nil);
-	kr->sha256(hisPKbuf, len hisPKbuf, nil, state);
-	digest := array[Keyring->SHA256dlen] of byte;
-	kr->sha256(certbuf, len certbuf, digest, state);
+	# resist is somebody else's request showing this caller's digest),
+	# or SHA-384 with a key whose certificates are under it (ML-DSA,
+	# SLH-DSA: CNSA 2.0's hash).
+	digest: array of byte;
+	if(certhash(info.mysk) == "sha384"){
+		state = kr->sha384(mypkbuf, len mypkbuf, nil, nil);
+		kr->sha384(hisPKbuf, len hisPKbuf, nil, state);
+		digest = array[Keyring->SHA384dlen] of byte;
+		kr->sha384(certbuf, len certbuf, digest, state);
+	}else{
+		state = kr->sha256(mypkbuf, len mypkbuf, nil, nil);
+		kr->sha256(hisPKbuf, len hisPKbuf, nil, state);
+		digest = array[Keyring->SHA256dlen] of byte;
+		kr->sha256(certbuf, len certbuf, digest, state);
+	}
 
 	# save sum and blinded cert in a file, which must not be there
 	fd := sys->create(file, Sys->OWRITE|Sys->OEXCL, 8r600);

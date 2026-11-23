@@ -46,7 +46,7 @@ maxconn := 64;	# -n: loginds in an exchange at once
 steps := 0;	# messages had from the client: the stalker's sign of life
 
 #
-# The exchange is login(6)'s, version 2; the pieces both ends compute
+# The exchange is login(6)'s, version 3; the pieces both ends compute
 # (the groups, the keystream, the keys, the rule for names) and the
 # count of failed attempts are login(2)'s, in appl/lib/login.b, where
 # the reasons are.
@@ -193,9 +193,13 @@ dologin1(c: ref Sys->Connection): string
 		return "can't get hello: "+err;
 	steps++;
 	if(len hello == 32 || len hello == 44)
-		return "signer speaks login version 2; update the client (login(6))";
+		return "signer speaks login version 3; update the client (login(6))";
+	# version 2 had the same hello and no ML-KEM: a client of it is
+	# told, not answered in the version it cannot read
+	if(len hello == 2+Login->Noncelen && int hello[0] == 2)
+		return "signer speaks login version 3; update the client (login(6))";
 	if(len hello != 2+Login->Noncelen || int hello[0] != Login->Version)
-		return "bad hello: signer speaks login version 2 (login(6))";
+		return "bad hello: signer speaks login version 3 (login(6))";
 	suite := int hello[1];
 	gid := mingroup;
 	case suite {
@@ -292,10 +296,12 @@ dologin1(c: ref Sys->Connection): string
 	if(kr->putbytearray(c.dfd, reply, len reply) < 0)
 		return sys->sprint("can't send masked (2**r0 mod p): %r");
 
-	# user->CA: 2**r1 mod p and the client's proof.  Nothing made from
-	# the secret leaves here before the proof is checked: what was sent
-	# next under the secret's keys let a client that had chosen r1 try
-	# passwords against it at leisure.
+	# user->CA: 2**r1 mod p and the client's ML-KEM encapsulation key,
+	# its seed under the keystream of the password and the secret.
+	# Nothing made from the secrets leaves here before the client's
+	# proof is checked: what was sent next under the secret's keys let a
+	# client that had chosen r1 try passwords against it at leisure.
+	(eklen, nil) := login->kemsizes(suite);
 	msg: array of byte;
 	(msg, err) = kr->getbytearray(c.dfd);
 	if(err != nil){
@@ -303,7 +309,7 @@ dologin1(c: ref Sys->Connection): string
 		return "can't get 2**r1 mod p: "+err;
 	}
 	steps++;
-	if(len msg != n+hlen){
+	if(len msg != n+eklen){
 		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
 		return "bad Diffie-Hellman message";
 	}
@@ -320,12 +326,47 @@ dologin1(c: ref Sys->Connection): string
 		return "bad Diffie-Hellman value";
 	}
 	z := login->bebytes(y.expmod(r0.shl(1), p), n);
-	(cproof, sproof, sk) := login->keys(suite, name, pw, hello, reply, msg[0:n], z);
-	wipe = z :: sproof :: sk :: wipe;
+	wipe = z :: wipe;
+
+	# The key as the password unmasks it, and a ciphertext for it.  A
+	# key Keyring refuses (FIPS 203's check of its coefficients, which
+	# are in clear and no function of the password) is refused whatever
+	# the password: that says nothing a guess could use.
+	ek := array[eklen] of byte;
+	ek[0:] = msg[n:n+eklen-Login->Rholen];
+	ek[eklen-Login->Rholen:] = login->kemmask(suite, gid, name, pw, hello[2:], reply[3:3+Login->Noncelen], z, msg[n+eklen-Login->Rholen:]);
+	(ct, k) := login->kemencaps(suite, ek);
+	if(ct == nil || k == nil){
+		auditlog("authfail", sys->sprint("user=%s reason=badvalue", auditval(name)));
+		return "bad ML-KEM key";
+	}
+	wipe = k :: wipe;
+
+	# CA->user: the ciphertext.  It is not made from the secrets but
+	# for a key the password chose: a client that guessed the password
+	# can open it, and one that did not has only ML-KEM's implicit
+	# rejection, and one guess spent.
+	if(kr->putbytearray(c.dfd, ct, len ct) < 0)
+		return sys->sprint("can't send ML-KEM ciphertext: %r");
+
+	# user->CA: the client's proof
+	cp: array of byte;
+	(cp, err) = kr->getbytearray(c.dfd);
+	if(err != nil){
+		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
+		return "can't get proof: "+err;
+	}
+	steps++;
+	if(len cp != hlen){
+		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
+		return "bad proof message";
+	}
+	(cproof, sproof, sk) := login->keys(suite, name, pw, hello, reply, msg, ct, z, k);
+	wipe = sproof :: sk :: wipe;
 
 	# A name that cannot log in: no client has the stand-in, so none
 	# has the proof; if one did, it is still refused, uncleared, unsigned.
-	if(why != nil || !login->same(cproof, msg[n:])){
+	if(why != nil || !login->same(cproof, cp)){
 		if(why == nil)
 			auditlog("authfail", sys->sprint("user=%s reason=secret", auditval(name)));
 		return "name or secret incorrect";

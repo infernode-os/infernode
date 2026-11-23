@@ -134,6 +134,41 @@ hasprefix(a: array of byte, s: string): int
 	return 1;
 }
 
+# secstore version 5's key derivation (PAK5) against answers made by
+# Python from its description (tests/host/secstore/pak5vectors.py)
+ramp(mul, add, n: int): array of byte
+{
+	a := array[n] of byte;
+	for(i := 0; i < n; i++)
+		a[i] = byte (mul*i + add);
+	return a;
+}
+
+hexs(a: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len a; i++)
+		s += sys->sprint("%.2ux", int a[i]);
+	return s;
+}
+
+testPak5Vectors(t: ref T)
+{
+	m := secstore->pak5mask("alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(19, 6, 32));
+	t.assertseq(hexs(m), "0ebe324c5199ee7e72b6cf67a4db3dc0adfa38c909538ab9190b1c62048917af", "the masked ML-KEM seed");
+	again := secstore->pak5mask("alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", m);
+	t.assertseq(hexs(again), hexs(ramp(19, 6, 32)), "masked again it is the seed");
+	(ps, pc, sess) := secstore->pak5keys("alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 5, 32));
+	t.assertseq(hexs(ps), "2ba2357fccbb9dc4b4b992984eb6f0dfb4bea19b27b85a2e2485595d3a7ac2dee9244b383fa28c28f7292cfeaf86bf32", "the server's proof");
+	t.assertseq(hexs(pc), "c8e4b85e9844e2e148a4b3ee24aa16312c2aa85bb3d77db6ae5516a8be5829fe79e7fbaabe53be4f6a955d9670162078", "the client's proof");
+	t.assertseq(hexs(sess), "1eb6f49509ef9ba43cbb0b3e19c45dbf9e4fdf73d9c873a302a89bc8c68836363990ba8e61c4bf9d688d3294bfb0a621", "the session's secret");
+	# each input changes it
+	(ps2, nil, nil) := secstore->pak5keys("alice", "secstore", "m-text", "mu-text", "sigma-text", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 6, 32));
+	t.assert(hexs(ps2) != hexs(ps), "another ML-KEM secret, another proof");
+	(ps2, nil, nil) = secstore->pak5keys("alice", "secstore", "m-text", "mu-text", "sigma-texT", "Hi-text", ramp(5, 3, 1568), ramp(13, 4, 1568), ramp(17, 5, 32));
+	t.assert(hexs(ps2) != hexs(ps), "another PAK secret, another proof");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -161,6 +196,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SGCM1Compat", testSGCM1Compat);
 	run("SGCM2UserBinding", testSGCM2UserBinding);
 	run("VerifierFormats", testVerifierFormats);
+	run("Pak5Vectors", testPak5Vectors);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

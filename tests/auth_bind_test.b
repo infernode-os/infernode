@@ -46,7 +46,7 @@ AuthBindTest: module
 SRCFILE: con "/tests/auth_bind_test.b";
 PLAIN: con "what-the-client-wrote";
 INTRUDER: con "what-the-carrier-wrote";
-VERSION: con "infernode-auth 2";
+VERSION: con "infernode-auth 3";
 
 passed := 0;
 failed := 0;
@@ -490,17 +490,17 @@ testRefusalSaysWhy(t: ref T)
 
 confirmkey(secret: array of byte): array of byte
 {
-	l := array of byte "infernode auth 2 confirm";
-	k := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(l, len l, secret, k, nil);
+	l := array of byte "infernode auth 3 confirm";
+	k := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(l, len l, secret, k, nil);
 	return k;
 }
 
 mac(key: array of byte, text: string): string
 {
 	b := array of byte text;
-	d := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(b, len b, key, d, nil);
+	d := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(b, len b, key, d, nil);
 	s := "";
 	for(i := 0; i < len d; i++)
 		s += sys->sprint("%.2ux", int d[i]);
@@ -524,7 +524,7 @@ handclient(alg, offered: string, bound: int, fd: ref Sys->FD, res: chan of strin
 			return;
 		}
 		if(bound) {
-			l := array of byte ("infernode auth 2 ssl\n" + alg + "\n" + offered);
+			l := array of byte ("infernode auth 3 ssl\n" + alg + "\n" + offered);
 			k := array[Keyring->SHA384dlen] of byte;
 			kr->hmac_sha384(l, len l, secret, k, nil);
 			secret = k;

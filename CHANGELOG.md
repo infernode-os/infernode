@@ -20,6 +20,33 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **Post-quantum key establishment for the password protocols (CNSA
+  2.0).** login(6) and secstore's PAK each had a classical
+  Diffie-Hellman exchange alone: a party with a quantum computer and a
+  recording of one login could find the password and read the session.
+  Each now runs ML-KEM beside it, the client's encapsulation key's seed
+  masked under the password and the Diffie-Hellman secret, so a guess is
+  checked only through the ML-KEM secret (one guess in each login an
+  impersonator takes part in, whether or not it can take logarithms),
+  and the session is made from both secrets. In CNSA mode ML-KEM-1024
+  and SHA-384 throughout. auth(2)'s confirmation of the ssl algorithm
+  is HMAC-SHA-384. Not compatible:
+  - **Login is version 3** (login(6)): suite 1 adds ML-KEM-768, suite 2
+    (CNSA) ML-KEM-1024, and there is a fourth and fifth message. A
+    version 2 end is told which version is spoken. Update logind and
+    every client together; keys, certificates and accounts are
+    unchanged.
+  - **secstore speaks version 5** (secstore(2)): version 4's account
+    and verifier, with ML-KEM-1024 and SHA-384 in the exchange.
+    secstored refuses the version 4 exchange, saying so; accounts at
+    version 4 need nothing. In CNSA mode client and server speak
+    version 5 alone, and an account still at version 1 or 3 is not
+    moved in the mode: log in once outside it.
+  - **auth(2)'s exchange is version 3** (`infernode-auth 3`): its
+    confirmation is HMAC-SHA-384 where it was HMAC-SHA-256. Every
+    authenticated 9P connection between a node updated and one not is
+    refused, saying the other end is of another version.
+
 - **The security review's second round: what the first left, closed.**
   The fixes and their tests are in `CLAUDE.md`'s table. What is not
   compatible with 0.11.0:

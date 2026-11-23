@@ -45,10 +45,11 @@ Login: module
 	okname:	fn(name: string): string;
 
 	# login(6)'s exchange
-	Version:	con 2;
-	Chacha:	con 1;	# suites: ChaCha20 and SHA-256
-	Aesgcm:	con 2;	# AES-256-GCM and SHA-384 (CNSA)
+	Version:	con 3;
+	Chacha:	con 1;	# suites: ChaCha20, SHA-256 and ML-KEM-768
+	Aesgcm:	con 2;	# AES-256-GCM, SHA-384 and ML-KEM-1024 (CNSA)
 	Noncelen:	con 32;
+	Rholen:	con 32;	# the seed at an ML-KEM encapsulation key's end (FIPS 203)
 	# a group's prime and its length in bytes; nil for none of login(6)'s
 	group:	fn(id: int): (ref Keyring->IPint, int);
 	exponent:	fn(p: ref Keyring->IPint): ref Keyring->IPint;	# uniform in 1..(p-1)/2-1
@@ -57,8 +58,18 @@ Login: module
 	nonce:	fn(): array of byte;
 	# x under the password's keystream, and back
 	mask:	fn(suite, group: int, name: string, pw, cnonce, snonce, x: array of byte): array of byte;
+	# the suite's ML-KEM: its encapsulation key's and ciphertext's lengths,
+	# and its three operations (nil where Keyring refuses a key or
+	# ciphertext, as it does an encapsulation key that is not one)
+	kemsizes:	fn(suite: int): (int, int);
+	kemkeygen:	fn(suite: int): (array of byte, array of byte);	# (ek, dk)
+	kemencaps:	fn(suite: int, ek: array of byte): (array of byte, array of byte);	# (ct, k)
+	kemdecaps:	fn(suite: int, dk, ct: array of byte): array of byte;	# k
+	# the encapsulation key's seed under a keystream of the password and
+	# the Diffie-Hellman secret, and back
+	kemmask:	fn(suite, group: int, name: string, pw, cnonce, snonce, z, rho: array of byte): array of byte;
 	# the client's proof, the signer's, and the session's secret
-	keys:	fn(suite: int, name: string, pw, hello, reply, share, z: array of byte):
+	keys:	fn(suite: int, name: string, pw, hello, reply, share, ct, z, k: array of byte):
 			(array of byte, array of byte, array of byte);
 	same:	fn(a, b: array of byte): int;	# equal, in time that does not say where not
 

@@ -8,8 +8,8 @@
  * three times. Upstream stirred a pool with clock jitter and handed out
  * what was in it. #1051 made the rule that a secret comes only from a
  * hardware generator, and kept it by reading the generator for every
- * byte asked for: at the hardware's speed (an RNG200 gives about
- * 190 KB/s), with nothing behind it, and a key made while the generator
+ * byte asked for: at the hardware's speed (a Pi 4's RNG200 gave
+ * 79 KB/s through hwrandom, measured), with nothing behind it, and a key made while the generator
  * had nothing waited holding the Dis VM, so every program on it stopped
  * too. So a deterministic generator came to stand between the hardware
  * and every reader, as in Linux, the BSDs and 9front; it was ChaCha20,

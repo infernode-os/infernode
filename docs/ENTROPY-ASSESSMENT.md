@@ -121,6 +121,14 @@ fail with their reason.
   fine but whose bits are structured (an upper bit stuck, say) is credited
   far less than its bytes' entropy: three random bits a byte is credited
   1.06. When a figure is low, the two parts say which.
+- One run can come out lower than the rest by chance. The Pi 4's third run
+  was credited 6.638 where the others had 7.2: one estimator (MultiMCW,
+  90B 6.3.7) saw four correct predictions in a row where the others saw
+  three, a local estimate from a single run that comes about one time in
+  thousands. Its words, blocks and per-byte counts were all as chance has
+  them. A low run is a reason for more runs, not for a lower claim on one.
+- The rate is the board's: the Pi 4's RNG200 gave 79 KB/s through
+  `hwrandom`, not the 190 KB/s this file once expected.
 - The kernel claims 4. A board credited at least that, with the restart
   test passed, keeps `Seedbytes` and the cutoffs as they are. One credited
   less needs them made from its own figure, before any key it made is
@@ -130,7 +138,7 @@ fail with their reason.
 
 | Board | Serial | Date | Credited (bits/byte) | IID | Restart | Verdict | Report |
 |-------|--------|------|---------------------|-----|---------|---------|--------|
-| Pi 4B | | | | | | not yet run | |
+| Pi 4B (rev 1.5 by earlier notes, not read this run) | not read | 2026-11-23 | 6.638 (three runs: 7.215, 7.243, 6.638) | passed, all three | passed, 1000 boots (watchdog resets, one power cycle among them) | PASS | Kept privately with the raw files; built from `5f0f4fee` |
 | Pi 5 | | | | | | not yet run | |
 | Pi 3B+ | | | | | | not yet run | |
 | Pi Zero 2 W | | | | | | not yet run | |

@@ -15,7 +15,8 @@
  * /n/local, so files on other drives are passed over.
  *
  * Either launcher starts the emu with no console window and sends its
- * output to a log (%TEMP%\xenith.log or XEN_LOG; %TEMP%\infernode.log),
+ * output to a log (XEN_LOG or %TEMP%\xen.log, as for xen; InferNode's
+ * %TEMP%\infernode.log),
  * and says so in a message box when the emu fails to start or stops at
  * once: a missing DLL otherwise left nothing on the screen at all.
  *
@@ -82,8 +83,8 @@ inlocal(const char *path, char *buf, int n)
 
 /*
  * The emu's output, which a Windows-subsystem launcher has nowhere to
- * show: XEN_LOG (Xenith, as for tools/xen) or %TEMP%\xenith.log /
- * infernode.log, added to, between a line marking the start and one
+ * show: XEN_LOG or %TEMP%\xen.log for Xenith, as for xen, and
+ * %TEMP%\infernode.log for InferNode, added to, between a line marking the start and one
  * giving the emu's exit status.  The handle is inherited by the emu.
  */
 static HANDLE
@@ -105,7 +106,7 @@ openlog(char *path, int n)
 		if (GetTempPathA(sizeof(tmp), tmp) == 0)
 			strcpy(tmp, ".\\");
 #ifdef XENITH
-		_snprintf(path, n, "%sxenith.log", tmp);
+		_snprintf(path, n, "%sxen.log", tmp);
 #else
 		_snprintf(path, n, "%sinfernode.log", tmp);
 #endif

@@ -10,6 +10,12 @@ include "string.m";
 	str: String;
 include "filter.m";
 	deflate: Filter;
+include "draw.m";
+	draw: Draw;
+	Display, Image, Rect: import draw;
+include "bufio.m";
+include "imagefile.m";
+include "imgload.m";
 include "visrec.m";
 
 init(): string
@@ -322,6 +328,74 @@ chunk(fd: ref Sys->FD, kind: string, data: array of byte): string
 	b[8:] = data;
 	be32(b, 8 + len data, crc32(0, b[4:8 + len data]));
 	return writeall(fd, b);
+}
+
+readall(fd: ref Sys->FD): array of byte
+{
+	b := array[64*1024] of byte;
+	n := 0;
+	for(;;){
+		if(n == len b){
+			nb := array[2*len b] of byte;
+			nb[0:] = b;
+			b = nb;
+		}
+		m := sys->read(fd, b[n:], len b - n);
+		if(m <= 0)
+			break;
+		n += m;
+	}
+	return b[0:n];
+}
+
+# an image(6) header's field: eleven characters, blank-padded
+field(b: array of byte, i: int): string
+{
+	s := string b[12*i:12*i+11];
+	for(j := 0; j < len s && s[j] == ' '; j++)
+		;
+	return s[j:];
+}
+
+readrgb(fd: ref Sys->FD): (array of byte, int, int, string)
+{
+	b := readall(fd);
+	if(len b < 60)
+		return (nil, 0, 0, "not an image: too short");
+	if(string b[0:11] != "compressed\n" && field(b, 0) == "r8g8b8"){
+		x0 := int field(b, 1);
+		y0 := int field(b, 2);
+		w := int field(b, 3) - x0;
+		h := int field(b, 4) - y0;
+		if(w < 1 || h < 1 || len b < 60 + 3*w*h)
+			return (nil, 0, 0, "not an image: short or no size");
+		return (b[60:60+3*w*h], w, h, nil);
+	}
+	# anything else as the draw device reads it
+	if(draw == nil)
+		draw = load Draw Draw->PATH;
+	if(draw == nil)
+		return (nil, 0, 0, sys->sprint("cannot load Draw: %r"));
+	d := Display.allocate(nil);
+	if(d == nil)
+		return (nil, 0, 0, sys->sprint("this image(6) needs a display: %r"));
+	il := load Imgload Imgload->PATH;
+	if(il == nil)
+		return (nil, 0, 0, sys->sprint("cannot load Imgload: %r"));
+	il->init(d);
+	(img, e) := il->readimagedata(b, "image.bit");	# uncompressed image(6) has no magic: known by its name
+	if(img == nil)
+		return (nil, 0, 0, "not an image: " + e);
+	w := img.r.dx();
+	h := img.r.dy();
+	rgb := d.newimage(Rect((0, 0), (w, h)), Draw->RGB24, 0, Draw->Black);
+	if(rgb == nil)
+		return (nil, 0, 0, sys->sprint("cannot make the picture: %r"));
+	rgb.draw(rgb.r, img, nil, img.r.min);
+	pix := array[3*w*h] of byte;
+	if(rgb.readpixels(rgb.r, pix) != len pix)
+		return (nil, 0, 0, sys->sprint("cannot read the picture: %r"));
+	return (pix, w, h, nil);
 }
 
 # PNG: 8-bit RGB, each row unfiltered, the whole through deflate's zlib

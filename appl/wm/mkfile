@@ -120,6 +120,7 @@ SYSMODULES=\
 	i420.m\
 	layers.m\
 	parread.m\
+	visrec.m\
 
 DISBIN=$ROOT/dis/wm
 

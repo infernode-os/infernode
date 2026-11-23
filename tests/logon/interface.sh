@@ -12,6 +12,8 @@
 #		twice); then the Desktop: its windows, a file plumbed
 #	again	the login screen as it next shows
 #	which	what the boot started, without the login screen
+#	themed	the login screen as it first shows and with the interface
+#		at $x $y clicked, in the theme the boot names
 #	shown	the keyboard on the screen shown by a touch (wm/osk, as the
 #		boot starts it for the login screen)
 #	touch	that, then the interface chosen by a touch at $x $y and
@@ -57,6 +59,14 @@ fn tapkey {
 	pat='^'^$1^' '
 	l=`{grep $pat /tmp/keys}
 	touch ${expr ${index 2 $l} ${index 4 $l} + 2 /} ${expr ${index 3 $l} ${index 5 $l} + 2 /}
+}
+if {~ $phase themed} {
+	sleep 10
+	shot themed-$theme-start
+	echo m $x $y 1 > /dev/pointer
+	echo m $x $y 0 > /dev/pointer
+	echo m 2 2 > /dev/pointer
+	shot themed-$theme-click
 }
 if {~ $phase look again} {
 	sleep 10

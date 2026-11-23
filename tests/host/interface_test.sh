@@ -4,7 +4,9 @@
 # lib/lucifer/boot.sh starts from it (tests/logon/interface.sh drives
 # each boot), by pixel and by what each interface serves:
 #
-#   - the screen shows both under the field, Assistant chosen at first
+#   - the screen shows both under the field, Assistant chosen at first,
+#     and under them the line the boot gives the one chosen (-d), at
+#     least 4.5:1 against the background in every theme, light and dark
 #   - a click on Desktop chooses it, and keys typed after the click
 #     still go to the password field; up and down choose round
 #   - skipped there (Escape twice), the boot starts the Desktop: wm/wm
@@ -128,6 +130,16 @@ X=$1 Y=$2 PY0=$3 PY1=$4 FY=$5
 echo "PASS: the picker is under the field (row $PY0-$PY1, Desktop at $X $Y)"
 
 boot pick "phase=pick; x=$X; y=$Y;"
+# the line under the picker in each theme (the theme named by a file
+# bound over the tree's current, which is left alone)
+themes=$(cd lib/lucifer/theme && ls | grep -v '^current$')
+for t in $themes; do
+	echo $t > "$ROOT/$T/theme.$t"
+	home=home-$t
+	mkdir -p "$ROOT/$T/$home"
+	boot themed-$t "phase=themed; theme=$t; x=$X; y=$Y; bind /$T/theme.$t /lib/lucifer/theme/current;"
+done
+home=home
 boot again 'phase=again;'
 cp "$ROOT/$T/home/.infernode/usr/inferno/lib/interface" "$ROOT/$T/kept" 2>/dev/null || :
 boot skip 'phase=which; skiplogon=1;'
@@ -188,6 +200,39 @@ check(same('click', 'typed', *pick) and not same('click', 'typed', *field),
 check(same('start', 'up', *pick), 'up chooses the interface before it (Assistant)')
 check(same('click', 'down', *pick), 'down chooses the one after (Desktop)')
 check(same('down', 'again', *pick), 'the next login screen has Desktop chosen')
+about = (y1 + 6, y1 + 40)
+check(band(im['start'], *about) != [im['start'].px(4, 4)] * (W * (about[1] - about[0]))
+      and not same('start', 'click', *about) and same('start', 'up', *about) and same('click', 'down', *about),
+      'under the picker a line says what the interface chosen is, and changes with the choice')
+sys.exit(failed)
+PY
+
+python3 - "$ROOT" "$T" "$W" "$PY1" $themes <<'PY' || failed=1
+import sys, os
+root, T, W, y1, themes = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5:]
+sys.path.insert(0, os.path.join(root, 'tools'))
+import p9img2png as P
+d = os.path.join(root, T)
+def lum(p):	# p as px gives it: RRGGBB in hex
+    v = [int(p[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    c = [x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in v]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+def ratio(a, b):
+    a, b = sorted((lum(a), lum(b)))
+    return (b + 0.05) / (a + 0.05)
+failed = 0
+for t in themes:
+    worst = None
+    for s in ('start', 'click'):
+        im = P.load(os.path.join(d, 'themed-%s-%s.img' % (t, s)))
+        bg = im.px(4, 4)
+        # the text's own colour: the pixel of the line furthest from the background
+        ink = [im.px(x, y) for y in range(y1 + 6, y1 + 40) for x in range(W) if im.px(x, y) != bg]
+        r = max((ratio(p, bg) for p in ink), default=0)
+        worst = r if worst is None else min(worst, r)
+    ok = worst >= 4.5
+    print(('PASS: ' if ok else 'FAIL: ') + 'in %s the line under the picker is %.1f:1 against the background' % (t, worst))
+    if not ok: failed = 1
 sys.exit(failed)
 PY
 

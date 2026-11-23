@@ -32,8 +32,9 @@ if {! ~ $osk off} {
 #	Assistant	Lucia, the agent-first interface (lucifer), the default
 #	Desktop	windows (wm/wm), a shell to begin with
 #
-# wm/logon shows them and writes the name chosen to $interfacefile; it
-# knows nothing of what each is, which is this script's, below.  The
+# wm/logon shows them, each with the line $about gives it, and writes
+# the name chosen to $interfacefile; it knows nothing of what each is,
+# which is this script's, below.  The
 # file is the user's (/usr/<user>/lib or, for a user with no home of
 # their own,
 # /usr/inferno/lib, kept in ~/.infernode as the plumbing rules are), so
@@ -46,6 +47,7 @@ if {! ~ $osk off} {
 # naming Lucia is taken for Assistant.
 interfaces=(Assistant Desktop)
 if {~ $infmobile 1} {interfaces=(Assistant)}
+about=(-d 'Assistant=Agent-first. Voice, touch and keyboard input. Adaptive layout.' -d 'Desktop=Overlapping windows, pointer input, command shell.')
 interfacefile=/usr/^$user^/lib/interface
 if {! ftest -d /usr/^$user^/lib} {
 	mkdir -p /usr/inferno/lib >[2] /dev/null
@@ -73,7 +75,7 @@ if {! ftest -d /usr/^$user^/lib} {
 # one with. ($status is copied first: `if` resets it from every
 # condition it evaluates, the `~` included.)
 if {! ~ $skiplogon 1} {
-	if {wm/logon -i $interfacefile $interfaces} {
+	if {wm/logon -i $interfacefile $about $interfaces} {
 		echo 'boot: logged in — secstore keys are in factotum'
 	}{
 		why=$status

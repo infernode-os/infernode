@@ -46,11 +46,13 @@ implement WmLogon;
 # The interface.  The boot script may name the interfaces it can start,
 # and a file the choice is kept in:
 #
-#	wm/logon [-i file] [interface ...]
+#	wm/logon [-i file] [-d interface=text ...] [interface ...]
 #
 # With two or more, the form shows them under the field, the one the
 # file names chosen (the first if it names none of them); a click or
-# the up and down arrows choose another.  When the screen ends with a
+# the up and down arrows choose another.  -d gives an interface a line
+# that says what it is, shown under them while it is the one chosen
+# (and left out above the keyboard on a small screen, as the logo is).  When the screen ends with a
 # login or a skip, the name chosen is written to the file, a line of
 # text, for the boot script to read and start.  This screen starts
 # nothing itself and knows nothing of what an interface is: which there
@@ -161,6 +163,8 @@ SKIPPED: con "skipped";
 # The interfaces the boot script named, and the file the choice is kept in.
 interfaces: array of string;
 interfacefile: string;
+# what -d says of each, by the index in interfaces; nil for none
+abouts: array of string;
 
 stderr: ref Sys->FD;
 
@@ -281,6 +285,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		}
 	p := <-ptrch =>
 		tk->pointer(top, *p);
+		showabout();
 		# a click on an interface must not take the keys from the field
 		if(state != STATE_LOGIN_FAILED)
 			tk->cmd(top, "focus .f.pw");
@@ -311,7 +316,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: wm/logon [-i file] [interface ...]\n");
+	sys->fprint(stderr, "usage: wm/logon [-i file] [-d interface=text ...] [interface ...]\n");
 	raise "fail:usage";
 }
 
@@ -321,15 +326,46 @@ args(argv: list of string)
 	if(arg == nil)
 		return;
 	arg->init(argv);
+	dl: list of string;
 	while((o := arg->opt()) != 0)
 		case o {
 		'i' =>	interfacefile = arg->earg();
+		'd' =>	dl = arg->earg() :: dl;
 		* =>	usage();
 		}
 	l := arg->argv();
 	interfaces = array[len l] of string;
 	for(i := 0; l != nil; l = tl l)
 		interfaces[i++] = hd l;
+	abouts = array[len interfaces] of string;
+	for(; dl != nil; dl = tl dl){
+		d := hd dl;
+		j := 0;
+		while(j < len d && d[j] != '=')
+			j++;
+		if(j == len d)
+			usage();
+		for(k := 0; k < len interfaces; k++)
+			if(interfaces[k] == d[0:j] && abouts[k] == nil)
+				abouts[k] = d[j+1:];
+	}
+}
+
+# What -d said of the interface chosen, or nil.
+chosenabout(): string
+{
+	c := choseninterface();
+	for(i := 0; i < len interfaces; i++)
+		if(interfaces[i] == c)
+			return abouts[i];
+	return nil;
+}
+
+# The line under the interfaces made the chosen one's.
+showabout()
+{
+	if(top != nil && len interfaces > 1)
+		tk->cmd(top, ".f.ifabout configure -text " + tk->quote(chosenabout()));
 }
 
 # The interface the form shows chosen.
@@ -363,6 +399,7 @@ nextinterface(d: int)
 		i++;
 	i = (i + d + n) % n;
 	tk->cmd(top, ".f.iface.s" + string i + " invoke");
+	showabout();
 	tk->cmd(top, "update");
 }
 
@@ -712,6 +749,7 @@ buildform(): int
 	accent := int 16rff5500ff;
 	text := int 16rffffffff;
 	dim := int 16r666666ff;
+	text2 := int 16rbbbbbbff;
 	red := int 16rff4444ff;
 	if(lucitheme != nil){
 		th := lucitheme->gettheme();
@@ -721,6 +759,7 @@ buildform(): int
 			accent = th.accent;
 			text = th.text;
 			dim = th.dim;
+			text2 = th.text2;
 			red = th.red;
 		}
 	}
@@ -777,6 +816,8 @@ buildform(): int
 		"label .f.iface.l -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf
 			+ " -text {Interface:}",
 		"pack .f.iface.l -side left -padx 6",
+		# text2, not dim: small text, and dim is under 4.5:1 in some themes
+		"label .f.ifabout -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(text2) + smallf,
 		"frame .b -bd 0 -bg " + tkcol(bg),
 		"label .b.version -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
 		"label .b.copy -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
@@ -817,6 +858,7 @@ buildform(): int
 			if(interfaces[si] == chosen)
 				tk->cmd(top, w + " invoke");
 		}
+		showabout();
 	}
 	# There is no window manager to say so: this window has the keyboard.
 	tk->cmd(top, "focus -global 1");
@@ -838,7 +880,7 @@ redraw()
 	if(top == nil)
 		return;
 
-	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2", ".f.iface"}; w != nil; w = tl w)
+	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2", ".f.iface", ".f.ifabout"}; w != nil; w = tl w)
 		tk->cmd(top, "pack forget " + hd w);
 
 	# Above a keyboard on a small screen (the Pi's 800x480 panel) the
@@ -892,8 +934,12 @@ redraw()
 		tk->cmd(top, "focus .f.pw");
 	}
 	# whatever the state: a skip starts the interface chosen too
-	if(len interfaces > 1)
+	if(len interfaces > 1){
 		tk->cmd(top, "pack .f.iface -side top -pady " + string PADDING);
+		# under it, as the logo goes above a keyboard on a small screen
+		if(roomy)
+			tk->cmd(top, "pack .f.ifabout -side top");
+	}
 	tk->cmd(top, "update");
 }
 

@@ -28,6 +28,19 @@ All notable changes to InferNode are documented in this file.
   `chdir("..")` went there, with or without `NODEVS`. The new dot now has
   a name of its own, as the new root has, in the hosted and the native
   kernel. `pwd` after `pctl(NEWNS)` is `/`. `tests/newns_root_test.b`.
+- **Native kernel: removing an IPv6 address could stop neighbour
+  discovery for the others.** 0.11.0 made a conversation's join of a
+  multicast address count once however often it was asked for. IP joins
+  a group once for each local address that needs it, through one
+  conversation, and leaves once for each; a link-local and a global
+  address with the same last three bytes share a solicited-node group,
+  so removing either left the group for both, and solicitations for the
+  one that remained went unanswered. Joins are counted for each
+  conversation again, a leave gives back only a join the conversation
+  made, and a close gives back all of them. The limits 0.11.0 added
+  stay: the list is no longer than 64 addresses, and a conversation
+  cannot release another's. Found by running the same change on 9front;
+  not run on a board. `tests/host/netif_multi_test.sh`.
 
 ## [0.11.0] - 2026-11-19
 

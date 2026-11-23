@@ -327,6 +327,7 @@ _ifmt(Fmt *f)
 	char buf[70], *p, *conv;
 	uvlong vu;
 	ulong u;
+	long sv;
 	int neg, base, i, n, fl, w, isv;
 
 	neg = 0;
@@ -334,6 +335,7 @@ _ifmt(Fmt *f)
 	isv = 0;
 	vu = 0;
 	u = 0;
+	sv = 0;
 	if(f->r == 'p'){
 		u = (ulong)va_arg(f->args, void*);
 		f->r = 'x';
@@ -344,26 +346,41 @@ _ifmt(Fmt *f)
 			vu = va_arg(f->args, uvlong);
 		else
 			vu = va_arg(f->args, vlong);
-	}else if(fl & FmtLong){
-		if(fl & FmtUnsigned)
-			u = va_arg(f->args, ulong);
-		else
-			u = va_arg(f->args, long);
-	}else if(fl & FmtByte){
-		if(fl & FmtUnsigned)
-			u = (uchar)va_arg(f->args, int);
-		else
-			u = (char)va_arg(f->args, int);
-	}else if(fl & FmtShort){
-		if(fl & FmtUnsigned)
-			u = (ushort)va_arg(f->args, int);
-		else
-			u = (short)va_arg(f->args, int);
 	}else{
-		if(fl & FmtUnsigned)
-			u = va_arg(f->args, uint);
-		else
-			u = va_arg(f->args, int);
+		/*
+		 * A signed argument's sign is taken here, at its own width:
+		 * where ulong is wider than long (Windows x64, LLP64: ulong is
+		 * 64 bits and long 32), testing and negating u as a long below
+		 * made LONG_MIN's %ld -18446744071562067968.
+		 */
+		if(fl & FmtLong){
+			if(fl & FmtUnsigned)
+				u = va_arg(f->args, ulong);
+			else
+				sv = va_arg(f->args, long);
+		}else if(fl & FmtByte){
+			if(fl & FmtUnsigned)
+				u = (uchar)va_arg(f->args, int);
+			else
+				sv = (char)va_arg(f->args, int);
+		}else if(fl & FmtShort){
+			if(fl & FmtUnsigned)
+				u = (ushort)va_arg(f->args, int);
+			else
+				sv = (short)va_arg(f->args, int);
+		}else{
+			if(fl & FmtUnsigned)
+				u = va_arg(f->args, uint);
+			else
+				sv = va_arg(f->args, int);
+		}
+		if(!(fl & FmtUnsigned)){
+			if(sv < 0){
+				u = -(ulong)sv;
+				neg = 1;
+			}else
+				u = sv;
+		}
 	}
 	conv = "0123456789abcdef";
 	switch(f->r){
@@ -386,14 +403,9 @@ _ifmt(Fmt *f)
 	default:
 		return -1;
 	}
-	if(!(fl & FmtUnsigned)){
-		if(isv && (vlong)vu < 0){
-			vu = -(vlong)vu;
-			neg = 1;
-		}else if(!isv && (long)u < 0){
-			u = -(long)u;
-			neg = 1;
-		}
+	if(isv && !(fl & FmtUnsigned) && (vlong)vu < 0){
+		vu = -(vlong)vu;
+		neg = 1;
 	}
 	p = buf + sizeof buf - 1;
 	n = 0;

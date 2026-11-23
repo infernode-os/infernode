@@ -274,6 +274,8 @@ struct ecodes {
 	EXCEPTION_STACK_OVERFLOW,		"stack overflow",
 	EXCEPTION_INVALID_DISPOSITION,		"invalid disposition",
 	EXCEPTION_GUARD_PAGE,			"guard page violation",
+	STATUS_FLOAT_MULTIPLE_FAULTS,		"floating point exception",
+	STATUS_FLOAT_MULTIPLE_TRAPS,		"floating point exception",
 	0,					nil
 };
 
@@ -290,25 +292,35 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 	// pc = ureg->ContextRecord->Eip;
 
 	/*
+	 * A fault in compiled code: R.PC and R.FP are stale there (the JIT
+	 * stores them only where it leaves compiled code), so handler()
+	 * must be told the faulting instruction and the frame it ran in,
+	 * which the JIT keeps in RBX (RRFP, comp-amd64.c), as
+	 * emu/Linux/os.c does with jitfaultfp.  With R.FP stale, a fault
+	 * in a function called from compiled code was caught in its
+	 * caller's frame, which then freed the wrong frames ("alloc:D2B",
+	 * jit_ownhandler_test), or no handler matched and the program died.
+	 */
+#if defined(_AMD64_)
+	jitfaultfp((uintptr)ureg->ContextRecord->Rip, (uintptr)ureg->ContextRecord->Rbx);
+#elif defined(_ARM64_)
+	jitfault((uintptr)ureg->ContextRecord->Pc);
+#endif
+
+	/*
 	 * A nil address is a Limbo nil dereference: the program's
 	 * "dereference of nil", with R.PC set from the faulting instruction
 	 * so an exception block around it catches it under the JIT (see
 	 * jitfault).  No dump: that is for faults that are emu's bugs.
 	 */
 	if(code == EXCEPTION_ACCESS_VIOLATION
-	&& isnilfault((uintptr)ureg->ExceptionRecord->ExceptionInformation[1])) {
-#if defined(_AMD64_)
-		jitfault((uintptr)ureg->ContextRecord->Rip);
-#elif defined(_ARM64_)
-		jitfault((uintptr)ureg->ContextRecord->Pc);
-#endif
+	&& isnilfault((uintptr)ureg->ExceptionRecord->ExceptionInformation[1]))
 		disfault(nil, exNilref);
-	}
 
 	/* x86's integer divide traps on zero: the program's "zero divide" (emu/Linux/os.c:trapFPE) */
 	if(code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
 #if defined(_AMD64_)
-		if(jitfault((uintptr)ureg->ContextRecord->Rip))
+		if(jitfaultfp((uintptr)ureg->ContextRecord->Rip, (uintptr)ureg->ContextRecord->Rbx))
 			disfault(nil, exZdiv);
 #endif
 	}
@@ -371,6 +383,8 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 	case EXCEPTION_FLT_OVERFLOW:
 	case EXCEPTION_FLT_STACK_CHECK:
 	case EXCEPTION_FLT_UNDERFLOW:
+	case STATUS_FLOAT_MULTIPLE_FAULTS:
+	case STATUS_FLOAT_MULTIPLE_TRAPS:
 		/* clear exception flags and ensure safe empty state */
 #ifdef _AMD64_
 		_clearfp();
@@ -382,6 +396,50 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 	disfault(nil, name);
 	/* not reached */
 	return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+/*
+ * The unhandled-exception filter is reached only after Windows has
+ * looked for a handler in every frame on the stack, unwinding each by
+ * its function table.  Compiled code has none (emu/Nt/jit-unwind.c's
+ * is not right yet), so a fault in C called from compiled code (a
+ * builtin, or the VM's C for an instruction compiled code punts, such
+ * as cvtca of a nil ref's string) could not be unwound past the
+ * compiled frame, and Windows ended emu (0xC0000005) before the filter
+ * ran; a fault in compiled code itself survived only as a leaf.  A
+ * vectored handler is called before that search.  It takes the
+ * faults that are a program's (or emu's own bug, as before) on emu's
+ * own procs, and leaves the rest to the search: other threads (SDL's,
+ * the host's), breakpoints and single steps (a debugger's), a stack
+ * overflow (too little stack left to be handled here), and anything
+ * that is not a hardware fault (C++ exceptions, debug output).
+ */
+static LONG CALLBACK
+VectorHandler(PEXCEPTION_POINTERS ep)
+{
+	if(up == nil)
+		return EXCEPTION_CONTINUE_SEARCH;
+	switch(ep->ExceptionRecord->ExceptionCode){
+	case EXCEPTION_ACCESS_VIOLATION:
+	case EXCEPTION_DATATYPE_MISALIGNMENT:
+	case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+	case EXCEPTION_FLT_DENORMAL_OPERAND:
+	case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+	case EXCEPTION_FLT_INEXACT_RESULT:
+	case EXCEPTION_FLT_INVALID_OPERATION:
+	case EXCEPTION_FLT_OVERFLOW:
+	case EXCEPTION_FLT_STACK_CHECK:
+	case EXCEPTION_FLT_UNDERFLOW:
+	case STATUS_FLOAT_MULTIPLE_FAULTS:
+	case STATUS_FLOAT_MULTIPLE_TRAPS:
+	case EXCEPTION_INT_DIVIDE_BY_ZERO:
+	case EXCEPTION_INT_OVERFLOW:
+	case EXCEPTION_PRIV_INSTRUCTION:
+	case EXCEPTION_IN_PAGE_ERROR:
+	case EXCEPTION_ILLEGAL_INSTRUCTION:
+		return TrapHandler(ep);
+	}
+	return EXCEPTION_CONTINUE_SEARCH;
 }
 
 static void
@@ -480,8 +538,16 @@ libinit(char *imod)
 
 	gethostname(sys, sizeof(sys));
 	kstrdup(&ossysname, sys);
-	if(sflag == 0)
+	if(sflag == 0){
+		/*
+		 * Last among vectored handlers, which all run before the
+		 * search: an earlier one may take a fault that is its own
+		 * (AddressSanitizer commits its shadow memory on an access
+		 * violation).
+		 */
+		AddVectoredExceptionHandler(0, VectorHandler);
 		SetUnhandledExceptionFilter((LPTOP_LEVEL_EXCEPTION_FILTER)TrapHandler);
+	}
 
 	path = getenv("PATH");
 	if(path == nil)

@@ -1,10 +1,10 @@
 #!/bin/sh
 #
-# The login screen's choice of interface, Lucia or Desktop, and what
+# The login screen's choice of interface, Assistant or Desktop, and what
 # lib/lucifer/boot.sh starts from it (tests/logon/interface.sh drives
 # each boot), by pixel and by what each interface serves:
 #
-#   - the screen shows both under the field, Lucia chosen at first
+#   - the screen shows both under the field, Assistant chosen at first
 #   - a click on Desktop chooses it, and keys typed after the click
 #     still go to the password field; up and down choose round
 #   - skipped there (Escape twice), the boot starts the Desktop: wm/wm
@@ -17,11 +17,11 @@
 #     its strip, a touch on Desktop choosing it, a word tapped on the
 #     keys going to the field, the keyboard still shown
 #   - a password: set on the first boot with Desktop chosen, a key put
-#     in factotum and saved to secstore; the next boot, Lucia chosen,
+#     in factotum and saved to secstore; the next boot, Assistant chosen,
 #     unlocks with it and has the key; a wrong one refused (factotum
 #     still empty) and the right one after it taken
-#   - with $skiplogon the boot starts Lucia whatever was chosen;
-#     $interface starts that one; a phone ($infmobile) has Lucia alone
+#   - with $skiplogon the boot starts Assistant whatever was chosen;
+#     $interface starts that one; a phone ($infmobile) has Assistant alone
 #
 # The boots with the login screen have the keyboard on the screen
 # running, as every boot has: it read /dev/pointer, which has one
@@ -133,6 +133,7 @@ cp "$ROOT/$T/home/.infernode/usr/inferno/lib/interface" "$ROOT/$T/kept" 2>/dev/n
 boot skip 'phase=which; skiplogon=1;'
 boot override 'phase=which; skiplogon=1; interface=Desktop;'
 boot phone 'phase=which; skiplogon=1; interface=Desktop; infmobile=1;'
+boot oldname 'phase=which; skiplogon=1; interface=Lucia;'
 
 # a password, in a home where none was set
 home=home3
@@ -184,7 +185,7 @@ check(same('look', 'start', *pick), 'the picker shows the same each boot')
 check(not same('start', 'click', *pick), 'a click on Desktop chooses it')
 check(same('click', 'typed', *pick) and not same('click', 'typed', *field),
       'keys typed after the click go to the password field')
-check(same('start', 'up', *pick), 'up chooses the interface before it (Lucia)')
+check(same('start', 'up', *pick), 'up chooses the interface before it (Assistant)')
 check(same('click', 'down', *pick), 'down chooses the one after (Desktop)')
 check(same('down', 'again', *pick), 'the next login screen has Desktop chosen')
 sys.exit(failed)
@@ -218,16 +219,18 @@ has pick 'boot: interface Desktop'; check $? 'skipped at the screen, the boot st
 has pick '^R windows 1$'; check $? 'the Desktop is wm/wm with a shell window'
 has pick '^R windows 2$'; check $? 'a file plumbed on the Desktop opens in a window of its own'
 [ "$(cat "$ROOT/$T/kept" 2>/dev/null)" = Desktop ]; check $? 'the choice is kept in the user'"'"'s /usr/inferno/lib/interface'
-has skip '^R started Lucia$'; check $? 'with $skiplogon the boot starts Lucia, whatever was chosen'
+has skip '^R started Assistant$'; check $? 'with $skiplogon the boot starts Assistant, whatever was chosen'
 has override '^R started Desktop$'; check $? '$interface starts the interface it names'
-has phone '^R started Lucia$'; check $? 'a phone ($infmobile) has Lucia alone'
+has phone '^R started Assistant$'; check $? 'a phone ($infmobile) has Assistant alone'
 has setpw 'boot: logged in' && has setpw 'boot: interface Desktop' && [ "$(grep '^R key' "$ROOT/$T/setpw.log" | tr '\n' ' ')" = 'R key no R key yes ' ]
 check $? 'a password set on the first boot logs in to the Desktop, and a key added there is in factotum'
-has unlock 'logon: loaded 1 keys from secstore' && has unlock 'boot: interface Lucia' && has unlock '^R key yes$'
-check $? 'the next boot, Lucia chosen, unlocks with the password and has the key back from secstore'
+has unlock 'logon: loaded 1 keys from secstore' && has unlock 'boot: interface Assistant' && has unlock '^R key yes$'
+check $? 'the next boot, Assistant chosen, unlocks with the password and has the key back from secstore'
 [ "$(sed -n '/^R_WAITING/{n;p;}' "$ROOT/$T/retry.log")" = 'R key no' ] && has retry 'boot: logged in' && [ "$(grep '^R key' "$ROOT/$T/retry.log" | tail -1)" = 'R key yes' ]
 check $? 'a wrong password is refused (factotum empty while the screen waits), the right one after it taken'
-for b in pick again skip override phone shown touch setpw unlock retry; do
+has oldname 'boot: interface Assistant' && has oldname '^R started Assistant$'
+check $? 'Lucia, the old name kept in a file or set in $interface, starts Assistant'
+for b in pick again skip override phone oldname shown touch setpw unlock retry; do
 	if grep -q 'R timeout' "$ROOT/$T/$b.log"; then
 		echo "FAIL: the $b boot timed out: $(grep 'R timeout' "$ROOT/$T/$b.log")"
 		failed=1

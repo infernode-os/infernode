@@ -29,21 +29,23 @@ if {! ~ $osk off} {
 # The interfaces the login screen offers, and the file the one chosen is
 # kept in:
 #
-#	Lucia	the agent's three zones (lucifer), the default
+#	Assistant	Lucia, the agent-first interface (lucifer), the default
 #	Desktop	windows (wm/wm), a shell to begin with
 #
 # wm/logon shows them and writes the name chosen to $interfacefile; it
 # knows nothing of what each is, which is this script's, below.  The
 # file is the user's (/usr/<user>/lib or, for a user with no home of
-# their own, /usr/inferno/lib, kept in ~/.infernode as the plumbing
-# rules are), so the interface chosen is the one the screen offers
-# next time.  It is the login screen's: with $skiplogon (the tests',
-# a developer's) the interface is Lucia, as it always was, whatever was
-# chosen there.  $interface, set before this runs, starts that one
-# either way.  A phone or tablet has Lucia alone: wm/wm's windows are not for a
-# touch screen.
-interfaces=(Lucia Desktop)
-if {~ $infmobile 1} {interfaces=(Lucia)}
+# their own,
+# /usr/inferno/lib, kept in ~/.infernode as the plumbing rules are), so
+# the interface chosen is the one the screen offers next time.  It is
+# the login screen's: with $skiplogon (the tests', a developer's) the
+# interface is Assistant, as it always was, whatever was chosen there.
+# $interface, set before this runs, starts that one either way.  A
+# phone or tablet has Assistant alone: wm/wm's windows are not for a
+# touch screen.  Assistant was called Lucia here: a file or $interface
+# naming Lucia is taken for Assistant.
+interfaces=(Assistant Desktop)
+if {~ $infmobile 1} {interfaces=(Assistant)}
 interfacefile=/usr/^$user^/lib/interface
 if {! ftest -d /usr/^$user^/lib} {
 	mkdir -p /usr/inferno/lib >[2] /dev/null
@@ -92,6 +94,7 @@ if {! ~ $#oskpid 0} {kill -g $oskpid >[2] /dev/null}
 if {~ $#interface 0} {
 	if {! ~ $skiplogon 1} {interface=`{cat $interfacefile >[2] /dev/null}}
 }
+if {~ $interface Lucia} {interface=Assistant}
 known=0
 for offered in $interfaces {if {~ $offered $interface} {known=1}}
 if {~ $known 0} {interface=${hd $interfaces}}
@@ -148,7 +151,7 @@ if {~ $interface Desktop} {
 	exit
 }
 
-# Lucia: the GUI services, then lucifer.
+# Assistant (Lucia): the GUI services, then lucifer.
 luciuisrv
 echo activity create Main > /mnt/ui/ctl
 # The messages are activity 0's to hand on: /mnt/msg is the read-only

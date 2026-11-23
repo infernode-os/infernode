@@ -19,7 +19,7 @@
 | [USER-MANUAL.md](USER-MANUAL.md) | **Comprehensive user guide** - namespaces, devices, host integration |
 | [QUICKSTART.md](../QUICKSTART.md) | Get running in 3 commands |
 | [TOUR.md](TOUR.md) | Interactive Veltro feature tour |
-| [LUCIA.md](LUCIA.md) | User and operator guide for Lucia, the three-zone desktop UI |
+| [LUCIA.md](LUCIA.md) | User and operator guide for Lucia, the agent-first interface (Assistant at the login screen) |
 | [VELTRO.md](VELTRO.md) | User and operator guide for Veltro, the AI agent system |
 | [PERSISTENCE.md](PERSISTENCE.md) | What survives updates and why: all of `/usr` is durable, snapshots add history |
 | [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md) | Using a headless InferNode from another one's screen |

@@ -18,7 +18,7 @@
 #		a word tapped on the keyboard's keys
 #	setpw	the first boot's password set (typed twice) with Desktop
 #		chosen; a key added to factotum and saved to secstore
-#	unlock	the password typed with Lucia chosen
+#	unlock	the password typed with Assistant chosen
 #	retry	a wrong password typed, then the right one
 #
 # For the three with a password the driver reports whether factotum
@@ -143,7 +143,7 @@ if {~ $phase retry} {
 if {~ $phase which} {
 	waitfor interface {or {ftest -e /chan/wmwindows} {ftest -e /mnt/ui/ctl}}
 	if {ftest -e /chan/wmwindows} {echo R started Desktop}
-	if {ftest -e /mnt/ui/ctl} {echo R started Lucia}
+	if {ftest -e /mnt/ui/ctl} {echo R started Assistant}
 }
 echo R done
 echo halt > '#c/sysctl'

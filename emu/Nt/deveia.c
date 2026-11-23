@@ -370,7 +370,7 @@ eiawstat(Chan *c, uchar *dp, int n)
 
 	n = convM2D(dp, n, &d, nil);
 	i = Nqid*NETID(c->qid.path)+NETTYPE(c->qid.path)-Ndataqid;
-	if(d.mode != ~0UL)
+	if(d.mode != ~(ulong)0)
 		eiadir[i+1].perm = d.mode&0666;
 	return n;
 }

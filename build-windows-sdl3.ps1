@@ -202,6 +202,14 @@ if (Test-Path $LIMBO) {
     & $LIMBO -t Srv -I "$ROOT\module" "$ROOT\module\srvrunt.b" 2>$null | Set-Content -Path "srvm.h" -Encoding ASCII
 }
 
+# Extra compiler and linker flags from the environment, for a build of
+# another kind (tools/sanemu.ps1: /fsanitize=address /DSANMALLOC). Unset,
+# the build is as it was.
+$ExtraCFlags = @()
+if ($env:INFERNODE_CFLAGS) { $ExtraCFlags = @($env:INFERNODE_CFLAGS -split '\s+' | Where-Object { $_ }) }
+$ExtraLDFlags = @()
+if ($env:INFERNODE_LDFLAGS) { $ExtraLDFlags = @($env:INFERNODE_LDFLAGS -split '\s+' | Where-Object { $_ }) }
+
 $emuCFlags = @(
     "/nologo", "/c", "/O2", "/Gy", "/GF", "/MT",
     "/W3", "/we4013", "/wd4018", "/wd4244", "/wd4245", "/wd4068",
@@ -214,6 +222,7 @@ $emuCFlags = @(
     "/I$ROOT\libinterp",
     "/I$sdl3Include"
 )
+$emuCFlags += $ExtraCFlags
 if ($fido2Found) {
     $emuCFlags += "/DHAVE_FIDO2"
     $emuCFlags += "/I$fido2Include"
@@ -298,10 +307,12 @@ $guiConfigC = @"
  * qid 4: net
  * qid 5: chan
  * qid 6: env
+ * qid 7: nvfs (a mount point: tools/sysfuzz binds its scratch there, as on Linux)
+ * qid 8: prof
  */
-int rootmaxq = 7;
+int rootmaxq = 9;
 
-Dirtab roottab[7] = {
+Dirtab roottab[9] = {
 	"",	{0, 0, QTDIR},	0,	0555,
 	"dev",	{1, 0, QTDIR},	0,	0555,
 	"fd",	{2, 0, QTDIR},	0,	0555,
@@ -309,10 +320,14 @@ Dirtab roottab[7] = {
 	"net",	{4, 0, QTDIR},	0,	0555,
 	"chan",	{5, 0, QTDIR},	0,	0555,
 	"env",	{6, 0, QTDIR},	0,	0555,
+	"nvfs",	{7, 0, QTDIR},	0,	0555,
+	"prof",	{8, 0, QTDIR},	0,	0555,
 };
 
-Rootdata rootdata[7] = {
-	0,	&roottab[1],	6,	nil,
+Rootdata rootdata[9] = {
+	0,	&roottab[1],	8,	nil,
+	0,	nil,	0,	nil,
+	0,	nil,	0,	nil,
 	0,	nil,	0,	nil,
 	0,	nil,	0,	nil,
 	0,	nil,	0,	nil,
@@ -418,7 +433,7 @@ $linkLibs = @(
 )
 if ($fido2Found -and $fido2Lib -ne "") { $linkLibs += $fido2Lib }
 
-& link.exe /nologo /subsystem:console /MAP `
+& link.exe /nologo @ExtraLDFlags /subsystem:console /MAP `
     "/OUT:o.emu.exe" `
     @allObjs `
     @linkLibs `

@@ -435,7 +435,7 @@ pipewstat(Chan *c, uchar *dp, int n)
 			error(Eexist);
 		kstrcpy(p->pipedir[1+d1].name, d->name, KNAMELEN);
 	}
-	if(d->mode != ~0UL)
+	if(d->mode != ~(ulong)0)
 		p->pipedir[d1 + 1].perm = d->mode & 0777;
 	poperror();
 	free(d);

@@ -48,6 +48,7 @@ import argparse
 import concurrent.futures
 import glob
 import os
+import platform
 import re
 import shutil
 import signal
@@ -57,13 +58,52 @@ import time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 DIS = os.path.join(ROOT, "dis", "tests", "sysfuzz.dis")
-CRASH = re.compile(r"panic|SEGV|BUS: addr|sys: trap|ERROR: AddressSanitizer|runtime error: (?!left shift|load of misaligned)|ERROR: LeakSanitizer|ThreadSanitizer|bad op|illegal instruction|double free|corrupted")
+CRASH = re.compile(r"panic|SEGV|BUS: addr|ACCESS VIOLATION|unknown trap type|sys: trap|ERROR: AddressSanitizer|runtime error: (?!left shift|load of misaligned)|ERROR: LeakSanitizer|ThreadSanitizer|bad op|illegal instruction|double free|corrupted")
 NOISE = re.compile(r"/bin/bash: line [0-9]+: unalias: unsetenv: not found\n?")
 
 
+WINDOWS = platform.system() == "Windows"
+
+if WINDOWS:
+	# A child that faults must die with its status, not wait on Windows
+	# Error Reporting's dialog; the error mode is inherited.
+	import ctypes
+	ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)	# FAILCRITICALERRORS NOGPFAULTERRORBOX NOOPENFILEERRORBOX
+
+
+def group():
+	# Popen arguments that put the child in a group of its own
+	if WINDOWS:
+		return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+	return {"start_new_session": True}
+
+
+def killgroup(p):
+	if WINDOWS:
+		subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+			stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+	else:
+		os.killpg(p.pid, signal.SIGKILL)
+
+
+def status(rc):
+	# Windows reports a fault as its NTSTATUS (0xC0000005 an access
+	# violation), unsigned: made negative, as a signal is elsewhere
+	if WINDOWS and rc is not None and rc & 0xFFFFFFFF >= 0xC0000000:
+		return -(rc & 0xFFFFFFFF)
+	return rc
+
+
 def sanenv():
-	out = subprocess.run([os.path.join(ROOT, "tools", "sanemu"), "env"], capture_output=True, text=True).stdout
+	if WINDOWS:
+		out = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+			os.path.join(ROOT, "tools", "sanemu.ps1"), "env"], capture_output=True, text=True).stdout
+	else:
+		out = subprocess.run([os.path.join(ROOT, "tools", "sanemu"), "env"], capture_output=True, text=True).stdout
 	env = dict(os.environ)
+	if WINDOWS:
+		# the sanitizer's runtime DLL is beside the instrumented emu
+		env["PATH"] = os.path.join(ROOT, "tmp", "sanemu") + os.pathsep + env.get("PATH", "")
 	for l in out.splitlines():
 		k, _, v = l.partition("=")
 		env[k] = v
@@ -79,12 +119,12 @@ def one(seed, a, emu, env):
 		pre + "/dis/tests/sysfuzz.dis -s %d -t %d -e %d -p %d%s; echo halt > /dev/sysctl" % (seed, a.t, a.e, a.p, d)]
 	before = set(glob.glob(os.path.join(ROOT, "tmp", "sanemu", "log", "*")))
 	p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-		env=env, start_new_session=True)
+		env=env, **group())
 	hung = False
 	try:
 		out, _ = p.communicate(timeout=a.t + 60)
 	except subprocess.TimeoutExpired:
-		os.killpg(p.pid, signal.SIGKILL)
+		killgroup(p)
 		out, _ = p.communicate()
 		hung = True
 	text = NOISE.sub("", out.decode("utf-8", "replace"))
@@ -98,8 +138,9 @@ def one(seed, a, emu, env):
 	for f in new:
 		with open(f, errors="replace") as fh:
 			reports.append(fh.read())
-	if p.returncode is not None and p.returncode < 0 and not hung:
-		kind, why = "signal", "emu died by signal %d" % -p.returncode
+	rc = status(p.returncode)
+	if rc is not None and rc < 0 and not hung:
+		kind, why = "signal", ("emu died by exception %#x" if WINDOWS else "emu died by signal %d") % -rc
 	elif bad:
 		kind, why = "crash", bad[0][:200]
 	elif reports:
@@ -130,11 +171,11 @@ def main():
 	a = ap.parse_args()
 
 	if a.a:
-		emu = os.path.join(ROOT, "tmp", "sanemu", "o.emu")
+		emu = os.path.join(ROOT, "tmp", "sanemu", "o.emu" + (".exe" if WINDOWS else ""))
 		env = sanenv()
 	else:
-		h = {"Linux": "Linux", "Darwin": "MacOSX"}.get(os.uname().sysname)
-		emu = os.path.join(ROOT, "emu", h, "o.emu")
+		h = {"Linux": "Linux", "Darwin": "MacOSX", "Windows": "Nt"}.get(platform.system())
+		emu = os.path.join(ROOT, "emu", h, "o.emu" + (".exe" if WINDOWS else ""))
 		env = dict(os.environ)
 	for f in (emu, DIS):
 		if not os.path.exists(f):

@@ -164,7 +164,7 @@ void
 Sys_pipe(void *fp)
 {
 	Array *a;
-	int fd[2];
+	int fd[2], r;
 	Sys_FD **sfd;
 	F_Sys_pipe *f;
 
@@ -175,7 +175,16 @@ Sys_pipe(void *fp)
 	/* (a nil array was read: a fault, in the native kernel's own code) */
 	if(a == (Array*)H || a->len < 2)
 		return;
-	if(kpipe(fd) < 0)
+	/*
+	 * With the VM let go, as every other call into the kernel here:
+	 * kpipe waits in smalloc when memory is short, for memory that
+	 * only the Progs it held up could give back (emu/port/inferno.c,
+	 * found by tools/sysfuzz -P on Windows).
+	 */
+	release();
+	r = kpipe(fd);
+	acquire();
+	if(r < 0)
 		return;
 
 	sfd = (Sys_FD**)a->data;
@@ -433,7 +442,14 @@ packdir(Sys_Dir *sd)
 	n = 0;
 	for(i=0; i<4; i++)
 		n += strlen(nm[i])+1;
-	d = smalloc(sizeof(*d)+n);
+	/*
+	 * malloc, not smalloc: the caller holds the VM, and smalloc's wait
+	 * for memory, which only the Progs it holds up could give back,
+	 * had no end (emu/port/inferno.c, tools/sysfuzz -P).  The call fails.
+	 */
+	d = malloc(sizeof(*d)+n);
+	if(d == nil)
+		return nil;
 	p = (char*)d+sizeof(*d);
 	for(i=0; i<4; i++){
 		n = strlen(nm[i])+1;
@@ -550,6 +566,11 @@ Sys_wstat(void *fp)
 
 	f = fp;
 	d = packdir(&f->d);
+	if(d == nil){
+		kwerrstr(Enomem);
+		*f->ret = -1;
+		return;
+	}
 	release();
 	*f->ret = kdirwstat(string2c(f->s), d);
 	acquire();
@@ -564,6 +585,11 @@ Sys_fwstat(void *fp)
 
 	f = fp;
 	d = packdir(&f->d);
+	if(d == nil){
+		kwerrstr(Enomem);
+		*f->ret = -1;
+		return;
+	}
 	release();
 	*f->ret = kdirfwstat(fdchk(f->fd), d);
 	acquire();

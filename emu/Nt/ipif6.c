@@ -16,6 +16,30 @@
 #include	"error.h"
 
 extern int SOCK_SELECT;
+extern SOCKET oswakesock(void);
+
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)	/* mstcpip.h */
+#endif
+
+/*
+ * Whether an ICMP port unreachable for what a UDP socket sent fails its
+ * next read.  Windows fails the next recvfrom of any UDP socket with
+ * WSAECONNRESET; POSIX hosts fail only a connected one's (ECONNREFUSED).
+ * So an announced socket answering many peers (a server) had a read
+ * fail whenever a peer it had answered was gone, and a server that
+ * reads until an error ended there.
+ */
+static void
+udpconnreset(int fd, int on)
+{
+	BOOL b;
+	DWORD n;
+
+	b = on? TRUE: FALSE;
+	n = 0;
+	WSAIoctl(fd, SIO_UDP_CONNRESET, &b, sizeof(b), nil, 0, &n, nil, nil);
+}
 
 int
 so_socket(int type)
@@ -46,6 +70,7 @@ so_socket(int type)
 	if(type == SOCK_DGRAM){
 		one = 1;
 		setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (char*)&one, sizeof(one));
+		udpconnreset(fd, 0);	/* until it is connected, as POSIX has it */
 	}else{
 		one = 1;
 		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
@@ -84,7 +109,19 @@ so_send(int sock, void *va, int len, void *hdr, int hdrlen)
 		}
 		r = sendto(sock, va, len, 0, (struct sockaddr*)sin6, sizeof(*sin6));
 	}
-	osleave();
+	/*
+	 * What was sent or read is the caller's, interrupted or not, as in
+	 * ipif6-posix.c: osleave raised Eintr for a kill that came during a
+	 * send or recv that had done its work, so bytes taken from the
+	 * host were lost (devssl's record cut short: "bad digest") and
+	 * bytes sent were reported unsent (devssl hung up the connection
+	 * and every mount over it: "inappropriate use of fd";
+	 * ninep_disconnect_test).
+	 */
+	if(r > 0)
+		osleavekeep();
+	else
+		osleave();
 	return r;
 }
 
@@ -93,19 +130,39 @@ doselect(int sock)
 {
 	fd_set	waitr;
 	struct timeval seltime;
+	SOCKET wake;
+	char buf[16];
 
+	/*
+	 * oshostintr sends a byte to wake when it interrupts a Proc in
+	 * SOCK_SELECT, which ends the select at once.  The timeout is
+	 * kept for an interrupt that came before syscall said SOCK_SELECT
+	 * (swipend is then set), or with no wake socket to be had.
+	 */
+	wake = oswakesock();
+	lock(&up->sysio);
 	up->syscall = SOCK_SELECT;
+	unlock(&up->sysio);
 	FD_ZERO(&waitr);
 	FD_SET(sock, &waitr);
+	if(wake != INVALID_SOCKET)
+		FD_SET(wake, &waitr);
 	for(;;){
 		int nfds;
 		fd_set in, exc;
 
+		if(up->intwait || up->swipend) {
+			up->intwait = 0;
+			return -1;
+		}
 		in = waitr;
 		exc = waitr;
 		seltime.tv_sec = 1;
 		seltime.tv_usec = 0L;
 		nfds = select(sizeof(fd_set)*8, &in, (fd_set*)0, &exc, &seltime);
+		if(wake != INVALID_SOCKET && FD_ISSET(wake, &in))
+			while(recv(wake, buf, sizeof(buf), 0) > 0)
+				;
 		if(up->intwait) {
 			up->intwait = 0;
 			return -1;
@@ -189,20 +246,58 @@ so_recv(int sock, void *va, int len, void *hdr, int hdrlen)
 			memmove(hdr, h, hdrlen);
 		}
 	}
-	osleave();
+	/* bytes read are the caller's, interrupted or not: see so_send */
+	if(r > 0)
+		osleavekeep();
+	else
+		osleave();
 	return r;
+}
+
+/*
+ * Close a socket so that its peer gets what was written and the end of
+ * it (FIN), and no reset.  A reset loses data at both ends on Windows:
+ * the peer discards what it had received and not yet read, so a
+ * server's answer followed by its close never arrived (an HTTP server
+ * that answers once it has the headers, its client's body unread:
+ * webclient_origin_test's "empty response", the client's recv
+ * WSAECONNRESET; a proxy's refusal of CONNECT, llmclient_proxy_test;
+ * ventisrv's greeting before its handshake deadline, auditprov_test).
+ * Two things make one: an abortive close (SO_LINGER of {1, 0}, which
+ * the POSIX hangup asks for), and a close with received data unread.
+ * So what is waiting unread is taken first, without waiting for more
+ * (a peer still sending more than this gets its reset), and the close
+ * is Windows' own, which does not wait either: with linger off,
+ * closesocket returns at once and the stack sends what is queued,
+ * then the FIN.
+ */
+static int
+closegently(int fd)
+{
+	int n;
+	u_long one;
+	char junk[2048];
+
+	one = 1;
+	if(ioctlsocket(fd, FIONBIO, &one) == 0){
+		for(n = 0; n < 64; n++)	/* at most 128K */
+			if(recv(fd, junk, sizeof junk, 0) <= 0)
+				break;
+	}
+	shutdown(fd, SD_SEND);
+	return closesocket(fd);
 }
 
 void
 so_close(int sock)
 {
-	closesocket(sock);
+	closegently(sock);
 }
 
 void
 so_connect(int fd, unsigned char *raddr, unsigned short rport)
 {
-	int r;
+	int r, type, tl;
 	struct sockaddr_storage sa;
 	struct sockaddr_in6 *sin6;
 
@@ -217,6 +312,9 @@ so_connect(int fd, unsigned char *raddr, unsigned short rport)
 	osleave();
 	if(r < 0)
 		oserror();
+	tl = sizeof(type);
+	if(getsockopt(fd, SOL_SOCKET, SO_TYPE, (char*)&type, &tl) == 0 && type == SOCK_DGRAM)
+		udpconnreset(fd, 1);
 }
 
 void
@@ -377,12 +475,11 @@ int
 so_hangup(int fd, int nolinger)
 {
 	int r;
-	static struct linger l = {1, 0};
 
+	/* no reset: see closegently; nolinger needs none, as the close does not wait */
+	USED(nolinger);
 	osenter();
-	if(nolinger)
-		setsockopt(fd, SOL_SOCKET, SO_LINGER, (char*)&l, sizeof(l));
-	r = closesocket(fd);
+	r = closegently(fd);
 	osleave();
 	return r;
 }

@@ -58,8 +58,10 @@ exists, it is modified; otherwise, a new entry is created.
 The user is prompted for the following items:
 .TP
 password
-A string at least 8 characters in length. The SHA-256 digest of the entered string is stored in the password file. See
-.IR keyring-sha1 (2).
+A string at least 8 characters in length. The account's secret made from it
+(PBKDF2-HMAC-SHA-384 salted by the name; see
+.IR keys (6))
+is stored in the password file.
 By default, the password for an existing entry is unchanged.
 .TP
 expiration date
@@ -123,7 +125,7 @@ in
 .IR security-login (2)):
 in raw mode the console edits nothing, and a backspace typed to correct a slip
 was once a character of the secret.
-It is kept as bytes and zeroed once its SHA-256 is taken.
+It is kept as bytes and zeroed once its secret is made.
 .SH FILES
 .TF /keydb/keys
 .TP

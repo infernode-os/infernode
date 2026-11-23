@@ -20,7 +20,11 @@ this prints (testVectors).
            PRK = HMAC-H(th, k || z || pw)          L(m) = two bytes of length, big-endian, then m
            client proof, signer proof, session = HKDF-Expand(PRK, label, len H)
 
-The ML-KEM operations themselves are not made again here: the values
+    secret: an account's, as keyfs holds it (keys(6)):
+           PBKDF2-HMAC-SHA-384(password, "infernode login secret 2" || 0 || name, 200000, 48)
+
+The reply carries the form of the account's secret (2, the new) after
+the group.  The ML-KEM operations themselves are not made again here: the values
 for share, ct and k are made-up bytes of the right lengths, as z is.
 """
 import hashlib, hmac, sys
@@ -68,7 +72,9 @@ def ramp(mul, add, n):
 
 def main():
     name = b"alice"
-    pw = hashlib.sha256(b"correct horse battery staple").digest()
+    pw = hashlib.pbkdf2_hmac("sha384", b"correct horse battery staple",
+                             b"infernode login secret 2\0" + name, 200000, 48)
+    print("secret of alice:", pw.hex())
     cnonce = bytes(range(32))
     snonce = bytes(range(32, 64))
     # ML-KEM-768's and ML-KEM-1024's encapsulation key and ciphertext (FIPS 203)
@@ -76,7 +82,7 @@ def main():
         x = ramp(7, 1, n)
         m = mask(suite, gid, name, pw, cnonce, snonce, x)
         hello = bytes([3, suite]) + cnonce
-        reply = bytes([3, suite, gid]) + snonce + m
+        reply = bytes([3, suite, gid, 2]) + snonce + m
         z = ramp(11, 2, n)
         rho = ramp(19, 6, 32)
         km = kemmask(suite, gid, name, pw, cnonce, snonce, z, rho)

@@ -43,7 +43,7 @@ if python3 -c 'import cryptography' 2>/dev/null; then
 		grep -q "\"$v\"" "$ROOT/tests/login_test.b" || echo "$v"
 	done)
 	n=$(python3 "$D/mkvectors.py" | grep -c ': [0-9a-f]\{32,\}$')
-	if [ "$n" = 12 ] && [ -z "$missing" ]; then
+	if [ "$n" = 13 ] && [ -z "$missing" ]; then
 		echo "PASS: the key derivation's known answers in tests/login_test.b are Python's"
 	else
 		echo "FAIL: known answers not in tests/login_test.b ($n made):"

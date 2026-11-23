@@ -122,7 +122,26 @@ readfile(name: string): array of byte
 	return buf[0:n];
 }
 
-pwdigest(password: string): array of byte
+# an account's secret as keyfs holds it (keys(6)): the new form,
+# PBKDF2-HMAC-SHA-384 salted by the name, kept once made
+Kept: adt {
+	user, password:	string;
+	secret:	array of byte;
+};
+kept: list of ref Kept;
+
+pwdigest(user, password: string): array of byte
+{
+	for(l := kept; l != nil; l = tl l)
+		if((hd l).user == user && (hd l).password == password)
+			return (hd l).secret;
+	s := login->secret(user, array of byte password);
+	kept = ref Kept(user, password, s) :: kept;
+	return s;
+}
+
+# the old form, the password's SHA-256
+oldsecret(password: string): array of byte
 {
 	pw := array of byte password;
 	dig := array[Keyring->SHA256dlen] of byte;
@@ -212,12 +231,14 @@ setup(): string
 	err := <-res;
 	if(err != nil)
 		return err;
-	dig := pwdigest(Old);
 	for(i = 0; i < len Users; i++){
 		u := "/mnt/keys/"+Users[i];
-		if(mkdir(u) < 0 || writefile(u+"/secret", dig) < 0)
+		if(mkdir(u) < 0 || writefile(u+"/secret", pwdigest(Users[i], Old)) < 0)
 			return sys->sprint("can't make %s in keyfs: %r", Users[i]);
 	}
+	# an account whose secret is of the old form
+	if(mkdir("/mnt/keys/olive") < 0 || writefile("/mnt/keys/olive/secret", oldsecret(Old)) < 0)
+		return sys->sprint("can't make olive in keyfs: %r");
 
 	csk := load Command "/dis/auth/createsignerkey.dis";
 	if(csk == nil)
@@ -438,8 +459,8 @@ testChange(t: ref T)
 	t.assert(contains(said, "secret changed"), "it says the secret is changed: " + said);
 	t.assert(!contains(said, "key owner"), "and prints nothing else of its own");
 	secret := readfile("/mnt/keys/alice/secret");
-	t.asserteq(len secret, Keyring->SHA256dlen, "what keyfs holds is 32 bytes");
-	t.assert(eq(secret, pwdigest(New)), "the SHA-256 of the new password, as login(6) wants it");
+	t.asserteq(len secret, Login->Secretlen, "what keyfs holds is 48 bytes");
+	t.assert(eq(secret, pwdigest("alice", New)), "the new password's secret of the new form, as login(6) wants it");
 
 	(err, info) = dologin(t, "alice", New);
 	t.assertnil(err, "a login with the new password");
@@ -460,7 +481,7 @@ testWrongOld(t: ref T)
 	t.assertseq(end, "returned", "passwd, a wrong secret, the right one, no new one: " + said);
 	t.assert(contains(said, "!wrong secret"), "the wrong one is said to be wrong: " + said);
 	t.assert(contains(said, "not changed"), "and no new secret changes nothing: " + said);
-	t.assert(eq(readfile("/mnt/keys/bob/secret"), pwdigest(Old)), "bob's secret is as it was");
+	t.assert(eq(readfile("/mnt/keys/bob/secret"), pwdigest("bob", Old)), "bob's secret is as it was");
 	sys->remove("/keydb/loginfail");
 
 	# entries that do not match are asked for again
@@ -469,7 +490,7 @@ testWrongOld(t: ref T)
 		("new secret", "short") :: ("new secret", New) :: ("confirm: ", New) :: nil);
 	t.assertseq(end, "returned", "passwd, a confirmation that does not match, a short secret, then a new one: " + said);
 	t.assert(contains(said, "didn't match") && contains(said, "at least 8"), "each is said: " + said);
-	t.assert(eq(readfile("/mnt/keys/bob/secret"), pwdigest(New)), "and bob's secret is the new one's SHA-256");
+	t.assert(eq(readfile("/mnt/keys/bob/secret"), pwdigest("bob", New)), "and bob's secret is the new one's");
 }
 
 # The server must be the signer: one that authenticates with a user's
@@ -484,13 +505,14 @@ testNotSigner(t: ref T)
 	t.assert(!contains(said, "Inferno secret"), "passwd asks a server that is not the signer for nothing: " + said);
 	t.assert(contains(said, "not as") && contains(said, "erin"), "and says who answered: " + said);
 	t.assert(contains(end, "raised fail:"), "and fails: " + end);
-	t.assert(eq(readfile("/mnt/keys/carol/secret"), pwdigest(Old)), "carol's secret is as it was");
+	t.assert(eq(readfile("/mnt/keys/carol/secret"), pwdigest("carol", Old)), "carol's secret is as it was");
 }
 
 #
 # keysrv's file by a client of the test's own.
 #
-Version: con "keysrv 2 ";
+Version: con "keysrv 3 ";
+lastform := 0;	# the form of secret the last challenge said keyfs holds
 
 # keysrv on a pipe as its connection, authenticated to as ai, its file
 # mounted on /mnt/kc
@@ -563,9 +585,10 @@ challenge(): (array of byte, string)
 	if(n < 0)
 		return (nil, sys->sprint("%r"));
 	s := string buf[0:n];
-	if(len s != len Version + 64 || s[0:len Version] != Version)
+	if(len s != len Version + 2 + 64 || s[0:len Version] != Version || s[len Version+1] != ' ')
 		return (nil, sys->sprint("read %q", s));
-	return (unhex(s[len Version:]), nil);
+	lastform = s[len Version] - '0';
+	return (unhex(s[len Version+2:]), nil);
 }
 
 expand(prk: array of byte, info: string, n: int): array of byte
@@ -632,8 +655,8 @@ testWrongProofs(t: ref T)
 	sys->remove("/keydb/loginfail");
 	dave := certificate("dave");
 	session(t, dave);
-	secret := pwdigest(Old);
-	wrong := pwdigest("a guess");
+	secret := pwdigest("dave", Old);
+	wrong := pwdigest("dave", "a guess");
 	for(i := 0; i < 5; i++){
 		(c, err) := challenge();
 		if(c == nil)
@@ -678,7 +701,7 @@ testReplay(t: ref T)
 	sys->remove("/keydb/loginfail");
 	frank := certificate("frank");
 	session(t, frank);
-	secret := pwdigest(Old);
+	secret := pwdigest("frank", Old);
 	(c, err) := challenge();
 	if(c == nil)
 		t.fatal("no challenge: " + err);
@@ -694,22 +717,22 @@ testReplay(t: ref T)
 	d2 := array[Keyring->SHA256dlen] of byte;
 	kr->sha256(secret, len secret, d2, nil);
 	e = put(hex(d2));
-	t.assert(!contains(e, "ok") && contains(e, "version 2"), "the old keysrv's proof is refused, saying why: " + e);
+	t.assert(!contains(e, "ok") && contains(e, "version 3"), "the old keysrv's proof is refused, saying why: " + e);
 	e = put(hex(d2) + " newpassword1");
 	t.assert(!contains(e, "ok"), "and with a new secret in clear: " + e);
 	pw := array of byte Old;
 	s1 := array[Keyring->SHA1dlen] of byte;
 	kr->sha1(pw, len pw, s1, nil);
 	e = put(hex(s1));
-	t.assert(!contains(e, "ok") && contains(e, "version 2"), "the old passwd's proof is refused: " + e);
+	t.assert(!contains(e, "ok") && contains(e, "version 3"), "the old passwd's proof is refused: " + e);
 	t.assert(eq(readfile("/mnt/keys/frank/secret"), secret), "frank's secret is as it was");
 
-	# a new secret that is not a password's SHA-256
+	# a new secret that is not of the new form
 	(c, nil) = challenge();
 	e = put(answer(c, secret, "frank", array of byte "newpassword1"));
 	t.assert(!contains(e, "ok"), "a new secret of 12 bytes is not stored: " + e);
 	(c, nil) = challenge();
-	e = put(answer(c, secret, "frank", nil) + " " + hex(array[48] of {* => byte 1}));
+	e = put(answer(c, secret, "frank", nil) + " " + hex(array[Login->Secretlen+16] of {* => byte 1}));
 	t.assert(contains(e, "unacceptable"), "nor one not sealed under the old secret's key: " + e);
 	t.assert(eq(readfile("/mnt/keys/frank/secret"), secret), "frank's secret is still as it was");
 	sys->remove("/keydb/loginfail");
@@ -722,14 +745,14 @@ testStale(t: ref T)
 	sys->remove("/keydb/loginfail");
 	erin := certificate("erin");
 	session(t, erin);
-	was := pwdigest(Old);
-	now := pwdigest("the operator's new one");
+	was := pwdigest("erin", Old);
+	now := pwdigest("erin", "the operator's new one");
 	if(writefile("/mnt/keys/erin/secret", now) < 0)
 		t.fatal(sys->sprint("can't change erin's secret in keyfs: %r"));
 	(c, err) := challenge();
 	if(c == nil)
 		t.fatal("no challenge: " + err);
-	e := put(answer(c, was, "erin", pwdigest("taken back")));
+	e := put(answer(c, was, "erin", pwdigest("erin", "taken back")));
 	t.assert(contains(e, "wrong secret"), "the secret as it was when the session began no longer proves anything: " + e);
 	t.assert(eq(readfile("/mnt/keys/erin/secret"), now), "and changes nothing");
 	(c, nil) = challenge();
@@ -787,7 +810,7 @@ testChangelogin(t: ref T)
 	t.assert(tm.mday == 1 && tm.mon == 2 && tm.year == 131, sys->sprint("the expiry is 1 March 2031: %d/%d/%d", tm.mday, tm.mon+1, tm.year+1900));
 	t.assert(tm.hour == 23 && tm.min == 59 && tm.sec == 59,
 		sys->sprint("at the end of that day, though dates were refused before it: %.2d:%.2d:%.2d", tm.hour, tm.min, tm.sec));
-	t.assert(eq(readfile("/mnt/keys/gina/secret"), pwdigest(New)), "the secret is the password's SHA-256");
+	t.assert(eq(readfile("/mnt/keys/gina/secret"), pwdigest("gina", New)), "the secret is the password's SHA-256");
 	(err, info) := dologin(t, "gina", New);
 	t.assert(info != nil, "and the account logs in: " + err);
 
@@ -795,7 +818,7 @@ testChangelogin(t: ref T)
 	(said, end) = dialog("/dis/auth/changelogin.dis", "gina" :: nil,
 		("don't change]: ", "") :: ("expires [", "") :: nil);
 	t.assertseq(end, "returned", "changelogin, return at both questions: " + said);
-	t.assert(eq(readfile("/mnt/keys/gina/secret"), pwdigest(New)), "leaves the secret");
+	t.assert(eq(readfile("/mnt/keys/gina/secret"), pwdigest("gina", New)), "leaves the secret");
 	tm2 := expiry("gina");
 	t.assert(tm2 != nil && daytime->tm2epoch(tm2) == daytime->tm2epoch(tm), "and the expiry");
 
@@ -830,7 +853,7 @@ testTyped(t: ref T)
 	(said, end) := dialog("/dis/auth/changelogin.dis", "hank" :: nil,
 		("secret: ", typed) :: ("confirm: ", New) :: ("expires [", "permanent") :: nil);
 	t.assertseq(end, "returned", "changelogin, a secret typed with corrections, confirmed without: " + said);
-	t.assert(eq(readfile("/mnt/keys/hank/secret"), pwdigest(New)), "the secret is the SHA-256 of what was meant");
+	t.assert(eq(readfile("/mnt/keys/hank/secret"), pwdigest("hank", New)), "the secret is the one of what was meant");
 	(err, info) := dologin(t, "hank", New);
 	t.assert(info != nil, "and the account logs in with it: " + err);
 	# seven characters, however many bytes, are too few
@@ -865,6 +888,41 @@ rmtree(d: string)
 		}
 	sys->remove(d);
 }
+
+# An account whose secret is of the old form (the password's SHA-256):
+# keysrv's challenge says so, passwd proves the old form and gives the
+# new, which is what keyfs then holds.
+testOldForm(t: ref T)
+{
+	sys->remove("/keydb/loginfail");
+	session(t, certificate("olive"));
+	(c, err) := challenge();
+	if(c == nil)
+		t.fatal("no challenge: " + err);
+	t.asserteq(lastform, Login->Oldform, "the challenge says the secret held is of the old form");
+	kf := testdir + "/olive.key";
+	if(kr->writeauthinfo(kf, certificate("olive")) < 0)
+		t.fatal(sys->sprint("can't write olive's key file: %r"));
+	(said, end) := passwd(t, kf, nil,
+		("Inferno secret: ", Old) :: ("new secret", New) :: ("confirm: ", New) :: nil);
+	t.assertseq(end, "returned", "passwd on an account of the old form: " + said);
+	t.assert(contains(said, "secret changed"), "it changes the secret: " + said);
+	secret := readfile("/mnt/keys/olive/secret");
+	t.asserteq(len secret, Login->Secretlen, "keyfs then holds 48 bytes");
+	t.assert(eq(secret, pwdigest("olive", New)), "the new password's secret of the new form");
+	(c, err) = challenge();
+	if(c != nil)
+		t.asserteq(lastform, Login->Newform, "and the next challenge says the new form");
+	# a new secret of the old form's length is refused
+	(c, err) = challenge();
+	if(c == nil)
+		t.fatal("no challenge: " + err);
+	e := put(answer(c, secret, "olive", oldsecret("another one")));
+	t.assert(e != "ok" && (contains(e, "unacceptable") || contains(e, "bad proof or secret")), "a new secret not of the new form is refused: " + e);
+	t.assert(eq(readfile("/mnt/keys/olive/secret"), secret), "and nothing is changed");
+	sys->remove("/keydb/loginfail");
+}
+
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -906,6 +964,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Keysrv/Replay", testReplay);
 	run("Keysrv/Stale", testStale);
 	run("Keysrv/Name", testName);
+	run("Keysrv/OldForm", testOldForm);
 	run("Changelogin/Dates", testChangelogin);
 	run("Changelogin/Typed", testTyped);
 

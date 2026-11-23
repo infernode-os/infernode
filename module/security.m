@@ -50,6 +50,19 @@ Login: module
 	Aesgcm:	con 2;	# AES-256-GCM, SHA-384 and ML-KEM-1024 (CNSA)
 	Noncelen:	con 32;
 	Rholen:	con 32;	# the seed at an ML-KEM encapsulation key's end (FIPS 203)
+
+	# An account's secret, as keyfs(4) holds it (keys(6)): PBKDF2 with
+	# HMAC-SHA-384 of the password, salted by the account's name, 48
+	# bytes.  The old form, the password's SHA-256, is still read, and an
+	# account in it is given the new one at its next login (login(6)).
+	Newform:	con 2;
+	Oldform:	con 1;
+	Secretlen:	con 48;
+	Oldsecretlen:	con 32;
+	Secretiter:	con 200000;
+	secret:	fn(name: string, password: array of byte): array of byte;
+	oldsecret:	fn(password: array of byte): array of byte;
+	secretform:	fn(s: array of byte): int;	# Newform, Oldform, or 0: neither
 	# a group's prime and its length in bytes; nil for none of login(6)'s
 	group:	fn(id: int): (ref Keyring->IPint, int);
 	exponent:	fn(p: ref Keyring->IPint): ref Keyring->IPint;	# uniform in 1..(p-1)/2-1

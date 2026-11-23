@@ -194,8 +194,9 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 	if(kr->putbytearray(c.dfd, hello, len hello) < 0)
 		return (sys->sprint("can't send hello: %r"), nil);
 
-	# CA->user	reply: version, suite, group, the signer's nonce, and
-	# the signer's Diffie-Hellman value under the password's keystream
+	# CA->user	reply: version, suite, group, the form of the account's
+	# secret, the signer's nonce, and the signer's Diffie-Hellman value
+	# under the password's keystream
 	reply: array of byte;
 	(reply, err) = kr->getbytearray(c.dfd);
 	if(err != nil){
@@ -210,7 +211,7 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 			return ("signer speaks login version 2, which has no ML-KEM and is refused: update the signer (login(6))", nil);
 		return ("signer's reply is not login version 3: see login(6)", nil);
 	}
-	if(len reply < 3+Noncelen)
+	if(len reply < 4+Noncelen)
 		return ("signer's reply is too short", nil);
 	if(int reply[1] != suite){
 		if(suite == Aesgcm)
@@ -223,20 +224,34 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 		return (sys->sprint("signer's group %d is not one of login(6)'s", gid), nil);
 	if(suite == Aesgcm && n*8 < 3072)
 		return (sys->sprint("CNSA mode: signer's group %d has %d bits; 3072 at least are required", gid, n*8), nil);
-	if(len reply != 3+Noncelen+n)
+	if(len reply != 4+Noncelen+n)
 		return ("signer's reply is not the length of its group", nil);
 
-	# The stored form of the password (changelogin(8)): its SHA-256.
+	# The secret keyfs(4) holds for the account, from the password: the
+	# new form (PBKDF2-HMAC-SHA-384 salted by the name), or the old (its
+	# SHA-256) for an account not yet given the new, which this login
+	# then gives it.  A client in CNSA mode takes the new form alone.
+	form := int reply[3];
 	pwbuf := array of byte password;
-	pw := array[Keyring->SHA256dlen] of byte;
-	w.l = pwbuf :: pw :: w.l;
-	kr->sha256(pwbuf, len pwbuf, pw, nil);
+	w.l = pwbuf :: w.l;
+	pw: array of byte;
+	case form {
+	Newform =>
+		pw = secret(id, pwbuf);
+	Oldform =>
+		if(suite == Aesgcm)
+			return ("CNSA mode: the signer holds the account's secret in the old form (SHA-256); log in once outside CNSA mode", nil);
+		pw = oldsecret(pwbuf);
+	* =>
+		return (sys->sprint("signer's form of secret %d is not one of login(6)'s", form), nil);
+	}
+	w.l = pw :: w.l;
 
 	# The signer's value, +-2**r0 mod p.  With another password this
 	# is some other number, and nothing here says which: there is no
 	# tag to check.  It must be an element the secret can be made
 	# from: 0, 1 and p-1 would make the secret one anybody knows.
-	x := IPint.bytestoip(mask(suite, gid, id, pw, hello[2:], reply[3:3+Noncelen], reply[3+Noncelen:]));
+	x := IPint.bytestoip(mask(suite, gid, id, pw, hello[2:], reply[4:4+Noncelen], reply[4+Noncelen:]));
 	if(!inrange(x, p))
 		return ("name or secret incorrect", nil);
 
@@ -264,7 +279,7 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 	msg := array[n + eklen] of byte;
 	msg[0:] = y;
 	msg[n:] = ek[0:eklen-Rholen];
-	msg[n+eklen-Rholen:] = kemmask(suite, gid, id, pw, hello[2:], reply[3:3+Noncelen], z, rho);
+	msg[n+eklen-Rholen:] = kemmask(suite, gid, id, pw, hello[2:], reply[4:4+Noncelen], z, rho);
 	if(kr->putbytearray(c.dfd, msg, len msg) < 0)
 		return (sys->sprint("can't send (2**r1 mod p): %r"), nil);
 
@@ -306,6 +321,16 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 		return ("can't set secrets: " + err, nil);
 	if(sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
 		return (sys->sprint("can't push alg aes_256_gcm: %r"), nil);
+
+	# user->CA	for an account whose secret is of the old form, the
+	# new, under the session's keys: the signer stores it, and the next
+	# login is in the new form.  Only an end with the password makes it.
+	if(form == Oldform){
+		nw := secret(id, pwbuf);
+		w.l = nw :: w.l;
+		if(kr->putbytearray(c.dfd, nw, len nw) < 0)
+			return (sys->sprint("can't send the account's new secret: %r"), nil);
+	}
 
 	# CA->user	CA's public key, and the alpha and p of its key file,
 	# which auth(2) uses between the holders of its certificates.
@@ -419,6 +444,59 @@ okname(name: string): string
 	if(name[0] == ' ' || name[len name-1] == ' ')
 		return "name begins or ends with a blank";
 	return nil;
+}
+
+#
+# An account's secret, as keyfs(4) holds it: PBKDF2 (RFC 8018 5.2,
+# SP 800-132) with HMAC-SHA-384, of the password, Secretiter
+# iterations, its salt "infernode login secret 2", a zero byte and the
+# account's name, the first Secretlen bytes.  The old form was the
+# password's SHA-256, unsalted and one hash: a copy of the store tested
+# a guess for one SHA-256, and CNSA 2.0 takes SHA-384.  Only clients
+# compute it; the signer stores what it is given.
+#
+secret(name: string, password: array of byte): array of byte
+{
+	init();
+	salt := cat(array of byte "infernode login secret 2", cat(array[] of {byte 0}, array of byte name));
+	u := array[len salt + 4] of byte;
+	u[0:] = salt;
+	u[len salt:] = array[] of {byte 0, byte 0, byte 0, byte 1};
+	t := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(u, len u, password, t, nil);
+	u = array[Keyring->SHA384dlen] of byte;
+	u[0:] = t;
+	v := array[Keyring->SHA384dlen] of byte;
+	for(i := 1; i < Secretiter; i++){
+		kr->hmac_sha384(u, len u, password, v, nil);
+		for(j := 0; j < len t; j++)
+			t[j] ^= v[j];
+		(u, v) = (v, u);
+	}
+	zero(u);
+	zero(v);
+	return t;	# SHA384dlen is Secretlen
+}
+
+# the old form: the password's SHA-256
+oldsecret(password: array of byte): array of byte
+{
+	init();
+	d := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(password, len password, d, nil);
+	return d;
+}
+
+# the form of a secret keyfs holds, by its length
+secretform(s: array of byte): int
+{
+	case len s {
+	Secretlen =>
+		return Newform;
+	Oldsecretlen =>
+		return Oldform;
+	}
+	return 0;
 }
 
 # A group's prime and its length in bytes; (nil, 0) for an id that is

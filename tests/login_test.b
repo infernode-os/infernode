@@ -81,6 +81,8 @@ skipped := 0;
 User: con "alice";
 Users := array[] of {User, "carol", "dave", "erin", "frank", "gwen", "heidi", "ivan", "judy", "ken", "signer"};
 Expired: con "gwen";	# an entry whose expire reads "expired"
+# accounts whose secret is of the old form, the password's SHA-256
+Oldusers := array[] of {"olga", "omar", "otto"};
 Maxfail: con 10;	# logind's
 Wrong: con "correct horse battery stapler";
 testdir: string;
@@ -158,17 +160,23 @@ setup(): string
 	if(mkdir(d+"/root") < 0 || mkdir(d+"/root/keydb") < 0 ||
 	   mkdir(d+"/mnt") < 0 || mkdir(d+"/mnt/keys") < 0 || mkdir(d+"/mnt/audit") < 0)
 		return sys->sprint("can't make %s: %r", d);
-	pw := array of byte Password;
-	dig := array[Keyring->SHA256dlen] of byte;
-	kr->sha256(pw, len pw, dig, nil);
+	# each account's secret of the new form (keys(6)), and the
+	# accounts of the old form (the password's SHA-256) that a login
+	# moves to the new
 	for(i = 0; i < len Users; i++){
 		u := d+"/mnt/keys/"+Users[i];
 		exp := "never";
 		if(Users[i] == Expired)
 			exp = "expired";
-		if(mkdir(u) < 0 || writefile(u+"/secret", dig) < 0 ||
+		if(mkdir(u) < 0 || writefile(u+"/secret", xsecret(Users[i], Password)) < 0 ||
 		   writefile(u+"/expire", array of byte exp) < 0)
 			return sys->sprint("can't write %s's entry: %r", Users[i]);
+	}
+	for(i = 0; i < len Oldusers; i++){
+		u := d+"/mnt/keys/"+Oldusers[i];
+		if(mkdir(u) < 0 || writefile(u+"/secret", xoldsecret(Password)) < 0 ||
+		   writefile(u+"/expire", array of byte "never") < 0)
+			return sys->sprint("can't write %s's entry: %r", Oldusers[i]);
 	}
 	if(sys->bind(d+"/root", "/", Sys->MBEFORE) < 0 || sys->bind(d+"/mnt", "/mnt", Sys->MBEFORE) < 0)
 		return sys->sprint("can't bind the signer's files: %r");
@@ -855,12 +863,58 @@ xkeys(suite: int, name: string, pw, hello, reply, share, ct, z, k: array of byte
 		xexpand(suite, prk, array of byte "infernode login 3 session", n));
 }
 
-pwdigest(password: string): array of byte
+# an account's secret as keys(6) has it: PBKDF2-HMAC-SHA-384 of the
+# password, 200000 iterations, salt "infernode login secret 2" 0 name,
+# 48 bytes (tests/host/login/mkvectors.py makes alice's with hashlib).
+# A login computes it once; the test, for the same name and password
+# many times, keeps them.
+Kept: adt {
+	name, password:	string;
+	secret:	array of byte;
+};
+kept: list of ref Kept;
+
+xsecret(name, password: string): array of byte
+{
+	for(l := kept; l != nil; l = tl l)
+		if((hd l).name == name && (hd l).password == password)
+			return (hd l).secret;
+	pw := array of byte password;
+	salt := xcat(array of byte "infernode login secret 2", xcat(array[] of {byte 0}, array of byte name));
+	u := xcat(salt, array[] of {byte 0, byte 0, byte 0, byte 1});
+	t := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(u, len u, pw, t, nil);
+	u = array[Keyring->SHA384dlen] of byte;
+	u[0:] = t;
+	v := array[Keyring->SHA384dlen] of byte;
+	for(i := 1; i < 200000; i++){
+		kr->hmac_sha384(u, len u, pw, v, nil);
+		for(j := 0; j < len t; j++)
+			t[j] ^= v[j];
+		(u, v) = (v, u);
+	}
+	kept = ref Kept(name, password, t) :: kept;
+	return t;
+}
+
+# the old form: the password's SHA-256
+xoldsecret(password: string): array of byte
 {
 	pw := array of byte password;
 	dig := array[Keyring->SHA256dlen] of byte;
 	kr->sha256(pw, len pw, dig, nil);
 	return dig;
+}
+
+Newform: con 2;
+Oldform: con 1;
+
+# the secret a conversation's reply asks for, by its form
+xpw(cv: ref Conv, password: string): array of byte
+{
+	if(int cv.reply[3] == Oldform)
+		return xoldsecret(password);
+	return xsecret(cv.name, password);
 }
 
 hex(a: array of byte): string
@@ -899,20 +953,27 @@ inrange(x, p: ref IPint): int
 testVectors(t: ref T)
 {
 	v := array[] of {
-		(Chacha, 14, "e01cc240f014baaa6594b1143533ca1e",
-			"eadfe4c1019cb37b760704eacb8370c5f865ebd162a01b58ded633e630016dcd",
-			"d59c91963a607d675ac2ebd93b8026529bdc4b08af2f81f084b4833cc9261246",
-			"985cb32008baaca846bbbdbdd13b60cac40c17f96a16856bc0ac842b8416f803",
-			"b5af178e23eab41a3be6990cececd59519128b6f9975deef3ae608dd6a7c9b81",
-			"80b3abda810703ec98fbb95cabe38c353fe8b1c279d36938b5fed3092cf6bc86"),
-		(Aesgcm, 15, "92c2389540145519861251b157c9b119",
-			"f18457aad2461d29ed2db488450f72f49eaea89e2fba2fb70a72c0e45f8cc51f",
-			"070c40b76e30ace197c3ab47b2832424113c2025f3772d24f5bb964dcc9b0f24",
-			"d4f94558eb373dab328021881d1af352ab914069e9c3c097e491fae036c091ad0e0e65101e0abe5ae2e22bd22099c32e",
-			"ac165b9c48ca3a38f2ae71e8c4ea82fcb5d0161df0896c5b62dcb3011b22e1013d010d04eed45a2a9097014ef01cb8c9",
-			"2645e9352f3216639edf87cfe24fe7465efe3085d22ad96227a9638cb70b67629e80f3a9ca4ca2015d97e8a9463a60e0"),
+		(Chacha, 14, "3b9e01fc556338aaed8519ec77915f25",
+			"3b4f4414945e656f221623db0978e7d3ac13523eda9afed3b23d04533519c940",
+			"01218aacd47da19a0c398fdf8b16b9d647527d2d58e22a1025a1c3483649ced6",
+			"45783e77d7fe4488a41f0d37600eea07047d1bfed9091aca7edda19477447f5b",
+			"659a30e1f07b1a93282127b12681a3866148cda84c8cb055d2a40e3003ce9046",
+			"a39bb35f76fd94a4ab4159423b76f8d2fb2cbd1bbf7f842608ed6e8d57640409"),
+		(Aesgcm, 15, "34cc3ddb2c7c3c7e981c0a2e516e1476",
+			"3b4feea07cc5edbd20290a05ff9a5f1a9fa6a1afa10034b74fe75cfc7e48588d",
+			"2b447898ac9e70e77da8ca392f000e0238b69f4f31b3af07402776d7bdd08bce",
+			"ccf69a936a19249f03450d2e489e6a6c7519ba15b2c87b61cb6f00bf885dd1de99394e2116da4627ecdb933c4940ef37",
+			"2976e473a4c19a906f7bcb9d6390b7af41828d3a6a97fe24fa652611c0befd276a5612cb369aff915130c1513a7049fd",
+			"31b1d9701bc9024fcb121cf158b44cfd8333e96391fea06e32f7b795ecbcb71783302fb32406165120bfe4d04cab62ce"),
 	};
-	pw := pwdigest(Password);
+	# the account's secret (keys(6)), by the page, by login(2) and by Python
+	pw := xsecret("alice", Password);
+	t.assertseq(hex(pw), "c938e1fb43ac10df8583f4f1fcca71f165e22baa9bda55818b88a60086bc2366338592c90cbc9ef92186f36cdc8c0aa7", "alice's secret is PBKDF2-HMAC-SHA-384 as hashlib makes it");
+	t.assertseq(hex(login->secret("alice", array of byte Password)), hex(pw), "and as login(2) makes it");
+	t.asserteq(len pw, Login->Secretlen, "48 bytes");
+	t.asserteq(login->secretform(pw), Login->Newform, "of the new form");
+	t.asserteq(login->secretform(xoldsecret(Password)), Login->Oldform, "the password's SHA-256 is of the old");
+	t.asserteq(login->secretform(array[20] of byte), 0, "and the SHA-1 of old Inferno's neither");
 	cnonce := ramp(1, 0, Noncelen);
 	snonce := ramp(1, Noncelen, Noncelen);
 	for(i := 0; i < len v; i++){
@@ -935,7 +996,7 @@ testVectors(t: ref T)
 		# and login(2)'s own, which the signer uses
 		t.assertseq(hex(login->kemmask(suite, gid, "alice", pw, cnonce, snonce, z, rho)), km, what + ": login(2)'s masked seed");
 		hello := xcat(array[] of {byte Version, byte suite}, cnonce);
-		reply := xcat(xcat(array[] of {byte Version, byte suite, byte gid}, snonce), m);
+		reply := xcat(xcat(array[] of {byte Version, byte suite, byte gid, byte Newform}, snonce), m);
 		share := ramp(5, 3, n+eklen);
 		ct := ramp(13, 4, ctlen);
 		k := ramp(17, 5, 32);
@@ -1069,7 +1130,7 @@ begin(addr, name: string, suite: int, hello: array of byte): (ref Conv, string)
 	(reply, err) = getbytes(c.dfd);
 	if(err != nil)
 		return (nil, "reply: " + err);
-	if(len reply < 3+Noncelen)
+	if(len reply < 4+Noncelen)
 		return (nil, sys->sprint("reply of %d bytes", len reply));
 	cv := ref Conv(c, name, suite, int reply[2], 0, nil, hello, reply, 0, 0);
 	(cv.eklen, cv.ctlen) = xkemsizes(suite);
@@ -1082,7 +1143,7 @@ begin(addr, name: string, suite: int, hello: array of byte): (ref Conv, string)
 # what the signer's masked value is under password
 unmask(cv: ref Conv, password: string): ref IPint
 {
-	return IPint.bytestoip(xmask(cv.suite, cv.gid, cv.name, pwdigest(password), cv.hello[2:], cv.reply[3:3+Noncelen], cv.reply[3+Noncelen:]));
+	return IPint.bytestoip(xmask(cv.suite, cv.gid, cv.name, xpw(cv, password), cv.hello[2:], cv.reply[4:4+Noncelen], cv.reply[4+Noncelen:]));
 }
 
 # The client's third message as login(6) has it: 2**r1 mod p and an
@@ -1091,7 +1152,7 @@ share(cv: ref Conv, pw, y, z: array of byte): (array of byte, array of byte)
 {
 	(ek, dk) := xkeygen(cv.suite);
 	msg := xcat(y, ek);
-	msg[cv.n+cv.eklen-Rholen:] = xkemmask(cv.suite, cv.gid, cv.name, pw, cv.hello[2:], cv.reply[3:3+Noncelen], z, ek[cv.eklen-Rholen:]);
+	msg[cv.n+cv.eklen-Rholen:] = xkemmask(cv.suite, cv.gid, cv.name, pw, cv.hello[2:], cv.reply[4:4+Noncelen], z, ek[cv.eklen-Rholen:]);
 	return (msg, dk);
 }
 
@@ -1109,7 +1170,7 @@ finish(cv: ref Conv, password: string): (string, ref Keyring->Authinfo)
 	leakr1 = r1;
 	y := xbe(IPint.inttoip(2).expmod(r1, cv.p), cv.n);
 	z := xbe(x.expmod(r1.shl(1), cv.p), cv.n);
-	pw := pwdigest(password);
+	pw := xpw(cv, password);
 	(msg, dk) := share(cv, pw, y, z);
 	kr->putbytearray(cv.c.dfd, msg, len msg);
 	(ct, err) := getbytes(cv.c.dfd);
@@ -1132,6 +1193,11 @@ finish(cv: ref Conv, password: string): (string, ref Keyring->Authinfo)
 		return ("secrets: " + err, nil);
 	if(sys->fprint(cv.c.cfd, "alg aes_256_gcm") < 0)
 		return (sys->sprint("alg: %r"), nil);
+	# an account of the old form is sent its new secret
+	if(int cv.reply[3] == Oldform){
+		nw := xsecret(cv.name, password);
+		kr->putbytearray(cv.c.dfd, nw, len nw);
+	}
 	info := ref Keyring->Authinfo;
 	s: string;
 	(s, err) = getstr(cv.c.dfd);
@@ -1166,7 +1232,7 @@ testManual(t: ref T)
 	t.asserteq(int cv.reply[0], Version, "ChaCha20: the reply's version");
 	t.asserteq(int cv.reply[1], Chacha, "ChaCha20: the reply's suite");
 	t.asserteq(cv.gid, 14, "ChaCha20: group 14");
-	t.asserteq(len cv.reply, 3+Noncelen+256, "ChaCha20: version, suite, group, nonce and a value of len(p) bytes: no tag");
+	t.asserteq(len cv.reply, 4+Noncelen+256, "ChaCha20: version, suite, group, nonce and a value of len(p) bytes: no tag");
 	t.asserteq(cv.ctlen, 1088, "ChaCha20: ML-KEM-768's ciphertext is expected");
 	info: ref Keyring->Authinfo;
 	(err, info) = finish(cv, Password);
@@ -1178,7 +1244,7 @@ testManual(t: ref T)
 	if(cv == nil)
 		t.fatal("AES-256-GCM: " + err);
 	t.asserteq(cv.gid, 15, "AES-256-GCM: group 15 (3072 bits)");
-	t.asserteq(len cv.reply, 3+Noncelen+384, "AES-256-GCM: the reply's length");
+	t.asserteq(len cv.reply, 4+Noncelen+384, "AES-256-GCM: the reply's length");
 	t.asserteq(cv.ctlen, 1568, "AES-256-GCM: ML-KEM-1024's ciphertext is expected (CNSA 2.0)");
 	cnsacv := cv;
 
@@ -1375,7 +1441,7 @@ testOffline(t: ref T)
 		(cv, err) := begin(logind(t, 0), "heidi", Chacha, nil);
 		if(cv == nil)
 			t.fatal(sys->sprint("connection %d: %s", i, err));
-		if(len cv.reply != 3+Noncelen+cv.n)
+		if(len cv.reply != 4+Noncelen+cv.n)
 			t.fatal(sys->sprint("the reply has %d bytes: more than the nonce and the value", len cv.reply));
 		q := cv.p.shr(1);
 		for(w := 0; w < len words; w++){
@@ -1407,11 +1473,11 @@ testReplay(t: ref T)
 	(cv2, e2) := begin(logind(t, 0), "ivan", Chacha, hello);
 	if(cv1 == nil || cv2 == nil)
 		t.fatal("replay: " + e1 + " " + e2);
-	t.assert(!eq(cv1.reply[3:3+Noncelen], cv2.reply[3:3+Noncelen]), "the signer's nonce is fresh for each reply");
+	t.assert(!eq(cv1.reply[4:4+Noncelen], cv2.reply[4:4+Noncelen]), "the signer's nonce is fresh for each reply");
 	zero := array[cv1.n] of {* => byte 0};
-	pw := pwdigest(Password);
-	k1 := xmask(Chacha, cv1.gid, "ivan", pw, hello[2:], cv1.reply[3:3+Noncelen], zero);
-	k2 := xmask(Chacha, cv2.gid, "ivan", pw, hello[2:], cv2.reply[3:3+Noncelen], zero);
+	pw := xsecret("ivan", Password);
+	k1 := xmask(Chacha, cv1.gid, "ivan", pw, hello[2:], cv1.reply[4:4+Noncelen], zero);
+	k2 := xmask(Chacha, cv2.gid, "ivan", pw, hello[2:], cv2.reply[4:4+Noncelen], zero);
 	t.assert(!eq(k1, k2), "one hello sent twice gets two keystreams");
 	# and each reply is the signer's value under its own
 	t.assert(inrange(unmask(cv1, Password), cv1.p) && inrange(unmask(cv2, Password), cv2.p), "each unmasks to a value in range");
@@ -1551,6 +1617,7 @@ ownparams(c: ref Sys->Connection, arg: string): string
 	version := Version;
 	gid := 14;
 	n := 256;
+	form := Newform;
 	case arg {
 	"group2" =>
 		gid = 2;	# RFC 2409's 1024 bits
@@ -1565,12 +1632,18 @@ ownparams(c: ref Sys->Connection, arg: string): string
 		version = 2;
 	"version4" =>
 		version = 4;
+	"form0" =>
+		form = 0;
+	"form1" =>
+		form = Oldform;
+		gid = 15;	# what a CNSA client takes
+		n = 384;
 	"suite" =>
 		suite = 3 - suite;
 	"group14" =>
 		;
 	}
-	reply := xcat(xcat(array[] of {byte version, byte suite, byte gid}, randombytes(Noncelen)), randombytes(n));
+	reply := xcat(xcat(array[] of {byte version, byte suite, byte gid, byte form}, randombytes(Noncelen)), randombytes(n));
 	kr->putbytearray(c.dfd, reply, len reply);
 	return aftermath(c);
 }
@@ -1598,9 +1671,9 @@ pwsigner(c: ref Sys->Connection, arg: string): string
 	"p-1" =>
 		x = p.sub(one);
 	}
-	pw := pwdigest(Password);
+	pw := xsecret(name, Password);
 	snonce := randombytes(Noncelen);
-	reply := xcat(xcat(array[] of {byte Version, byte suite, byte gid}, snonce), xmask(suite, gid, name, pw, hello[2:], snonce, xbe(x, n)));
+	reply := xcat(xcat(array[] of {byte Version, byte suite, byte gid, byte Newform}, snonce), xmask(suite, gid, name, pw, hello[2:], snonce, xbe(x, n)));
 	kr->putbytearray(c.dfd, reply, len reply);
 	(msg, err) := getbytes(c.dfd);
 	if(msg == nil)
@@ -1724,6 +1797,8 @@ testOwnParams(t: ref T)
 		("version1", 0, "not login version 3"),
 		("version2", 0, "speaks login version 2, which has no ML-KEM"),
 		("version4", 0, "not login version 3"),
+		("form0", 0, "form of secret 0"),
+		("form1", 1, "CNSA mode: the signer holds the account's secret in the old form"),
 		("suite", 0, "suite not offered"),
 		("suite", 1, "CNSA mode"),
 		("group14", 1, "3072"),
@@ -1888,7 +1963,7 @@ logsigner(c: ref Sys->Connection, arg: string): string
 		gid = 15;
 	(p, n) := xgroup(gid);
 	snonce := randombytes(Noncelen);
-	reply := xcat(xcat(array[] of {byte Version, byte suite, byte gid}, snonce), randombytes(n));
+	reply := xcat(xcat(array[] of {byte Version, byte suite, byte gid, byte Newform}, snonce), randombytes(n));
 	kr->putbytearray(c.dfd, reply, len reply);
 	(msg, err) := getbytes(c.dfd);
 	if(msg == nil)
@@ -1902,11 +1977,11 @@ logsigner(c: ref Sys->Connection, arg: string): string
 	formed := 0;
 	guess := -1;
 	for(w := 0; w < len logwords; w++){
-		x := IPint.bytestoip(xmask(suite, gid, name, pwdigest(logwords[w]), hello[2:], snonce, reply[3+Noncelen:]));
+		x := IPint.bytestoip(xmask(suite, gid, name, xsecret(name, logwords[w]), hello[2:], snonce, reply[4+Noncelen:]));
 		zs[w] = xbe(x.expmod(r1.shl(1), p), n);
 		if(logwords[w] == Password && eq(zs[w], leakz))
 			gotz = 1;
-		rho := xkemmask(suite, gid, name, pwdigest(logwords[w]), hello[2:], snonce, zs[w], msg[n+eklen-Rholen:]);
+		rho := xkemmask(suite, gid, name, xsecret(name, logwords[w]), hello[2:], snonce, zs[w], msg[n+eklen-Rholen:]);
 		(ct, nil) := xencaps(suite, xcat(msg[n:n+eklen-Rholen], rho));
 		if(ct != nil)
 			formed++;
@@ -1915,7 +1990,7 @@ logsigner(c: ref Sys->Connection, arg: string): string
 	}
 	if(guess < 0)
 		return "no such guess";
-	ek := xcat(msg[n:n+eklen-Rholen], xkemmask(suite, gid, name, pwdigest(arg), hello[2:], snonce, zs[guess], msg[n+eklen-Rholen:]));
+	ek := xcat(msg[n:n+eklen-Rholen], xkemmask(suite, gid, name, xsecret(name, arg), hello[2:], snonce, zs[guess], msg[n+eklen-Rholen:]));
 	(ct, k) := xencaps(suite, ek);
 	kr->putbytearray(c.dfd, ct, len ct);
 	(cp, e2) := getbytes(c.dfd);
@@ -1923,7 +1998,7 @@ logsigner(c: ref Sys->Connection, arg: string): string
 		return "the client sent no proof: " + e2;
 	found := "";
 	for(w = 0; w < len logwords; w++){
-		(cproof, nil, nil) := xkeys(suite, name, pwdigest(logwords[w]), hello, reply, msg, ct, zs[w], k);
+		(cproof, nil, nil) := xkeys(suite, name, xsecret(name, logwords[w]), hello, reply, msg, ct, zs[w], k);
 		if(eq(cproof, cp))
 			found += " " + logwords[w];
 	}
@@ -1963,7 +2038,7 @@ finishleak(cv: ref Conv, x: ref IPint): (string, ref Keyring->Authinfo)
 	leakz = xbe(x.expmod(r1.shl(1), cv.p), cv.n);
 	leakr1 = r1;
 	y := xbe(IPint.inttoip(2).expmod(r1, cv.p), cv.n);
-	pw := pwdigest(Password);
+	pw := xpw(cv, Password);
 	(msg, dk) := share(cv, pw, y, leakz);
 	kr->putbytearray(cv.c.dfd, msg, len msg);
 	(ct, err) := getbytes(cv.c.dfd);
@@ -2034,6 +2109,75 @@ testOldExchange(t: ref T)
 	(err, info, nil) = fakelogin(t, oldsigner, nil, 0);
 	t.assert(info == nil, "a signer of the old exchange gives login(2) nothing");
 	t.assert(err != nil && contains(err, "old login exchange"), "and login(2) says which exchange it speaks: " + err);
+}
+
+# what keyfs holds as name's secret
+heldsecret(name: string): array of byte
+{
+	fd := sys->open("/mnt/keys/" + name + "/secret", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return nil;
+	return buf[0:n];
+}
+
+#
+# Accounts of the old form (the password's SHA-256, keys(6)) are moved
+# to the new (PBKDF2-HMAC-SHA-384 salted by the name) by their next
+# login, which is in the old form; not by a wrong password; not in CNSA
+# mode, where one is answered as a wrong password is.  A name with no
+# account is told the new form, as an account of the new form is.
+#
+testMigration(t: ref T)
+{
+	sys->remove("/keydb/loginfail");
+	auditlines = nil;
+	(cv, err) := begin(logind(t, 0), "otto", Chacha, nil);
+	if(cv == nil)
+		t.fatal("otto: " + err);
+	t.asserteq(int cv.reply[3], Oldform, "an account of the old form is told so");
+	(cv, err) = begin(logind(t, 0), "nobody-here", Chacha, nil);
+	if(cv == nil)
+		t.fatal("nobody: " + err);
+	t.asserteq(int cv.reply[3], Newform, "a name with no account is told the new form");
+	(cv, err) = begin(logind(t, 0), User, Chacha, nil);
+	if(cv == nil)
+		t.fatal(User + ": " + err);
+	t.asserteq(int cv.reply[3], Newform, "an account of the new form is told so");
+	cv = nil;
+
+	# a wrong password moves nothing
+	(werr, winfo) := userlogin(t, "otto", 0, 0, Wrong);
+	t.assert(winfo == nil && werr != nil && contains(werr, "incorrect"), "a wrong password to an account of the old form: " + werr);
+	t.asserteq(len heldsecret("otto"), Login->Oldsecretlen, "and its secret is still of the old form");
+
+	# CNSA mode: answered as a wrong password, and not moved
+	(cerr, cinfo) := userlogin(t, "omar", 1, 1, Password);
+	t.assert(cinfo == nil && cerr != nil && contains(cerr, "incorrect"), "in CNSA mode an account of the old form is refused as a wrong password: " + cerr);
+	t.asserteq(len heldsecret("omar"), Login->Oldsecretlen, "and not moved");
+
+	# the right password: a certificate, and the new form held after
+	(err2, info) := userlogin(t, "olga", 0, 0, Password);
+	userloggedin(t, "olga", "an account of the old form logs in", err2, info);
+	held := heldsecret("olga");
+	t.asserteq(len held, Login->Secretlen, "and is given a secret of the new form");
+	t.assert(eq(held, xsecret("olga", Password)), "the password's, salted by its name");
+	t.assert(audited("logind secretchange user=olga form=new"), "the change is in the audit log");
+	(cv, err) = begin(logind(t, 0), "olga", Chacha, nil);
+	if(cv != nil)
+		t.asserteq(int cv.reply[3], Newform, "the next login is told the new form");
+	cv = nil;
+	(err2, info) = userlogin(t, "olga", 0, 0, Password);
+	userloggedin(t, "olga", "and logs in in it", err2, info);
+	# and now in CNSA mode too
+	(err2, info) = userlogin(t, "olga", 1, 1, Password);
+	t.assert(info != nil, "and in CNSA mode once moved: " + err2);
+	if(info != nil)
+		t.assertseq(info.cert.ha, "sha384", "a CNSA certificate");
+	sys->remove("/keydb/loginfail");
 }
 
 # The signer's own name is not an account's: its certificate is the
@@ -2187,6 +2331,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Login/Relay", testRelay);
 	run("Login/OldExchange", testOldExchange);
 	run("Login/Logarithms", testLogarithms);
+	run("Login/Migration", testMigration);
 	run("Login/SignerName", testSignerName);
 	run("Login/StaleLock", testStaleLock);
 	run("Login/Idle", testIdle);

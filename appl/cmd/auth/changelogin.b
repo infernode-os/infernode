@@ -107,8 +107,9 @@ init(nil: ref Draw->Context, args: list of string)
 			raise "fail:mismatch";
 		}
 
-		newsecret = array[Keyring->SHA256dlen] of byte;
-		kr->sha256(pwbuf, len pwbuf, newsecret, nil);
+		# the account's secret of the new form (keys(6)): PBKDF2 with
+		# HMAC-SHA-384 salted by the name; it was the password's SHA-256
+		newsecret = login->secret(id, pwbuf);
 		login->zero(pwbuf);
 	}
 

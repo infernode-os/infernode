@@ -803,12 +803,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # two halves of about 18 minutes each, the whole being too long
-        # for one job beside the build
+        # three parts, each well inside the limit beside the build (whose
+        # apt-get alone takes 3 to 9 minutes): shard 1 had grown to 39 of
+        # its 40 and failed whenever a runner was slow. tools9p_integration
+        # takes 9.5 minutes by itself, a fresh emulator for each check
         include:
           - shard: 1
             tests: >-
-              activity_switch_test amd64_jit_typecom_bound_test
+              amd64_jit_typecom_bound_test
               amd64_jit_typecom_slab_test commands_test devletters_test dhcp_client_test
               dis_parser_bounds_test editor_capability_test
               exec_fork_no_panic_test exec_timeout_kill_test
@@ -818,8 +820,8 @@ jobs:
               timesync_test mail9p_imap_test network_capability_test pathmanage_test
               plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
-              tools9p_integration_test ecc_test secp256k1_test rwlock_test tls_matrix_test
-              tls_clientauth_test ssl_killedcall_test vid9p_hangup_test httpd_test httpd_auth_test
+              ecc_test secp256k1_test rwlock_test tls_matrix_test
+              tls_clientauth_test ssl_killedcall_test vid9p_hangup_test
               charon_netfile_test fetch_tools_test msg_email_bind_test editor_deputy_test
               matrix_compose_test llmsrv_ctl_test llmctl9p_test veltrosrv_gate_test veltro_kill_test
               keyfs_file_test aescbc_test keytools_test login_test x509_chain_test
@@ -857,6 +859,9 @@ jobs:
               digest_edge_test elgamal_test ipint_nomem_test libmp_edge_test rsa_edge_test
               x25519_test mnt_unexpected_test ninep_conv_test mldsa_test mlkem_test slhdsa_test
               pq_nodivide_test pq_residue_test
+          - shard: 3
+            tests: >-
+              tools9p_integration_test activity_switch_test httpd_test httpd_auth_test
     permissions:
       contents: read
     env:

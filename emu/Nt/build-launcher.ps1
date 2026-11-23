@@ -32,12 +32,17 @@ $repoRoot = Resolve-Path "$ROOT\..\.."
 # release's: include/version.h names it ("InferNode 0.6.0 build ..."; the
 # release stamps it with its tag, a source checkout says 0.1).  It is
 # written to launcher-version.h, which both resource scripts include.
+# A version.h with no number in it (a branch run stamps "InferNode
+# <branch> build ...", or one edited by hand) gives 0.0.0, as the macOS
+# apps take what the tag gives them, rather than leaving the build with
+# no launchers. ci.yml stamps a number and checks what Explorer shows.
 $verLine = Get-Content (Join-Path $repoRoot "include\version.h") | Select-String 'InferNode (\d+(\.\d+){0,3})' | Select-Object -First 1
-if (-not $verLine) {
-    Write-Host "ERROR: no version in include\version.h" -ForegroundColor Red
-    exit 1
+if ($verLine) {
+    $verStr = $verLine.Matches[0].Groups[1].Value
+} else {
+    $verStr = "0.0.0"
+    Write-Host "WARNING: no version number in include\version.h; the launchers say $verStr" -ForegroundColor Yellow
 }
-$verStr = $verLine.Matches[0].Groups[1].Value
 $verNum = @($verStr.Split('.') + @('0', '0', '0', '0'))[0..3] -join ','
 Set-Content -Path "$ROOT\launcher-version.h" -Encoding ascii -Value @(
     "#define LVERNUM $verNum",

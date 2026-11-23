@@ -64,13 +64,17 @@ function Pass($msg) {
     exit 0
 }
 
-# ── Preconditions ──────────────────────────────────────────────
+# -- Preconditions ----------------------------------------------
 if (-not (Test-Path "$Bundle\o.emu.exe")) {
     Fail "no o.emu.exe at $Bundle. Build a dev bundle first: .\build-dev-bundle.ps1"
 }
 
-# Kill any stale o.emu that might be holding files / state.
+# Kill any stale o.emu of this bundle that might be holding files / state.
+# Only this tree's emulators: a machine-wide Stop-Process -Name o.emu also
+# killed other checkouts' runs and a user's running InferNode (it was
+# the "intermittent" release smoke failure: exit 1, no output).
 Get-Process -Name "o.emu", "InferNode" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like "$((Resolve-Path $Bundle).Path)\*" } |
     ForEach-Object { Stop-Process -Id $_.Id -Force }
 
 # Note pre-test latest crash log entry so we can detect a new one.
@@ -79,9 +83,9 @@ $preCrash = Get-WinEvent -LogName Application -MaxEvents 1 -ErrorAction Silently
     Select-Object -First 1
 $preCrashTime = if ($preCrash) { $preCrash.TimeCreated } else { Get-Date '2000-01-01' }
 
-# ── The repro ──────────────────────────────────────────────────
+# -- The repro --------------------------------------------------
 # Run o.emu directly (PowerShell-attached stdio; the launcher path
-# would have no stdio but crashes identically — see prior tests).
+# would have no stdio but crashes identically - see prior tests).
 # load std + mount -ac {mntgen} /n is the minimal sequence that
 # spawns enough JIT-compiled modules to trigger the crash.
 $cmd = "load std; mount -ac {mntgen} /n >[2] /dev/null; echo OK"
@@ -95,7 +99,7 @@ $exitHex = '{0:X8}' -f ([uint32]([int64]$exitCode -band 0xFFFFFFFF))
 Write-Host "exit code:    $exitCode (decimal) / 0x$exitHex"
 Write-Host "saw 'OK':     $sawOk"
 
-# ── Diagnostics on crash ───────────────────────────────────────
+# -- Diagnostics on crash ---------------------------------------
 $crashed = ($exitCode -eq -1073741569)   # 0xC00000FF
 if ($crashed) {
     Write-Host ""
@@ -118,7 +122,7 @@ if ($crashed) {
     }
 }
 
-# ── Verdict ────────────────────────────────────────────────────
+# -- Verdict ----------------------------------------------------
 if ($ExpectPass) {
     if ($sawOk -and $exitCode -eq 0) {
         Pass "JIT + mntgen spawn ran clean (INFR-46 fix confirmed)."

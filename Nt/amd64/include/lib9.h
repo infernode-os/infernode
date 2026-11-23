@@ -18,6 +18,7 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <string.h>
+#include <ctype.h>
 #include "math.h"
 #include <fcntl.h>
 #include <setjmp.h>
@@ -118,6 +119,14 @@ extern	vlong	strtoll(const char*, char**, int);
 #define	qsort	infqsort
 extern	void	qsort(void*, long, long, int (*)(void*, void*));
 extern	uvlong	strtoull(const char*, char**, int);
+/*
+ * libmath's (dtoa.c), as infstrtod: <stdlib.h>'s prototype above has
+ * the CRT's name, so without this every strtod a file calls after the
+ * #define had none, was taken to return int (C4013), and on x64 read
+ * EAX where the double is in XMM0: the VM's string to real
+ * (libinterp/string.c, `real s` in Limbo) gave 0 for every string.
+ */
+extern	double	strtod(const char*, char**);
 
 enum
 {

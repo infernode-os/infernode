@@ -61,20 +61,32 @@ if (Test-Path "$ROOT\emu\Nt\SDL3.dll") {
 } else {
     Write-Warning "SDL3.dll not found at emu\Nt\SDL3.dll - copy it in manually if you need GUI mode."
 }
+# The FIDO2 runtime DLLs, present when the GUI emu was linked with
+# libfido2: build-windows-sdl3.ps1 copies every DLL fido2.dll needs
+# beside o.emu.exe, and the release bundles all of them. Without one the
+# emu does not start (v0.11.0 lacked libz.dll).
+Get-ChildItem "$ROOT\emu\Nt\*.dll" | Where-Object { $_.Name -ne "SDL3.dll" } |
+    ForEach-Object { Copy-Item $_.FullName "$OutDir\" }
 
 # Native tools (limbo, mk).
 New-Item -ItemType Directory -Force -Path "$OutDir\Nt\amd64\bin" | Out-Null
 Copy-Item "$ROOT\Nt\amd64\bin\limbo.exe" "$OutDir\Nt\amd64\bin\"
 Copy-Item "$ROOT\Nt\amd64\bin\mk.exe"    "$OutDir\Nt\amd64\bin\"
 
-# Runtime tree. usr\ and mnt\ excluded by default: usr\ contains
-# per-user state (secstore data, test artefacts) that shouldn't ship in
-# a release bundle; profile creates the needed subdirs at boot.
-foreach ($d in @("dis", "lib", "fonts", "man", "doc", "icons", "module", "services", "locale", "n", "appl")) {
+# Runtime tree, with usr\ and mnt\ as build-dev-bundle.sh and the release
+# have them: the profile binds ~/.infernode\usr over /usr and mounts
+# services under /mnt, and makes neither mount point (without them /usr's
+# bind, factotum and speech9p fail). acme\ and xenith\ hold the editors'
+# own commands (xenith\dis: Agent, Chat and the rest), as in the release.
+foreach ($d in @("dis", "acme", "xenith", "lib", "fonts", "man", "doc", "icons", "module", "services", "locale", "n", "appl", "usr", "mnt")) {
     if (Test-Path "$ROOT\$d") {
         Copy-Item -Recurse "$ROOT\$d" "$OutDir\$d"
     }
 }
+# The tree's usr\inferno\keyring\default is a test key: as release.yml
+# does (tools/release-scrub.sh), every file under a keyring\ goes.
+Get-ChildItem -Path "$OutDir\usr" -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Directory.Name -eq 'keyring' } | Remove-Item -Force
 # appl: the source, and the .sbl files beside it that the debugger and
 # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
 Get-ChildItem -Recurse -Filter *.dis "$OutDir\appl" | Remove-Item

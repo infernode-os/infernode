@@ -321,8 +321,13 @@ testNdvi(t: ref T)
 		t.fatal(sys->sprint("open ndvi: %r"));
 	nd := array[W*H] of byte;
 	# the next frame, waited for: those made before 0/ndvi was opened
-	# have none, and are refused as expired
-	(got, e) := readat(fd, nd, newest() + 1);
+	# have none, and are refused as expired. A runner that stalls longer
+	# than the window kept can let that number pass before the read is
+	# served (macOS AMD64 CI), as in Rotate: take the newest's next again.
+	got := 0;
+	e := "frame expired";
+	for(try := 0; try < 5 && e == "frame expired"; try++)
+		(got, e) = readat(fd, nd, newest() + 1);
 	t.asserteq(got, W*H, "a whole NDVI frame: " + e);
 	row := H-8;
 	bar := array[] of {128, 255, 1, 0};	# white, red alone, blue alone, neither

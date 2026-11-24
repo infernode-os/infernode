@@ -4,6 +4,30 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **`pctl(NEWNS)`: a relative ".." left the new root.** sys-pctl(2) makes
+  the current directory the root of the new name space. `/..` was held
+  there, but the new dot was a clone that kept the name dot had before,
+  with the mount points crossed on the way to it, so `../x` opened a file
+  of the directory above the root, `create` made one there, and
+  `chdir("..")` went there, with or without `NODEVS`. The new dot now has
+  a name of its own, as the new root has, in the hosted and the native
+  kernel. `pwd` after `pctl(NEWNS)` is `/`. `tests/newns_root_test.b`.
+- **Native kernel: removing an IPv6 address could stop neighbour
+  discovery for the others.** 0.11.0 (and 0.12.0 after it) made a conversation's join of a
+  multicast address count once however often it was asked for. IP joins
+  a group once for each local address that needs it, through one
+  conversation, and leaves once for each; a link-local and a global
+  address with the same last three bytes share a solicited-node group,
+  so removing either left the group for both, and solicitations for the
+  one that remained went unanswered. Joins are counted for each
+  conversation again, a leave gives back only a join the conversation
+  made, and a close gives back all of them. The limits 0.11.0 added
+  stay: the list is no longer than 64 addresses, and a conversation
+  cannot release another's. Found by running the same change on 9front;
+  not run on a board. `tests/host/netif_multi_test.sh`.
+
 ## [0.12.0] - 2026-11-24
 
 ### Added
@@ -194,27 +218,6 @@ All notable changes to InferNode are documented in this file.
     emulator from 71 to 2770 MB/s here); the constant-time C runs
     elsewhere, and on Windows. Ed25519 keys and signatures are made in
     constant time; signatures are unchanged.
-- **`pctl(NEWNS)`: a relative ".." left the new root.** sys-pctl(2) makes
-  the current directory the root of the new name space. `/..` was held
-  there, but the new dot was a clone that kept the name dot had before,
-  with the mount points crossed on the way to it, so `../x` opened a file
-  of the directory above the root, `create` made one there, and
-  `chdir("..")` went there, with or without `NODEVS`. The new dot now has
-  a name of its own, as the new root has, in the hosted and the native
-  kernel. `pwd` after `pctl(NEWNS)` is `/`. `tests/newns_root_test.b`.
-- **Native kernel: removing an IPv6 address could stop neighbour
-  discovery for the others.** 0.11.0 made a conversation's join of a
-  multicast address count once however often it was asked for. IP joins
-  a group once for each local address that needs it, through one
-  conversation, and leaves once for each; a link-local and a global
-  address with the same last three bytes share a solicited-node group,
-  so removing either left the group for both, and solicitations for the
-  one that remained went unanswered. Joins are counted for each
-  conversation again, a leave gives back only a join the conversation
-  made, and a close gives back all of them. The limits 0.11.0 added
-  stay: the list is no longer than 64 addresses, and a conversation
-  cannot release another's. Found by running the same change on 9front;
-  not run on a board. `tests/host/netif_multi_test.sh`.
 
 ### Fixed
 

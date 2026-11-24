@@ -1870,9 +1870,12 @@ jobs:
             # An i7-8700B, interpreted: slower still.  At 1800 the suite
             # was cut off in its last few tests on 2026-11-15, nothing
             # hung: the tests it had finished add up to 1801 s (crypto
-            # 247 s, tls_server 209 s).  The backstop bounds a hang, and
-            # the job has 75 minutes.
-            backstop: 2400
+            # 247 s, tls_server 209 s).  At 2400 it was cut off again on
+            # 2026-11-23, in its last tests (Whitespace, ToolArgsByName)
+            # on four PRs, one of them a CHANGELOG edit: 2256 to 2398 s
+            # finished.  The backstop bounds a hang; the build takes about
+            # 2 minutes of the job's 75.
+            backstop: 3300
     env:
       ROOT: ${{ github.workspace }}
       OBJTYPE: ${{ matrix.arch }}

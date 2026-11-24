@@ -218,6 +218,7 @@ TARG=\
 	nil_far_test.dis\
 	slice_end_test.dis\
 	draw_edge_test.dis\
+	drawwarp_test.dis\
 	tk_edge_test.dis\
 	string_edge_test.dis\
 	geom_edge_test.dis\

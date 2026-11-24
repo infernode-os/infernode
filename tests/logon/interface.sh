@@ -160,7 +160,9 @@ if {~ $phase which} {
 	osk=no
 	n=0
 	while {and {~ $osk no} {! ~ $n 40}} {
-		if {ps | grep -s ' Osk$'} {osk=yes} {sleep 1}
+		# (a file, not a pipe: a pipeline's status is not grep's)
+		ps > /tmp/ps
+		if {grep -s ' Osk$' /tmp/ps} {osk=yes} {sleep 1}
 		n=${expr $n 1 +}
 	}
 	echo R osk $osk

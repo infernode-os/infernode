@@ -8,7 +8,7 @@
 # boot, and wm/wm's /chan/wmctl is beside its ports.
 load std
 if {! ~ $noplumber 1} {
-	/lib/sh/plumbrules start /lib/wm/plumbing
+	sh /lib/sh/plumbrules start /lib/wm/plumbing
 	# Files the host asks to have opened (Finder's Open With, a file
 	# dropped on the window) arrive on /dev/hostopen and are plumbed.
 	# A process group of its own: the shell below is this one's, and

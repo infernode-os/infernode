@@ -6285,9 +6285,14 @@ vrefute "modern: nothing panics"                   "panic:"
 VCARD="$BUILD/$PLAT-card.img"
 printf 'local\n' > "$BUILD/rootpath"
 : > "$BUILD/skiplogon"
+# An LLM configured, as the first run's setup leaves it (lib/ndb/llm): an
+# OpenAI-compatible server nothing answers at, so llmsrv starts and serves
+# /mnt/llm with no key.  With nothing configured llmsrv is not started on
+# any machine (it wants a key), here or hosted.
+printf 'backend=openai\nurl=http://10.0.2.2:9/v1\nmodel=test\n' > "$BUILD/llm"
 if python3 "$ROOT/tools/mkcard.py" "$VCARD" 192 /dis="$ROOT/dis" /lib="$ROOT/lib" \
         /fonts="$ROOT/fonts" /icons="$ROOT/icons" /usr= \
-        /rootpath="$BUILD/rootpath" /skiplogon="$BUILD/skiplogon" > "$BUILD/mkcard.txt" 2>&1; then
+        /rootpath="$BUILD/rootpath" /skiplogon="$BUILD/skiplogon" /lib/ndb/llm="$BUILD/llm" > "$BUILD/mkcard.txt" 2>&1; then
     pass "virt: mkcard builds a populated FAT32 card ($(sed 's/^mkcard: [^:]*: //' "$BUILD/mkcard.txt"))"
     FSCK="$(command -v fsck.fat 2>/dev/null || ls /usr/sbin/fsck.fat /sbin/fsck.fat 2>/dev/null | head -1)"
     if [[ -n "$FSCK" ]]; then
@@ -6412,8 +6417,8 @@ PYEOF
     # works with, so a Pi's chat had no model, no tools and no plumber.
     # Module names as ps prints them.
     #
-    for m in Llmsrv Wallet9p Msg9p Tools9p Lucibridge Plumber Luciuisrv; do
-        if grep -qiE "[[:space:]]$m[[:space:]]*\$" <<<"$OUT"; then
+    for m in Llmsrv Wallet9p Msg9p Tools9p LuciBridge Plumber Luciuisrv; do
+        if grep -qE "[[:space:]]$m(\[\\\$Sys\])?[[:space:]]*\$" <<<"$OUT"; then
             pass "virt: the board's Assistant runs $m, as a hosted one does"
         else
             fail "virt: no $m among the board's Progs (ps)"
@@ -6553,7 +6558,7 @@ try:
         def at(x, y):
             o = (y*w + x)*3
             return px[o:o+3]
-        bg = at(4, 4)
+        bg = at(w - 4, 4)	# not (4,4): the pointer's arrow is drawn at 0,0
         def ink(y):
             return [x for x in range(0, w, 2) if at(x, y) != bg]
         field = None
@@ -6597,8 +6602,9 @@ try:
         prev = (r, band(px, w, *r)) if r else None
     if not rows:
         say("LOGIN no picker under the field")
-        raise SystemExit
-    say("LOGIN picker rows %d-%d" % rows)
+        rows = (0, 0)
+    else:
+        say("LOGIN picker rows %d-%d" % rows)
     start = band(px, w, *rows)
     key("down"); time.sleep(2)
     w, h, px = dump()
@@ -6629,7 +6635,7 @@ PYEOF
         vcheck "login: Up chooses the one before"               "LOGIN up back"
         vcheck "login: the first password set logs in"          "boot: logged in"
         vcheck "login: the interface chosen, Desktop, is started" "boot: interface Desktop"
-        if grep -qiE '[[:space:]]Wm[[:space:]]*$' <<<"$OUT"; then
+        if grep -qE '[[:space:]]Wm(\[\$Sys\])?[[:space:]]*$' <<<"$OUT"; then
             pass "virt: login: the Desktop is wm/wm"
         else
             fail "virt: login: no wm/wm among the board's Progs (ps)"

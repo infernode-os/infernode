@@ -409,6 +409,8 @@ if {grep -s '^watch=on' /lib/veltro/messaging.conf} {
 # ftree file tree, the context panel, an agent, or the `plumb` command.
 # lib/sh/plumbrules starts it, falling back to the defaults alone if the
 # user's rules do not parse.
+# Run by sh, not by its name: a board's card is FAT, which keeps no
+# execute bit, and a script run by its name there is "not executable".
 #
 # The plumber publishes /chan/plumb.* via file2chan, which needs /chan on
 # the srv device (#s); emu leaves /chan as the snarf device (#^).  Bind a
@@ -423,7 +425,7 @@ if {grep -s '^watch=on' /lib/veltro/messaging.conf} {
 # consumer must never gate lucipres's init (see lucipres plumbreceiver).
 if {! ~ $noplumber 1} {
 	bind -bc '#splumber' /chan
-	/lib/sh/plumbrules start /lib/lucifer/plumbing
+	sh /lib/sh/plumbrules start /lib/lucifer/plumbing
 }{
 	echo 'boot: noplumber=1 — plumber not started (pickers use the /mnt/ui fallback)'
 }

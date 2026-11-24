@@ -20,6 +20,16 @@ the new card image, which replaces the whole card, `usr/` too (your keys and
 secstore account): copy `usr/` off first and back after. A release that fixes a
 security problem says so in its notes, with the advisory.
 
+## Security Advisories
+
+Vulnerabilities fixed in a release are listed in
+[docs/SECURITY-ADVISORIES.md](docs/SECURITY-ADVISORIES.md), one file each
+under `docs/security-advisories/`: what was affected, who could use it,
+the release with the fix and the commits that made it. They are filed as
+GitHub Security Advisories from those files (`tools/security-advisories.py`).
+Every release's own **Security** section in [CHANGELOG.md](CHANGELOG.md)
+lists all its security changes, the smaller ones too.
+
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability in InferNode, please report it

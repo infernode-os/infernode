@@ -318,6 +318,15 @@ jobs:
         chmod +x tests/host/release_scrub_test.sh
         ROOT=. bash tests/host/release_scrub_test.sh
 
+    - name: Check the security advisories
+      run: |
+        # docs/security-advisories/: each advisory's header is one GitHub
+        # takes (severity, CWEs, a version range ending where the fix
+        # begins), docs/SECURITY-ADVISORIES.md is generated from them, and
+        # tools/security-advisories.py files drafts against a fake GitHub.
+        # (Which release holds each fix is checked where tags are cloned.)
+        ROOT=. sh tests/host/security_advisories_test.sh
+
     - name: Check the tree's icons
       run: |
         # icons/ holds icon(2)'s glyphs (icons/ui), Tk's cursors and the

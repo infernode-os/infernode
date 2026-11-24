@@ -4,6 +4,18 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **Security advisories for the fixes in earlier releases.**
+  `docs/SECURITY-ADVISORIES.md` lists 32, one file each under
+  `docs/security-advisories/` (ISA-2026-001 to 032): what was affected,
+  who could use it, the release that fixed it, its commits, and what to
+  do on an older install. `tools/security-advisories.py` checks them and
+  files them as GitHub Security Advisory drafts;
+  `tests/host/security_advisories_test.sh` holds both to their rules.
+  ISA-2026-032 is the `pctl(NEWNS)` fix below the 0.12.0 heading: it was
+  merged after the `v0.12.0` tag, so no release has it yet.
+
 ## [0.12.0] - 2026-11-24
 
 ### Added

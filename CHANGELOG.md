@@ -41,7 +41,7 @@ All notable changes to InferNode are documented in this file.
   board CI runs when the boot or the login screen changes, and boots a
   card under QEMU with a USB keyboard: the picker drawn, Down and Up
   changing it, the first password set, the Desktop started, and the
-  Assistant's services running. Not run on a board.
+  Assistant's services running. Run on a Pi Zero 2 W.
 - **The Windows packages start on a new PC and under any user's
   folder** (#1264, after #1250). The DLLs beside the GUI emulator
   (`fido2`, `cbor`, `libcrypto`, `zlib`) need `VCRUNTIME140.dll`, which

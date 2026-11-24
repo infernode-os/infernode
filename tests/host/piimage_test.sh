@@ -240,7 +240,7 @@ for board in rpi3bplus rpizero2w rpi4b rpi5; do
 	fi
 
 	ok=1
-	for f in dis/sh.dis dis/lucifer.dis dis/wm/logon.dis lib/lucifer/boot-baremetal.sh; do has "$L" "/$f" "$f" || ok=0; done
+	for f in dis/sh.dis dis/lucifer.dis dis/wm/logon.dis dis/wm/wm.dis lib/lucifer/boot-baremetal.sh lib/lucifer/boot.sh lib/wm/desktop.sh; do has "$L" "/$f" "$f" || ok=0; done
 	[ $ok = 1 ] && pass "$board: dis/ and lib/ are the tree's" || failed "$board: dis/ or lib/"
 	ndis=$(find dis -type f | wc -l | tr -d ' ')
 	ncard=$(grep -c '^/dis/.* [0-9]* ' "$L")

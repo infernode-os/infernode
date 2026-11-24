@@ -154,6 +154,18 @@ if {~ $phase which} {
 	waitfor interface {or {ftest -e /chan/wmwindows} {ftest -e /mnt/ui/ctl}}
 	if {ftest -e /chan/wmwindows} {echo R started Desktop}
 	if {ftest -e /mnt/ui/ctl} {echo R started Assistant}
+	# the keyboard on the screen: Lucifer starts it once it is up
+	# (some seconds after its UI server), where $osk is on.  Looked
+	# for for 40 seconds, so "no" means it was not started.
+	osk=no
+	n=0
+	while {and {~ $osk no} {! ~ $n 40}} {
+		# (a file, not a pipe: a pipeline's status is not grep's)
+		ps > /tmp/ps
+		if {grep -s ' Osk$' /tmp/ps} {osk=yes} {sleep 1}
+		n=${expr $n 1 +}
+	}
+	echo R osk $osk
 }
 echo R done
 echo halt > '#c/sysctl'

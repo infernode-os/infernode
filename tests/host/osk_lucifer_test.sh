@@ -28,7 +28,7 @@ LOG="$ROOT/$T/log"
 trap 'rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
 SDL_VIDEODRIVER=dummy with_timeout 150 "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m -g1024x768 -r"$ROOT" \
-	/dis/sh.dis -l -c "skiplogon=1; run /lib/lucifer/boot.sh & sleep 45; bind -c /$T /tmp; run /tests/osk/lucifer.sh" \
+	/dis/sh.dis -l -c "skiplogon=1; osk=on; run /lib/lucifer/boot.sh & sleep 45; bind -c /$T /tmp; run /tests/osk/lucifer.sh" \
 	</dev/null >"$LOG" 2>&1 || true
 
 failed=0

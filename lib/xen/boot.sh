@@ -11,7 +11,7 @@ load std
 # not start its own: the user's rules (/usr/<user>/lib/plumbing), then
 # /lib/xen/plumbing.
 bind -bc '#splumber' /chan
-/lib/sh/plumbrules start /lib/xen/plumbing
+sh /lib/sh/plumbrules start /lib/xen/plumbing
 # Files the host asks to have opened, a document opened with the app
 # (Finder's Open With, the Dock icon) or a file dropped on the window,
 # arrive on /dev/hostopen (cons(3)) and are plumbed like any other.

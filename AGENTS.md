@@ -234,8 +234,8 @@ comes back under a different name than you created — a file written as
 it did not. `/usr` is `MREPL` and writable. `/dis/lib/wpakey.dis` and friends
 resolve to the *card*, not the image, so replacing bytecode there does take
 effect; `/lib/sh/profile` resolves to the read-only image copy, so it cannot be
-the hook for boot-time changes. `/lib/lucifer/boot-baremetal.sh` comes from the
-card and can.
+the hook for boot-time changes. `/lib/lucifer/boot-baremetal.sh` and the boot it
+runs, `/lib/lucifer/boot.sh` (every build's), come from the card and can.
 
 **factotum runs unlocked, and that is deliberate.** `osinit.b` starts it with no
 arguments, so neither persistence backend is configured, `allkeys` starts empty

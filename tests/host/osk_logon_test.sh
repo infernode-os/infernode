@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # wm/osk as the boot starts it for the login screen (lib/lucifer/boot.sh,
-# boot-baremetal.sh; tests/osk/logon.sh): with no window manager, in
+# where $osk is on; tests/osk/logon.sh): with no window manager, in
 # secret mode: hidden until the screen is touched, then along the
 # bottom of the screen; what it types reaches the keyboard's reader
 # (wm/logon) as typed -- nothing put right -- and nothing of it is

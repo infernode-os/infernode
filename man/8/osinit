@@ -134,8 +134,11 @@ which in the kernel image is
 it starts
 .B auth/secstored
 and, in the background,
-.BR /lib/lucifer/boot-baremetal.sh .
-That script forks its namespace; removes
+.BR /lib/lucifer/boot-baremetal.sh ,
+which runs
+.BR /lib/lucifer/boot.sh ,
+the boot every build runs.
+On a board that script forks its namespace; removes
 .B #S
 and
 .B #G
@@ -154,7 +157,8 @@ Otherwise it runs
 .B wm/logon
 (unless
 .B /n/dos/skiplogon
-exists) and the Lucifer desktop.
+exists), which offers the Assistant and the Desktop, and then the
+interface chosen.
 The console remains a shell with the whole namespace in either case.
 .SS "Files on the card"
 All are optional.
@@ -282,7 +286,11 @@ the card's FAT partition
 in the kernel's root
 .TP
 .B /lib/lucifer/boot-baremetal.sh
-narrows the namespace; starts the desktop if there is a screen
+runs
+.B /lib/lucifer/boot.sh
+.TP
+.B /lib/lucifer/boot.sh
+narrows the namespace; starts the login screen and the interface chosen if there is a screen
 .SH SOURCE
 .B /os/init/osinit.b
 .SH SEE ALSO

@@ -160,14 +160,14 @@ TW=800
 TH=480
 home=home2
 mkdir -p "$ROOT/$T/$home"
-boot shown 'phase=shown;' ${TW}x$TH
+boot shown 'phase=shown; osk=on;' ${TW}x$TH
 set -- $(findpicker shown $TW $TH)
 [ "$1" != none ] && [ $# = 5 ] || { echo "FAIL: no picker found above the keyboard"; exit 1; }
 TX=$1 TY=$2 TY0=$3 TY1=$4 TFY=$5
 KH=$(sed -n 's/^height //p' "$ROOT/$T/status.shown")
 [ "$(sed -n 's/^state //p' "$ROOT/$T/status.shown")" = shown ] && [ "$TY1" -lt $((TH - ${KH:-0})) ]
 check $? "a touch shows the keyboard (a strip of ${KH:-0}) and the picker above it (row $TY0-$TY1)"
-boot touch "phase=touch; x=$TX; y=$TY;" ${TW}x$TH
+boot touch "phase=touch; osk=on; x=$TX; y=$TY;" ${TW}x$TH
 [ "$(sed -n 's/^state //p' "$ROOT/$T/status.keyed")" = shown ]
 check $? 'the keyboard still shown after the picker and its keys are touched'
 
@@ -267,6 +267,8 @@ has pick '^R windows 2$'; check $? 'a file plumbed on the Desktop opens in a win
 has skip '^R started Assistant$'; check $? 'with $skiplogon the boot starts Assistant, whatever was chosen'
 has override '^R started Desktop$'; check $? '$interface starts the interface it names'
 has phone '^R started Assistant$'; check $? 'a phone ($infmobile) has Assistant alone'
+has skip '^R osk no$'; check $? 'a hosted boot starts no keyboard on the screen ($osk unset: a hosted desktop has a keyboard)'
+has phone '^R osk yes$'; check $? 'a phone starts the keyboard on the screen'
 has setpw 'boot: logged in' && has setpw 'boot: interface Desktop' && [ "$(grep '^R key' "$ROOT/$T/setpw.log" | tr '\n' ' ')" = 'R key no R key yes ' ]
 check $? 'a password set on the first boot logs in to the Desktop, and a key added there is in factotum'
 has unlock 'logon: loaded 1 keys from secstore' && has unlock 'boot: interface Assistant' && has unlock '^R key yes$'

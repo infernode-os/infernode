@@ -647,13 +647,20 @@ the kernel `booted` → **`sh -l` on the serial console.**
 `auth/secstored`; run `/lib/lucifer/boot-baremetal.sh` in the
 background, so the serial console stays an interactive shell.
 
-**`boot-baremetal.sh`**: fork the namespace and **take the raw card, the
-GPIO pins, `/dev/sysctl` and `/dev/hostowner` out of it** — then check
-that they are really gone, and refuse to start the desktop if not. Then
-ask the draw device whether there is a screen: **if not, say so in one
-line and stop — the machine is headless.** Otherwise `wm/logon` (three
-attempts; or `skiplogon`), `luciuisrv`, `lucifer`.
-When the desktop exits the machine is still up: its `/dev/sysctl` is
+**`boot-baremetal.sh`** runs **`/lib/lucifer/boot.sh`**, the boot every
+build runs (macOS, Linux, Windows, the phones), which does a board's
+part where `$emuhost` is unset: fork the namespace and **take the raw
+card, the GPIO pins, `/dev/sysctl` and `/dev/hostowner` out of it** —
+then check that they are really gone, and refuse to start the desktop
+if not. Then ask the draw device whether there is a screen: **if not,
+say so in one line and stop — the machine is headless.** Otherwise
+the keyboard on the screen (for a touch panel) and `wm/logon` with the
+choice of interface, Assistant or Desktop (three attempts, and no
+desktop if all fail; or `skiplogon`), then the interface chosen, as a
+hosted machine starts it: Assistant is `llmsrv`, the wallet and
+messages, `luciuisrv`, `tools9p`, `lucibridge`, the plumber and
+`lucifer`; Desktop is `wm/wm` with a plumber and a shell.
+When the interface exits the machine is still up: its `/dev/sysctl` is
 null, so it cannot halt the board. The serial console can.
 
 ## 7. Getting at a running machine

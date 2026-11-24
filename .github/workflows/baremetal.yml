@@ -70,7 +70,14 @@ on:
       - 'Inferno/riscv64/**'
       - 'module/runt.m'
       - 'module/bench.m'
-      - 'lib/lucifer/boot-baremetal.sh'
+      # The boot every build runs, and what it starts: a change to any of
+      # them reaches the boards too, so the boards' boot is tested with it
+      # (the login screen's choice of interface went into the hosted boot
+      # alone, and four releases of card images shipped without it).
+      - 'lib/lucifer/**'
+      - 'lib/wm/desktop.sh'
+      - 'lib/sh/plumbrules'
+      - 'appl/wm/logon.b'
       - 'tests/host/baremetal_test.sh'
       - 'tests/host/baremetal_riscv64_test.sh'
       - 'tools/mkrootfs.py'
@@ -89,6 +96,10 @@ on:
     paths:
       - 'os/**'
       - 'libinterp/**'
+      - 'lib/lucifer/**'
+      - 'lib/wm/desktop.sh'
+      - 'lib/sh/plumbrules'
+      - 'appl/wm/logon.b'
       - 'tests/host/baremetal_test.sh'
       - 'tests/host/baremetal_riscv64_test.sh'
       - 'tools/mkcard.py'

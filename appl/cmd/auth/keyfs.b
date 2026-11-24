@@ -125,6 +125,19 @@ init(nil: ref Draw->Context, args: list of string)
 		error(sys->sprint("can't read the time from /dev/time: %r"));
 	timefd = nil;	# the server opens its own, in its own fd group
 
+	# The mount point is made here, readable by the signer's owner
+	# alone, before the master key is asked for: no tree ships it
+	# (security-check(8) refuses a tree with /mnt/keys in it), so
+	# svc/auth on a fresh install asked for the key and then failed
+	# to mount ("'/mnt/keys' does not exist"), and logind refused
+	# every login.
+	if(sys->stat(mountpt).t0 < 0){
+		fd := sys->create(mountpt, Sys->OREAD, Sys->DMDIR|8r700);
+		if(fd == nil)
+			error(sys->sprint("can't make the mount point %s: %r", mountpt));
+		fd = nil;
+	}
+
 	pwd, err: string;
 	# The key as the nvram file has it, when that is not the key: a
 	# file made by echo ends in a newline, which was taken as part of
@@ -258,13 +271,15 @@ readconsline(prompt: string, raw: int): (string, string)
 	fd := sys->open("/dev/cons", Sys->ORDWR);
 	if(fd == nil)
 		return (nil, sys->sprint("can't open cons: %r"));
-	sys->fprint(fd, "%s", prompt);
+	# echo off before the prompt: a key typed ahead of the console's
+	# change of mode was echoed as it arrived
 	fdctl: ref Sys->FD;
 	if(raw){
 		fdctl = sys->open("/dev/consctl", sys->OWRITE);
 		if(fdctl == nil || sys->fprint(fdctl, "rawon") < 0)
 			return (nil, sys->sprint("can't open consctl: %r"));
 	}
+	sys->fprint(fd, "%s", prompt);
 	line := array[256] of byte;
 	o := 0;
 	err: string;

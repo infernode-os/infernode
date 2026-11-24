@@ -164,13 +164,13 @@ pw() { echo "$2" | "$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd.dis -i "$3" 
 pw dave davepass 20000 > dave.pw
 pw alice newsesame 20000 > alice2.pw
 [ "$(wc -l < pw)" -eq 3 ] && [ -s dave.pw ] && [ -s alice2.pw ] || { echo "FAIL: svc/httpd/passwd made no lines"; cat pw; exit 1; }
-python3 - "$W/pw" <<'PY' && echo "PASS: svc/httpd/passwd's lines are PBKDF2-HMAC-SHA-256 (checked by hashlib)" || { echo "FAIL: svc/httpd/passwd's hash is not PBKDF2"; exit 1; }
+python3 - "$W/pw" <<'PY' && echo "PASS: svc/httpd/passwd's lines are PBKDF2-HMAC-SHA-384 (checked by hashlib)" || { echo "FAIL: svc/httpd/passwd's hash is not PBKDF2-HMAC-SHA-384"; exit 1; }
 import sys, hashlib, base64
 want = {"alice": b"opensesame", "bob": b"bobpass", "carol": b"carolpass"}
 for l in open(sys.argv[1]):
     u, alg, it, salt, h = l.strip().split(":")
-    assert alg == "pbkdf2-sha256" and len(base64.b64decode(salt)) == 16
-    assert hashlib.pbkdf2_hmac("sha256", want[u], base64.b64decode(salt), int(it)) == base64.b64decode(h), u
+    assert alg == "pbkdf2-sha384" and len(base64.b64decode(salt)) == 16
+    assert hashlib.pbkdf2_hmac("sha384", want[u], base64.b64decode(salt), int(it)) == base64.b64decode(h), u
 PY
 
 # what httpd would take from no client, passwd makes no line of
@@ -178,7 +178,7 @@ fails=0
 nopw() {
 	local why=$1 user=$2
 	out=$("$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd.dis -i 1000 "$user" 2>&1)
-	if echo "$out" | grep -q 'pbkdf2-sha256'; then
+	if echo "$out" | grep -q 'pbkdf2-sha'; then
 		echo "FAIL: svc/httpd/passwd made a line: $why"; fails=$((fails+1))
 	else
 		echo "PASS: svc/httpd/passwd makes no line: $why ($(echo "$out" | grep -a '^passwd:' | head -1 | cut -c1-60))"
@@ -189,7 +189,7 @@ python3 -c 'print("p" * 2000)' | nopw "a password of 2000 bytes (its first 1024 
 python3 -c 'print("p" * 257)' | nopw "a password of 257 bytes" long
 printf 'a\tb\n' | nopw "a password with a tab" tab
 printf 'caf\351\n' | nopw "a password that is not UTF-8" latin
-python3 -c 'print("p" * 256)' | "$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd.dis -i 1000 ok 2>&1 | grep -q '^ok:pbkdf2-sha256:1000:' &&
+python3 -c 'print("p" * 256)' | "$EMU" $EMUFLAGS -r"$ROOT" /dis/svc/httpd/passwd.dis -i 1000 ok 2>&1 | grep -q '^ok:pbkdf2-sha384:1000:' &&
 	echo "PASS: a password of 256 bytes makes one" || { echo "FAIL: a password of 256 bytes refused"; fails=$((fails+1)); }
 
 # ---------------------------------------------------------------- refused configurations

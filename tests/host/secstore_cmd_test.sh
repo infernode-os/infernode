@@ -10,7 +10,7 @@
 # factotum write; t's filter left nothing out; and after an accepted PIN
 # it asked for the password again.
 #
-# Here: a file stored (in the current format, SGCM2), listed, extracted
+# Here: a file stored (in the current format, SGCM3), listed, extracted
 # the same, printed, stored under the last component of its local name,
 # removed; a missing file, a wrong password and the verifier's name
 # refused, each saying why; a wrong password costing one exchange with
@@ -153,7 +153,7 @@ grep -q '^MARK end' "$ROOT/$T/out"; check $? "the script ran to its end"
 if grep -q 'Broken\|dereference of nil' "$ROOT/$T/out"; then check 1 "no command died"; else check 0 "no command died"; fi
 
 has store '^STATUS r *$'; check $? "r stores a file"
-has store '^MAGIC SGCM2'; check $? "in the current format (SGCM2)"
+has store '^MAGIC SGCM3'; check $? "in the current format (SGCM3)"
 has list '^factotum$'; check $? "t lists it"
 hasnot list '^PAK'; check $? "and not the account's verifier"
 has longlist '^factotum  *[0-9][0-9]* '; check $? "t -v gives its size"
@@ -179,8 +179,8 @@ n=$(sect wrong | grep -c 'secstored: new connection' || true)
 [ "$n" = 1 ]; check $? "a wrong password is one exchange with the server (was $n)"
 has old '^STATUS old *$'; check $? "an account on the oldest version is reached"
 n=$(sect old | grep -c 'secstored: new connection' || true)
-[ "$n" = 4 ]; check $? "by the fallbacks the server asks for, and then again at version 4 ($n connections)"
-has old '^OLDPAK secstore4 [^ ]*$'; check $? "and the account is at version 4 alone after it"
+[ "$n" = 5 ]; check $? "by the fallbacks the server asks for (6, 5, 3, 1), and then again at version 6 ($n connections)"
+has old '^OLDPAK secstore6 [^ ]*$'; check $? "and the account is at version 6 alone after it"
 n=$(sect oldagain | grep -c 'secstored: new connection' || true)
 has oldagain '^STATUS oldagain *$' && [ "$n" = 1 ]; check $? "its next login is one exchange ($n)"
 
@@ -190,7 +190,7 @@ if [ -f "$ROOT/$T/store/cmduser/oldfile.made" ]; then
 	has oldformat 'auth/secstore m'; check $? "and says how it is moved"
 	has oldformat '^STATUS oldp .'; check $? "nor does p"
 	has oldformat '^STATUS oldm *$'; check $? "m moves it"
-	has oldformat '^OLDMAGIC SGCM2'; check $? "into the current format"
+	has oldformat '^OLDMAGIC SGCM3'; check $? "into the current format"
 	has oldformat '^an old secret$'; check $? "and then p prints it"
 	has oldformat '^STATUS again *$'; check $? "m of a file already moved is no error"
 else
@@ -203,7 +203,7 @@ has setup2 '^STATUS stillin *$'; check $? "whose password still logs in"
 has setup2 '^STATUS short .'; check $? "a password of seven characters is refused"
 [ ! -e "$ROOT/$T/store/shorty/PAK" ]; check $? "and makes no account"
 has setup2 '^STATUS import .'; check $? "-i, which imported nothing, is refused"
-has setup2 '^STATUS fresh *$' && has setup2 '^FRESHPAK secstore4 '; check $? "a new account is at version 4"
+has setup2 '^STATUS fresh *$' && has setup2 '^FRESHPAK secstore6 '; check $? "a new account is at version 6"
 has setup2 '^STATUS force *$'; check $? "-f replaces a verifier"
 has nouser '^STATUS nouser .'; check $? "no account fails"
 n=$(sect nouser | grep -c 'secstored: new connection' || true)

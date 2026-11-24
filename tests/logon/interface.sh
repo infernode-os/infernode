@@ -12,13 +12,15 @@
 #		twice); then the Desktop: its windows, a file plumbed
 #	again	the login screen as it next shows
 #	which	what the boot started, without the login screen
+#	themed	the login screen as it first shows and with the interface
+#		at $x $y clicked, in the theme the boot names
 #	shown	the keyboard on the screen shown by a touch (wm/osk, as the
 #		boot starts it for the login screen)
 #	touch	that, then the interface chosen by a touch at $x $y and
 #		a word tapped on the keyboard's keys
 #	setpw	the first boot's password set (typed twice) with Desktop
 #		chosen; a key added to factotum and saved to secstore
-#	unlock	the password typed with Lucia chosen
+#	unlock	the password typed with Assistant chosen
 #	retry	a wrong password typed, then the right one
 #
 # For the three with a password the driver reports whether factotum
@@ -57,6 +59,14 @@ fn tapkey {
 	pat='^'^$1^' '
 	l=`{grep $pat /tmp/keys}
 	touch ${expr ${index 2 $l} ${index 4 $l} + 2 /} ${expr ${index 3 $l} ${index 5 $l} + 2 /}
+}
+if {~ $phase themed} {
+	sleep 10
+	shot themed-$theme-start
+	echo m $x $y 1 > /dev/pointer
+	echo m $x $y 0 > /dev/pointer
+	echo m 2 2 > /dev/pointer
+	shot themed-$theme-click
 }
 if {~ $phase look again} {
 	sleep 10
@@ -143,7 +153,7 @@ if {~ $phase retry} {
 if {~ $phase which} {
 	waitfor interface {or {ftest -e /chan/wmwindows} {ftest -e /mnt/ui/ctl}}
 	if {ftest -e /chan/wmwindows} {echo R started Desktop}
-	if {ftest -e /mnt/ui/ctl} {echo R started Lucia}
+	if {ftest -e /mnt/ui/ctl} {echo R started Assistant}
 }
 echo R done
 echo halt > '#c/sysctl'

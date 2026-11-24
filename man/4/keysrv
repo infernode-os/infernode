@@ -57,10 +57,18 @@ A read of
 returns a challenge:
 .IP
 .EX
-keysrv 2 \fIchallenge\fP
+keysrv 3 \fIform\fP \fIchallenge\fP
 .EE
 .PP
 where
+.I form
+is the form of the secret held,
+.B 2
+for the new and
+.B 1
+for the old
+.RI ( keys (6)),
+and
 .I challenge
 is 32 random bytes as 64 hexadecimal digits.
 There is a new one after every write.
@@ -78,14 +86,14 @@ With
 .I secret
 the user's existing secret as
 .IR keyfs (4)
-holds it (the SHA-256 of the password),
+holds it, in its form,
 .IP
 .EX
 PRK = HMAC-SHA-384(challenge, secret)
 proof = HKDF-Expand(PRK, "infernode keysrv 2 proof" || user, 48)
 key || nonce = HKDF-Expand(PRK,
     "infernode keysrv 2 new secret" || user, 44)
-newsecret = AES-256-GCM(key, nonce, SHA-256(new password))
+newsecret = AES-256-GCM(key, nonce, the new password's secret, new form)
 .EE
 .PP
 .I Proof
@@ -93,7 +101,7 @@ is 96 hexadecimal digits.
 .I Newsecret
 is the ciphertext and its tag (the associated data is the label
 .BR "infernode keysrv 2 new secret" ),
-96 hexadecimal digits,
+128 hexadecimal digits,
 separated from
 .I proof
 by a single space.
@@ -101,7 +109,7 @@ If
 .I proof
 is right for the secret currently stored and
 .I newsecret
-is given and opens to 32 bytes, they replace the stored secret;
+is given and opens to 48 bytes, they replace the stored secret;
 they are what
 .IR login (6)
 expects there.
@@ -120,6 +128,7 @@ though whoever is sent them could try passwords against them, which is why the
 client first makes sure the server is the signer.
 Before version 2 the proof was a hash of the stored secret, the same every time,
 and the new secret was sent and stored as typed, which no login then matched.
+Version 2 had no form, and its new secret was the password's SHA-256.
 .PP
 Wrong proofs are guesses at the password, and are counted where
 .IR logind (8)

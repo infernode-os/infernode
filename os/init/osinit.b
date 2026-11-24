@@ -309,6 +309,13 @@ init()
 	strictlinksetup();
 
 	#
+	# SP 800-90B's restart test, if the card and the command line ask
+	# for it (rngrestart): this boot's first generator bytes kept, and
+	# the next boot begun.
+	#
+	rngrestart();
+
+	#
 	# The radio's firmware lives on the card just mounted. The kernel
 	# names no path: this is where the paths come from.
 	#
@@ -2935,6 +2942,25 @@ bootword(w: string): int
 	return 0;
 }
 
+# The value of name=value on the boot command line, or nil.
+bootvalue(name: string): string
+{
+	fd := sys->open("/dev/bootargs", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	(nil, l) := sys->tokenize(string buf[0:n], " \t\r\n");
+	for(; l != nil; l = tl l){
+		w := hd l;
+		if(len w > len name && w[0:len name+1] == name + "=")
+			return w[len name+1:];
+	}
+	return nil;
+}
+
 dosmount(dos: string)
 {
 	srv := load Command "/dis/dossrv.dis";
@@ -3019,6 +3045,163 @@ cnsasetup()
 	if(fd == nil || sys->fprint(fd, "1") < 0)
 		sys->print("init: cnsamode: /env/cnsamode: %r\n");
 	sys->print("init: cnsamode: CNSA 2.0 strict (ML-KEM-1024) for every authentication\n");
+}
+
+#
+# The restart test of SP 800-90B (3.1.4; docs/ENTROPY-ASSESSMENT.md):
+# the first bytes the hardware generator gives after each of a thousand
+# boots. It runs only when the command line says rngassess (the kernel
+# gives #c/hwrandomboot on no other boot) and says how many boots are
+# wanted: the word rngrestart=N on the command line (cmdline.txt, edited
+# with the card out), or a file /n/dos/rngrestart holding N. The word is
+# the way to start it: a file written at the shell and followed at once
+# by "echo reboot > /dev/sysctl" was not on the card after the reset
+# (under QEMU; five seconds later it was), and the loop never began. Each boot
+# appends its Firstbytes (4096) to /n/dos/rngboot.bin and resets the
+# machine until the file holds that many; then it says so and boots on.
+# Each boot also adds a line to /n/dos/rngboot.log, the board's own
+# record of how it was running (#P/throttled, #P/cputemp: under-voltage
+# and throttling now and since boot), so that a sample taken on a bad
+# supply is known from the evidence and not from whoever was watching:
+#
+#	boot 17 throttled=0x00000 ok cputemp=51.2
+#
+# Anything that goes wrong stops the loop rather than resetting again:
+# a loop that cannot write would reset for ever. To stop it by hand,
+# take rngassess off cmdline.txt (or rngrestart=N, or remove
+# /n/dos/rngrestart).
+#
+Rngrestartfile: con "/n/dos/rngrestart";
+Rngbootfile: con "/n/dos/rngboot.bin";
+Rnglogfile: con "/n/dos/rngboot.log";
+Rngfirst: con 4096;
+
+rngrestart()
+{
+	want := 0;
+	from := bootvalue("rngrestart");
+	if(from != nil){
+		want = int from;
+		from = "rngrestart=" + from + " on the command line";
+	}else{
+		fd := sys->open(Rngrestartfile, Sys->OREAD);
+		if(fd == nil)
+			return;
+		buf := array[32] of byte;
+		n := sys->read(fd, buf, len buf);
+		if(n > 0)
+			want = int string buf[0:n];
+		from = Rngrestartfile;
+	}
+	if(want <= 0){
+		sys->print("init: rngrestart: %s is not a number of boots; not collecting\n", from);
+		return;
+	}
+	n: int;
+	in := sys->open("/dev/hwrandomboot", Sys->OREAD);
+	if(in == nil){
+		sys->print("init: rngrestart: /dev/hwrandomboot: %r; not collecting\n");
+		return;
+	}
+	b := array[Rngfirst] of byte;
+	for(got := 0; got < Rngfirst; got += n){
+		n = sys->read(in, b[got:], Rngfirst - got);
+		if(n <= 0){
+			sys->print("init: rngrestart: /dev/hwrandomboot: %r; not collecting\n");
+			return;
+		}
+	}
+	(ok, d) := sys->stat(Rngbootfile);
+	if(ok >= 0 && d.length >= big want * big Rngfirst){
+		sys->print("init: rngrestart: %s already holds %bd boots; done (take rngassess off the command line)\n",
+			Rngbootfile, d.length / big Rngfirst);
+		return;
+	}
+	out: ref Sys->FD;
+	if(ok < 0)
+		out = sys->create(Rngbootfile, Sys->OWRITE, 8r644);
+	else{
+		if(d.length % big Rngfirst != big 0){
+			sys->print("init: rngrestart: %s is %bd bytes, not whole boots; not collecting\n", Rngbootfile, d.length);
+			return;
+		}
+		out = sys->open(Rngbootfile, Sys->OWRITE);
+	}
+	if(out == nil){
+		sys->print("init: rngrestart: %s: %r; not collecting\n", Rngbootfile);
+		return;
+	}
+	off := big 0;
+	if(ok >= 0)
+		off = d.length;
+	if(sys->pwrite(out, b, Rngfirst, off) != Rngfirst){
+		sys->print("init: rngrestart: %s: %r; not collecting\n", Rngbootfile);
+		return;
+	}
+	out = nil;	# its clunk is dossrv's sync
+	(ok, d) = sys->stat(Rngbootfile);
+	if(ok < 0 || d.length != off + big Rngfirst){
+		sys->print("init: rngrestart: %s did not grow by one boot; stopped\n", Rngbootfile);
+		return;
+	}
+	boots := int (d.length / big Rngfirst);
+	if(rnglog(sys->sprint("boot %d %s\n", boots, boardhealth())) < 0){
+		sys->print("init: rngrestart: %s: %r; stopped\n", Rnglogfile);
+		return;
+	}
+	if(boots >= want){
+		sys->print("init: rngrestart: %d boots collected in %s; done (take rngassess off the command line)\n",
+			boots, Rngbootfile);
+		return;
+	}
+	sys->print("init: rngrestart: boot %d of %d kept; resetting\n", boots, want);
+	ctl := sys->open("#c/sysctl", Sys->OWRITE);
+	if(ctl == nil || sys->fprint(ctl, "reboot") < 0)
+		sys->print("init: rngrestart: reboot: %r; stopped\n");
+}
+
+# One line appended to the restart collection's log.
+rnglog(line: string): int
+{
+	fd := sys->open(Rnglogfile, Sys->OWRITE);
+	if(fd == nil)
+		fd = sys->create(Rnglogfile, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return -1;
+	sys->seek(fd, big 0, Sys->SEEKEND);
+	b := array of byte line;
+	if(sys->write(fd, b, len b) != len b)
+		return -1;
+	return 0;
+}
+
+# The firmware's word on power and heat (#P, os/bcm/devarch.c), as
+# "throttled=0x00000 ok cputemp=51.2"; "none" for a file a board does
+# not have.
+boardhealth(): string
+{
+	t := readline("#P/throttled");
+	if(t == nil)
+		t = "none";
+	c := readline("#P/cputemp");
+	if(c == nil)
+		c = "none";
+	return "throttled=" + t + " cputemp=" + c;
+}
+
+readline(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	s := string buf[0:n];
+	while(s != nil && (s[len s-1] == '\n' || s[len s-1] == ' '))
+		s = s[0:len s-1];
+	return s;
 }
 
 #

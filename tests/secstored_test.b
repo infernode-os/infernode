@@ -24,6 +24,13 @@ implement SecstoredTest;
 #     and removed the vault: the server now keeps the hash of the
 #     vault key, and changes an enrolled account's files only in a
 #     session that has shown the key.
+#   - version 4's exchange was a PAK over a 2048-bit group alone: a
+#     party that could take logarithms (a quantum computer) tried
+#     passwords against a login it had recorded.  Version 5 has the
+#     account's version 4 verifier and runs an ML-KEM-1024 encapsulation
+#     beside the PAK, its proofs and session from both secrets by
+#     SHA-384 (secstore(2)'s PAK5); version 4's exchange is not spoken,
+#     and in CNSA mode nothing but version 5 is.
 #
 
 include "sys.m";
@@ -32,6 +39,7 @@ include "draw.m";
 include "dial.m";
 include "keyring.m";
 	kr: Keyring;
+	IPint: import kr;
 include "encoding.m";
 	base64: Encoding;
 include "secstore.m";
@@ -142,6 +150,8 @@ account(t: ref T, user, pass, version: string)
 		h = k.v1;
 	"secstore3" =>
 		h = k.v3;
+	"secstore6" =>
+		h = secstore->mkseckey6(secstore->mkfilekey6(user, pass));
 	}
 	hexHi := secstore->mkverifier(user, version, h);
 	if(hexHi == nil)
@@ -324,6 +334,153 @@ testVersion4(t: ref T)
 	secstore->bye(conn);
 }
 
+# what the server answers to text written raw on a connection of its own
+Raw: adt {
+	conn:	ref Dial->Connection;
+};
+
+rawsay(r: ref Raw, msg: string): string
+{
+	if(sys->fprint(r.conn.dfd, "%s", msg) < 0)
+		return sys->sprint("!can't write: %r");
+	buf := array[8192] of byte;
+	n := sys->read(r.conn.dfd, buf, len buf);
+	if(n <= 0)
+		return sys->sprint("!nothing: %r");
+	return string buf[0:n];
+}
+
+rawdial(t: ref T): ref Raw
+{
+	c := secstore->dial(addr);
+	if(c == nil)
+		t.fatal(sys->sprint("can't dial %s: %r", addr));
+	return ref Raw(c);
+}
+
+setcnsa(on: int)
+{
+	fd := sys->create("/env/cnsamode", Sys->OWRITE, 8r666);
+	if(fd != nil)
+		sys->fprint(fd, "%d", on);
+}
+
+testVersion5(t: ref T)
+{
+	account(t, "pq", "pq's password", "secstore4");
+	two := IPint.inttoip(2).iptostr(64);
+
+	# the version 4 exchange is refused, saying how the account is spoken to
+	r := rawdial(t);
+	a := rawsay(r, "secstore4\tPAK\nC=pq\nm=" + two + "\n");
+	t.assert(has(a, "secstore4 is spoken as secstore5"), "a secstore4 hello is told the version: " + a);
+
+	# version 5's first answer is mu and S, and nothing made from the
+	# verifier: the server's proof waits for the client's ML-KEM key
+	r = rawdial(t);
+	a = rawsay(r, "secstore5\tPAK\nC=pq\nm=" + two + "\n");
+	t.assert(has(a, "mu=") && has(a, "S=") && !has(a, "k="), "a secstore5 hello is answered with mu and S alone: " + a);
+	# a key of no length, and one that is no ML-KEM key, are refused
+	b := rawsay(r, "ek=AAAA\n");
+	t.assert(has(b, "bad ML-KEM key"), "a key of the wrong length is refused: " + b);
+	r = rawdial(t);
+	rawsay(r, "secstore5\tPAK\nC=pq\nm=" + two + "\n");
+	ff := array[Keyring->MLKEM1024_PKLEN] of {* => byte 16rFF};
+	b = rawsay(r, "ek=" + base64->enc(ff) + "\n");
+	t.assert(has(b, "bad ML-KEM key"), "a key whose coefficients are q and past it is refused: " + b);
+	# a real key, its seed masked under nothing the server has: a
+	# ciphertext and a proof, and the client's proof then refused
+	r = rawdial(t);
+	a = rawsay(r, "secstore5\tPAK\nC=pq\nm=" + two + "\n");
+	(ek, nil) := kr->mlkem1024_keygen();
+	b = rawsay(r, "ek=" + base64->enc(ek) + "\n");
+	t.assert(has(b, "ct=") && has(b, "k="), "a key that is one is answered with a ciphertext and the server's proof: " + b[0:20]);
+	t.assert(len b > 2000, sys->sprint("of ML-KEM-1024's length (%d bytes of text)", len b));
+	c := rawsay(r, "k'=" + base64->enc(array[48] of {* => byte 0}) + "\n");
+	t.assert(has(c, "didn't match"), "and a proof that is none is refused: " + c);
+
+	# secstore(2) logs in at version 5, with the right password only
+	(conn, diag) := login("pq", "pq's password");
+	t.assert(conn != nil, "a version 4 account logs in at version 5: " + diag);
+	if(conn != nil){
+		t.assertnil(put(conn, "factotum", "pq keys\n"), "and the session stores");
+		secstore->bye(conn);
+	}
+	(conn, diag) = login("pq", "another password");
+	t.assert(conn == nil && has(diag, "didn't match"), "not with another password: " + diag);
+
+	# CNSA mode: version 5 alone, both ends
+	account(t, "pqold", "pqold's password", "secstore3");
+	setcnsa(1);
+	r = rawdial(t);
+	a = rawsay(r, "secstore3\tPAK\nC=pqold\nm=" + two + "\n");
+	t.assert(has(a, "CNSA mode"), "in CNSA mode the server refuses secstore3: " + a);
+	(conn, diag) = oldlogin("pqold", "pqold's password");
+	t.assert(conn == nil && has(diag, "CNSA mode"), "and the client offers no older version: " + diag);
+	(conn, diag) = login("pq", "pq's password");
+	t.assert(conn == nil && has(diag, "CNSA mode"), "in CNSA mode an account at version 4 (its verifier SHA-256's) is not logged in to: " + diag);
+	(conn, diag) = login6("pqold", "pqold's password");
+	t.assert(conn == nil && has(diag, "CNSA mode"), "an account at version 3 is not moved in CNSA mode: " + diag);
+	setcnsa(0);
+}
+
+# a login as clients do now (connect6), moving the account if it must
+login6(user, pass: string): (ref Dial->Connection, string)
+{
+	c := secstore->mkcreds(user, pass);
+	(conn, nil, diag) := secstore->connect6(addr, c);
+	secstore->erasecreds(c);
+	return (conn, diag);
+}
+
+#
+# Version 6: the verifier from a root of PBKDF2-HMAC-SHA-384 (mkfilekey6,
+# mkseckey6).  An account at version 4 is given its version 6 verifier
+# by connect6, kept beside the old until a version 6 login has worked,
+# and then is at version 6 alone; one at version 3 goes through version
+# 4 on the way.  In CNSA mode an account at version 6 logs in.
+#
+testVersion6(t: ref T)
+{
+	vers := array[] of {"secstore4", "secstore3"};
+	for(i := 0; i < len vers; i++){
+		user := "six" + string i;
+		pass := user + "'s password";
+		account(t, user, pass, vers[i]);
+		pakfile := store + "/" + user + "/PAK";
+		(conn, diag) := login6(user, pass);
+		t.assert(conn != nil, "a " + vers[i] + " account logs in through connect6: " + diag);
+		pak := readfile(pakfile);
+		t.assert(has(pak, "secstore6 ") && !has(pak, "secstore4 ") && !has(pak, vers[i] + " "), "and is at version 6 alone: " + pak);
+		if(conn != nil){
+			t.assertnil(put(conn, "factotum", "six keys\n"), "a version 6 session stores");
+			secstore->bye(conn);
+		}
+		(conn, diag) = login(user, pass);
+		t.assert(conn == nil, "the old verifier no longer logs in: " + diag);
+		(conn, diag) = login6(user, "not the password");
+		t.assert(conn == nil, "nor another password: " + diag);
+	}
+	# a raw secstore6 hello is answered as version 5's: mu and S alone
+	r := rawdial(t);
+	a := rawsay(r, "secstore6\tPAK\nC=six0\nm=" + IPint.inttoip(2).iptostr(64) + "\n");
+	t.assert(has(a, "mu=") && has(a, "S=") && !has(a, "k="), "a secstore6 hello is answered with mu and S: " + a);
+	setcnsa(1);
+	(conn, diag) := login6("six0", "six0's password");
+	t.assert(conn != nil, "in CNSA mode an account at version 6 logs in: " + diag);
+	if(conn != nil){
+		t.assertseq(get(conn, "factotum"), "six keys\n", "and reads what it stored");
+		secstore->bye(conn);
+	}
+	setcnsa(0);
+	# an account made at version 6 (secstore-setup's default)
+	account(t, "sixnew", "a new one's password", "secstore6");
+	(conn, diag) = login6("sixnew", "a new one's password");
+	t.assert(conn != nil, "an account made at version 6 logs in: " + diag);
+	if(conn != nil)
+		secstore->bye(conn);
+}
+
 testVerifier(t: ref T)
 {
 	account(t, "changer", "the old password", "secstore4");
@@ -502,6 +659,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AbsentOrError", testAbsentOrError);
 	run("Reserved", testReserved);
 	run("Version4", testVersion4);
+	run("Version5", testVersion5);
+	run("Version6", testVersion6);
 	run("Verifier", testVerifier);
 	run("Vault", testVault);
 

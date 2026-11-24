@@ -1,9 +1,10 @@
 implement SecstoreAbortProbe;
 
 # Drives the secstore PAK abort path for lockout tests: establish the normal
-# SSL transport, send a PAK hello, read the server verifier, then close before
-# sending k'. This simulates a guessing client that stops after learning its
-# password guess was wrong from the server verifier.
+# SSL transport, send a version 6 PAK hello, read mu, send an ML-KEM key,
+# read the server's ciphertext and verifier, then close before sending k'.
+# This simulates a guessing client that stops after learning its password
+# guess was wrong from the server verifier.
 
 include "sys.m";
 	sys: Sys;
@@ -11,6 +12,12 @@ include "sys.m";
 include "draw.m";
 
 include "dial.m";
+
+include "keyring.m";
+	kr: Keyring;
+
+include "encoding.m";
+	base64: Encoding;
 
 include "secstore.m";
 	secstore: Secstore;
@@ -23,7 +30,9 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	secstore = load Secstore Secstore->PATH;
-	if(secstore == nil)
+	kr = load Keyring Keyring->PATH;
+	base64 = load Encoding Encoding->BASE64PATH;
+	if(secstore == nil || kr == nil || base64 == nil)
 		fail("cannot load secstore");
 	secstore->init();
 
@@ -56,14 +65,24 @@ init(nil: ref Draw->Context, args: list of string)
 		conn := secstore->dial(addr);
 		if(conn == nil)
 			fail(sys->sprint("dial %s failed: %r", addr));
-		if(sys->fprint(conn.dfd, "secstore4\tPAK\nC=%s\nm=AQ==\n", user) < 0)
+		if(sys->fprint(conn.dfd, "secstore6\tPAK\nC=%s\nm=AQ==\n", user) < 0)
 			fail(sys->sprint("hello write failed: %r"));
-		buf := array[4096] of byte;
+		buf := array[8192] of byte;
 		n := sys->read(conn.dfd, buf, len buf);
 		if(n <= 0)
-			fail(sys->sprint("server verifier read failed: %r"));
+			fail(sys->sprint("server's mu read failed: %r"));
 		reply := string buf[0:n];
 		if(len reply < 3 || reply[0:3] != "mu=")
+			fail("unexpected server reply: " + reply);
+		# an ML-KEM key, and the server's ciphertext and verifier for it
+		(ek, nil) := kr->mlkem1024_keygen();
+		if(sys->fprint(conn.dfd, "ek=%s\n", base64->enc(ek)) < 0)
+			fail(sys->sprint("key write failed: %r"));
+		n = sys->read(conn.dfd, buf, len buf);
+		if(n <= 0)
+			fail(sys->sprint("server verifier read failed: %r"));
+		reply = string buf[0:n];
+		if(len reply < 3 || reply[0:3] != "ct=")
 			fail("unexpected server reply: " + reply);
 
 		conn.dfd = nil;
@@ -79,7 +98,7 @@ mprobe(m, user, addr: string)
 	conn := secstore->dial(addr);
 	if(conn == nil)
 		fail(sys->sprint("dial failed: %r"));
-	if(sys->fprint(conn.dfd, "secstore4\tPAK\nC=%s\nm=%s\n", user, m) < 0)
+	if(sys->fprint(conn.dfd, "secstore6\tPAK\nC=%s\nm=%s\n", user, m) < 0)
 		fail(sys->sprint("hello write failed: %r"));
 	buf := array[4096] of byte;
 	n := sys->read(conn.dfd, buf, len buf);

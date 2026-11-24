@@ -17,6 +17,7 @@ include "security.m";
 include "twofaslot.m";
 
 Slot: adt {
+	path:	string;		# the slot's file
 	kind:	string;		# "key" | "recovery"
 	cred:	string;		# credential id hex (key slots)
 	salt:	string;		# salt hex (key slots)
@@ -140,7 +141,7 @@ readslot(path: string): ref Slot
 	n := sys->read(fd, buf, len buf);
 	if(n <= 0)
 		return nil;
-	s := ref Slot("", "", "", nil);
+	s := ref Slot(path, "", "", "", nil);
 	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
 	for(l := lines; l != nil; l = tl l){
 		(nf, f) := sys->tokenize(hd l, " \t");
@@ -247,7 +248,51 @@ frontload(slots: list of ref Slot, cred: string): list of ref Slot
 	return match :: ord;
 }
 
-unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array of byte, string)
+#
+# A slot's file, written again with its data key wrapped under kek
+# (verified first, and written beside and renamed): a slot made before
+# version 6 of the store (secstore(2)), its key from the old root by
+# HMAC-SHA256, is wrapped again under the version 6 root the first time
+# it unlocks.  A slot that cannot be written is left as it was, and
+# still opens.
+#
+rewrap(s: ref Slot, DK, kek: array of byte)
+{
+	wrap := secstore->encrypt3(DK, kek);
+	if(wrap == nil || !eq(secstore->decrypt3(wrap, kek, nil, nil), DK))
+		return;
+	content: array of byte;
+	if(s.kind == "key")
+		content = array of byte ("kind key\ncred " + s.cred + "\nsalt " + s.salt + "\nwrap " + tohex(wrap) + "\n");
+	else
+		content = array of byte ("kind recovery\ncred -\nsalt -\nwrap " + tohex(wrap) + "\n");
+	tmp := s.path + ".new";
+	fd := sys->create(tmp, Sys->OWRITE, 8r600);
+	if(fd == nil || sys->write(fd, content, len content) != len content){
+		fd = nil;
+		sys->remove(tmp);
+		return;
+	}
+	fd = nil;
+	d := sys->nulldir;
+	(nil, name) := splitpath(s.path);
+	d.name = name;
+	sys->remove(s.path);
+	if(sys->wstat(tmp, d) < 0)
+		sys->fprint(sys->fildes(2), "2fa: can't rename %s to %s: %r\n", tmp, s.path);
+	else
+		sys->fprint(sys->fildes(2), "2fa: slot %s wrapped again under the version 6 root\n", name);
+}
+
+splitpath(p: string): (string, string)
+{
+	for(i := len p - 1; i >= 0; i--)
+		if(p[i] == '/')
+			return (p[0:i], p[i+1:]);
+	return ("", p);
+}
+
+unlock(user: string, c: ref Secstore->Creds, recoverypass, pin: string): (array of byte, string)
 {
 	stderr := sys->fildes(2);
 	tl0 := sys->millisec();
@@ -293,8 +338,15 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 			lastderr = "empty derive result";
 			continue;
 		}
-		kek := secstore->mkkek2fa(rootkey, R);
+		kek := secstore->mkkek2fa(c.root6, R);
 		DK := secstore->decrypt3(s.wrap, kek, nil, nil);
+		if(DK == nil){
+			# a slot made before version 6
+			if(secstore->oldkeys(c))
+				DK = secstore->decrypt3(s.wrap, secstore->oldkek2fa(c.root3, R), nil, nil);
+			if(DK != nil)
+				rewrap(s, DK, kek);
+		}
 		if(DK != nil){
 			writelastgood(user, s.cred);	# try this slot first next time
 			sys->fprint(stderr, "2fa: unlocked (slot %s, tried %d, %dms)\n", sid, si, sys->millisec()-tl0);
@@ -309,8 +361,14 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 			s := hd l;
 			if(s.kind != "recovery" || s.wrap == nil)
 				continue;
-			kek := secstore->mkfilekey3(user, recoverypass);
+			kek := secstore->mkfilekey6(user, recoverypass);
 			DK := secstore->decrypt3(s.wrap, kek, nil, nil);
+			if(DK == nil){
+				# a recovery slot made before version 6
+				DK = secstore->decrypt3(s.wrap, secstore->mkfilekey3(user, recoverypass), nil, nil);
+				if(DK != nil)
+					rewrap(s, DK, kek);
+			}
 			if(DK != nil)
 				return (DK, nil);
 		}
@@ -320,7 +378,7 @@ unlock(user: string, rootkey: array of byte, recoverypass, pin: string): (array 
 	return (nil, "no slot could unlock (key absent or wrong recovery passphrase)");
 }
 
-writeslots(user: string, rootkey, DK: array of byte, keys: list of (string, string, string), recoverypass, pin: string): string
+writeslots(user: string, root6, DK: array of byte, keys: list of (string, string, string), recoverypass, pin: string): string
 {
 	# Build + verify every slot in memory before touching disk (never-brick).
 	recs: list of (string, array of byte);
@@ -333,7 +391,7 @@ writeslots(user: string, rootkey, DK: array of byte, keys: list of (string, stri
 		(R, e) := twofa->derive(credhex, salt, pin);	# touch (+PIN if UV)
 		if(e != nil)
 			return "derive " + name + ": " + e;
-		kek := secstore->mkkek2fa(rootkey, R);
+		kek := secstore->mkkek2fa(root6, R);
 		wrap := secstore->encrypt3(DK, kek);
 		if(wrap == nil)
 			return "wrap " + name + " failed";
@@ -344,7 +402,7 @@ writeslots(user: string, rootkey, DK: array of byte, keys: list of (string, stri
 	}
 
 	if(recoverypass != nil && recoverypass != ""){
-		kek := secstore->mkfilekey3(user, recoverypass);
+		kek := secstore->mkfilekey6(user, recoverypass);
 		wrap := secstore->encrypt3(DK, kek);
 		if(wrap == nil)
 			return "wrap recovery failed";
@@ -377,12 +435,15 @@ writeslots(user: string, rootkey, DK: array of byte, keys: list of (string, stri
 
 enroll(user, pass, recoverypass: string, keys: list of (string, string, string), pin: string): string
 {
-	rootkey := secstore->mkfilekey3(user, pass);
-	pwhash := secstore->mkseckey(pass);
-	pwhash2 := secstore->mkseckey2(pass);
-	pwhash4 := secstore->mkseckey4(rootkey);
+	c := secstore->mkcreds(user, pass);
+	err := enroll1(user, c, recoverypass, keys, pin);
+	secstore->erasecreds(c);
+	return err;
+}
 
-	(conn, nil, diag) := secstore->connect4(Addr, user, pwhash, pwhash2, pwhash4);
+enroll1(user: string, c: ref Secstore->Creds, recoverypass: string, keys: list of (string, string, string), pin: string): string
+{
+	(conn, nil, diag) := secstore->connect6(Addr, c);
 	if(conn == nil){
 		if(diag != nil)
 			return "secstore connect: " + diag;
@@ -402,12 +463,10 @@ enroll(user, pass, recoverypass: string, keys: list of (string, string, string),
 			ferr = "the file is empty (damaged)";
 		return "cannot read the current factotum: " + ferr;
 	}else{
-		plaintext = secstore->decrypt3(file, rootkey, nil, nil);
+		(plaintext, nil) = secstore->openfile(file, c);
 		if(plaintext == nil){
 			secstore->bye(conn);
-			if(!secstore->iscurrent(file))
-				return "the current factotum is in an old format: move it with auth/secstore m factotum";
-			return "wrong password (cannot decrypt current factotum)";
+			return "wrong password, or a format only auth/secstore m moves (cannot decrypt current factotum)";
 		}
 	}
 
@@ -432,7 +491,7 @@ enroll(user, pass, recoverypass: string, keys: list of (string, string, string),
 	}
 
 	# Write slots first (verify-before-commit inside); only then swap the blob.
-	err := writeslots(user, rootkey, DK, keys, recoverypass, pin);
+	err := writeslots(user, c.root6, DK, keys, recoverypass, pin);
 	if(err != nil){
 		secstore->bye(conn);
 		return "writeslots: " + err;
@@ -504,8 +563,9 @@ addkey(user, pass, recoverypass: string, cred, salthex, newpin: string): string
 {
 	if(recoverypass == nil || recoverypass == "")
 		return "addkey needs the recovery passphrase";
-	rootkey := secstore->mkfilekey3(user, pass);
-	(DK, e) := unlock(user, rootkey, recoverypass, "");	# recovery slot (no primary key needed)
+	c := secstore->mkcreds(user, pass);
+	(DK, e) := unlock(user, c, recoverypass, "");	# recovery slot (no primary key needed)
+	root6 := c.root6;
 	if(DK == nil)
 		return "cannot unlock with the recovery passphrase: " + e;
 	# Unique slot name per credential so a backup never overwrites the primary
@@ -517,7 +577,9 @@ addkey(user, pass, recoverypass: string, cred, salthex, newpin: string): string
 		name += cred;
 	# recoverypass "" => writeslots does not rewrite the recovery slot, and it
 	# never deletes existing slots — it only adds this one.
-	return writeslots(user, rootkey, DK, (name, cred, salthex) :: nil, "", newpin);
+	err := writeslots(user, root6, DK, (name, cred, salthex) :: nil, "", newpin);
+	secstore->erasecreds(c);
+	return err;
 }
 
 removeslots(user: string): string
@@ -543,15 +605,20 @@ disable(user, pass, recoverypass, pin: string): string
 	if(!is2fa(user))
 		return nil;			# already password-only
 
-	rootkey := secstore->mkfilekey3(user, pass);
-	(DK, e) := unlock(user, rootkey, recoverypass, pin);
+	c := secstore->mkcreds(user, pass);
+	err := disable1(user, c, recoverypass, pin);
+	secstore->erasecreds(c);
+	return err;
+}
+
+disable1(user: string, c: ref Secstore->Creds, recoverypass, pin: string): string
+{
+	rootkey := c.root6;
+	(DK, e) := unlock(user, c, recoverypass, pin);
 	if(DK == nil)
 		return "cannot recover data key to disable: " + e;
 
-	pwhash := secstore->mkseckey(pass);
-	pwhash2 := secstore->mkseckey2(pass);
-	pwhash4 := secstore->mkseckey4(rootkey);
-	(conn, nil, diag) := secstore->connect4(Addr, user, pwhash, pwhash2, pwhash4);
+	(conn, nil, diag) := secstore->connect6(Addr, c);
 	if(conn == nil){
 		if(diag != nil)
 			return "secstore connect: " + diag;
@@ -584,7 +651,7 @@ disable(user, pass, recoverypass, pin: string): string
 		plaintext := secstore->decrypt3(file, DK, nil, nil);
 		if(plaintext == nil)
 			# a disable that stopped after its store: already under the password
-			plaintext = secstore->decrypt3(file, rootkey, nil, nil);
+			(plaintext, nil) = secstore->openfile(file, c);
 		if(plaintext == nil){
 			secstore->bye(conn);
 			return "decrypt factotum with data key failed";

@@ -44,6 +44,14 @@ and serves files representing the contents at
 .I mountpoint
 in the name space (default:
 .BR /mnt/keys ).
+A
+.I mountpoint
+that does not exist is made, readable by its owner alone,
+before the master key is asked for
+(no InferNode tree ships
+.BR /mnt/keys :
+.IR security-check (8)
+refuses one).
 .I Keyfs
 does not make
 .IR keyfile :

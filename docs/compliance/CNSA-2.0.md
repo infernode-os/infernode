@@ -4,8 +4,8 @@
 Security Systems).
 **Roadmap row:** Cryptographic foundation — CNSA 2.0, Tier 0→1.
 **Tracking:** Program epic [INFR-328]; gaps [INFR-329] (G1), [INFR-330] (G2), [INFR-331] (G3). EPIC 3 — Complete CNSA 2.0 ([`history/security-epics.md`](../history/security-epics.md)).
-**Artifact date:** 2026-06-22.
-**Overall status:** **All in-scope CNSA 2.0 algorithm requirements Met under CNSA-strict mode.**
+**Artifact date:** 2026-06-22; revised 2026-11-23 (G4–G9: the password protocols' key establishment, auth(2)'s confirmation, the native transport's combiner, the signer's digest, the stored secrets).
+**Overall status:** **All in-scope CNSA 2.0 algorithm requirements Met under CNSA-strict mode.** Secrets stored in an older form are moved at their next use (§3.7).
 Every applicable CNSA 2.0 algorithm is implemented natively at the required security
 category. The two parameter-selection gaps are closed under a fleet-wide **CNSA mode**
 (the host `CNSAMODE` env var, reflected by the emu into Inferno `/env/cnsamode`, off by
@@ -63,7 +63,7 @@ implementation and the regression test.
 |------|--------|
 | Requirement | AES with 256-bit keys |
 | Implementation | `libsec/aes.c`, AES-GCM in `libsec/aesgcm.c` (`setupAESGCMstate` accepts `keylen`; 32 = AES-256) — decl `include/libsec.h:53` |
-| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA-strict TLS (`/env/cnsatls`) restricts to it alone (`strictcnsaconfig`). The login exchange (login(6), version 2) in CNSA mode is suite 2 alone: AES-256 in counter mode for the masked value, HKDF and proofs under SHA-384, a 3072-bit group or larger, then `aes_256_gcm` records; outside the mode suite 1 (ChaCha20, SHA-256, 2048 bits) is also taken — `appl/lib/login.b`, `appl/cmd/auth/logind.b` |
+| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA-strict TLS (`/env/cnsatls`) restricts to it alone (`strictcnsaconfig`). The login exchange (login(6), version 3) in CNSA mode is suite 2 alone: AES-256 in counter mode for the masked value and the masked ML-KEM seed, HKDF and proofs under SHA-384, ML-KEM-1024, a 3072-bit group or larger, then `aes_256_gcm` records; outside the mode suite 1 (ChaCha20, SHA-256, ML-KEM-768, 2048 bits) is also taken — `appl/lib/login.b`, `appl/cmd/auth/logind.b`. secstore version 5 masks its ML-KEM seed with AES-256 in counter mode and seals its session with `aes_256_gcm` in every mode — `appl/lib/secstore.b` |
 | Evidence | `tests/tls_crypto_test.b` (AES-GCM NIST vectors), `tests/secstore_crypto_test.b` (SGCM file encryption) |
 | Status | **Met** — AES-256-GCM available and negotiated |
 
@@ -84,8 +84,8 @@ implementation and the regression test.
 | Requirement | ML-KEM-1024 (Category 5) |
 | Implementation | `libsec/mlkem.c`, `libsec/mlkem_ntt.c`, `libsec/mlkem_poly.c`. **Both** ML-KEM-768 *and* ML-KEM-1024 keygen/encaps/decaps present (`mlkem1024_*`) — sizes per FIPS 203 (`docs/CRYPTO-MODERNIZATION.md` §8) |
 | Keyring binding | `libinterp/keyring.c` builtins (`Keyring_mlkem768_keygen` at `:3944`, ML-KEM-1024 counterparts) |
-| In use | **Native 9P/Styx STS handshake** — mutual ML-KEM (768 default, **1024 under CNSA mode**) hybridised with classical DH (`libinterp/keyring.c` `Keyring_auth`, SHA3-512 combiner). **TLS 1.3** — the **X25519MLKEM768** hybrid (`0x11EC`) first by default, with classical X25519/P-256/P-384 for servers without it; under CNSA-strict TLS (`/env/cnsatls`) the client offers the **SecP384r1MLKEM1024** hybrid alone (P-384 ECDH + ML-KEM-1024, `0x11ED`, `appl/lib/crypt/tls.b`). *(Until October 2026 the X25519MLKEM768 constant was `0x4588`, the decimal codepoint read as hex, and the share was never sent.)* |
-| Evidence | `tests/mlkem_test.b` (KAT + round-trip), `tests/mlkem_stress_test.b`, `tests/pqauth_test.b` (hybrid handshake, downgrade-rejected, tamper-rejected), `tests/handshake_fuzz_test.b` |
+| In use | **Native 9P/Styx STS handshake** — mutual ML-KEM (768 default, **1024 under CNSA mode**) hybridised with classical DH (`libinterp/keyring.c` `Keyring_auth`; the combiner is **SHA-512 under CNSA mode**, the ML-KEM-1024 secrets first, and SHA3-512 outside it). **login(6), version 3** — the password-authenticated exchange that issues every certificate: ML-KEM (768 for suite 1, **1024 for suite 2, the only suite in CNSA mode**) beside its Diffie-Hellman EKE, the client's encapsulation key's seed masked under the password and the DH secret, proofs and session by HKDF-SHA-384 over k ‖ z ‖ pw (`appl/lib/login.b`, `appl/cmd/auth/logind.b`, login(6)). **secstore version 5** — the PAK to the key store: **ML-KEM-1024** in every mode beside the PAK, the seed masked under the PAK's secret and the verifier, proofs and session by HKDF-SHA-384 (`appl/lib/secstore.b` PAK5, `appl/cmd/auth/secstored.b`). **TLS 1.3** — the **X25519MLKEM768** hybrid (`0x11EC`) first by default, with classical X25519/P-256/P-384 for servers without it; under CNSA-strict TLS (`/env/cnsatls`) the client offers the **SecP384r1MLKEM1024** hybrid alone (P-384 ECDH + ML-KEM-1024, `0x11ED`, `appl/lib/crypt/tls.b`). *(Until October 2026 the X25519MLKEM768 constant was `0x4588`, the decimal codepoint read as hex, and the share was never sent.)* |
+| Evidence | `tests/mlkem_test.b` (KAT + round-trip), `tests/mlkem_stress_test.b`, `tests/pqauth_test.b` (hybrid handshake, downgrade-rejected, tamper-rejected), `tests/handshake_fuzz_test.b`, `tests/cnsa_nodepair_test.sh` (the SHA-512 combiner between two CNSA nodes); `tests/login_test.b` (both suites' ML-KEM lengths, a key that is none refused, a relay changing the key, its seed or the ciphertext refused, *Logarithms*: a signer given the client's exponent, as a quantum adversary would have it, finds the DH secret of every password it tries and matches none against the client's proof but its one guess) with `tests/host/login_test.sh` (key derivation against Python); `tests/secstored_test.b` *Version5* (version 4's exchange refused, bad keys refused, CNSA mode version 5 alone) and `tests/secstore_crypto_test.b` *Pak5Vectors* with `tests/host/secstore_pak5_test.sh` (against Python) |
 | Status | **Met (CNSA-strict mode)** — both transports negotiate **ML-KEM-1024** under CNSA mode (`CNSAMODE` for the native transport, `CNSATLS` for TLS). *Native STS:* `Keyring_auth` uses `mlkem1024_*`; **multi-node verified** (`tests/cnsa_nodepair_test.sh`) — two CNSA nodes complete the 1024 handshake over TCP, a mixed 1024/768 pair is rejected (no silent downgrade); `tests/pqauth_test.b` passes 11/11 in both modes. *TLS 1.3:* the client offers **SecP384r1MLKEM1024** (P-384 ECDH + ML-KEM-1024, ECDH-first combiner) — **interop-verified against OpenSSL 3.6** (`tests/tls_cnsa_hybrid_test.sh`): the hybrid handshake + application data succeed, the classical path still works, and a CNSA client refuses an X25519-only server. Default deployments use ML-KEM-768 (native) and X25519MLKEM768 with classical fallback (TLS). The two settings are apart because public servers do not offer SecP384r1MLKEM1024: a node CNSA-strict to its peers keeps the web. |
 
 ### 3.4 Signatures (general) — ML-DSA (FIPS 204) ✅
@@ -129,35 +129,48 @@ reason.
 |---------|--------------|
 | `auth/createsignerkey` (or `-c`) | Makes ML-DSA-87, certificate under SHA-384, RFC 3526's 3072-bit Diffie-Hellman group in the key file (it was the 2048-bit one). `-a` naming another algorithm and any `-b` are refused. |
 | `auth/mkauthinfo` | Signs only with a key file that is CNSA's whole (keys, signer's key, certificate algorithm and hash, modulus ≥ 3072 bits). |
-| `auth/logind` | Suite 2 of login(6) alone (AES-256, SHA-384, group ≥ 3072 bits), and a signer's key that is CNSA's whole, checked at each connection: with any other key every login is refused, "signer's key is not CNSA's". The key certified is of the signer's algorithm. |
-| login client (`login(2)`, `getauthinfo`) | Suite 2 alone; refuses a signer's key that is not ML-DSA-87, a signer's modulus under 3072 bits, a certificate not ML-DSA-87's under SHA-384/512. |
-| `auth/signer` | As logind for its key; certifies only keys of its own algorithm. Not started by default (signer(8)). |
+| `auth/logind` | Suite 2 of login(6) alone (AES-256, SHA-384, ML-KEM-1024, group ≥ 3072 bits), and a signer's key that is CNSA's whole, checked at each connection: with any other key every login is refused, "signer's key is not CNSA's". The key certified is of the signer's algorithm. A client of login version 2 (no ML-KEM) is refused in every mode. |
+| login client (`login(2)`, `getauthinfo`) | Suite 2 alone (ML-KEM-1024); refuses a signer's key that is not ML-DSA-87, a signer's modulus under 3072 bits, a certificate not ML-DSA-87's under SHA-384/512, and a signer of login version 2. |
+| `auth/signer` | As logind for its key; certifies only keys of its own algorithm; the digest the operator compares is SHA-384 for an ML-DSA or SLH-DSA signer. Not started by default (signer(8)). |
+| `auth/secstored` | secstore version 5 alone (ML-KEM-1024 and SHA-384 beside the PAK); versions 1 and 3, kept outside the mode for accounts to move, are refused saying so. The version 4 exchange is refused in every mode. |
+| secstore client (`secstore(2)`, `auth/secstore`, logon, factotum) | Version 5 alone; an account still at version 1 or 3 is not moved in the mode, and the client says to log in once outside it. |
 | `auth/factotum` | `genkey` makes ML-DSA-87 alone; `proto=sign` signs with an ML-DSA-87 key alone. |
 | `auth/factotum` `proto=p9any`, `proto=dp9ik` | Refused ("dp9ik is not available in CNSA mode"): 9front's authentication, for working with 9front, is classical (§3.8). |
 | `rcpu`, `rimport` (`rconnect(2)`) | Refused before anything is dialled, saying why (§3.8). |
 | `Keyring->auth` (every authenticated connection) | By the emulator's own switch (`CNSAMODE`): a key file that is not CNSA's whole is refused, each end told which part; the peer's key and certificate are held to the same; the exchange is signed over SHA-384 and a peer's signature over another hash is refused. (It took any key file and signed over SHA-256.) |
-| `auth(2)` (`client`, `server`, `auth`) | By `/env/cnsamode`: a key file that is not CNSA's whole is refused before anything is sent, with `cnsakey`'s reason. |
+| `auth(2)` (`client`, `server`, `auth`) | By `/env/cnsamode`: a key file that is not CNSA's whole is refused before anything is sent, with `cnsakey`'s reason. The confirmation of the ssl algorithm (`infernode-auth 3`) is HMAC-SHA-384 in every mode (it was HMAC-SHA-256). |
 
 Known limits, stated rather than hidden:
 
-- **Certificate delivery.** An ML-DSA-87 certificate is 6197 bytes as text and
-  Keyring's `getstring`/`putstring` messages hold 4096 (`libinterp/keyring.c`
-  `Maxmsg`). Until that limit is raised, a CNSA signer completes the exchange
-  and then tells the client that the certificate does not fit a message (it was
-  sent cut short); `tests/login_test.b`'s three CNSA logins check that and are
-  skipped, and run whole once a 7000-byte string passes. Key files made by
-  `mkauthinfo` are not affected.
-- **The peer-to-peer handshake** (`Keyring->auth`, C) reads the mode for
-  ML-KEM-1024 but does not itself refuse a certificate or key file that is not
-  ML-DSA-87 with a 3072-bit modulus; `login->cnsakey` is the check a caller of
-  `auth(2)` can make on the key file it reads.
-- **Stored secrets.** keyfs(4)'s key file is PBKDF2-HMAC-SHA-384 and AES-256-GCM
-  in every mode. An account's stored secret is the SHA-256 of its password
-  (keys(6), changelogin(8)) in every mode: it enters login(6)'s suite 2 only as
-  key material to HKDF-SHA-384 and is never a signature's hash. secstore's file
-  key and PAK verifier are HMAC-SHA-256 and SHA-256 (`appl/lib/secstore.b`), with
-  AES-256-GCM for the files and the session: outside the mode's signature and
-  key-establishment rules, and not SHA-384.
+- **The masked-seed construction** in login(6) version 3 and secstore version 5
+  (ML-KEM beside the password exchange, the encapsulation key's seed masked
+  under the password and the Diffie-Hellman secret) is this project's own. Its
+  key establishment is ML-KEM-1024 and SHA-384 as CNSA 2.0 asks; the claim that
+  a quantum adversary gets one password guess per login it takes part in rests
+  on the reasoning in login(6) and on `tests/login_test.b` *Logarithms*, not on a
+  published proof, and wants a cryptographer's review.
+- **Stored secrets in the form before** (G9). Each password-derived secret is
+  now made with SHA-384, and one still in its old form is moved the next time
+  its owner gives the password, never sooner, because only the password makes
+  the new form:
+  - an account's secret (keys(6)) at its next login (login(6)). In CNSA mode an
+    account still in the old form is refused, and is moved by a login outside
+    the mode or set again with changelogin(8);
+  - a secstore account's verifier at its next login (connect6), and its files
+    at the next login that reads them (logon, factotum) or with
+    `auth/secstore m`. In CNSA mode an account not yet at version 6 is refused;
+  - a second factor's key slot at its next unlock with the key, and its
+    recovery slot the next time the recovery passphrase is used: only then is
+    the key's secret, or the passphrase, at hand;
+  - factotum's key file (`-f`) when it is next read;
+  - an httpd(8) password line when the administrator makes it again with
+    `svc/httpd/passwd` (httpd cannot, having only the hash). In CNSA mode an
+    old line is left out.
+
+  Until it is moved, a secret in the old form keeps its old strength. An
+  installation that must have none left can see what remains: keyfs entries of
+  32 bytes, `secstore4` and older lines in secstored's `PAK` files, SGCM2 files,
+  FKEY1 key files, and `pbkdf2-sha256` lines.
 
 ### 3.8 Outside the mode: 9front's dp9ik
 
@@ -195,33 +208,112 @@ All deployed PQ key exchange is **hybrid** (classical + PQ), so a session is saf
   it; classical otherwise (`appl/lib/crypt/tls.b`, `docs/CRYPTO-MODERNIZATION.md` §8).
 - Native 9P/Styx transport: classical DH **+** mutual ML-KEM-768, combined via SHA3-512,
   transcript-bound against active substitution (`docs/CRYPTO-MODERNIZATION.md` §10;
-  proven by `tests/pqauth_test.b` *TamperedEkRejected* / *DowngradeRejected*).
+  proven by `tests/pqauth_test.b` *TamperedEkRejected* / *DowngradeRejected*); in CNSA
+  mode ML-KEM-1024, combined via SHA-512.
+- login(6) version 3: the Diffie-Hellman EKE **+** ML-KEM (768, or 1024 in CNSA mode),
+  both secrets and the password in the HKDF-SHA-384 key material.
+- secstore version 5: the PAK **+** ML-KEM-1024, both secrets and the verifier in the
+  HKDF-SHA-384 key material.
 
 This exceeds the CNSA 2.0 baseline (which permits PQ-only); the hybrid construction is a
 stricter, transition-safe posture.
 
 ---
 
-## 5. Gap resolution (all closed)
+## 5. Gap resolution
 
 | ID | CNSA 2.0 requirement | Resolution | Tracking |
 |----|----------------------|------------|----------|
 | **G1** | **ML-KEM-1024** (Cat 5) negotiated key exchange | **Closed.** Both transports select ML-KEM-1024 under CNSA mode (native STS `if(cnsa)` keygen/encaps/decaps, `libinterp/keyring.c:1891`–`2177`; TLS client offers `SecP384r1MLKEM1024`, `appl/lib/crypt/tls.b`). No silent downgrade. Multi-node (`tests/cnsa_nodepair_test.sh`) + OpenSSL-interop (`tests/tls_cnsa_hybrid_test.sh`) verified. | INFR-329 |
 | **G2** | **ML-DSA-87** (Cat 5) across all signing surfaces | **Closed, and enforced.** Under CNSA mode `createsignerkey` makes ML-DSA-87 and refuses anything else asked for; `logind`, `signer`, `mkauthinfo`, factotum's `genkey` and `proto=sign`, and the login client each refuse a key that is not ML-DSA-87 (§3.7). `auth/signer` no longer makes a key of its own when it finds none: `createsignerkey` is the one maker. `createsignerkey -c` is the mode for that command regardless of the environment. | INFR-330 |
 | **G3** | LMS/XMSS (SP 800-208) firmware signing | **Resolved — Not Applicable** (§3.5): no firmware / in-system signed-image use case; compensating control is hardware (YubiKey) release signing, with ML-DSA-87 / SLH-DSA available. Accreditor to confirm the determination. | INFR-331 |
+| **G4** | ML-KEM-1024 in **login(6)**, which issues every certificate | **Closed.** Version 2 was a classical Diffie-Hellman EKE alone: a party with a quantum computer and a recording of a login whose signer's part it took could test every password. Version 3 runs ML-KEM beside it (1024 in CNSA mode, the mode's only suite), the seed masked under the password and the DH secret, proofs and session from both by HKDF-SHA-384; version 2 is refused at both ends (`appl/lib/login.b`, `appl/cmd/auth/logind.b`, login(6); `tests/login_test.b`, `tests/host/login_test.sh`). | — |
+| **G5** | ML-KEM-1024 and SHA-384 in **secstore's PAK** | **Closed.** Version 4 was a PAK over a 2048-bit group with SHA-256 proofs: a recorded login was a password to search for. Version 5 keeps the account's verifier and adds ML-KEM-1024 and SHA-384 (`appl/lib/secstore.b` PAK5, `appl/cmd/auth/secstored.b`); the version 4 exchange is refused, and in CNSA mode both ends speak version 5 alone. The PAK's group stays the account's (2048 bits, below CNSA 1.0's 3072): the verifier is bound to it, so it is the hybrid's T and ML-KEM-1024 its Z (SP 800-56C rev. 2), the key establishment CNSA 2.0 counts (`tests/secstored_test.b` *Version5*, `tests/secstore_crypto_test.b` *Pak5Vectors*, `tests/host/secstore_pak5_test.sh`). | — |
+| **G6** | SHA-384 for **auth(2)'s confirmation** of the ssl algorithm | **Closed.** It was HMAC-SHA-256; `infernode-auth 3` is HMAC-SHA-384 (`appl/lib/auth.b`; `tests/auth_algs_test.b`, `tests/auth_bind_test.b`). | — |
+| **G7** | SHA-2 for the **native transport's hybrid combiner** | **Closed.** It was SHA3-512, which CNSA 2.0 has only inside ML-KEM and ML-DSA; under CNSA mode it is SHA-512 with the ML-KEM-1024 secrets first (`libinterp/keyring.c` `Keyring_auth`; `tests/cnsa_nodepair_test.sh`, `tests/pqauth_test.b`). | — |
+| **G8** | SHA-384 for **signer(8)'s operator digest** | **Closed** for ML-DSA and SLH-DSA signers (`appl/cmd/auth/signer.b`, signer(8)). | — |
+| **G9** | SHA-384 for the **stored secrets** made from passwords | **Closed.** An account's secret (keys(6)) is PBKDF2-HMAC-SHA-384 salted by its name, moved at its next login (`Login->secret`; `tests/login_test.b` *Migration*, `tests/passwd_test.b` *OldForm*). secstore version 6: its verifier and the files' keys from a root of PBKDF2-HMAC-SHA-384, the files SGCM3 (keys by HMAC-SHA-384), second-factor key slots wrapped under HMAC-SHA-384, all moved at the next use (`appl/lib/secstore.b` `connect6`, `openfile`; `appl/lib/twofaslot.b`; `tests/secstored_test.b` *Version6*, `tests/twofaslot_test.b` *OldSlotMoved*, `tests/secstore_crypto_test.b`, `tests/host/secstore_pak5_test.sh` against hashlib). factotum's key file FKEY2 (PBKDF2-HMAC-SHA-384), FKEY1 rewritten when read (`tests/host/factotum_persist_test.sh`). httpd(8)'s password lines `pbkdf2-sha384`, the old refused in CNSA mode (`tests/host/httpd_auth_test.sh`). createuser wrote the password's SHA-1, which no login took; it writes the new form. Secrets still in the old form are moved at their next use (§3.7). | — |
 
 None of G1–G3 require architectural change; G1/G2 are selection of already-implemented
 Category-5 parameters. Per project policy these are scoped and reviewed as their own
 changes rather than bundled here. **No code is altered by this evidence artifact.**
 
+### 5.1 Why G4–G8, and what they break
+
+G4–G8 were made to meet CNSA 2.0, not because each one answered a
+present threat. The table says which did both, so that an accreditor
+and an operator can each weigh them. CNSA 2.0 asks for quantum-resistant
+public-key algorithms in all key establishment within a National
+Security System, on NSA's transition timeline. It names no
+password-authenticated exchange, and it does not exempt a protocol for
+being confined to one host. An accreditor may still scope loopback
+traffic as inside the boundary. A classical Diffie-Hellman exchange of
+3072 bits is CNSA 1.0's transition algorithm, not CNSA 2.0's end state.
+
+| Gap | Exposure in a deployment | Threat it answers | Driven by |
+|-----|--------------------------|-------------------|-----------|
+| G4 login(6) | logind listens on every interface where the auth service runs (`tcp!*!inflogin`: `appl/svc/auth.sh`, `lib/sh/srv`) | A recording of a login, kept until a quantum computer exists, gives the password by offline guessing (the session carries nothing else secret: keys and certificate are public, and the user's secret key never leaves the client). An active attacker with a quantum computer at login time, taking the signer's part, got every password; now it gets one guess | **Threat and compliance** |
+| G5 secstore | secstored listens on `127.0.0.1` by default (`secstored.b`, `lib/sh/profile`); on the network only with `-a` | On loopback, nothing an observer does not already have by holding the machine. With `-a`, a recording plus a future quantum computer gives the password, and with it every file in the store (factotum's keys among them) | **Compliance** by default; **threat and compliance** with `-a` |
+| G6 auth(2) confirmation | Every authenticated 9P connection | None: HMAC-SHA-256 is not weakened by a quantum computer | **Compliance** (CNSA 2.0's hash is SHA-384/512) |
+| G7 transport combiner | Every authenticated 9P connection in CNSA mode | None: SHA3-512 is a sound combiner | **Compliance** (CNSA 2.0 has SHA-3 only inside ML-KEM and ML-DSA) |
+| G8 signer digest | The operator's comparison, out of band | None of note: 16 bytes are shown either way | **Compliance** |
+| G9 stored secrets | A copy of a store (keyfs's file, secstored's directory, a factotum key file, an httpd password file) | Grover's algorithm does not make SHA-256 weak here: a password-derived secret is as strong as the password. The one real gain is keyfs's: one unsalted SHA-256 a guess became 200000 HMAC-SHA-384 salted by the name | **Compliance**, and the keyfs store against offline guessing |
+
+**Breaking changes, made on purpose.** Each of these protocols was
+changed in every mode, not only in CNSA mode, and none negotiates down:
+
+- login(6) version 3: a signer and its clients must be updated together.
+- secstore version 5: secstored refuses the version 4 exchange, so an
+  old client cannot reach a new server.
+- auth(2) `infernode-auth 3`: an authenticated 9P connection between an
+  updated node and an older one is refused, whatever the mode.
+- keysrv 3 (passwd(1)): the challenge names the form of the secret held;
+  an older passwd is refused, saying so.
+- secstore version 6: accounts and files are moved by a client of this
+  version; an older client cannot read a file written in SGCM3.
+
+Accounts, verifiers, keys and certificates are unchanged; only the
+exchanges are. Each refusal tells the other end which version is spoken.
+The project accepts these breaks now, while deployment is limited: one
+exchange per protocol, with nothing to negotiate down to, gives an
+attacker nothing to downgrade, leaves less to accredit, and is cheaper
+to establish before there are fleets that depend on compatibility than
+after. The changelog's Security section names each break.
+
+**What they cost, measured in use.** Two nodes, each an emulator with
+a root, home and keys of its own, driven at their consoles
+(`tests/host/twonode_auth_test.sh`), and the login screen driven
+headless, against the build before G4–G9 on the same host (x86-64,
+JIT). Times run from the Enter that ends the password:
+
+| Step | Before | After |
+|------|--------|-------|
+| Log in to a signer (`getauthinfo`) | 0.05–0.07 s | 0.41–0.55 s |
+| The same in CNSA mode | 0.10–0.16 s | 0.44–0.49 s |
+| A wrong password refused | 0.05 s | 0.41–0.47 s (as long as a right one) |
+| An account made (`changelogin`) | ≈0 s | 0.35–0.49 s |
+| Authenticated mount (auth(2)) | 30 ms | 30 ms (56 ms in CNSA mode) |
+| secstore unlocked by factotum | 0.16–0.18 s | 0.38–0.48 s |
+| The login screen: keys in factotum | 0.31–0.34 s | 0.41 s |
+| The login screen: Lucia running | 0.39 s | 0.81 s |
+| First unlock of an account at version 4 (moved once) | — | 2.9 s |
+
+Nearly all of it is the PBKDF2 of G9, paid once per login or unlock;
+ML-KEM adds about 0.2 ms, and each protocol one round trip. Mounts and
+everything after login cost what they did. A slower board pays the
+PBKDF2 several times over. The login screen at first made the keys
+twice, and the old version's each time (1.1 s to the keys); it makes
+them once now, and the old version's only for an old account or file.
+
 ## 6. Disposition
 
 - CNSA 2.0 **algorithm primitives: complete** at Category 5 (FIPS 203/204/205/202; AES-256;
   SHA-384/512) — closes EPIC 3 acceptance item *"algorithm inventory documented."*
-- CNSA 2.0 **strict-mode parameter compliance:** Met under CNSA-strict mode — G1 and G2
-  Closed, G3 Resolved as Not Applicable (§5).
-- Remaining: the accreditor to confirm the G3 applicability determination (LMS/XMSS vs.
-  SLH-DSA waiver).
+- CNSA 2.0 **strict-mode parameter compliance:** Met under CNSA-strict mode — G1, G2 and
+  G4–G9 Closed, G3 Resolved as Not Applicable (§5).
+- Remaining: the accreditor to confirm the G3 applicability determination (LMS/XMSS
+  vs. SLH-DSA waiver); a cryptographer's review of the masked-seed construction (§3.7);
+  secrets still in their old form, which move at their next use (§3.7).
 
 ## 7. References
 

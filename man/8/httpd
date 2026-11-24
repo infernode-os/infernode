@@ -330,11 +330,19 @@ With
 a file of lines that
 .B svc/httpd/passwd
 makes, HTTP Basic authentication:
-.IB user :pbkdf2-sha256: iterations : salt : hash \fR,
-the hash PBKDF2-HMAC-SHA-256 (RFC 8018) of the password, 100000
+.IB user :pbkdf2-sha384: iterations : salt : hash \fR,
+the hash PBKDF2-HMAC-SHA-384 (RFC 8018) of the password, 100000
 iterations unless
 .B -i
 says.
+A line of the form before,
+.BR pbkdf2-sha256 ,
+is still taken, except in CNSA mode
+.RB ( /env/cnsamode
+set when
+.I httpd
+starts), where it is left out, saying so: it is made again with
+.BR svc/httpd/passwd .
 .B Svc/httpd/passwd
 reads the password from its standard input (its first line: at most
 256 bytes of UTF-8, no control character) and prints the line, to be

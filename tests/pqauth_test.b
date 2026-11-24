@@ -10,6 +10,9 @@ implement PQAuthTest;
 #
 #     SHA3-512("infernode-pq-sts-v2" || dh || kem_lo || kem_hi || ek_lo || ek_hi)
 #
+# (in CNSA mode, with ML-KEM-1024, SHA-512("infernode-pq-sts-v3-cnsa" ||
+# kem_lo || kem_hi || dh || ek_lo || ek_hi): tests/cnsa_nodepair_test.sh)
+#
 # Coverage:
 #   - HybridAuthHandshake        happy path, ed25519 signer
 #   - HybridHandshakeMLDSA        fully post-quantum (ML-DSA-65 signer + ML-KEM)

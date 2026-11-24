@@ -4,8 +4,10 @@
 # A 2FA account's factotum blob is encrypted under a random data key DK; DK is
 # wrapped in one or more slot files under /usr/inferno/secstore/<user>/2fa/.
 # Each slot = encrypt3(DK, KEK):
-#   key slot:      KEK = mkkek2fa(rootkey, R)   (R = YubiKey hmac-secret, touch)
-#   recovery slot: KEK = mkfilekey3(user, recoverypass)
+#   key slot:      KEK = mkkek2fa(root6, R)   (R = YubiKey hmac-secret, touch)
+#   recovery slot: KEK = mkfilekey6(user, recoverypass)
+# (before version 6 of the store, oldkek2fa(root3, R) and mkfilekey3: such a
+# slot is wrapped again by its next unlock)
 # The presence of a slot dir is the marker that the account is "2FA"; legacy
 # password-only accounts have none and are left untouched. This module is pure
 # local-file + crypto: the caller (Settings enroll / logon unlock) owns the
@@ -40,13 +42,16 @@ Twofaslot: module
 
 	# Recover the data key DK from the slots. Tries each key slot (present
 	# YubiKey, touch) first; then the recovery slot if recoverypass is given.
-	# rootkey is mkfilekey3(user,pass). Returns (DK, nil) or (nil, error).
-	unlock:	fn(user: string, rootkey: array of byte, recoverypass, pin: string): (array of byte, string);
+	# c is secstore(2)'s mkcreds(user, pass): a slot is opened under the
+	# version 6 root, or one made before version 6 under the old root and
+	# then wrapped again under the new. Returns (DK, nil) or (nil, error).
+	unlock:	fn(user: string, c: ref Secstore->Creds, recoverypass, pin: string): (array of byte, string);
 
 	# Create the key-slots + recovery slot for DK. keys is a list of
 	# (slotname, cred-id-hex, salt-hex). Derives R per key (touch), wraps DK,
 	# VERIFIES every slot unwraps DK before writing anything. Returns nil or error.
-	writeslots:	fn(user: string, rootkey, DK: array of byte, keys: list of (string, string, string), recoverypass, pin: string): string;
+	# root6 is secstore(2)'s mkfilekey6(user, pass).
+	writeslots:	fn(user: string, root6, DK: array of byte, keys: list of (string, string, string), recoverypass, pin: string): string;
 
 	# Add a backup/second key-slot wrapping the SAME DK, without disturbing the
 	# existing slots or the factotum (no single point of failure). Unlocks DK via

@@ -19,6 +19,8 @@ cons \- console device
 .B /dev/msec
 .B /dev/null
 .B /dev/notquiterandom
+.B /dev/hwrandom
+.B /dev/hwrandomboot
 .B /dev/pointer
 .B /dev/random
 .B /dev/scancode
@@ -242,6 +244,17 @@ device returns as many bytes of pseudo-random data as are requested in the
 this is typically faster than
 .B random
 but the results are more predictable.
+.PP
+On the native kernel,
+.B hwrandom
+gives the board's hardware generator's bytes as its driver gives them, before
+any deterministic generator, and
+.B hwrandomboot
+the first 4096 it gave on this boot;
+they are for measuring the generator (see
+.IR rngdump (1)).
+Only eve may open them, and only on a boot whose command line holds the word
+.BR rngassess .
 .PP
 The
 .B scancode

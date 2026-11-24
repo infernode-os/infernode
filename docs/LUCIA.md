@@ -1,6 +1,6 @@
 # Lucia
 
-**Purpose:** User and operator guide for Lucia, InferNode's desktop UI — a three-zone tiling environment for AI-assisted work.
+**Purpose:** User and operator guide for Lucia, InferNode's agent-first interface, offered at the login screen as **Assistant**. It is built for voice, touch and keyboard input, lays itself out for the screen it is on (three zones side by side on a desktop or a tablet held sideways, one zone at a time on a phone), and runs on phones, tablets, touch panels and desktops alike.
 
 > Looking for the production-readiness audit (P0/P1/P2 issues)? See [LUCIA-EVALUATION.md](history/LUCIA-EVALUATION.md). This document is the user-facing guide.
 
@@ -37,7 +37,7 @@ From the repository root, run the emulator for your platform with the boot scrip
 
 Windows uses `.\emu\Nt\o.emu.exe` with `-r%CD%`; see [CLAUDE.md](../CLAUDE.md) and [QUICKSTART.md](../QUICKSTART.md#running-for-development). Add `-g WxH` for a custom window size. The `-p` flags set the memory limits. `sh -l` runs `lib/sh/profile` first, which starts `speech9p` (TTS/STT, mounted at `/mnt/speech`). `lib/lucifer/boot.sh` then:
 
-1. Runs the login screen (`wm/logon`) unless `skiplogon=1`. It offers two interfaces, Lucia and Desktop (`wm/wm`), and keeps the one chosen in `/usr/inferno/lib/interface` (in `~/.infernode`); `interface=Desktop` or `interface=Lucia` set before the boot picks one without it, and `skiplogon=1` alone starts Lucia.
+1. Runs the login screen (`wm/logon`) unless `skiplogon=1`. It offers two interfaces, Assistant (Lucia; "Agent-first. Voice, touch and keyboard input. Adaptive layout.") and Desktop (`wm/wm`; "Overlapping windows, pointer input, command shell."), and keeps the one chosen in `/usr/inferno/lib/interface` (in `~/.infernode`); `interface=Desktop` or `interface=Assistant` set before the boot picks one without it, and `skiplogon=1` alone starts Assistant. A phone or tablet offers Assistant alone and shows no picker. Assistant was called Lucia at the login screen: a kept choice or `interface=` naming `Lucia` starts Assistant.
 2. Starts the LLM service in the background (`lib/lucifer/llmsrv.sh`).
 3. Starts `wallet9p` and `msg9p`. For the Desktop interface it then starts `wm/wm`, whose first command (`lib/wm/desktop.sh`) starts a plumber on `/lib/wm/plumbing` and a shell, and none of the steps below.
 4. Starts `luciuisrv` (the UI 9P filesystem at `/mnt/ui`) and creates the `Main` activity.

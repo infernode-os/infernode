@@ -189,11 +189,12 @@ RAWOFF : con 1;
 
 promptstring(prompt, def: string, mode: int): string
 {
+	p: string;
 	if(mode == RAWON || def == nil || def == "")
-		sys->fprint(stdout, "%s: ", prompt);
+		p = sys->sprint("%s: ", prompt);
 	else
-		sys->fprint(stdout, "%s [%s]: ", prompt, def);
-	(eof, resp) := readline(stdin, mode);
+		p = sys->sprint("%s [%s]: ", prompt, def);
+	(eof, resp) := readline(stdin, mode, p);
 	if(eof)
 		exit;
 	if(resp == "")
@@ -201,7 +202,9 @@ promptstring(prompt, def: string, mode: int): string
 	return resp;
 }
 
-readline(fd: ref Sys->FD, mode: int): (int, string)
+# the prompt is printed once the console's mode is set: a password
+# typed ahead of rawon was echoed as it arrived
+readline(fd: ref Sys->FD, mode: int, prompt: string): (int, string)
 {
 	i: int;
 	eof: int;
@@ -218,6 +221,7 @@ readline(fd: ref Sys->FD, mode: int): (int, string)
 			return (1,nil);
 		}
 	}
+	sys->fprint(stdout, "%s", prompt);
 
 	for(sofar := 0; sofar < 128; sofar += i){
 		i = sys->read(fd, tmp, 128 - sofar);

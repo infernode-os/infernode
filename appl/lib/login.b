@@ -9,7 +9,7 @@
 implement Login;
 
 #
-# login(6), version 2: the client's side (login), and what the signer's
+# login(6), version 3: the client's side (login), and what the signer's
 # programs share with it -- the rule for account names, the groups, the
 # key derivation, and logind(8)'s count of failed attempts -- so that
 # there is one of each.
@@ -20,7 +20,7 @@ include "sys.m";
 
 include "keyring.m";
 	kr: Keyring;
-	IPint: import kr;
+	IPint, DigestState: import kr;
 
 include "security.m";
 
@@ -182,7 +182,8 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 
 	# user->CA	hello: the version, the suite, the client's nonce.
 	# A client in CNSA mode (/env/cnsamode) offers only AES-256-GCM
-	# with SHA-384, and then takes only a group of 3072 bits or more.
+	# with SHA-384 and ML-KEM-1024, and then takes only a group of 3072
+	# bits or more.
 	suite := Chacha;
 	if(cnsamode())
 		suite = Aesgcm;
@@ -193,8 +194,9 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 	if(kr->putbytearray(c.dfd, hello, len hello) < 0)
 		return (sys->sprint("can't send hello: %r"), nil);
 
-	# CA->user	reply: version, suite, group, the signer's nonce, and
-	# the signer's Diffie-Hellman value under the password's keystream
+	# CA->user	reply: version, suite, group, the form of the account's
+	# secret, the signer's nonce, and the signer's Diffie-Hellman value
+	# under the password's keystream
 	reply: array of byte;
 	(reply, err) = kr->getbytearray(c.dfd);
 	if(err != nil){
@@ -204,8 +206,13 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 			return ("signer speaks the old login exchange, which is refused: see login(6)", nil);
 		return ("remote: " + err, nil);
 	}
-	if(len reply < 3+Noncelen || int reply[0] != Version)
-		return ("signer's reply is not login version 2: see login(6)", nil);
+	if(len reply < 3 || int reply[0] != Version){
+		if(len reply >= 1 && int reply[0] == 2)
+			return ("signer speaks login version 2, which has no ML-KEM and is refused: update the signer (login(6))", nil);
+		return ("signer's reply is not login version 3: see login(6)", nil);
+	}
+	if(len reply < 4+Noncelen)
+		return ("signer's reply is too short", nil);
 	if(int reply[1] != suite){
 		if(suite == Aesgcm)
 			return ("CNSA mode: signer did not answer with AES-256-GCM and SHA-384", nil);
@@ -217,36 +224,86 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 		return (sys->sprint("signer's group %d is not one of login(6)'s", gid), nil);
 	if(suite == Aesgcm && n*8 < 3072)
 		return (sys->sprint("CNSA mode: signer's group %d has %d bits; 3072 at least are required", gid, n*8), nil);
-	if(len reply != 3+Noncelen+n)
+	if(len reply != 4+Noncelen+n)
 		return ("signer's reply is not the length of its group", nil);
 
-	# The stored form of the password (changelogin(8)): its SHA-256.
+	# The secret keyfs(4) holds for the account, from the password: the
+	# new form (PBKDF2-HMAC-SHA-384 salted by the name), or the old (its
+	# SHA-256) for an account not yet given the new, which this login
+	# then gives it.  A client in CNSA mode takes the new form alone.
+	form := int reply[3];
 	pwbuf := array of byte password;
-	pw := array[Keyring->SHA256dlen] of byte;
-	w.l = pwbuf :: pw :: w.l;
-	kr->sha256(pwbuf, len pwbuf, pw, nil);
+	w.l = pwbuf :: w.l;
+	pw: array of byte;
+	case form {
+	Newform =>
+		pw = secret(id, pwbuf);
+	Oldform =>
+		if(suite == Aesgcm)
+			return ("CNSA mode: the signer holds the account's secret in the old form (SHA-256); log in once outside CNSA mode", nil);
+		pw = oldsecret(pwbuf);
+	* =>
+		return (sys->sprint("signer's form of secret %d is not one of login(6)'s", form), nil);
+	}
+	w.l = pw :: w.l;
 
 	# The signer's value, +-2**r0 mod p.  With another password this
 	# is some other number, and nothing here says which: there is no
 	# tag to check.  It must be an element the secret can be made
 	# from: 0, 1 and p-1 would make the secret one anybody knows.
-	x := IPint.bytestoip(mask(suite, gid, id, pw, hello[2:], reply[3:3+Noncelen], reply[3+Noncelen:]));
+	x := IPint.bytestoip(mask(suite, gid, id, pw, hello[2:], reply[4:4+Noncelen], reply[4+Noncelen:]));
 	if(!inrange(x, p))
 		return ("name or secret incorrect", nil);
 
-	# user->CA	2**r1 mod p, and the proof that the client has the
-	# secret, x**(2*r1) mod p: the signer says nothing made from the
-	# secret before it has this.
+	# user->CA	2**r1 mod p, and an ML-KEM encapsulation key of this
+	# login's whose seed is under a keystream of the password and the
+	# Diffie-Hellman secret x**(2*r1) mod p.  The seed alone is masked:
+	# with any password it unmasks to 32 bytes that make a key of the
+	# right form (the rest of the key, which has a form, is in clear;
+	# whether it goes with a given seed is ML-KEM's own hard problem),
+	# and a ciphertext the signer made under a guess opens only to
+	# whoever had the guess right.  So a party that can
+	# take logarithms (a quantum computer) and reads or takes the
+	# signer's part in a login still has only one guess at the password
+	# in each, and the session's secret needs the KEM's as well.
 	r1 := exponent(p);
 	y := bebytes(IPint.inttoip(2).expmod(r1, p), n);
 	z := bebytes(x.expmod(r1.shl(1), p), n);
-	(cproof, sproof, sk) := keys(suite, id, pw, hello, reply, y, z);
-	w.l = z :: sproof :: sk :: w.l;
-	msg := array[n + len cproof] of byte;
+	w.l = z :: w.l;
+	(eklen, ctlen) := kemsizes(suite);
+	(ek, dk) := kemkeygen(suite);
+	if(ek == nil || dk == nil || len ek != eklen)
+		return ("can't make an ML-KEM key", nil);
+	w.l = dk :: w.l;
+	rho := ek[eklen-Rholen:];
+	msg := array[n + eklen] of byte;
 	msg[0:] = y;
-	msg[n:] = cproof;
+	msg[n:] = ek[0:eklen-Rholen];
+	msg[n+eklen-Rholen:] = kemmask(suite, gid, id, pw, hello[2:], reply[4:4+Noncelen], z, rho);
 	if(kr->putbytearray(c.dfd, msg, len msg) < 0)
 		return (sys->sprint("can't send (2**r1 mod p): %r"), nil);
+
+	# CA->user	an ML-KEM ciphertext for that key, as the signer
+	# unmasked it.  With another password it was another key, and what
+	# opens here is ML-KEM's implicit rejection, which nobody knows: the
+	# proofs then differ.
+	ct: array of byte;
+	(ct, err) = kr->getbytearray(c.dfd);
+	if(err != nil)
+		return ("remote: " + err, nil);
+	if(len ct != ctlen)
+		return ("signer's ML-KEM ciphertext is not the length of its suite's", nil);
+	k := kemdecaps(suite, dk, ct);
+	if(k == nil)
+		return ("signer's ML-KEM ciphertext is refused", nil);
+	w.l = k :: w.l;
+
+	# user->CA	the proof that the client has both secrets: the
+	# signer says nothing made from them before it has this.
+	(cproof, sproof, sk) := keys(suite, id, pw, hello, reply, msg, ct, z, k);
+	w.l = sproof :: sk :: w.l;
+	if(kr->putbytearray(c.dfd, cproof, len cproof) < 0)
+		return (sys->sprint("can't send proof: %r"), nil);
 
 	# CA->user	the signer's proof: it had the password too
 	proof: array of byte;
@@ -264,6 +321,16 @@ login1(id, password, dest: string, w: ref Wipe): (string, ref Keyring->Authinfo)
 		return ("can't set secrets: " + err, nil);
 	if(sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
 		return (sys->sprint("can't push alg aes_256_gcm: %r"), nil);
+
+	# user->CA	for an account whose secret is of the old form, the
+	# new, under the session's keys: the signer stores it, and the next
+	# login is in the new form.  Only an end with the password makes it.
+	if(form == Oldform){
+		nw := secret(id, pwbuf);
+		w.l = nw :: w.l;
+		if(kr->putbytearray(c.dfd, nw, len nw) < 0)
+			return (sys->sprint("can't send the account's new secret: %r"), nil);
+	}
 
 	# CA->user	CA's public key, and the alpha and p of its key file,
 	# which auth(2) uses between the holders of its certificates.
@@ -377,6 +444,78 @@ okname(name: string): string
 	if(name[0] == ' ' || name[len name-1] == ' ')
 		return "name begins or ends with a blank";
 	return nil;
+}
+
+#
+# An account's secret, as keyfs(4) holds it: PBKDF2 (RFC 8018 5.2,
+# SP 800-132) with HMAC-SHA-384, of the password, Secretiter
+# iterations, its salt "infernode login secret 2", a zero byte and the
+# account's name, the first Secretlen bytes.  The old form was the
+# password's SHA-256, unsalted and one hash: a copy of the store tested
+# a guess for one SHA-256, and CNSA 2.0 takes SHA-384.  Only clients
+# compute it; the signer stores what it is given.
+#
+secret(name: string, password: array of byte): array of byte
+{
+	init();
+	salt := cat(array of byte "infernode login secret 2", cat(array[] of {byte 0}, array of byte name));
+	# HMAC's key padded to SHA-384's block (hashed first when longer),
+	# its inner and outer pads hashed once: each iteration is then two
+	# compressions, not four (hmac_sha384 hashed the pads at every call),
+	# and the iterations' sum is kept in an IPint, one builtin where a
+	# loop of 48 steps was (the suite is interpreted on some machines)
+	Block: con 128;
+	k := array[Block] of {* => byte 0};
+	if(len password > Block)
+		kr->sha384(password, len password, k[0:Keyring->SHA384dlen], nil);
+	else
+		k[0:] = password;
+	ip := array[Block] of byte;
+	op := array[Block] of byte;
+	for(i := 0; i < Block; i++){
+		ip[i] = k[i] ^ byte 16r36;
+		op[i] = k[i] ^ byte 16r5c;
+	}
+	is := kr->sha384(ip, Block, nil, nil);
+	os := kr->sha384(op, Block, nil, nil);
+	zero(k);
+	zero(ip);
+	zero(op);
+	u := array[len salt + 4] of byte;
+	u[0:] = salt;
+	u[len salt:] = array[] of {byte 0, byte 0, byte 0, byte 1};
+	v := array[Keyring->SHA384dlen] of byte;
+	kr->sha384(u, len u, v, is.copy());
+	kr->sha384(v, len v, v, os.copy());
+	t := IPint.bebytestoip(v);
+	for(i = 1; i < Secretiter; i++){
+		kr->sha384(v, len v, v, is.copy());
+		kr->sha384(v, len v, v, os.copy());
+		t = t.xor(IPint.bebytestoip(v));
+	}
+	zero(v);
+	return bebytes(t, Secretlen);	# SHA384dlen is Secretlen
+}
+
+# the old form: the password's SHA-256
+oldsecret(password: array of byte): array of byte
+{
+	init();
+	d := array[Keyring->SHA256dlen] of byte;
+	kr->sha256(password, len password, d, nil);
+	return d;
+}
+
+# the form of a secret keyfs holds, by its length
+secretform(s: array of byte): int
+{
+	case len s {
+	Secretlen =>
+		return Newform;
+	Oldsecretlen =>
+		return Oldform;
+	}
+	return 0;
 }
 
 # A group's prime and its length in bytes; (nil, 0) for an id that is
@@ -506,16 +645,100 @@ mask(suite, gid: int, name: string, pw, cnonce, snonce, x: array of byte): array
 {
 	init();
 	prk := hmac(suite, pw, cat(cnonce, snonce));
-	info := cat(array of byte "infernode login 2 mask", array[] of {byte 0, byte suite, byte gid});
+	info := cat(array of byte "infernode login 3 mask", array[] of {byte 0, byte suite, byte gid});
 	okm := expand(suite, prk, cat(info, array of byte name), 32+12);
+	out := stream(suite, okm, x);
+	zero(prk);
+	zero(okm);
+	return out;
+}
+
+# x under the suite's AEAD's keystream (key || nonce in okm), its tag
+# thrown away: the same operation encrypts and decrypts
+stream(suite: int, okm, x: array of byte): array of byte
+{
 	out: array of byte;
 	if(suite == Aesgcm)
 		(out, nil) = kr->aesgcmencrypt(kr->aesgcmsetup(okm[0:32], okm[32:]), x, nil);
 	else
 		(out, nil) = kr->ccpolyencrypt(x, nil, okm[0:32], okm[32:]);
+	return out;
+}
+
+#
+# The ML-KEM encapsulation key's seed rho under a keystream of pw and
+# the Diffie-Hellman secret z, and back.  z is in it so that the mask
+# holds while either problem does: a party that can take logarithms
+# finds z for each password it guesses, unmasks a seed, and is left
+# with ML-KEM's question of whether the key's other half goes with it;
+# one that can answer that question but not take logarithms has no z,
+# and so no seed to ask about.
+#
+kemmask(suite, gid: int, name: string, pw, cnonce, snonce, z, rho: array of byte): array of byte
+{
+	init();
+	ikm := cat(z, pw);
+	prk := hmac(suite, ikm, cat(cnonce, snonce));
+	zero(ikm);
+	info := cat(array of byte "infernode login 3 kem mask", array[] of {byte 0, byte suite, byte gid});
+	okm := expand(suite, prk, cat(info, array of byte name), 32+12);
+	out := stream(suite, okm, rho);
 	zero(prk);
 	zero(okm);
 	return out;
+}
+
+# ML-KEM-768 for suite 1, ML-KEM-1024 (CNSA 2.0) for suite 2
+kemsizes(suite: int): (int, int)
+{
+	if(suite == Aesgcm)
+		return (Keyring->MLKEM1024_PKLEN, Keyring->MLKEM1024_CTLEN);
+	return (Keyring->MLKEM768_PKLEN, Keyring->MLKEM768_CTLEN);
+}
+
+kemkeygen(suite: int): (array of byte, array of byte)
+{
+	init();
+	{
+		if(suite == Aesgcm)
+			return kr->mlkem1024_keygen();
+		return kr->mlkem768_keygen();
+	} exception {
+	"*" =>
+		return (nil, nil);
+	}
+}
+
+kemencaps(suite: int, ek: array of byte): (array of byte, array of byte)
+{
+	init();
+	(eklen, nil) := kemsizes(suite);
+	if(ek == nil || len ek != eklen)
+		return (nil, nil);
+	{
+		if(suite == Aesgcm)
+			return kr->mlkem1024_encaps(ek);
+		return kr->mlkem768_encaps(ek);
+	} exception {
+	"*" =>
+		return (nil, nil);
+	}
+}
+
+kemdecaps(suite: int, dk, ct: array of byte): array of byte
+{
+	init();
+	(nil, ctlen) := kemsizes(suite);
+	if(dk == nil || ct == nil || len ct != ctlen)
+		return nil;
+	{
+		if(suite == Aesgcm)
+			return kr->mlkem1024_decaps(dk, ct);
+		return kr->mlkem768_decaps(dk, ct);
+	} exception {
+	"*" =>
+		return nil;
+	}
 }
 
 lenpfx(a: array of byte): array of byte
@@ -524,22 +747,27 @@ lenpfx(a: array of byte): array of byte
 }
 
 #
-# From the secret z = 2**(2*r0*r1) mod p, the password and everything
-# said so far: the client's proof, the signer's, and the secret the
-# rest is sealed under.  HKDF again: the salt is the hash of the
-# conversation (so both ends agree on the name, the suite, the group,
-# the nonces and both values, or on nothing), the key material z and
-# pw.  pw is there so that a secret somebody contrived to know is still
-# not enough.
+# From the secret z = 2**(2*r0*r1) mod p, the ML-KEM secret k, the
+# password and everything said so far: the client's proof, the
+# signer's, and the secret the rest is sealed under.  HKDF again: the
+# salt is the hash of the conversation (so both ends agree on the name,
+# the suite, the group, the nonces, both values, the masked key and the
+# ciphertext, or on nothing), the key material k, z and pw.  Both
+# secrets are there so that the session holds while either problem
+# does: SP 800-56C rev. 2's Z || T, the ML-KEM secret (SP 800-227) the
+# Z and the rest the T, so the approved one is first whatever the
+# group; pw so that a secret somebody contrived to know is still not
+# enough.
 #
-keys(suite: int, name: string, pw, hello, reply, share, z: array of byte): (array of byte, array of byte, array of byte)
+keys(suite: int, name: string, pw, hello, reply, share, ct, z, k: array of byte): (array of byte, array of byte, array of byte)
 {
 	init();
-	tr := array of byte "infernode login 2 transcript";
+	tr := array of byte "infernode login 3 transcript";
 	tr = cat(tr, lenpfx(array of byte name));
 	tr = cat(tr, lenpfx(hello));
 	tr = cat(tr, lenpfx(reply));
 	tr = cat(tr, lenpfx(share));
+	tr = cat(tr, lenpfx(ct));
 	th: array of byte;
 	if(suite == Aesgcm){
 		th = array[Keyring->SHA384dlen] of byte;
@@ -548,13 +776,15 @@ keys(suite: int, name: string, pw, hello, reply, share, z: array of byte): (arra
 		th = array[Keyring->SHA256dlen] of byte;
 		kr->sha256(tr, len tr, th, nil);
 	}
-	ikm := cat(z, pw);
+	kz := cat(k, z);
+	ikm := cat(kz, pw);
+	zero(kz);
 	prk := hmac(suite, ikm, th);
 	zero(ikm);
 	n := len th;
-	cproof := expand(suite, prk, array of byte "infernode login 2 client proof", n);
-	sproof := expand(suite, prk, array of byte "infernode login 2 signer proof", n);
-	sk := expand(suite, prk, array of byte "infernode login 2 session", n);
+	cproof := expand(suite, prk, array of byte "infernode login 3 client proof", n);
+	sproof := expand(suite, prk, array of byte "infernode login 3 signer proof", n);
+	sk := expand(suite, prk, array of byte "infernode login 3 session", n);
 	zero(prk);
 	return (cproof, sproof, sk);
 }
@@ -665,13 +895,17 @@ putstring(fd: ref Sys->FD, s: string): string
 # mode, where the console does no editing: a backspace typed to
 # correct a slip was a character of the password, and so was a \r.
 #
-readsecret(io: ref Sys->FD): (array of byte, string)
+readsecret(io: ref Sys->FD, prompt: string): (array of byte, string)
 {
 	if(init() != nil)
 		return (nil, "cannot load Keyring");
 	ctl := sys->open("/dev/consctl", Sys->OWRITE);
 	if(ctl == nil || sys->fprint(ctl, "rawon") < 0)
 		return (nil, sys->sprint("cannot turn the console's echo off: %r"));
+	# only now: a secret typed ahead of rawon was echoed as it arrived,
+	# and a prompt printed first invited just that
+	if(prompt != nil)
+		sys->print("%s", prompt);
 	line := array[Maxsecret] of byte;
 	n := 0;
 	buf := array[256] of byte;

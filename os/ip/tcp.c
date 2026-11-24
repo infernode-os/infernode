@@ -1360,7 +1360,7 @@ isnkey(void)
 
 	got = 0;
 	for(try = 0; try < 8 && got < sizeof k; try++){
-		n = hwrandom(k + got, sizeof k - got);
+		n = rnghw(k + got, sizeof k - got);
 		if(n < 0)
 			break;		/* no generator at all */
 		got += n;

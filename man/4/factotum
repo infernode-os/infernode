@@ -356,6 +356,16 @@ or otherwise, until a
 .B secstore
 request says where to save: keys added after a failed load were once saved
 over the file that had not been read.
+A load that fails makes a new account only when the server says it has
+none for the user and is this machine's own (its address
+.BR localhost ,
+.B 127.0.0.1
+or
+.BR ::1 ),
+and never over a verifier that is there; any failure did, a wrong
+password and another machine's server included, writing the account on
+this machine's disk and reporting the setup's error in place of the
+server's.
 .TP
 .B "secstore \fIaddress user password\fP [\fIdatakey\fP]"
 save the keys, from now on, in the account
@@ -370,6 +380,12 @@ with
 .IR datakey
 (64 hexadecimal digits) the file is encrypted under that key and not under the
 one made from the password (a second-factor account).
+The write is answered at once: the keys are made from the password
+(PBKDF2, a large part of a second) by the thread that saves, and a save
+asked for meanwhile waits for them; the serving loop no longer answered
+nothing while they were made.
+Only version 6's keys are kept for the saves: the older versions' keys,
+and the password, are let go once made use of.
 The fields are parted by blanks, so none can hold one.
 .TP
 .B "secstoreq \fIaddress user password\fP [\fIdatakey\fP]"

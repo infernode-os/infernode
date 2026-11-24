@@ -157,7 +157,7 @@ if {~ $phase which} {
 	# the keyboard on the screen: Lucifer starts it a moment after
 	# its UI server, where $osk is on
 	sleep 8
-	if {ps | grep -s -i osk} {echo R osk yes} {echo R osk no}
+	if {ps | grep -s ' Osk$'} {echo R osk yes} {echo R osk no}
 }
 echo R done
 echo halt > '#c/sysctl'

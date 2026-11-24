@@ -3569,16 +3569,16 @@ fi
 #     The card image is the FAT16 one, attached so that #S has a card
 #     to bind and /dev/sdcard is there to take away.
 #
-BOOTSH="$ROOT/lib/lucifer/boot-baremetal.sh"
+BOOTSH="$ROOT/lib/lucifer/boot.sh"
 NARROW=()
 while IFS= read -r l; do NARROW+=("$l"); done \
-    < <(sed -n '/^pctl forkns$/,/^bind \/dev\/null \/dev\/hostowner$/p' "$BOOTSH")
+    < <(sed -n $'/^\tpctl forkns$/,/^\tbind \\/dev\\/null \\/dev\\/hostowner$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
 # The check block, from narrowed=1 to the close of the if that refuses
 # the desktop. Leading tabs are dropped: the shell does not need them
 # and the serial line discipline should not be asked about them here.
 NARROWCHK=()
 while IFS= read -r l; do NARROWCHK+=("$l"); done \
-    < <(sed -n '/^narrowed=1$/,/^}$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
+    < <(sed -n $'/^\tnarrowed=1$/,/^\t}$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
 
 if [[ ${#NARROW[@]} -ge 5 && "${NARROW[0]}" == 'pctl forkns' ]] \
    && printf '%s\n' "${NARROW[@]}" | grep -q "^unmount '#S' /dev$" \
@@ -3586,9 +3586,9 @@ if [[ ${#NARROW[@]} -ge 5 && "${NARROW[0]}" == 'pctl forkns' ]] \
    && printf '%s\n' "${NARROW[@]}" | grep -q '^bind /dev/null /dev/sysctl$' \
    && [[ ${#NARROWCHK[@]} -ge 6 && "${NARROWCHK[0]}" == 'narrowed=1' ]] \
    && printf '%s\n' "${NARROWCHK[@]}" | grep -q '^exit$'; then
-    pass "boot-baremetal.sh carries the narrowing (forkns, unmount #S #G, null over sysctl) and a fail-closed check after it"
+    pass "boot.sh carries a board's narrowing (forkns, unmount #S #G, null over sysctl) and a fail-closed check after it"
 else
-    fail "could not read the narrowing or its check out of boot-baremetal.sh (${#NARROW[@]} and ${#NARROWCHK[@]} lines)"
+    fail "could not read the narrowing or its check out of boot.sh (${#NARROW[@]} and ${#NARROWCHK[@]} lines)"
 fi
 
 QEMUARGS="$SAVEDARGS -drive file=$SDIMG,if=sd,format=raw"
@@ -3641,7 +3641,7 @@ else
 fi
 
 if grep -q '^narrowed 1$' <<<"$NSIN"; then
-    pass "boot-baremetal.sh's own fail-closed check (ftest on the card and the pins, an empty sysctl) passes in the narrowed namespace"
+    pass "boot.sh's own fail-closed check (ftest on the card and the pins, an empty sysctl) passes in the narrowed namespace"
 else
     fail "the script's narrowed= check did not come out 1 in the narrowed namespace (or its exit fired)"
 fi
@@ -3719,11 +3719,11 @@ fi
 #
 CPUL=()
 while IFS= read -r l; do CPUL+=("$l"); done \
-    < <(sed -n '/^if {ftest -f \/n\/dos\/cpulisten} {$/,/^}$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
+    < <(sed -n $'/^\tif {ftest -f \\/n\\/dos\\/cpulisten} {$/,/^\t}$/p' "$BOOTSH" | sed 's/^[[:space:]]*//')
 if [[ ${#CPUL[@]} -ge 8 ]] && printf '%s\n' "${CPUL[@]}" | grep -q 'listen -a aes_256_gcm \$cpuaddr auxi/rstyxd &'; then
-    pass "boot-baremetal.sh gates the cpu listener on /n/dos/cpulisten and requires AES-256-GCM"
+    pass "boot.sh gates the cpu listener on /n/dos/cpulisten and requires AES-256-GCM"
 else
-    fail "could not read the cpu listener block out of boot-baremetal.sh (${#CPUL[@]} lines)"
+    fail "could not read the cpu listener block out of boot.sh (${#CPUL[@]} lines)"
 fi
 QEMUARGS="$SAVEDARGS -drive file=$SDIMG,if=sd,format=raw"
 CLOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \

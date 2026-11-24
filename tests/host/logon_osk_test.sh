@@ -1,8 +1,8 @@
 #!/bin/sh
 #
 # wm/logon with the keyboard on the screen at the Raspberry Pi's 7"
-# panel's 800x480, booted as lib/lucifer/boot.sh boots it (wm/osk -s
-# -M secret, then wm/logon, no window manager; tests/logon/osk.sh), by
+# panel's 800x480, booted as lib/lucifer/boot.sh boots a board (osk=on:
+# wm/osk -s -M secret, then wm/logon, no window manager; tests/logon/osk.sh), by
 # pixel: the login screen with its logo; the screen touched shows the
 # keyboard and the form moves above its strip (its logo gone for
 # room), the keys whole; a password tapped shows in the field above
@@ -34,7 +34,7 @@ mkdir -p "$ROOT/$T"
 trap 'rm -rf "$ROOT/$T"' EXIT
 cd "$ROOT"
 SDL_VIDEODRIVER=dummy with_timeout 150 "$EMU" -c1 -pheap=512m -pmain=512m -pimage=512m -g${W}x$H -r"$ROOT" \
-	/dis/sh.dis -l -c "run /lib/lucifer/boot.sh & bind -c /$T /tmp; run /tests/logon/osk.sh" \
+	/dis/sh.dis -l -c "osk=on; run /lib/lucifer/boot.sh & bind -c /$T /tmp; run /tests/logon/osk.sh" \
 	</dev/null >"$ROOT/$T/log" 2>&1 || true
 grep -q '^R done' "$ROOT/$T/log" || { echo "FAIL: the driver did not finish"; grep -v '^fs:' "$ROOT/$T/log" | tail -20; exit 1; }
 

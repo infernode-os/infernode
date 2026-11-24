@@ -262,8 +262,12 @@ reads SGCM3 and SGCM2;
 opens a file under either root and says whether it is of the current form, so
 that the caller writes it again under
 .BR root6 .
-In CNSA mode version 6 alone is spoken, and an account or file not yet moved is
-refused.
+In CNSA mode an account at version 4 is moved over version 5's exchange, which
+is CNSA's (ML-KEM-1024, SHA-384, AES-256): the version 6 verifier goes inside
+it, and the session does nothing else.  An account at version 3 or 1, whose
+exchanges are classical, is refused, saying to start once with
+.B CNSAMODE
+unset and unlock, which moves it.
 .I Pwhash
 .RB ( mkseckey )
 and

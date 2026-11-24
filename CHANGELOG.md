@@ -4,6 +4,25 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An existing secstore account unlocks in CNSA mode.** 0.12.0 moved
+  accounts to secstore version 6 at their next unlock, but refused the
+  move in CNSA mode: an account made before it (version 4) could not be
+  unlocked at all with `CNSAMODE=1`, and the login screen said "log in
+  once outside it" without saying how. The move now happens in CNSA
+  mode over version 5's exchange, which is CNSA's (ML-KEM-1024, SHA-384,
+  AES-256); secstored allows that exchange in the mode only for an
+  account not yet at version 6, and the session only sets the new
+  verifier. An account at version 3 or 1 (classical exchanges) is still
+  refused in the mode, and the message says what to do: start once with
+  `CNSAMODE` unset and unlock. Checked by booting the login screen of the
+  release before 0.12.0, making an account and saving a key, then
+  booting this one with `CNSAMODE=1` on the same home and unlocking:
+  the key is loaded, the account at version 6, its file SGCM3
+  (`tests/host/secstore_migrate_test.sh`, `tests/secstored_test.b`,
+  which had asserted the refusal).
+
 ## [0.12.0] - 2026-11-24
 
 ### Added

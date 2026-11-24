@@ -101,8 +101,7 @@ VERSION4: con "secstore4";
 # per login it takes part in.  A version 5 session is a version 4 one
 # in what it may do.  The version 4 exchange is not spoken: a client
 # asking for it is told the account is at version 5 (and an older
-# version's exchange is still spoken, for an account to move).  In
-# CNSA mode (/env/cnsamode) version 5 alone is spoken.
+# version's exchange is still spoken, for an account to move).
 #
 VERSION5: con "secstore5";
 #
@@ -112,7 +111,10 @@ VERSION5: con "secstore5";
 # root of HMAC-SHA256, which is not CNSA 2.0's hash.  An account is
 # given its version 6 verifier by a client in a session of an older
 # version (VERIFIER secstore6), kept beside the old until a version 6
-# login has worked.  In CNSA mode version 6 alone is spoken.
+# login has worked.  In CNSA mode version 6 is spoken, and version 5
+# only to move an account at version 4 to 6 (VERIFIER secstore6 and
+# nothing else in the session); an account at version 3 or 1, whose
+# exchanges are classical, is moved outside CNSA mode.
 #
 VERSION6: con "secstore6";
 Maxfilesize: con 128*1024;
@@ -451,7 +453,11 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 		writerr(fd, "bad protocol: secstore4 is spoken as secstore5");
 		return (nil, nil, nil);
 	}
-	if(ver != VERSION6 && login->cnsamode()){
+	# CNSA mode: version 6, and version 5's exchange (the same one,
+	# ML-KEM-1024, SHA-384, AES-256) for an account to be moved from
+	# version 4 to 6 and nothing else (fileloop); nothing older, whose
+	# exchanges are classical
+	if(ver != VERSION6 && ver != VERSION5 && login->cnsamode()){
 		writerr(fd, "bad protocol: CNSA mode: secstore6 alone");
 		return (nil, nil, nil);
 	}
@@ -496,9 +502,16 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 		return (nil, nil, C);
 	}
 	hexHi: string;
-	for(vl := verifiers; vl != nil; vl = tl vl)
+	for(vl := verifiers; vl != nil; vl = tl vl){
 		if((hd vl).t0 == verver(ver))
 			hexHi = (hd vl).t1;
+		# an account at version 6 is not spoken to at 5 in CNSA mode:
+		# version 5 is for moving to it
+		if(ver == VERSION5 && (hd vl).t0 == VERSION6 && login->cnsamode()){
+			writerr(fd, "bad protocol: CNSA mode: the account is at secstore6");
+			return (nil, nil, C);
+		}
+	}
 	if(hexHi == nil){
 		writerr(fd, "account version mismatch");
 		return (nil, nil, C);
@@ -703,6 +716,10 @@ fileloop(conn: ref Dial->Connection, user: string, ver: string)
 	buf := array[Maxmsg] of byte;
 	v4 := ver == VERSION4 || ver == VERSION5 || ver == VERSION6;
 	shown := 0;	# this session has shown the account's vault key
+	# in CNSA mode a version 5 session gives the account its version 6
+	# verifier and does nothing else: its files are under keys from a
+	# root of HMAC-SHA-256, and are read and written at version 6
+	moveonly := ver == VERSION5 && login->cnsamode();
 
 	for(;;){
 		n := sys->read(fd, buf, len buf);
@@ -727,6 +744,11 @@ fileloop(conn: ref Dial->Connection, user: string, ver: string)
 			}
 		}
 
+		if(moveonly && (cmd != "VERIFIER" || !hasprefix(arg, VERSION6+" "))){
+			log(sys->sprint("%s: %s in a CNSA mode %s session refused", user, cmd, ver));
+			writerr(fd, "CNSA mode: a secstore5 session only moves the account to secstore6");
+			continue;
+		}
 		case cmd {
 		"GET" =>
 			doget(fd, user, arg);
@@ -1101,6 +1123,11 @@ doverifier(fd: ref Sys->FD, user, ver, arg: string)
 	log(sys->sprint("%s: %s verifier recorded (in a %s session)", user, nv, ver));
 	auditlog("secstore", "verifier", sys->sprint("user=%s session=%s", auditval(user), ver));
 	sys->fprint(fd, "OK");
+}
+
+hasprefix(s, p: string): int
+{
+	return len s >= len p && s[0:len p] == p;
 }
 
 # the order of the verifiers' versions

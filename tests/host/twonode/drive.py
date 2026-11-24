@@ -111,7 +111,8 @@ try:
     # ---- A: the signer, as its administrator sets it up.  No mkdir
     # of /mnt/keys or /mnt/keysrv: keyfs makes the one, the tree ships
     # the other.
-    A.cmd("auth/createsignerkey authsrv; mkdir -p /usr/root/keyring /usr/root/share; echo hello from A > /usr/root/share/hello; cat /dev/null > /keydb/keys", 120)
+    # the emulator's user is the host's (root here, runner in CI): its home is /usr/$user
+    A.cmd("user=`{cat /dev/user}; auth/createsignerkey authsrv; mkdir -p /usr/$user/keyring /usr/$user/share; echo hello from A > /usr/$user/share/hello; cat /dev/null > /keydb/keys", 120)
     o, _ = A.cmd("svc/auth", 20, prompt=r"(Key: |; $)")
     report("Key:" in o, "svc/auth asks for the master key on a fresh tree" + ("" if "Key:" in o else ": " + flat(o)))
     A.line(pws[0]); A.expect(r"Confirm key: ", 20)
@@ -144,10 +145,10 @@ try:
             os.write(N.fd, b"\x04"); N.expect(r"; $", 30)
         report(got == want, f"{who}: getauthinfo as {user} " + ("gives a certificate" if want else "refused") + ("" if got == want else ": " + flat(o)))
         timed(f"{who} login" + ("" if want else " refused"), dt)
-    B.cmd("mkdir -p /usr/root/keyring /n/a /n/fa /n/fb /n/fc")
+    B.cmd("user=`{cat /dev/user}; mkdir -p /usr/$user/keyring /n/a /n/fa /n/fb /n/fc")
     login(A, "A", "nodea", pws[2])
     # the export authenticates with the certificate A has just been given
-    A.cmd(f"styxlisten 'tcp!*!{EXPORT}' export /usr/root/share &")
+    A.cmd(f"styxlisten 'tcp!*!{EXPORT}' export /usr/$user/share &")
     login(B, "B", "alice", pws[1])
     login(B, "B", "alice", WRONG[0], False)
 

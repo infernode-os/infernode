@@ -6386,6 +6386,12 @@ try:
         w, h = map(int, parts[1].split()); px = parts[3]
         cmoved = max(arrow(px, w, h, w//2 + dx, h//2 + dy) for dx in range(-3, 3) for dy in range(-3, 3))
         corigin = arrow(px, w, h, 0, 0)
+    # What the boot started, from the serial console: ps lists every
+    # Prog, whatever its name space.  Typed a character at a time, CR
+    # for Enter, as shell_session does.
+    for c in "ps\r":
+        p.stdin.write(c.encode()); p.stdin.flush(); time.sleep(0.2)
+    time.sleep(8)
     s.close()
 finally:
     p.kill(); p.communicate()
@@ -6400,6 +6406,19 @@ PYEOF
     vcheck "/usr is the card's, writable"              "init: /usr from /n/dos/usr (writable)"
     vcheck "boot-baremetal.sh narrows the namespace and starts the desktop" "boot: skiplogon"
     vcheck "Lucifer starts"                            "lucifer: INIT"
+    #
+    # The Assistant a board starts is the hosted one, agent and all: the
+    # boards ran a boot of their own that started Lucifer and nothing it
+    # works with, so a Pi's chat had no model, no tools and no plumber.
+    # Module names as ps prints them.
+    #
+    for m in Llmsrv Wallet9p Msg9p Tools9p Lucibridge Plumber Luciuisrv; do
+        if grep -qiE "[[:space:]]$m[[:space:]]*\$" <<<"$OUT"; then
+            pass "virt: the board's Assistant runs $m, as a hosted one does"
+        else
+            fail "virt: no $m among the board's Progs (ps)"
+        fi
+    done
     desk="$(grep -a '^DESKTOP' <<<"$OUT" | tail -1)"
     read -r _ ddim _ dacc <<<"$desk"
     if [[ "$ddim" == "1280x720" && "${dacc:-0}" -ge 1000 ]]; then
@@ -6457,6 +6476,171 @@ PYEOF
     vrefute "headless: nothing claims a desktop exited"     "the desktop has exited"
     vcheck "headless: the machine is up -- shell and network" "etherusb: 10.0.2.15 mask"
     vrefute "headless: nothing panics"                      "panic:"
+
+    #
+    # The login screen a board shows, and the Desktop chosen on it.
+    #
+    # The boards had a boot of their own, and every change to the login
+    # screen went into the hosted one alone: four releases of card images
+    # shipped with no choice of interface.  This boots a card with no
+    # skiplogon, as a Pi's first boot is, and drives the screen with the
+    # virtio keyboard: the picker is found under the password field (the
+    # second line of ink below it, as tests/host/interface_test.sh finds
+    # it), Down changes it and Up puts it back; then Down, the first
+    # password typed twice, and the board must log in and start the
+    # Desktop -- wm/wm, which only that choice starts.
+    #
+    LUSR="$BUILD/$PLAT-loginusr"
+    rm -rf "$LUSR"; mkdir -p "$LUSR/inferno/secstore" "$LUSR/inferno/keyring" "$LUSR/inferno/lib" "$LUSR/inferno/tmp"
+    LCARD="$BUILD/$PLAT-card-login.img"
+    if python3 "$ROOT/tools/mkcard.py" "$LCARD" 192 /dis="$ROOT/dis" /lib="$ROOT/lib" \
+            /fonts="$ROOT/fonts" /icons="$ROOT/icons" /usr="$LUSR" \
+            /rootpath="$BUILD/rootpath" > "$BUILD/mkcard-login.txt" 2>&1; then
+        rm -f "$VQMP"
+        python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$LCARD" "$VQMP" "$BUILD/$PLAT-login.ppm" <<'PYEOF' > "$BUILD/$PLAT-login.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, sd, qmp, ppm = sys.argv[1:7]
+p = subprocess.Popen([qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % sd, "-device", "virtio-blk-device,drive=sd",
+    "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",
+    "-device", "ramfb", "-device", "virtio-keyboard-device", "-device", "virtio-tablet-device",
+    "-qmp", "unix:%s,server,nowait" % qmp],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def say(*a):
+    buf.extend(("\n" + " ".join(str(x) for x in a) + "\n").encode())
+def waitbuf(what, secs):
+    end = time.time() + secs
+    while time.time() < end and what.encode() not in buf:
+        time.sleep(0.5)
+    return what.encode() in buf
+try:
+    waitbuf("init: starting the shell", 120)
+    for _ in range(100):
+        try:
+            s = socket.socket(socket.AF_UNIX); s.connect(qmp); break
+        except OSError:
+            time.sleep(0.2)
+    f = s.makefile("rw"); f.readline()
+    def cmd(c, a=None):
+        m = {"execute": c}
+        if a is not None:
+            m["arguments"] = a
+        f.write(json.dumps(m) + "\n"); f.flush()
+        while True:
+            r = json.loads(f.readline())
+            if "return" in r or "error" in r:
+                return r
+    cmd("qmp_capabilities")
+    def dump():
+        if os.path.exists(ppm):
+            os.unlink(ppm)
+        cmd("screendump", {"filename": ppm})
+        time.sleep(1)
+        d = open(ppm, "rb").read()
+        parts = d.split(b"\n", 3)
+        w, h = map(int, parts[1].split())
+        return w, h, parts[3]
+    def picker(w, h, px):
+        def at(x, y):
+            o = (y*w + x)*3
+            return px[o:o+3]
+        bg = at(4, 4)
+        def ink(y):
+            return [x for x in range(0, w, 2) if at(x, y) != bg]
+        field = None
+        for y in range(h):
+            xs = ink(y)
+            if len(xs) > 125 and len(set(at(x, y) for x in xs)) <= 3:
+                field = y
+                break
+        if field is None:
+            return None
+        y = field
+        while y < h and ink(y):
+            y += 1
+        rows = []
+        while y < h and len(rows) < 2:
+            while y < h and not ink(y):
+                y += 1
+            y0 = y
+            while y < h and ink(y):
+                y += 1
+            rows.append((y0, y))
+        if len(rows) < 2 or rows[1][0] >= h:
+            return None
+        return rows[1]
+    def band(px, w, y0, y1):
+        return px[(y0 - 4)*w*3:(y1 + 4)*w*3]
+    def key(k):
+        cmd("send-key", {"keys": [{"type": "qcode", "data": k}]})
+        time.sleep(0.3)
+    # the login screen: the picker found, the same in two dumps
+    prev = None
+    rows = None
+    end = time.time() + 300
+    while time.time() < end:
+        time.sleep(3)
+        w, h, px = dump()
+        r = picker(w, h, px)
+        if r and prev and r == prev[0] and band(px, w, *r) == prev[1]:
+            rows = r
+            break
+        prev = (r, band(px, w, *r)) if r else None
+    if not rows:
+        say("LOGIN no picker under the field")
+        raise SystemExit
+    say("LOGIN picker rows %d-%d" % rows)
+    start = band(px, w, *rows)
+    key("down"); time.sleep(2)
+    w, h, px = dump()
+    say("LOGIN down", "changed" if band(px, w, *rows) != start else "same")
+    key("up"); time.sleep(2)
+    w, h, px = dump()
+    say("LOGIN up", "back" if band(px, w, *rows) == start else "different")
+    key("down"); time.sleep(1)
+    for _ in range(2):
+        for c in "hunter22":
+            key(c)
+        key("ret")
+        time.sleep(4)
+    waitbuf("boot: interface", 120)
+    time.sleep(20)
+    for c in "ps\r":
+        p.stdin.write(c.encode()); p.stdin.flush(); time.sleep(0.2)
+    time.sleep(8)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+        OUT="$(cat "$BUILD/$PLAT-login.txt")"
+        [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+        vcheck "login: a board's login screen offers the interfaces (the picker under the field)" "LOGIN picker rows"
+        vcheck "login: Down chooses the next interface"         "LOGIN down changed"
+        vcheck "login: Up chooses the one before"               "LOGIN up back"
+        vcheck "login: the first password set logs in"          "boot: logged in"
+        vcheck "login: the interface chosen, Desktop, is started" "boot: interface Desktop"
+        if grep -qiE '[[:space:]]Wm[[:space:]]*$' <<<"$OUT"; then
+            pass "virt: login: the Desktop is wm/wm"
+        else
+            fail "virt: login: no wm/wm among the board's Progs (ps)"
+        fi
+        vrefute "login: Lucifer is not started on the Desktop"  "lucifer: INIT"
+        vrefute "login: logon does not fail"                    "wm/logon failed"
+        vrefute "login: nothing panics"                         "panic:"
+    else
+        fail "virt: mkcard could not build the login card: $(tail -2 "$BUILD/mkcard-login.txt" | tr '\n' ' ')"
+    fi
+    rm -rf "$LUSR" "$LCARD"
 
     #
     # The collector frees cycles with the desktop up. An object in a

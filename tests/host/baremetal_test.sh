@@ -6488,8 +6488,8 @@ PYEOF
     # The boards had a boot of their own, and every change to the login
     # screen went into the hosted one alone: four releases of card images
     # shipped with no choice of interface.  This boots a card with no
-    # skiplogon, as a Pi's first boot is, and drives the screen with the
-    # virtio keyboard: the picker is found under the password field (the
+    # skiplogon, as a Pi's first boot is, and drives the screen with a
+    # USB keyboard, as a Pi's is: the picker is found under the password field (the
     # second line of ink below it, as tests/host/interface_test.sh finds
     # it), Down changes it and Up puts it back; then Down, the first
     # password typed twice, and the board must log in and start the
@@ -6509,7 +6509,7 @@ p = subprocess.Popen([qemu] + extra.split() + [
     "-kernel", img, "-display", "none", "-serial", "stdio",
     "-drive", "file=%s,if=none,format=raw,id=sd" % sd, "-device", "virtio-blk-device,drive=sd",
     "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",
-    "-device", "ramfb", "-device", "virtio-keyboard-device", "-device", "virtio-tablet-device",
+    "-device", "ramfb", "-device", "usb-kbd", "-device", "virtio-tablet-device",
     "-qmp", "unix:%s,server,nowait" % qmp],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 buf = bytearray()
@@ -6529,6 +6529,7 @@ def waitbuf(what, secs):
     return what.encode() in buf
 try:
     waitbuf("init: starting the shell", 120)
+    waitbuf("kbdusb: ep", 120)
     for _ in range(100):
         try:
             s = socket.socket(socket.AF_UNIX); s.connect(qmp); break
@@ -6585,8 +6586,14 @@ try:
         return rows[1]
     def band(px, w, y0, y1):
         return px[(y0 - 4)*w*3:(y1 + 4)*w*3]
+    # a press and a release, on the USB keyboard: kbdusb types what it
+    # reads through /dev/keyboard, which the login screen holds.  (The
+    # virtio keyboard is a kernel driver whose keys go only to the
+    # console's queue: a QEMU board's, never a Pi's.)
     def key(k):
-        cmd("send-key", {"keys": [{"type": "qcode", "data": k}]})
+        for down in (True, False):
+            cmd("input-send-event", {"events": [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}]})
+            time.sleep(0.05)
         time.sleep(0.3)
     # the login screen: the picker found, the same in two dumps
     prev = None

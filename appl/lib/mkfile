@@ -52,6 +52,7 @@ TARG=\
 	dial.dis\
 	dialnorm.dis\
 	dialog.dis\
+	dp9ik.dis\
 	selectfile.dis\
 	tabs.dis\
 	debdata.dis\
@@ -127,6 +128,8 @@ TARG=\
 	rabin.dis\
 	rand.dis\
 	random.dis\
+	rconnect.dis\
+	tlspsk.dis\
 	readdir.dis\
 	readavif.dis\
 	readgif.dis\
@@ -366,6 +369,9 @@ SYSMODULES=\
 	bioauth.m\
 	dhcp.m\
 	dialog.m\
+	dp9ik.m\
+	rconnect.m\
+	tlspsk.m\
 	docreg.m\
 	keyringinst.m\
 	mailparse.m\

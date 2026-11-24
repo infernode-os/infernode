@@ -7,6 +7,8 @@ TARG=\
 	btpin.dis\
 	btlink.dis\
 	btltk.dis\
+	p9any.dis\
+	dp9ik.dis\
 
 SYSMODULES=\
 	factotum.m\
@@ -19,6 +21,7 @@ SYSMODULES=\
 	string.m\
 	daytime.m\
 	encoding.m\
+	dp9ik.m\
 
 MODULES=\
 	../authio.m\

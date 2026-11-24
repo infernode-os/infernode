@@ -1,0 +1,114 @@
+.TH DP9IK 2
+.SH NAME
+dp9ik, tlspsk, rconnect \- 9front's authentication, its TLS, and rcpu's connection
+.SH SYNOPSIS
+.EX
+include "dp9ik.m";
+dp := load Dp9ik Dp9ik->PATH;
+
+init:          fn(): string;
+passtoaeskey:  fn(password: array of byte): array of byte;
+authpakhash:   fn(aeskey: array of byte, user: string): array of byte;
+Pak.new:       fn(pakhash: array of byte, isclient: int, x: array of byte): ref Pak;
+Pak.finish:    fn(p: self ref Pak, y: array of byte): array of byte;
+sealticket:    fn(t: ref Ticket, key: array of byte): array of byte;
+openticket:    fn(a: array of byte, key: array of byte): (ref Ticket, string);
+sealauth:      fn(a: ref Authenticator, key: array of byte): array of byte;
+openauth:      fn(b: array of byte, key: array of byte): (ref Authenticator, string);
+sessionsecret: fn(rand: array of byte, tkey: array of byte): array of byte;
+
+include "tlspsk.m";
+tlspsk := load Tlspsk Tlspsk->PATH;
+client: fn(fd: ref Sys->FD, identity: string, psk: array of byte): (ref Sys->FD, string);
+
+include "rconnect.m";
+rconnect := load Rconnect Rconnect->PATH;
+connect: fn(host, keyspec, script: string): (ref Sys->FD, ref Factotum->Authinfo, string);
+.EE
+.SH DESCRIPTION
+.B Dp9ik
+is what a client of 9front's authentication needs of 9front's
+.IR authsrv (2),
+written from its source and checked against answers 9front gives.
+.B Passtoaeskey
+is the AES key of a password (PBKDF2-HMAC-SHA1, 9001 rounds, 16 bytes).
+.B Authpakhash
+maps a user's key to two points of Ed448-Goldilocks
+(HKDF-SHA256 salted with the user's name, then Elligator 2), 448 bytes.
+.B Pak.new
+starts one side of the SPAKE2-EE exchange from that hash
+(with the private scalar
+.I x
+given, for known answers, or random), its public key, decaf-encoded, in
+.BR y ;
+.B finish
+takes the other side's and gives the 32-byte shared key, or nil when the
+other's is no point, once.
+.B Sealticket
+and
+.B sealauth
+make form1 tickets and authenticators, ChaCha20-Poly1305 under a 32-byte key with
+the nonce the message type's signature and a counter;
+.B openticket
+and
+.B openauth
+open them, refusing one changed, cut, of the wrong length or of another type.
+.B Sessionsecret
+is the 256-byte secret both ends of a
+.B dp9ik
+conversation have (HKDF-SHA256 of the ticket key, salted with both nonces).
+.B Ticketreq
+packs and unpacks 9front's ticket request.
+.PP
+.B Tlspsk
+is a TLS 1.2 client with a pre-shared key and nothing else
+(RFC 4279 and RFC 7905:
+.BR TLS_PSK_WITH_CHACHA20_POLY1305_SHA256 ),
+as 9front's
+.I tlssrv
+speaks it after
+.BR p9any .
+.B Client
+makes the handshake over
+.I fd
+and returns one end of a pipe that is the conversation.
+It is not
+.IR tls (2),
+offers no certificates, no other suite and no renegotiation, and is used for nothing else.
+.PP
+.B Rconnect
+makes a connection to a 9front cpu server's
+.B rcpu
+service: it dials
+.IR host ,
+authenticates through
+.IR factotum (4)
+.RB ( proto=p9any ),
+starts
+.B tlspsk
+with the secret (identity
+.BR p9secret )
+and sends
+.I script
+for the server's
+.I rc
+to run.
+.SH SOURCE
+.B /appl/lib/dp9ik.b
+.br
+.B /appl/lib/tlspsk.b
+.br
+.B /appl/lib/rconnect.b
+.br
+.B /appl/cmd/auth/factotum/proto/p9any.b
+.SH SEE ALSO
+.IR rcpu (1),
+.IR factotum (4)
+.SH BUGS
+Classical cryptography only, for working with 9front: not CNSA 2.0, and
+refused in CNSA mode by everything that uses it.
+.PP
+The arithmetic is IPint's, which is not constant time.
+The scalars are a conversation's own; the password's hash is mapped to the curve once a login.
+An observer able to time a client's login closely might learn something of that hash;
+9front's own is exposed the same way where its multiprecision code is.

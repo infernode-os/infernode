@@ -799,13 +799,13 @@ startproto(request: string): (Authproto, list of ref Attr, string)
 		if(len a.name > 0 && a.name[0] == '!' && (a.val != nil || a.tag != Aquery))
 			return (nil, nil, "cannot specify values for private fields");
 	}
-	# Plan 9's p9any offered one protocol, p9sk1, whose tickets are
-	# DES: with DES gone from the system it could only fail, somewhere
-	# in the middle, with "module not loaded".  Its module is removed,
-	# nothing in the tree asks for it, and whoever does is told why
-	# rather than that a file is missing.
-	if(p == "p9any" || p == "p9sk1")
-		return (nil, nil, "Plan 9's p9sk1 authentication is not available: it needs DES, which this system no longer has");
+	# Plan 9's p9sk1, whose tickets are DES: with DES gone from the
+	# system it could only fail, somewhere in the middle, with "module
+	# not loaded".  Whoever asks for it is told why rather than that a
+	# file is missing.  p9any is 9front's, and offers dp9ik alone
+	# (proto/p9any.b).
+	if(p == "p9sk1")
+		return (nil, nil, "Plan 9's p9sk1 authentication is not available: it needs DES, which this system no longer has; 9front's dp9ik is (proto=p9any or proto=dp9ik)");
 	proto := load Authproto "/dis/auth/proto/"+p+".dis";
 	if(proto == nil)
 		return (nil, nil, sys->sprint("protocol %s: %r", p));

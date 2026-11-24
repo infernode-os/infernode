@@ -32,6 +32,7 @@ dbf dbm
 dbm dbm
 init dbm
 debug debug
+dp9ik dp9ik
 devpointer devpointer
 dialog dialog
 getstring dialog
@@ -423,3 +424,5 @@ layers layers
 mdhtml mdhtml
 tensor tensor
 letterbox tensor
+rconnect dp9ik
+tlspsk dp9ik

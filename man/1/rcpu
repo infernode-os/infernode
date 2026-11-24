@@ -1,0 +1,164 @@
+.TH RCPU 1
+.SH NAME
+rcpu, rimport \- run a command on, or mount a tree of, a 9front machine
+.SH SYNOPSIS
+.B rcpu
+[
+.B -k
+.I keypattern
+]
+[
+.B -u
+.I user
+]
+[
+.B -h
+.I host
+]
+[
+.B -d
+.I dir
+]
+[
+.B -c
+.I cmd
+.RI [ arg ...]
+]
+.PP
+.B rimport
+[
+.B -abc
+]
+[
+.B -k
+.I keypattern
+]
+[
+.B -u
+.I user
+]
+.I host
+.I tree
+.I mountpoint
+.SH DESCRIPTION
+These speak to a 9front cpu server as 9front's own
+.I rcpu
+and
+.I rimport
+do, through its
+.B rcpu
+service (port 17019): 9front's authentication,
+.B p9any
+with
+.B dp9ik
+(see
+.IR factotum (4)),
+then TLS with the session secret as a pre-shared key, then an
+.I rc
+script the server runs with the connection as its input and output.
+They need a
+.B dp9ik
+key in
+.IR factotum (4)
+for the server's authentication domain, for instance
+.IP
+.EX
+echo 'key proto=dp9ik dom=9front user=glenda !password=...' \e
+	'auth=tcp!authhost!567' >/mnt/factotum/ctl
+.EE
+.PP
+.I Host
+is a name or address
+(network
+.B tcp
+and port 17019 when not given).
+.B -k
+adds attributes to the key's query and
+.B -u
+names the user.
+.PP
+.I Rimport
+has 9front's
+.I exportfs
+serve
+.I tree
+over the connection and mounts it on
+.IR mountpoint ,
+replacing what is there, or after
+.RB ( -a )
+or before
+.RB ( -b )
+it, with
+.B -c
+to allow creation.
+.PP
+.I Rcpu
+runs
+.I cmd
+with its arguments, or an interactive
+.B rc
+when there is none, on the server, as the key's user, in directory
+.I dir
+if given (with
+.B -d ,
+else the user's home), with
+.B $service
+set to
+.BR cpu .
+As 9front's
+.I rcpu
+does, the server mounts what this end serves over the same connection at
+.BR /mnt/term ,
+and the command's input, output and error are
+.BR /mnt/term/fd/10 ,
+.B 11
+and
+.BR 12 ,
+which are this command's;
+.B /mnt/term/dev/cons
+is bound over its
+.BR /dev/cons .
+9front's
+.I rcpu
+serves its whole name space there.
+This serves a tree of its own with those files in it and nothing else of this machine:
+.B fd/10 fd/11 fd/12
+.BR dev/cons ,
+.BR mnt/cpunote/data ,
+from which no note is ever read (interrupts are not passed on), and
+.BR env/rstatus ,
+where the server leaves the command's exit status, which becomes
+.IR rcpu 's.
+.PP
+Both are refused in CNSA mode: 9front's authentication and its TLS are
+classical cryptography (Ed448, ChaCha20-Poly1305, SHA-256), and this is
+for working with 9front, not a part of CNSA 2.0.
+.SH EXAMPLES
+Mount a 9front file server's root and run a command there:
+.IP
+.EX
+rimport cirno / /n/cirno
+ls /n/cirno/usr/glenda
+rcpu -h cirno -c 'cat /dev/sysname; ps | wc -l'
+.EE
+.SH SOURCE
+.B /appl/cmd/rcpu.b
+.br
+.B /appl/cmd/rimport.b
+.br
+.B /appl/lib/rconnect.b
+.SH SEE ALSO
+.IR cpu (1),
+.IR dp9ik (2),
+.IR factotum (4),
+.IR import (4)
+.SH BUGS
+Notes (an interrupt) are not sent to the far end, and 9front's
+.B -p
+(the
+.I aan
+filter, which keeps a session across a dropped connection) is not offered.
+There is no drawterm: a 9front program has no
+.B /dev/draw
+of this machine's in
+.BR /mnt/term .

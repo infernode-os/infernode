@@ -62,6 +62,8 @@ TARG=\
 	cowfs_control_test.dis\
 	cut_test.dis\
 	dhcp_test.dis\
+	dp9ik_test.dis\
+	dp9ik_proto_test.dis\
 	errlabel_leak_test.dis\
 	crypto_test.dis\
 	login_test.dis\
@@ -483,6 +485,9 @@ MODULES=\
 	$ROOT/appl/xenith/xfid.m
 
 SYSMODULES=\
+	dp9ik.m\
+	rconnect.m\
+	factotum.m\
 	tensor.m\
 	layers.m\
 	parread.m\

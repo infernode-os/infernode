@@ -433,7 +433,7 @@ $linkLibs = @(
 )
 if ($fido2Found -and $fido2Lib -ne "") { $linkLibs += $fido2Lib }
 
-& link.exe /nologo @ExtraLDFlags /subsystem:console /MAP `
+& link.exe /nologo @ExtraLDFlags /subsystem:console /ENTRY:wmainCRTStartup /MAP `
     "/OUT:o.emu.exe" `
     @allObjs `
     @linkLibs `
@@ -473,6 +473,56 @@ if ($fido2Found -and $fido2DllDir -ne "") {
         foreach ($line in (& dumpbin /nologo /dependents $src)) {
             if ($line -match '^\s+(\S+\.dll)\s*$') { $queue.Enqueue($Matches[1]) }
         }
+    }
+}
+
+# The Visual C++ runtime the DLLs beside o.emu.exe were built against
+# (vcpkg's and Yubico's libfido2, libcrypto, zlib and libcbor import
+# VCRUNTIME140.dll). It is not part of Windows: it comes with the VC++
+# redistributable, which GitHub's runners and most developers' machines have
+# and a new PC need not, so a release without it started there with
+# "VCRUNTIME140.dll was not found". Microsoft lets an application carry these
+# beside itself (app-local deployment); they are copied from this Visual
+# Studio's redistributable folder, and the build fails if one is needed and
+# not there. o.emu.exe itself is linked with the static runtime.
+function Find-VcCrtDir {
+    $roots = @()
+    if ($env:VCToolsRedistDir) { $roots += $env:VCToolsRedistDir }
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $vs = & $vswhere -latest -products * -property installationPath
+        if ($vs) {
+            $roots += Get-ChildItem "$vs\VC\Redist\MSVC\*" -Directory -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | ForEach-Object { $_.FullName }
+        }
+    }
+    foreach ($r in $roots) {
+        $d = Get-ChildItem "$r\x64\Microsoft.VC14*.CRT" -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+        if ($d -and (Test-Path "$($d.FullName)\vcruntime140.dll")) { return $d.FullName }
+    }
+    return $null
+}
+$crtWanted = @{}
+foreach ($bin in @(Get-Item "$ROOT\emu\Nt\o.emu.exe") + @(Get-ChildItem "$ROOT\emu\Nt\*.dll")) {
+    foreach ($line in (& dumpbin /nologo /dependents $bin.FullName)) {
+        if ($line -match '^\s+((vcruntime|msvcp|concrt|vccorlib)\S*\.dll)\s*$') { $crtWanted[$Matches[1].ToLower()] = $true }
+    }
+}
+if ($crtWanted.Count -gt 0) {
+    $crtDir = Find-VcCrtDir
+    if (-not $crtDir) {
+        Write-Host "ERROR: the DLLs beside o.emu.exe need the Visual C++ runtime ($($crtWanted.Keys -join ', '))" -ForegroundColor Red
+        Write-Host "       and no VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT was found to bundle it from." -ForegroundColor Red
+        exit 1
+    }
+    foreach ($dll in $crtWanted.Keys) {
+        if (-not (Test-Path "$crtDir\$dll")) {
+            Write-Host "ERROR: $dll is needed and not in $crtDir" -ForegroundColor Red
+            exit 1
+        }
+        Copy-Item "$crtDir\$dll" "$ROOT\emu\Nt\$dll" -Force
+        Write-Host "  Copied $dll (Visual C++ runtime) to emu\Nt\" -ForegroundColor Green
     }
 }
 

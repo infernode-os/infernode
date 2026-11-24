@@ -1823,7 +1823,10 @@ jobs:
             ($head.Count -eq 2 -and $head[0] -match '^\d+$' -and $head[1] -match '^(ed25519|elgamal|rsa|dsa)$') -or
             (Select-String -LiteralPath $_.FullName -Pattern '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' -Quiet -ErrorAction SilentlyContinue) }
           if ($keys) { $keys | ForEach-Object { Write-Host "release-scrub: a private key is in the package: $($_.FullName)" }; throw "release-scrub: refusing $Stage" }
+          # Compress-Archive leaves out empty directories: v0.12.0's zips had
+          # no tmp\, and what ran before the profile's mkdir found no /tmp.
           New-Item -ItemType Directory -Force -Path "$Stage\tmp" | Out-Null
+          Set-Content -Path "$Stage\tmp\.keep" -Value $null
           foreach ($f in @("LICENSE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1", "setup-windows.bat")) {
             if (Test-Path $f) { Copy-Item $f "$Stage\" }
           }
@@ -1859,6 +1862,52 @@ jobs:
           Write-Host "Archive: $Stage.zip ($([math]::Round((Get-Item "$Stage.zip").Length / 1MB, 1)) MB)"
         }
 
+        # Refuse a bundle whose binaries import a DLL that is neither staged
+        # nor part of Windows, then run what ships, from the stage, before
+        # archiving it, as the macOS and Linux jobs do: v0.10.x and v0.11.0
+        # shipped a Windows emu that could not load (no libz.dll) on a tree
+        # with no /dis/sh.dis. The Visual C++ runtime counts as not part of
+        # Windows even where this runner's System32 has it (every GitHub
+        # runner does; a new PC need not): v0.12.0's DLLs imported
+        # VCRUNTIME140.dll and its zips did not carry it. build-windows-sdl3.ps1
+        # copies it beside o.emu.exe.
+        function Assert-Bundle {
+          param([string]$Stage)
+          $staged = @{}
+          Get-ChildItem "$Stage\*.dll" | ForEach-Object { $staged[$_.Name.ToLower()] = $true }
+          $missing = @()
+          foreach ($bin in Get-ChildItem "$Stage\*.exe", "$Stage\*.dll") {
+            foreach ($line in (& dumpbin /nologo /dependents $bin.FullName)) {
+              if ($line -notmatch '^\s+(\S+\.dll)\s*$') { continue }
+              $dep = $Matches[1].ToLower()
+              if ($staged[$dep] -or $dep -like 'api-ms-win-*') { continue }
+              if ($dep -notmatch '^(vcruntime|msvcp|concrt|vccorlib)' -and (Test-Path "$env:SystemRoot\System32\$dep")) { continue }
+              $missing += "$($bin.Name) -> $dep"
+            }
+          }
+          if ($missing) {
+            $missing | ForEach-Object { Write-Host "missing runtime DLL: $_" }
+            throw "Assert-Bundle: $Stage imports DLLs it does not ship"
+          }
+          $root = (Resolve-Path $Stage).Path
+          $env:SDL_VIDEODRIVER = "dummy"
+          $p = Start-Process -FilePath "$root\o.emu.exe" -NoNewWindow -PassThru `
+            -ArgumentList @("-c1", "-r$root", "/dis/sh.dis", "-c", '"echo staged-emu-ok"') `
+            -RedirectStandardOutput "$Stage.smoke.out" -RedirectStandardError "$Stage.smoke.err"
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "Assert-Bundle: staged o.emu.exe timed out" }
+          $out = (Get-Content "$Stage.smoke.out", "$Stage.smoke.err" -ErrorAction SilentlyContinue) -join "`n"
+          Remove-Item "$Stage.smoke.out", "$Stage.smoke.err" -ErrorAction SilentlyContinue
+          if ($out -notmatch '(?m)^staged-emu-ok\r?$') {
+            Write-Host $out
+            throw "Assert-Bundle: staged o.emu.exe did not run /dis/sh.dis"
+          }
+          Write-Host "staged o.emu.exe runs sh"
+          # and from folders named as users' folders are: v0.12.0's emu did
+          # not start under C:\Users\<a name with an accent>
+          pwsh -NoProfile -File tests\host\nt_root_path_test.ps1 -Emu "$root\o.emu.exe" -Root $root
+          if ($LASTEXITCODE -ne 0) { throw "Assert-Bundle: staged o.emu.exe fails from a folder whose name is not ASCII" }
+        }
+
         # GUI bundle: flat layout matching the launcher's expectations —
         # $STAGE\InferNode.exe invokes %dir%\o.emu.exe with -r ., so launcher +
         # GUI emu + SDL3.dll + runtime tree all live at the bundle's top level.
@@ -1878,41 +1927,7 @@ jobs:
           # libz.dll and v0.11.0's emu would not start.
           Get-ChildItem "emu\Nt\*.dll" | Where-Object { $_.Name -ne "SDL3.dll" } |
             ForEach-Object { Copy-Item $_.FullName "$Stage\" }
-          # Refuse a bundle whose binaries import a DLL that is neither staged
-          # nor part of Windows. vcruntime/UCRT are allowed: they come with the
-          # VC++ redistributable, which is not bundled.
-          $staged = @{}
-          Get-ChildItem "$Stage\*.dll" | ForEach-Object { $staged[$_.Name.ToLower()] = $true }
-          $missing = @()
-          foreach ($bin in Get-ChildItem "$Stage\*.exe", "$Stage\*.dll") {
-            foreach ($line in (& dumpbin /nologo /dependents $bin.FullName)) {
-              if ($line -notmatch '^\s+(\S+\.dll)\s*$') { continue }
-              $dep = $Matches[1].ToLower()
-              if ($staged[$dep] -or $dep -like 'api-ms-win-*' -or $dep -like 'vcruntime*' -or $dep -like 'msvcp*') { continue }
-              if (Test-Path "$env:SystemRoot\System32\$dep") { continue }
-              $missing += "$($bin.Name) -> $dep"
-            }
-          }
-          if ($missing) {
-            $missing | ForEach-Object { Write-Host "missing runtime DLL: $_" }
-            throw "Stage-GUI: $Stage imports DLLs it does not ship"
-          }
-          # Run what ships, from the stage, before archiving it, as the macOS
-          # and Linux jobs do: v0.10.x and v0.11.0 shipped a Windows emu that
-          # could not load (no libz.dll) on a tree with no /dis/sh.dis.
-          $root = (Resolve-Path $Stage).Path
-          $env:SDL_VIDEODRIVER = "dummy"
-          $p = Start-Process -FilePath "$root\o.emu.exe" -NoNewWindow -PassThru `
-            -ArgumentList @("-c1", "-r$root", "/dis/sh.dis", "-c", '"echo staged-emu-ok"') `
-            -RedirectStandardOutput "$Stage.smoke.out" -RedirectStandardError "$Stage.smoke.err"
-          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "Stage-GUI: staged o.emu.exe timed out" }
-          $out = (Get-Content "$Stage.smoke.out", "$Stage.smoke.err" -ErrorAction SilentlyContinue) -join "`n"
-          Remove-Item "$Stage.smoke.out", "$Stage.smoke.err" -ErrorAction SilentlyContinue
-          if ($out -notmatch '(?m)^staged-emu-ok\r?$') {
-            Write-Host $out
-            throw "Stage-GUI: staged o.emu.exe did not run /dis/sh.dis"
-          }
-          Write-Host "staged o.emu.exe runs sh"
+          Assert-Bundle $Stage
           Write-Zip $Stage
         }
         Stage-GUI "infernode-$VERSION-windows-amd64-gui" "InferNode.exe"
@@ -1926,16 +1941,30 @@ jobs:
         $HL = "infernode-$VERSION-windows-amd64"
         Stage-Common $HL
         Copy-Item "emu\Nt\o.emu.headless.exe" "$HL\o.emu.exe"
+        Assert-Bundle $HL
         Write-Zip $HL
 
     # Charon, Xenith and Lucifer in the staged packages, as on macOS and
     # Linux: fails the release if not. (Its one-time "intermittent" failure on
     # Windows was another process killing every o.emu.exe on the machine.)
-    - name: Release smoke test (Windows GUI and headless packages)
+    - name: Release smoke test (Windows GUI, Xenith and headless packages)
       shell: bash
       run: |
         sh tests/host/release_smoke_test.sh "infernode-${{ steps.version.outputs.version }}-windows-amd64-gui" o.emu.exe . gui
+        sh tests/host/release_smoke_test.sh "xenith-${{ steps.version.outputs.version }}-windows-amd64" o.emu.exe . gui
         sh tests/host/release_smoke_test.sh "infernode-${{ steps.version.outputs.version }}-windows-amd64" o.emu.exe .
+
+    # The packages on a Windows with nothing installed: a Server Core
+    # container (no Visual C++ runtime, nothing this runner has added to
+    # System32), unpacked under C:\Users\<a name not in ASCII>. v0.11.0
+    # (libz.dll) and v0.12.0 (VCRUNTIME140.dll) passed every check above
+    # and did not start on a new PC. It fails the release.
+    - name: Packages on a clean Windows (Server Core container)
+      shell: pwsh
+      run: |
+        $V = "${{ steps.version.outputs.version }}"
+        & .\tests\host\nt_clean_host_test.ps1 -Packages "infernode-$V-windows-amd64-gui", "xenith-$V-windows-amd64", "infernode-$V-windows-amd64"
+        if ($LASTEXITCODE -ne 0) { exit 1 }
 
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:

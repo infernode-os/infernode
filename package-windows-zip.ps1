@@ -67,6 +67,12 @@ Write-Host "Staging files..."
 Copy-Item $launcher "$StageDir\InferNode.exe"
 Copy-Item $emuExe "$StageDir\o.emu.exe"
 Copy-Item $sdl3Dll "$StageDir\SDL3.dll"
+# Every other DLL beside o.emu.exe: libfido2 and what it needs, and the
+# Visual C++ runtime they import (build-windows-sdl3.ps1 put them there).
+# Without them o.emu.exe does not start: SDL3.dll alone was copied, as
+# v0.11.0's release lacked libz.dll.
+Get-ChildItem "$ROOT\emu\Nt\*.dll" | Where-Object { $_.Name -ne "SDL3.dll" } |
+    ForEach-Object { Copy-Item $_.FullName "$StageDir\" }
 
 # --- Copy Inferno root filesystem ---
 

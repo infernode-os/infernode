@@ -968,6 +968,17 @@ Sys_pctl(void *fp)
 		cn = newcname("/");
 		cnameclose(np.np->slash->name);
 		np.np->slash->name = cn;
+		/*
+		 * dot is the new root too, and gets a name of its own: the
+		 * clone kept the name dot had, with the mount points crossed
+		 * on the way to it, so a relative ".." after NEWNS popped to
+		 * the old parent, outside the new root (/.. was held; ../x and
+		 * chdir("..") were not). A fresh name has no stack: a walk
+		 * from it pins it as its origin, as a walk from slash does.
+		 */
+		cn = newcname("/");
+		cnameclose(np.np->dot->name);
+		np.np->dot->name = cn;
 		opg = pg;
 		o->pgrp = np.np;
 		np.np = nil;

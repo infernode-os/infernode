@@ -468,14 +468,14 @@ closefile(Netif *nif, Netfile *f)
 		}
 		if(f->nmaddr){
 			/*
-			 * each address this conversation joined, by its place
-			 * in the list (t was never advanced: every address
+			 * each join this conversation made, by the address's
+			 * place in the list (t was never advanced: every address
 			 * was released if the first was the conversation's,
 			 * and none otherwise)
 			 */
 			t = 0;
-			for(ap = nif->maddr; ap != nil && t < 8*sizeof(f->maddr); ap = ap->next, t++){
-				if(f->maddr[t/8] & (1<<(t%8)))
+			for(ap = nif->maddr; ap != nil && t < nelem(f->maddr); ap = ap->next, t++){
+				while(f->maddr[t] != 0)
 					netmulti(nif, f, ap->addr, 0);
 			}
 			f->nmaddr = 0;
@@ -684,12 +684,21 @@ netmulti(Netif *nif, Netfile *f, uchar *addr, int add)
 		return "interface does not support multicast";
 
 	/*
-	 * An address's place in the list is its bit in each conversation's
-	 * set, so an entry is never taken out; one nobody has joined (ref
+	 * An address's place in the list is its place in each conversation's
+	 * counts, so an entry is never taken out; one nobody has joined (ref
 	 * 0) is used again for the next new address. The list is therefore
-	 * no longer than a conversation's set has bits. It grew by one for
+	 * no longer than a conversation has counts. It grew by one for
 	 * every new address ever added, and a driver that programs a
 	 * filter from it (ethergenet's) was led past its table.
+	 *
+	 * A conversation's joins of an address are counted, and each leave
+	 * gives one back. IP joins a group once for each local address that
+	 * needs it, all through one conversation (addselfcache), and leaves
+	 * once for each: a link-local and a global address with the same
+	 * last three bytes share a solicited-node group. With a join taken
+	 * once however often it was asked for, removing either address left
+	 * the group for both, and neighbour discovery for the one that
+	 * remained went unanswered.
 	 */
 	l = &nif->maddr;
 	i = 0;
@@ -707,8 +716,8 @@ netmulti(Netif *nif, Netfile *f, uchar *addr, int add)
 	}
 
 	if(add){
-		if(ap != 0 && i < 8*sizeof(f->maddr) && (f->maddr[i/8] & (1<<(i%8))))
-			return 0;	/* joined already: a second join added a reference nothing gave back */
+		if(ap != 0 && f->maddr[i] == (ushort)~0)
+			return "too many joins of a multicast address";
 		if(ap == 0){
 			if(dead != nil){
 				/* an entry nobody has: out of its hash chain, and given the new address */
@@ -721,7 +730,7 @@ netmulti(Netif *nif, Netfile *f, uchar *addr, int add)
 				ap = dead;
 				i = di;
 			}else{
-				if(i >= 8*sizeof(f->maddr))
+				if(i >= nelem(f->maddr))
 					return "too many multicast addresses";
 				*l = ap = smalloc(sizeof(*ap));
 				ap->next = 0;
@@ -738,24 +747,23 @@ netmulti(Netif *nif, Netfile *f, uchar *addr, int add)
 			nif->nmaddr++;
 			nif->multicast(nif->arg, addr, 1);
 		}
-		if((f->maddr[i/8] & (1<<(i%8))) == 0)
+		if(f->maddr[i]++ == 0)
 			f->nmaddr++;
-		f->maddr[i/8] |= 1<<(i%8);
 	} else {
 		/*
-		 * only an address this conversation joined: any other's
-		 * was given back by whoever asked, and its owner's bit
-		 * left set over a reference that had gone
+		 * only a join this conversation made: any other's was
+		 * given back by whoever asked, and its owner's count
+		 * left over a reference that had gone
 		 */
-		if(ap == 0 || i >= 8*sizeof(f->maddr) || (f->maddr[i/8] & (1<<(i%8))) == 0)
+		if(ap == 0 || i >= nelem(f->maddr) || f->maddr[i] == 0)
 			return 0;
 		ap->ref--;
 		if(ap->ref == 0){
 			nif->nmaddr--;
 			nif->multicast(nif->arg, addr, 0);
 		}
-		f->nmaddr--;
-		f->maddr[i/8] &= ~(1<<(i%8));
+		if(--f->maddr[i] == 0)
+			f->nmaddr--;
 	}
 	return 0;
 }

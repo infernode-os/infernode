@@ -1270,6 +1270,7 @@ dis/tests/mc9p_http_test.dis
 dis/tests/msg9p_stream_test.dis
 dis/tests/msg_probesrc.dis
 dis/tests/newns_test.dis
+dis/tests/newns_root_test.dis
 dis/tests/ninepsrc_watch_test.dis
 dis/tests/spawnfake.dis
 dis/tests/speech9p_say_test.dis

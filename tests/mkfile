@@ -374,6 +374,7 @@ TARG=\
 	veltro_store_test.dis\
 	veltro_child_test.dis\
 	newns_test.dis\
+	newns_root_test.dis\
 	subagent_edge_test.dis\
 	subagent_tool.dis\
 	veltro_test.dis\

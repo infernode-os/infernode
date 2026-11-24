@@ -55,8 +55,8 @@ struct Netfile
 	int	scan;			/* base station scanning interval */
 	int	bridge;			/* bridge mode */
 	int	headersonly;		/* headers only - no data */
-	uchar	maddr[8];		/* bitmask of multicast addresses requested */
-	int	nmaddr;			/* number of multicast addresses */
+	ushort	maddr[64];		/* joins of each multicast address, by its place in the list */
+	int	nmaddr;			/* number of multicast addresses joined */
 
 	Queue	*in;			/* input buffer */
 };

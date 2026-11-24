@@ -8,10 +8,13 @@
 # list is no longer than a conversation's set has bits however many
 # addresses come and go (it grew by one for each new address for ever,
 # and ethergenet.c's filter loop followed it past its table, into the
-# MAC's other registers); a second join of the same address by the same
-# conversation adds no reference; a conversation leaves only what it
-# joined (another's address was given back, and its owner's bit left
-# set); and what is joined is what the driver was told.
+# MAC's other registers); a conversation's joins of an address are counted
+# and each leave gives one back (IP joins a group once for each local
+# address through one conversation: taken once, removing one address left
+# the group for the others); a conversation leaves only what it joined
+# (another's address was given back, and its owner's count left); a close
+# gives back each of the conversation's joins and nobody else's; and what
+# is joined is what the driver was told.
 #
 # By the order of the source: stats and ifstats are of the second level
 # in netifgen (a stat of either asked devstat's question for ever when
@@ -46,10 +49,15 @@ trap 'rm -rf "$BUILD"' EXIT HUP INT TERM
 
 {
 	echo 'static ulong'; awk '/^hash\(/,/^}/' "$SRCFILE"
+	echo 'static char* netmulti(Netif*, Netfile*, uchar*, int);'
+	# the close's block that gives back what the conversation joined, as it is in the source
+	echo 'static void closeloop(Netif *nif, Netfile *f) { Netaddr *ap; int t;'
+	awk '/^\t\tif\(f->nmaddr\)\{/ {on=1} on {print} on && /^\t\t\}/ {exit}' "$SRCFILE"
+	echo '}'
 	echo 'static char*'; awk '/^netmulti\(/,/^}/' "$SRCFILE"
 } > "$BUILD/fn.inc"
 cp "$HDR" "$BUILD/netif.h"
-if ! grep -q '^netmulti(' "$BUILD/fn.inc" || ! grep -q '^hash(' "$BUILD/fn.inc"; then
+if ! grep -q '^netmulti(' "$BUILD/fn.inc" || ! grep -q '^hash(' "$BUILD/fn.inc" || ! grep -q 'if(f->nmaddr){' "$BUILD/fn.inc"; then
 	fail "netif.c has no netmulti to run"
 	echo "Passed: $PASSED  Failed: $FAILED"
 	exit 1
@@ -62,6 +70,8 @@ cat > "$BUILD/test.c" <<'EOT'
 typedef unsigned char uchar;
 typedef unsigned long ulong;
 typedef unsigned int uint;
+typedef unsigned short ushort;
+#define nelem(x) (sizeof(x)/sizeof((x)[0]))
 #define nil ((void*)0)
 enum { KNAMELEN = 28 };
 typedef struct QLock { int x; } QLock;
@@ -122,8 +132,8 @@ bits(Netfile *f)
 {
 	int i, n = 0;
 
-	for(i = 0; i < 8*(int)sizeof(f->maddr); i++)
-		if(f->maddr[i/8] & (1<<(i%8)))
+	for(i = 0; i < (int)nelem(f->maddr); i++)
+		if(f->maddr[i] != 0)
 			n++;
 	return n;
 }
@@ -135,7 +145,7 @@ main(void)
 	static Netfile fa, fb;
 	uchar a[Nmaxaddr];
 	char *e;
-	int k, bad = 0, cap = 8*(int)sizeof(fa.maddr);
+	int k, bad = 0, cap = (int)nelem(fa.maddr);
 
 	nif.alen = 6;
 	nif.multicast = drv;
@@ -150,13 +160,36 @@ main(void)
 	if(nif.nmaddr != 0 || ntold != 0 || bits(&fa) != 0 || fa.nmaddr != 0){
 		printf("  after leaving everything: %d joined, driver told %d, %d bits, count %d\n", nif.nmaddr, ntold, bits(&fa), fa.nmaddr); bad++; }
 
-	/* the same address twice by one conversation is one reference */
+	/*
+	 * the same address twice by one conversation is two joins, each given
+	 * back by a leave: IP joins a group once for each local address that
+	 * needs it, through one conversation, and leaves once for each
+	 */
 	mkaddr(a, 7);
 	netmulti(&nif, &fa, a, 1);
 	netmulti(&nif, &fa, a, 1);
-	if(refs(&nif, 7) != 1 || fa.nmaddr != 1){ printf("  joined twice by one conversation: ref %d, count %d\n", refs(&nif, 7), fa.nmaddr); bad++; }
+	if(refs(&nif, 7) != 2 || fa.nmaddr != 1 || bits(&fa) != 1){ printf("  joined twice by one conversation: ref %d, addresses %d\n", refs(&nif, 7), fa.nmaddr); bad++; }
 	netmulti(&nif, &fa, a, 0);
-	if(refs(&nif, 7) != 0 || told[7]){ printf("  and left once: ref %d, driver still told %d\n", refs(&nif, 7), told[7]); bad++; }
+	if(refs(&nif, 7) != 1 || !told[7] || fa.nmaddr != 1){ printf("  two joins, one leave: ref %d, driver told %d (the group was left for the address that remains)\n", refs(&nif, 7), told[7]); bad++; }
+	netmulti(&nif, &fa, a, 0);
+	if(refs(&nif, 7) != 0 || told[7] || fa.nmaddr != 0){ printf("  two joins, two leaves: ref %d, driver still told %d\n", refs(&nif, 7), told[7]); bad++; }
+	netmulti(&nif, &fa, a, 0);
+	if(refs(&nif, 7) != 0 || nif.nmaddr != 0){ printf("  a third leave: ref %d, %d joined\n", refs(&nif, 7), nif.nmaddr); bad++; }
+
+	/* a close gives back every join the conversation made, and nobody else's */
+	mkaddr(a, 11);
+	netmulti(&nif, &fa, a, 1);
+	netmulti(&nif, &fa, a, 1);
+	netmulti(&nif, &fb, a, 1);
+	mkaddr(a, 12);
+	netmulti(&nif, &fa, a, 1);
+	mkaddr(a, 13);
+	netmulti(&nif, &fb, a, 1);
+	closeloop(&nif, &fa);
+	if(refs(&nif, 11) != 1 || refs(&nif, 12) != 0 || refs(&nif, 13) != 1 || told[12] || !told[11] || !told[13] || bits(&fa) != 0 || fa.nmaddr != 0){
+		printf("  A closed: refs %d %d %d (want 1 0 1), A's addresses %d\n", refs(&nif, 11), refs(&nif, 12), refs(&nif, 13), fa.nmaddr); bad++; }
+	closeloop(&nif, &fb);
+	if(nif.nmaddr != 0 || ntold != 0 || bits(&fb) != 0){ printf("  both closed: %d joined, driver told %d\n", nif.nmaddr, ntold); bad++; }
 
 	/* a conversation leaves only what it joined */
 	mkaddr(a, 9);
@@ -192,7 +225,7 @@ EOT
 
 if "$CC" -std=c99 -Wall -Wno-unused-function -g -I"$BUILD" -o "$BUILD/test" "$BUILD/test.c" 2> "$BUILD/cc.err"; then
 	if "$BUILD/test" > "$BUILD/run.out" 2>&1; then
-		pass "the multicast list is bounded, a conversation joins once and leaves only its own, and the driver is told what is joined ($(tail -1 "$BUILD/run.out"))"
+		pass "the multicast list is bounded, a conversation's joins are counted and it leaves only its own, a close gives back what it joined, and the driver is told what is joined ($(tail -1 "$BUILD/run.out"))"
 	else
 		fail "netmulti: $(head -6 "$BUILD/run.out" | tr '\n' ' ')"
 	fi

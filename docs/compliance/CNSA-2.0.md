@@ -133,7 +133,7 @@ reason.
 | login client (`login(2)`, `getauthinfo`) | Suite 2 alone (ML-KEM-1024); refuses a signer's key that is not ML-DSA-87, a signer's modulus under 3072 bits, a certificate not ML-DSA-87's under SHA-384/512, and a signer of login version 2. |
 | `auth/signer` | As logind for its key; certifies only keys of its own algorithm; the digest the operator compares is SHA-384 for an ML-DSA or SLH-DSA signer. Not started by default (signer(8)). |
 | `auth/secstored` | secstore version 5 alone (ML-KEM-1024 and SHA-384 beside the PAK); versions 1 and 3, kept outside the mode for accounts to move, are refused saying so. The version 4 exchange is refused in every mode. |
-| secstore client (`secstore(2)`, `auth/secstore`, logon, factotum) | Version 5 alone; an account still at version 1 or 3 is not moved in the mode, and the client says to log in once outside it. |
+| secstore client (`secstore(2)`, `auth/secstore`, logon, factotum) | Version 6; an account at version 4 is moved to it over version 5's exchange (ML-KEM-1024, SHA-384, AES-256: the new verifier inside it, the session doing nothing else, secstored refusing anything else in it), and one at version 3 or 1, whose exchanges are classical, is refused, saying to start once with `CNSAMODE` unset and unlock. |
 | `auth/factotum` | `genkey` makes ML-DSA-87 alone; `proto=sign` signs with an ML-DSA-87 key alone. |
 | `auth/factotum` `proto=p9any`, `proto=dp9ik` | Refused ("dp9ik is not available in CNSA mode"): 9front's authentication, for working with 9front, is classical (§3.8). |
 | `rcpu`, `rimport` (`rconnect(2)`) | Refused before anything is dialled, saying why (§3.8). |

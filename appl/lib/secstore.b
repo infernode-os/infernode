@@ -145,10 +145,12 @@ isacked(conn: ref Dial->Connection): int
 #
 # An account at an older version is logged in to at its own version (as
 # connect4 does, but with no stop at version 4), given its version 6
-# verifier, and logged in to again at version 6.  In CNSA mode version 6
-# alone is spoken, and an account not yet at it is not moved: log in
-# once outside the mode.  Its files are the caller's to move (openfile
-# says which are of the old form; encrypt3 writes the new).
+# verifier, and logged in to again at version 6.  In CNSA mode an
+# account at version 4 is moved over version 5's exchange, which is
+# CNSA's (ML-KEM-1024, SHA-384, AES-256), and one at version 3 or 1 is
+# not: their exchanges are classical (Oldcnsa says what to do).  Its
+# files are the caller's to move (openfile says which are of the old
+# form; encrypt3 writes the new).
 #
 connect6(addr: string, c: ref Creds): (ref Dial->Connection, string, string)
 {
@@ -161,22 +163,29 @@ connect6(addr: string, c: ref Creds): (ref Dial->Connection, string, string)
 	}
 	if(!refusedversion(diag))
 		return (nil, nil, diag);
-	if(cnsamode())
-		return (nil, nil, "CNSA mode: the account is not yet at secstore version 6 and is not moved in CNSA mode; log in once outside it");
 	# the versions before, newest first, each tried only when the
 	# server refuses the one before as a version; the session had is
-	# where the version 6 verifier is given
+	# where the version 6 verifier is given.  In CNSA mode only version
+	# 5's exchange (ML-KEM-1024 beside the PAK, SHA-384, AES-256) is
+	# one to move over: the new verifier goes inside it.  Versions 3 and
+	# 1 are classical, and a recording of the move would give the new
+	# verifier to whoever can later break it.
 	if(!oldkeys(c))
 		return (nil, nil, "the account is at an older secstore version, and the keys for it were let go: unlock again with the password");
 	vers := array[] of {(VERSION5, c.h4), (VERSION3, c.h2), (VERSION1, c.h1)};
+	if(cnsamode())
+		vers = vers[0:1];
 	for(i := 0; i < len vers; i++){
 		(v, h) := vers[i];
 		(conn, sname, diag) = connectver(addr, c.user, v, h);
 		if(conn != nil || !refusedversion(diag))
 			break;
 	}
-	if(conn == nil)
+	if(conn == nil){
+		if(cnsamode() && refusedversion(diag))
+			return (nil, nil, Oldcnsa);
 		return (nil, nil, diag);
+	}
 	if(diag != nil)	# "need pin": the caller's to answer, at the version it has
 		return (conn, sname, diag);
 	err := setverifier(conn, VERSION6, mkverifier(c.user, VERSION6, c.h6));
@@ -190,6 +199,10 @@ connect6(addr: string, c: ref Creds): (ref Dial->Connection, string, string)
 		acked = conn :: acked;
 	return (conn, sname, diag);
 }
+
+# An account at version 3 or older, in CNSA mode: what to do, in words
+# the login screen shows
+Oldcnsa: con "this secstore account is at an old version whose login is not quantum-resistant, so CNSA mode will not move it: start InferNode once with CNSAMODE unset, unlock secstore (it is moved to version 6), then start it with CNSAMODE=1 again";
 
 # Everything a password gives a client of the store, for a store and its
 # files at any version: the PAK hashes of each verifier version and the
@@ -390,7 +403,11 @@ connectver(addr: string, user: string, version: string, pwhash: array of byte): 
 	params := pakparams(version);
 	if(params == nil)
 		return (nil, nil, "unsupported verifier version");
-	if(version != VERSION6 && cnsamode())
+	# In CNSA mode version 6 is spoken, and version 5's exchange (the
+	# same exchange: ML-KEM-1024, SHA-384, AES-256) to move an account
+	# from version 4 to 6 (connect6), and nothing older: theirs is not
+	# quantum-resistant.
+	if(version != VERSION6 && version != VERSION5 && cnsamode())
 		return (nil, nil, "CNSA mode: secstore version 6 alone, not " + version);
 
 	# Pre-compute PAK crypto before dialing to avoid TCP idle timeout.

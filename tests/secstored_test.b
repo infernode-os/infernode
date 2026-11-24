@@ -30,7 +30,8 @@ implement SecstoredTest;
 #     account's version 4 verifier and runs an ML-KEM-1024 encapsulation
 #     beside the PAK, its proofs and session from both secrets by
 #     SHA-384 (secstore(2)'s PAK5); version 4's exchange is not spoken,
-#     and in CNSA mode nothing but version 5 is.
+#     and in CNSA mode version 6, with version 5's exchange only to
+#     move an account at version 4 (one at 3 is refused, saying how).
 #
 
 include "sys.m";
@@ -418,9 +419,38 @@ testVersion5(t: ref T)
 	(conn, diag) = oldlogin("pqold", "pqold's password");
 	t.assert(conn == nil && has(diag, "CNSA mode"), "and the client offers no older version: " + diag);
 	(conn, diag) = login("pq", "pq's password");
-	t.assert(conn == nil && has(diag, "CNSA mode"), "in CNSA mode an account at version 4 (its verifier SHA-256's) is not logged in to: " + diag);
+	t.assert(conn == nil && has(diag, "CNSA mode"), "in CNSA mode connect4's version 5 session is not had: " + diag);
+	# an account at version 3 is not moved: its exchange is classical,
+	# and the refusal says what to do
 	(conn, diag) = login6("pqold", "pqold's password");
-	t.assert(conn == nil && has(diag, "CNSA mode"), "an account at version 3 is not moved in CNSA mode: " + diag);
+	t.assert(conn == nil && has(diag, "CNSAMODE unset") && has(diag, "not quantum-resistant"),
+		"an account at version 3 is not moved in CNSA mode, saying how to move it: " + diag);
+	# an account at version 4 is moved, over version 5's exchange
+	# (ML-KEM-1024, SHA-384, AES-256), to version 6, and its files read
+	# there: on 0.11.1 it was refused, and the login screen said "log in
+	# once outside it" to whoever had turned the mode on
+	account(t, "pqmove", "pqmove's password", "secstore4");
+	setcnsa(0);
+	(conn, diag) = login("pqmove", "pqmove's password");
+	if(conn != nil){
+		t.assertnil(put(conn, "factotum", "pqmove keys\n"), "a file stored at version 4");
+		secstore->bye(conn);
+	}
+	setcnsa(1);
+	(conn, diag) = login6("pqmove", "pqmove's password");
+	t.assert(conn != nil, "in CNSA mode an account at version 4 is moved to version 6 and logged in to: " + diag);
+	if(conn != nil){
+		t.assert(get(conn, "factotum") != "ABSENT", "its files are there at version 6");
+		secstore->bye(conn);
+	}
+	pak := readfile(store + "/pqmove/PAK");
+	t.assert(has(pak, "secstore6 ") && !has(pak, "secstore4 "), "and it is at version 6 alone: " + pak);
+	# at version 6, version 5 is not spoken to it in CNSA mode
+	r = rawdial(t);
+	a = rawsay(r, "secstore5\tPAK\nC=pqmove\nm=" + two + "\n");
+	t.assert(has(a, "CNSA mode") && !has(a, "mu="), "nor is its version 5 exchange had, once at version 6: " + a);
+	(conn, diag) = login6("pqmove", "not pqmove's password");
+	t.assert(conn == nil, "and another password is refused: " + diag);
 	setcnsa(0);
 }
 

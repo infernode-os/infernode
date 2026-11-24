@@ -69,7 +69,8 @@ Booted with a screen, that card comes up in the Lucia desktop, by the
 road the board takes: `osinit` mounts the FAT partition through `#S` and
 dossrv, `rootpath` unions the card's `dis/`, `lib/`, `fonts/` and
 `icons/` over the kernel's recovery root, and `/lib/sh/profile` runs
-`boot-baremetal.sh`. Leave `skiplogon` out for the login screen.
+`boot-baremetal.sh`, which runs `boot.sh`, the boot every build runs. Leave
+`skiplogon` out for the login screen and its choice of interface.
 
 Every one of those choices has a way to go wrong that says nothing:
 

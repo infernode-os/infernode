@@ -328,7 +328,7 @@ $mdSrc = @(
     "aa.c", "aapath.c",
     "arc.c", "cmap.c", "cread.c", "defont.c", "ellipse.c", "fillpoly.c",
     "hwdraw.c", "icossin.c", "icossin2.c", "iprint.c", "line.c",
-    "openmemsubfont.c", "poly.c", "read.c", "string.c", "subfont.c", "write.c",
+    "openmemsubfont.c", "poly.c", "read.c", "string.c", "subfont.c", "warp.c", "write.c",
     "alloc.c", "cload.c", "draw.c", "load.c", "unload.c"
 )
 $mdFlags = @("/I$ROOT\libmemdraw", "/I$ROOT\include", "/I$ROOT\Nt\amd64\include")
@@ -346,7 +346,7 @@ Remove-Item -Force *.obj -ErrorAction SilentlyContinue
 $mlSrc = @(
     "draw.c", "layerop.c", "ldelete.c", "lhide.c", "line.c", "load.c",
     "lorigin.c", "lsetrefresh.c", "ltofront.c", "ltorear.c", "unload.c",
-    "lalloc.c"
+    "warp.c", "lalloc.c"
 )
 $mlFlags = @("/I$ROOT\libmemlayer", "/I$ROOT\include", "/I$ROOT\Nt\amd64\include")
 Compile-CFiles -Dir "." -Sources $mlSrc -ExtraFlags $mlFlags

@@ -1224,6 +1224,7 @@ xenith/dis/win.dis
 xenith/dis/winm.dis
 dis/tests/alt_nilchan_test.dis
 dis/tests/draw_edge_test.dis
+dis/tests/drawwarp_test.dis
 dis/tests/draw_pools.dis
 dis/tests/errlabel_leak_test.dis
 dis/tests/geom_edge_test.dis

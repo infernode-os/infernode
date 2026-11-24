@@ -807,6 +807,53 @@ message, for a path longer than one message can hold.
 .br
 Flush changes from a soft screen, if any, to the display buffer.
 .HP
+.B w
+.IR dstid [4]
+.IR dp [2*4]
+.IR r [4*4]
+.IR srcid [4]
+.IR sp [2*4]
+.IR maskid [4]
+.IR mp [2*4]
+.IR M [3*3*4]
+.IR flags [1]
+.br
+Draw into the rectangle
+.I r
+of image
+.I dstid
+the image
+.I srcid
+under an affine map, as 9front's
+.I affinewarp
+does.
+.I M
+is the inverse of the map, from a destination pixel's place relative to
+.I dp
+to the source's relative to
+.IR sp ,
+row by row in 19.13 fixed point; its third row is not used.
+Bit 0 of
+.I flags
+samples the source bilinearly, otherwise at the nearest pixel;
+bit 1 says the map is an integer upscale, which may then be drawn a
+faster way.
+The source's edge gives transparent black unless it is replicated.
+The mask is not used.
+The four entries of the first two rows and columns of
+.I M
+must each be at most
+.if t 2\u\s-224\s+2\d
+.if n 2^24
+in magnitude, and
+.I r
+within
+.if t 2\u\s-224\s+2\d
+.if n 2^24
+pixels of
+.IR dp ;
+a matrix past that is refused and a rectangle past it draws nothing.
+.HP
 .B y
 .IR id [4]
 .IR r [4*4]

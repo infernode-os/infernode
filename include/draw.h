@@ -16,6 +16,7 @@ typedef struct	RGB RGB;
 typedef struct	Refreshq Refreshq;
 typedef struct	Screen Screen;
 typedef struct	Subfont Subfont;
+typedef struct	Warp Warp;
 
 #pragma varargck	type	"R"	Rectangle
 #pragma varargck	type	"P"	Point
@@ -189,6 +190,22 @@ struct Rectangle
 {
 	Point	min;
 	Point	max;
+};
+
+/*
+ * An affine warp as the draw device takes it (9front's 'w' message):
+ * the inverse of the map from source to destination, in 19.13 fixed
+ * point, row 2 unused.  WFintupscale says the map is an integer
+ * upscale, which memaffinewarp may then take a faster way.
+ */
+struct Warp
+{
+	long	m[3][3];
+	int	flags;
+};
+
+enum {
+	WFintupscale	= 1,
 };
 
 typedef void	(*Reffn)(Image*, Rectangle, void*);

@@ -163,6 +163,7 @@ TARG=\
 	randpass.dis\
 	raw2iaf.dis\
 	rawdbfs.dis\
+	rngdump.dis\
 	rcmd.dis\
 	read.dis\
 	rm.dis\

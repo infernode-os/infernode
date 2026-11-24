@@ -95,6 +95,8 @@ hwrandom(uchar *p, int n)
 	hwleft -= n;
 	return n;
 }
+/* random.c's rnghw: hwrandom, but for an rngassess boot (kernrandom_test.sh tests that) */
+static int rnghw(uchar *p, int n){ return hwrandom(p, n); }
 static int nrandcalls;
 static int nrand(int n){ nrandcalls++; return (nrandcalls * 37 + 11) % n; }
 static uvlong clockns = 1000000;

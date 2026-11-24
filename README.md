@@ -17,6 +17,8 @@ InferNode is a 64-bit distribution of Inferno® OS. Each agent runs in its own n
 
 It also has JIT compilation on AMD64 (14×), ARM64 (9×) and RISC-V, an optional SDL3 GUI (Lucia + Xenith), and a complete Plan 9-inspired environment, all in under 30 MB of RAM. It runs on macOS, Linux and Windows, and boots on bare metal on ARM64 and RISC-V.
 
+*As featured in The Register: [“InferNode gives Bell Labs' Inferno OS a 64-bit second wind”](https://www.theregister.com/os-platforms/2026/11/24/infernode-gives-bell-labs-inferno-os-a-64-bit-second-wind/5311704).*
+
 ## Quick Start
 
 ### Install (recommended)
@@ -24,8 +26,7 @@ It also has JIT compilation on AMD64 (14×), ARM64 (9×) and RISC-V, an optional
 Every tagged release ships signed binaries for macOS, Linux, and Windows on the [latest release page](https://github.com/infernode-os/infernode/releases/latest). No toolchain, no build step — download and run.
 
 - **macOS (Apple Silicon or Intel)** — `infernode-*-macos-arm64.dmg` or `infernode-*-macos-amd64.dmg`: open, drag to Applications, launch. Or with Homebrew: `brew install --cask infernode-os/tap/infernode`.
-- **macOS (Intel)** — `infernode-*-macos-amd64.dmg`: the same, built and tested on GitHub's Intel macOS runner. Supported for as long as Apple supports Intel Macs and GitHub has Intel runners.
-- **Windows (x86_64)** — `infernode-*-windows-amd64-gui.zip`: extract, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. (Until code-signing lands, the unsigned `InferNode.exe` would otherwise be silently blocked by SmartScreen after browser download — Windows propagates Mark-of-the-Web from the zip to every extracted file. `.bat` files are exempt from that gate, so `setup-windows.bat` runs anyway and its first job is to unblock the rest of the bundle.)
+- **Windows (x86_64)** — `infernode-*-windows-amd64-gui.zip`: extract, **double-click `setup-windows.bat`** (it unblocks the bundle and configures an LLM backend), then double-click `InferNode.exe`.
 - **Linux x86_64 (GUI)** — `infernode-*-linux-amd64-gui.tar.gz`: SDL3 is bundled.
 - **Linux ARM64 (GUI)** — `infernode-*-linux-arm64-gui.tar.gz`: for Jetson, Raspberry Pi, etc.
 - **Linux (headless)** — `infernode-*-linux-amd64.tar.gz` or `infernode-*-linux-arm64.tar.gz`.
@@ -33,7 +34,7 @@ Every tagged release ships signed binaries for macOS, Linux, and Windows on the 
   ```bash
   docker run -it ghcr.io/infernode-os/infernode:latest
   ```
-- **Raspberry Pi (bare metal)** — `infernode-*-rpi3bplus.img.xz`, `infernode-*-rpi4b.img.xz` and `infernode-*-rpi5.img.xz` are SD-card images of InferNode as the operating system, with nothing underneath. All three are in Raspberry Pi Imager's format (the release attaches `os_list_infernode.json`). See [docs/BAREMETAL.md](docs/BAREMETAL.md#4-putting-it-on-a-raspberry-pi-3b).
+- **Raspberry Pi (bare metal)** — `infernode-*-rpizero2w.img.xz`, `infernode-*-rpi3bplus.img.xz`, `infernode-*-rpi4b.img.xz` and `infernode-*-rpi5.img.xz` are SD-card images of InferNode as the operating system, with nothing underneath. All four are in Raspberry Pi Imager's format (the release attaches `os_list_infernode.json`). See [docs/BAREMETAL.md](docs/BAREMETAL.md#4-putting-it-on-a-raspberry-pi-3b).
 
 ```bash
 tar xzf infernode-*-linux-*-gui.tar.gz
@@ -46,7 +47,7 @@ cd infernode-*-linux-*-gui
 
 Every release asset is published with a cosign `.sigstore` bundle and a signed `SHA256SUMS.txt`; container images carry SLSA build provenance. See [Releases](https://github.com/infernode-os/infernode/releases) for the full history.
 
-Code signing for Windows builds is provided by the [SignPath Foundation](https://signpath.org/) — a non-profit that signs open-source releases with certificates issued by SSL.com. Signed Windows binaries get verified Publisher metadata and Microsoft SmartScreen reputation; without signing, browser-downloaded zips carry a Mark-of-the-Web tag that Windows propagates to every extracted file and SmartScreen then silently blocks (handled in the meantime by `setup-windows.bat`, which clears the tag from the bundle on first run — see the Windows install bullet above).
+Code signing for Windows builds is provided by the [SignPath Foundation](https://signpath.org/) — a non-profit that signs open-source releases with certificates issued by SSL.com — giving the binaries verified Publisher metadata and Microsoft SmartScreen reputation. Until it is live, `setup-windows.bat` unblocks the bundle on first run.
 
 ### Build from source
 
@@ -128,6 +129,7 @@ serial console, with the full namespace and the network up.
 | Board | State |
 |-------|-------|
 | **Raspberry Pi 3B+** (`os/bcm2837`) | Runs on the real board, and on QEMU's `raspi3b`. Ethernet (LAN7515 over USB), Wi-Fi (CYW43455), Bluetooth, SD card, HDMI/DSI, USB keyboard and mouse, touch, GPIO, audio, A/B kernel update, boot watchdog. |
+| **Raspberry Pi Zero 2 W** (`os/bcm2837`) | Runs on the real board (a Zero 2 W Rev 1.0, since 2026-11-21) with the 3B+'s kernel, boot firmware and `config.txt` unchanged: Wi-Fi and Bluetooth (CYW43436 or CYW43436s, firmware chosen at boot), the desktop on mini HDMI, USB on the OTG port, the camera at 30 frames a second, I2C, SD card, A/B kernel update. [docs/BAREMETAL.md](docs/BAREMETAL.md#and-on-a-raspberry-pi-zero-2-w). |
 | **QEMU `virt`** (`os/virt`) | GICv2 and virtio (net, blk, keyboard, tablet, ramfb) — the kernel anywhere QEMU runs, which is what CI boots. |
 | **Raspberry Pi 4B** (`os/bcm2711`) | Runs on the real board (a 4B rev 1.5, since 2026-10-15) and on QEMU's `raspi4b`: SD card, gigabit Ethernet, Wi-Fi and Bluetooth, USB, the 7" panel and touch, the camera, the headphone jack, all four cores. [os/bcm2711/README.md](os/bcm2711/README.md) says what was proved on the board. |
 | **Raspberry Pi 5** (`os/bcm2712`) | Runs on one board (a Pi 5 8GB rev 1.0, since 2026-10-31) and on nothing else, as no emulator models a Pi 5: all four cores, gigabit Ethernet, USB through RP1, Wi-Fi, Bluetooth, GPIO, I2C, SPI, PWM, the real-time clock, NVMe, the desktop on either HDMI port. Not yet: two screens at once, DSI and CSI. [os/bcm2712/README.md](os/bcm2712/README.md); [INVENTORY.md](os/bcm2712/INVENTORY.md) says what is proved, feature by feature. |

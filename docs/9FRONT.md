@@ -62,9 +62,11 @@ machine**:
 ## What is not here (yet)
 
 - **A drawterm.** A 9front graphical program has no `/dev/draw` of this
-  machine's to draw on. 9front programs do draw correctly on InferNode's draw
-  device when it is exported to them (we tried it); serving it through rcpu
-  with the mouse, keyboard and snarf files is the next step.
+  machine's to draw on. InferNode's draw device speaks 9front's draw protocol,
+  its `w` message (affine warp, which 9front's `page` and image tools send)
+  included, checked against 9front 11952's own answers
+  (`tests/drawwarp_test.b`); serving it through rcpu with the mouse, keyboard
+  and snarf files is the next step.
 - **Interrupts.** No note is sent to the far end, so `DEL` does not reach the
   remote command.
 - **`-p` (aan).** No session survives a dropped connection.

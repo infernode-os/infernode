@@ -26,7 +26,9 @@ upstream's terms in a header comment. In particular, the Raspberry Pi UART
 drivers os/bcm/uartmini.c and os/bcm/uartpl011.c come from 9front's
 sys/src/9/bcm; os/bcm/usbdwc.c is imported from Plan 9 4th edition; and
 os/bcm/emmc.c, os/bcm/sdhost.c, os/bcm/sdmmc.c and os/bcm/ether4330.c derive
-from Richard Miller's Plan 9 Raspberry Pi work. These terms do not differ from
+from Richard Miller's Plan 9 Raspberry Pi work. libmemdraw/warp.c and
+libmemlayer/warp.c, the draw device's affine warp, come from 9front's
+libmemdraw and libmemlayer. These terms do not differ from
 the MIT licence above; they are recorded here so the provenance is not lost.
 
 Inferno and Limbo are registered trademarks of Vita Nuova Holdings Limited in

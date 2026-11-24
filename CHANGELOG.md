@@ -4,8 +4,62 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-24
+
+### Added
+
+- **9front compatibility: `rcpu` and `rimport`.** InferNode reaches
+  9front machines as 9front's own `rcpu` and `rimport` do: factotum's
+  `p9any` and `dp9ik` (9front's authentication, client side, the
+  password kept in factotum), TLS 1.2 keyed by the session secret
+  (`tlspsk(2)`), and the server's `rc`. `rimport host / /n/host` mounts
+  a 9front tree; `rcpu -h host -c cmd` runs a command there with its
+  input, output and exit status. The 9front side's `/mnt/term` is a
+  tree rcpu serves (the command's input and output, `dev/cons`), not
+  this machine's name space. Off until a `proto=dp9ik` key is given;
+  refused in CNSA mode, since dp9ik is classical cryptography (CNSA-2.0.md
+  §3.8). `dp9ik(2)` was checked against answers 9front 11952 gave, and
+  the commands against 9front itself under QEMU
+  (`tests/host/dp9ik_live_test.sh`). See `docs/9FRONT.md`.
+
 ### Fixed
 
+- **The Windows packages start on a new PC and under any user's
+  folder** (#1264, after #1250). The DLLs beside the GUI emulator
+  (`fido2`, `cbor`, `libcrypto`, `zlib`) need `VCRUNTIME140.dll`, which
+  is not part of Windows and was not bundled; every package now carries
+  it, and the release check no longer accepts what the build machine's
+  System32 has. A folder with a letter outside ASCII (`C:\Users\José`,
+  a Chinese or Cyrillic account name) stopped the emulator at start: its
+  arguments and root path were read in the ANSI code page and the root
+  cut by a byte per accented letter. The profile takes the home from
+  `USERPROFILE` in place of guessing `C:\Users\<account>`, so
+  `setup-windows.ps1`'s `.infernode` is read; `setup-windows.bat` works
+  in a folder with an apostrophe; the zips have `tmp\`. The release
+  runs each zip in a Windows Server Core container, which has no VC++
+  runtime, unpacked under accented, Chinese and Cyrillic folders
+  (`tests/host/nt_clean_host_test.ps1`, `tests/host/nt_root_path_test.ps1`).
+- **`pctl(NEWNS)`: a relative ".." left the new root.** sys-pctl(2) makes
+  the current directory the root of the new name space. `/..` was held
+  there, but the new dot was a clone that kept the name dot had before,
+  with the mount points crossed on the way to it, so `../x` opened a file
+  of the directory above the root, `create` made one there, and
+  `chdir("..")` went there, with or without `NODEVS`. The new dot now has
+  a name of its own, as the new root has, in the hosted and the native
+  kernel. `pwd` after `pctl(NEWNS)` is `/`. `tests/newns_root_test.b`.
+- **Native kernel: removing an IPv6 address could stop neighbour
+  discovery for the others.** 0.11.0 made a conversation's join of a
+  multicast address count once however often it was asked for. IP joins
+  a group once for each local address that needs it, through one
+  conversation, and leaves once for each; a link-local and a global
+  address with the same last three bytes share a solicited-node group,
+  so removing either left the group for both, and solicitations for the
+  one that remained went unanswered. Joins are counted for each
+  conversation again, a leave gives back only a join the conversation
+  made, and a close gives back all of them. The limits 0.11.0 added
+  stay: the list is no longer than 64 addresses, and a conversation
+  cannot release another's. Found by running the same change on 9front;
+  not run on a board. `tests/host/netif_multi_test.sh`.
 - **An existing secstore account unlocks in CNSA mode.** 0.12.0 moved
   accounts to secstore version 6 at their next unlock, but refused the
   move in CNSA mode: an account made before it (version 4) could not be
@@ -27,19 +81,6 @@ All notable changes to InferNode are documented in this file.
 
 ### Added
 
-- **9front compatibility: `rcpu` and `rimport`.** InferNode reaches
-  9front machines as 9front's own `rcpu` and `rimport` do: factotum's
-  `p9any` and `dp9ik` (9front's authentication, client side, the
-  password kept in factotum), TLS 1.2 keyed by the session secret
-  (`tlspsk(2)`), and the server's `rc`. `rimport host / /n/host` mounts
-  a 9front tree; `rcpu -h host -c cmd` runs a command there with its
-  input, output and exit status. The 9front side's `/mnt/term` is a
-  tree rcpu serves (the command's input and output, `dev/cons`), not
-  this machine's name space. Off until a `proto=dp9ik` key is given;
-  refused in CNSA mode, since dp9ik is classical cryptography (CNSA-2.0.md
-  §3.8). `dp9ik(2)` was checked against answers 9front 11952 gave, and
-  the commands against 9front itself under QEMU
-  (`tests/host/dp9ik_live_test.sh`). See `docs/9FRONT.md`.
 - **The camera on the Raspberry Pi 5.** `#V` drives RP1's CSI-2
   receiver on either camera connector and serves the Pi 4's
   `#V/unicam` files, so camsrv(4), `wm/camera`, vision(4) and the
@@ -213,27 +254,6 @@ All notable changes to InferNode are documented in this file.
     emulator from 71 to 2770 MB/s here); the constant-time C runs
     elsewhere, and on Windows. Ed25519 keys and signatures are made in
     constant time; signatures are unchanged.
-- **`pctl(NEWNS)`: a relative ".." left the new root.** sys-pctl(2) makes
-  the current directory the root of the new name space. `/..` was held
-  there, but the new dot was a clone that kept the name dot had before,
-  with the mount points crossed on the way to it, so `../x` opened a file
-  of the directory above the root, `create` made one there, and
-  `chdir("..")` went there, with or without `NODEVS`. The new dot now has
-  a name of its own, as the new root has, in the hosted and the native
-  kernel. `pwd` after `pctl(NEWNS)` is `/`. `tests/newns_root_test.b`.
-- **Native kernel: removing an IPv6 address could stop neighbour
-  discovery for the others.** 0.11.0 made a conversation's join of a
-  multicast address count once however often it was asked for. IP joins
-  a group once for each local address that needs it, through one
-  conversation, and leaves once for each; a link-local and a global
-  address with the same last three bytes share a solicited-node group,
-  so removing either left the group for both, and solicitations for the
-  one that remained went unanswered. Joins are counted for each
-  conversation again, a leave gives back only a join the conversation
-  made, and a close gives back all of them. The limits 0.11.0 added
-  stay: the list is no longer than 64 addresses, and a conversation
-  cannot release another's. Found by running the same change on 9front;
-  not run on a board. `tests/host/netif_multi_test.sh`.
 
 ### Fixed
 

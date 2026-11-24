@@ -213,13 +213,20 @@ agent actions).
 A 2FA account's factotum blob is encrypted under a single random **data key DK**.
 DK is then wrapped once per *slot*, each slot a file under
 `/usr/inferno/secstore/<user>/2fa/`. Each slot is `encrypt3(DK, KEK)`
-(AES-256-GCM, SGCM2):
+(AES-256-GCM, SGCM3: its file key HMAC-SHA-384 of the KEK):
 
-- **key slot:** `KEK = mkkek2fa(rootkey, R)` — needs the password
-  (`rootkey = mkfilekey3(user,pass)`) **and** the device-bound `R` (a YubiKey
-  `hmac-secret` output, gated by touch, +PIN under UV/AAL3).
-- **recovery slot:** `KEK = mkfilekey3(user, recoverypass)` — a recovery
+- **key slot:** `KEK = mkkek2fa(root6, R)`, HMAC-SHA-384 — needs the password
+  (`root6 = mkfilekey6(user,pass)`, PBKDF2-HMAC-SHA-384) **and** the
+  device-bound `R` (a YubiKey `hmac-secret` output, gated by touch, +PIN under
+  UV/AAL3).
+- **recovery slot:** `KEK = mkfilekey6(user, recoverypass)` — a recovery
   passphrase only, the dev / lost-key safety net.
+
+Before secstore version 6 a slot was SGCM2 under `oldkek2fa(mkfilekey3(user,pass), R)`
+(HMAC-SHA-256) or `mkfilekey3(user, recoverypass)`. Such a slot still opens, and
+`twofaslot->unlock` wraps it again under the version 6 keys the first time it does:
+a key slot at its next unlock with the key, the recovery slot the next time the
+recovery passphrase is used (CNSA 2.0 G9, `docs/compliance/CNSA-2.0.md`).
 
 **Enroll** (`twofaslot->writeslots`, verify-before-commit): re-encrypt the
 factotum blob under a fresh random DK; derive `R` per key (touch); wrap DK into

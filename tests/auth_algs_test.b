@@ -137,7 +137,7 @@ wire(algs: list of string, choice: string): string
 			# the choice as Auth's client says it since the choice
 			# has been confirmed with the secret (auth.b, version 2):
 			# the words are still any words
-			b := array of byte ("infernode-auth 2\n" + choice + "\n" + mac(confirmkey(secret), "client\n" + choice));
+			b := array of byte ("infernode-auth 3\n" + choice + "\n" + mac(confirmkey(secret), "client\n" + choice));
 			kr->sendmsg(p[0], b, len b);
 			kr->getmsg(p[0]);	# the server's answer, whatever it is
 			sys->fprint(p[0], "%s", PLAIN);
@@ -154,17 +154,17 @@ wire(algs: list of string, choice: string): string
 
 confirmkey(secret: array of byte): array of byte
 {
-	l := array of byte "infernode auth 2 confirm";
-	k := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(l, len l, secret, k, nil);
+	l := array of byte "infernode auth 3 confirm";
+	k := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(l, len l, secret, k, nil);
 	return k;
 }
 
 mac(key: array of byte, text: string): string
 {
 	b := array of byte text;
-	d := array[Keyring->SHA256dlen] of byte;
-	kr->hmac_sha256(b, len b, key, d, nil);
+	d := array[Keyring->SHA384dlen] of byte;
+	kr->hmac_sha384(b, len b, key, d, nil);
 	s := "";
 	for(i := 0; i < len d; i++)
 		s += sys->sprint("%.2ux", int d[i]);

@@ -46,7 +46,7 @@ maxconn := 64;	# -n: loginds in an exchange at once
 steps := 0;	# messages had from the client: the stalker's sign of life
 
 #
-# The exchange is login(6)'s, version 2; the pieces both ends compute
+# The exchange is login(6)'s, version 3; the pieces both ends compute
 # (the groups, the keystream, the keys, the rule for names) and the
 # count of failed attempts are login(2)'s, in appl/lib/login.b, where
 # the reasons are.
@@ -193,9 +193,13 @@ dologin1(c: ref Sys->Connection): string
 		return "can't get hello: "+err;
 	steps++;
 	if(len hello == 32 || len hello == 44)
-		return "signer speaks login version 2; update the client (login(6))";
+		return "signer speaks login version 3; update the client (login(6))";
+	# version 2 had the same hello and no ML-KEM: a client of it is
+	# told, not answered in the version it cannot read
+	if(len hello == 2+Login->Noncelen && int hello[0] == 2)
+		return "signer speaks login version 3; update the client (login(6))";
 	if(len hello != 2+Login->Noncelen || int hello[0] != Login->Version)
-		return "bad hello: signer speaks login version 2 (login(6))";
+		return "bad hello: signer speaks login version 3 (login(6))";
 	suite := int hello[1];
 	gid := mingroup;
 	case suite {
@@ -229,9 +233,10 @@ dologin1(c: ref Sys->Connection): string
 
 	# Look up the password and expiry. A name that cannot log in -- no
 	# account, one keyfs(4) refuses the secret of (disabled, expired),
-	# an entry not a SHA-256, no expiry, the signer's own name -- is
-	# answered as a wrong password is: the exchange goes on under a
-	# random stand-in for the password's SHA-256, which no client has, so
+	# an entry that is neither form of secret, one of the old form in
+	# CNSA mode, no expiry, the signer's own name -- is answered as a
+	# wrong password is: the exchange goes on in the new form under a
+	# random stand-in for the secret, which no client has, so
 	# its proof fails and it is told "name or secret incorrect", as for a
 	# real name with a wrong password. The reason goes to the console
 	# alone, and both paths do the same work: both lookups, the key
@@ -242,8 +247,14 @@ dologin1(c: ref Sys->Connection): string
 	if(pw == nil)
 		why = sys->sprint("no password entry for %s: %r", s);
 	userexp := getexpiry(s);
-	if(why == nil && len pw < Keyring->SHA256dlen)
-		why = "bad password for "+s+": not SHA256 hashed?";
+	form := login->secretform(pw);
+	if(why == nil && form == 0)
+		why = sys->sprint("the secret for %s is neither form keys(6) has (%d bytes)", s, len pw);
+	# An account of the old form (the password's SHA-256) logs in in it
+	# and is given the new form by this login; in CNSA mode it is not
+	# taken: log it in once outside the mode, or set it with changelogin.
+	if(why == nil && form == Login->Oldform && cnsa)
+		why = "CNSA mode: the secret for "+s+" is of the old form (SHA-256); log in once outside CNSA mode, or set it with changelogin";
 	if(why == nil && userexp < 0)
 		why = sys->sprint("expiry time for %s: %r", s);
 	# The signer's own name is certified by its key file alone: a
@@ -257,15 +268,15 @@ dologin1(c: ref Sys->Connection): string
 		# the DRBG (#c/notquiterandom): ReallyRandom takes seconds, a
 		# delay a wrong password does not have
 		{
-			pw = rand->randombuf(Random->NotQuiteRandom, Keyring->SHA256dlen);
+			pw = rand->randombuf(Random->NotQuiteRandom, Login->Secretlen);
 		} exception e {
 		"random:*" =>
 			sys->fprint(stderr, "logind: %s\n", e);
 			return "login service unavailable";
 		}
+		form = Login->Newform;
 		userexp = 0;
 	}
-	pw = pw[0:Keyring->SHA256dlen];
 
 	# Our Diffie-Hellman value, 2**r0 mod p, or p less it as a coin
 	# falls.  2 generates the squares, so 2**r0 alone is always a
@@ -279,23 +290,30 @@ dologin1(c: ref Sys->Connection): string
 	if(int login->nonce()[0] & 1)
 		x = p.sub(x);
 
-	# CA->user: version, suite, group, our nonce, and x under the
-	# password's keystream: no tag, nothing a guess can be checked
-	# against.  Our nonce is in the keystream's derivation, so the same
-	# hello sent again gets another keystream.
-	reply := array[3+Login->Noncelen+n] of byte;
+	# CA->user: version, suite, group, the form of the secret, our
+	# nonce, and x under the password's keystream: no tag, nothing a
+	# guess can be checked against.  Our nonce is in the keystream's
+	# derivation, so the same hello sent again gets another keystream.
+	# The form says an account is of the old form (a name with no
+	# account is answered in the new, as a new account is): that is told
+	# until its next login, and is the price of moving accounts without
+	# their passwords.
+	reply := array[4+Login->Noncelen+n] of byte;
 	reply[0] = byte Login->Version;
 	reply[1] = byte suite;
 	reply[2] = byte gid;
-	reply[3:] = login->nonce();
-	reply[3+Login->Noncelen:] = login->mask(suite, gid, name, pw, hello[2:], reply[3:3+Login->Noncelen], login->bebytes(x, n));
+	reply[3] = byte form;
+	reply[4:] = login->nonce();
+	reply[4+Login->Noncelen:] = login->mask(suite, gid, name, pw, hello[2:], reply[4:4+Login->Noncelen], login->bebytes(x, n));
 	if(kr->putbytearray(c.dfd, reply, len reply) < 0)
 		return sys->sprint("can't send masked (2**r0 mod p): %r");
 
-	# user->CA: 2**r1 mod p and the client's proof.  Nothing made from
-	# the secret leaves here before the proof is checked: what was sent
-	# next under the secret's keys let a client that had chosen r1 try
-	# passwords against it at leisure.
+	# user->CA: 2**r1 mod p and the client's ML-KEM encapsulation key,
+	# its seed under the keystream of the password and the secret.
+	# Nothing made from the secrets leaves here before the client's
+	# proof is checked: what was sent next under the secret's keys let a
+	# client that had chosen r1 try passwords against it at leisure.
+	(eklen, nil) := login->kemsizes(suite);
 	msg: array of byte;
 	(msg, err) = kr->getbytearray(c.dfd);
 	if(err != nil){
@@ -303,7 +321,7 @@ dologin1(c: ref Sys->Connection): string
 		return "can't get 2**r1 mod p: "+err;
 	}
 	steps++;
-	if(len msg != n+hlen){
+	if(len msg != n+eklen){
 		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
 		return "bad Diffie-Hellman message";
 	}
@@ -320,12 +338,47 @@ dologin1(c: ref Sys->Connection): string
 		return "bad Diffie-Hellman value";
 	}
 	z := login->bebytes(y.expmod(r0.shl(1), p), n);
-	(cproof, sproof, sk) := login->keys(suite, name, pw, hello, reply, msg[0:n], z);
-	wipe = z :: sproof :: sk :: wipe;
+	wipe = z :: wipe;
+
+	# The key as the password unmasks it, and a ciphertext for it.  A
+	# key Keyring refuses (FIPS 203's check of its coefficients, which
+	# are in clear and no function of the password) is refused whatever
+	# the password: that says nothing a guess could use.
+	ek := array[eklen] of byte;
+	ek[0:] = msg[n:n+eklen-Login->Rholen];
+	ek[eklen-Login->Rholen:] = login->kemmask(suite, gid, name, pw, hello[2:], reply[4:4+Login->Noncelen], z, msg[n+eklen-Login->Rholen:]);
+	(ct, k) := login->kemencaps(suite, ek);
+	if(ct == nil || k == nil){
+		auditlog("authfail", sys->sprint("user=%s reason=badvalue", auditval(name)));
+		return "bad ML-KEM key";
+	}
+	wipe = k :: wipe;
+
+	# CA->user: the ciphertext.  It is not made from the secrets but
+	# for a key the password chose: a client that guessed the password
+	# can open it, and one that did not has only ML-KEM's implicit
+	# rejection, and one guess spent.
+	if(kr->putbytearray(c.dfd, ct, len ct) < 0)
+		return sys->sprint("can't send ML-KEM ciphertext: %r");
+
+	# user->CA: the client's proof
+	cp: array of byte;
+	(cp, err) = kr->getbytearray(c.dfd);
+	if(err != nil){
+		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
+		return "can't get proof: "+err;
+	}
+	steps++;
+	if(len cp != hlen){
+		auditlog("authfail", sys->sprint("user=%s reason=exchange", auditval(name)));
+		return "bad proof message";
+	}
+	(cproof, sproof, sk) := login->keys(suite, name, pw, hello, reply, msg, ct, z, k);
+	wipe = sproof :: sk :: wipe;
 
 	# A name that cannot log in: no client has the stand-in, so none
 	# has the proof; if one did, it is still refused, uncleared, unsigned.
-	if(why != nil || !login->same(cproof, msg[n:])){
+	if(why != nil || !login->same(cproof, cp)){
 		if(why == nil)
 			auditlog("authfail", sys->sprint("user=%s reason=secret", auditval(name)));
 		return "name or secret incorrect";
@@ -344,6 +397,23 @@ dologin1(c: ref Sys->Connection): string
 		return "can't set secrets: "+err;
 	if(sys->fprint(c.cfd, "alg aes_256_gcm") < 0)
 		return sys->sprint("can't push alg aes_256_gcm: %r");
+
+	# An account of the old form: its new secret, from the client that
+	# has just proved the password, under the session's keys.
+	if(form == Login->Oldform){
+		nw: array of byte;
+		(nw, err) = kr->getbytearray(c.dfd);
+		if(err != nil)
+			return "can't get the account's new secret: " + err;
+		wipe = nw :: wipe;
+		if(login->secretform(nw) != Login->Newform)
+			return "the account's new secret is not of the new form";
+		if((err = putsecret(name, nw)) != nil){
+			sys->fprint(stderr, "logind: can't give %s its new secret: %s\n", name, err);
+			auditlog("secretchange", sys->sprint("user=%s form=new failed", auditval(name)));
+		}else
+			auditlog("secretchange", sys->sprint("user=%s form=new", auditval(name)));
+	}
 
 	# send our public key, and the alpha and p of our key file: they
 	# are not this exchange's (which uses login(6)'s groups whatever
@@ -451,6 +521,18 @@ getsecret(id: string): array of byte
 	if(n < 0)
 		return nil;
 	return a[0:n];
+}
+
+# a secret written whole in place of the account's (keyfs takes a
+# write at offset 0 as the whole of it)
+putsecret(id: string, secret: array of byte): string
+{
+	fd := sys->open(sys->sprint("%s/%s/secret", keydb, id), Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("%r");
+	if(sys->write(fd, secret, len secret) != len secret)
+		return sys->sprint("%r");
+	return nil;
 }
 
 getexpiry(id: string): int

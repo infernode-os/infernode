@@ -14,8 +14,19 @@ The password is the secret shared between the user
 and signer (authentication server),
 allowing the signer to sign a certificate to authenticate a
 user's public key to others, using the secret to check the user's identity.
-The actual secret is not stored, but rather its SHA-256 hash,
-which is all that a login needs: an entry is as good as the password it was made from.
+The actual secret is not stored, but rather a key made from it:
+48 bytes of PBKDF2 (SP 800-132) with HMAC-SHA-384, 200000 iterations, salted with
+.B "infernode login secret 2"
+a zero byte and the user's name
+.RB ( secret
+in
+.IR security-login (2)),
+which is all that a login needs: an entry is as good as the password it was made from,
+and a copy of the file costs 200000 HMACs a guess where it cost one SHA-256.
+An entry of the old form, the password's 32-byte SHA-256, is still taken,
+and is replaced by the new form at the user's next login
+.RI ( login (6));
+in CNSA mode it is not taken.
 .PP
 The file is encrypted with a secret provided by the signer's administrator;
 normally that secret is entered once when

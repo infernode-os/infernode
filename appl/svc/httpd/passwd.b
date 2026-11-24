@@ -3,8 +3,8 @@ implement Passwd;
 #
 # svc/httpd/passwd [-i iterations] user: a line of httpd(8)'s -P
 # password file for user, the password read from standard input (its
-# first line): user:pbkdf2-sha256:iterations:salt:hash, salt and hash
-# in base64, the salt 16 random bytes, the hash PBKDF2-HMAC-SHA-256.
+# first line): user:pbkdf2-sha384:iterations:salt:hash, salt and hash
+# in base64, the salt 16 random bytes, the hash PBKDF2-HMAC-SHA-384.
 # The line is added to the file: of two for one user httpd takes the
 # last.  A name or password httpd would never take from a client (an
 # empty name, a password past 256 bytes, not UTF-8 or with a control
@@ -92,7 +92,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(rfd == nil || sys->readn(rfd, salt, len salt) != len salt)
 		fatal(sys->sprint("no random bytes for a salt: %r"));
 	h := pbkdf2(array of byte pass, salt, iters);
-	line := array of byte sys->sprint("%s:pbkdf2-sha256:%d:%s:%s\n", user, iters, base64->enc(salt), base64->enc(h));
+	line := array of byte sys->sprint("%s:pbkdf2-sha384:%d:%s:%s\n", user, iters, base64->enc(salt), base64->enc(h));
 	if(sys->write(sys->fildes(1), line, len line) != len line)
 		fatal(sys->sprint("cannot write the line: %r"));
 }
@@ -105,19 +105,21 @@ hasnl(b: array of byte): int
 	return 0;
 }
 
-# PBKDF2-HMAC-SHA-256 (RFC 8018), one block: as httpd checks it
+# PBKDF2-HMAC-SHA-384 (RFC 8018), one block: as httpd checks it (its
+# lines were PBKDF2-HMAC-SHA-256's, which httpd still takes outside CNSA
+# mode)
 pbkdf2(pass, salt: array of byte, iters: int): array of byte
 {
 	s := array[len salt + 4] of byte;
 	s[0:] = salt;
 	s[len salt:] = array[] of {byte 0, byte 0, byte 0, byte 1};
-	u := array[Keyring->SHA256dlen] of byte;
-	keyring->hmac_sha256(s, len s, pass, u, nil);
+	u := array[Keyring->SHA384dlen] of byte;
+	keyring->hmac_sha384(s, len s, pass, u, nil);
 	t := array[len u] of byte;
 	t[0:] = u;
 	v := array[len u] of byte;
 	for(i := 1; i < iters; i++) {
-		keyring->hmac_sha256(u, len u, pass, v, nil);
+		keyring->hmac_sha384(u, len u, pass, v, nil);
 		(u, v) = (v, u);
 		for(j := 0; j < len t; j++)
 			t[j] ^= u[j];

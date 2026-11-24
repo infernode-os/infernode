@@ -134,4 +134,37 @@ else
 	bad "factotum after a save that failed: $(echo "$OUT3" | grep -v fsqid | tail -3 | cut -c1-200 | tr '\n' '|')"
 fi
 [ ! -s "$DIR/keys3.enc" ] && ok "and no key file was written under no nonce" || bad "a key file was written with no random numbers"
+
+# The key file's form: FKEY2 (PBKDF2-HMAC-SHA-384) is what is written;
+# an FKEY1 file (10000 rounds of HMAC-SHA256, made here by Python as
+# factotum made it) is read, and written again as FKEY2 at once.
+head -c 6 "$DIR/keys.enc" | grep -q '^FKEY2' && ok "the key file is written as FKEY2" || bad "the key file is $(head -c 6 "$DIR/keys.enc")"
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import cryptography' 2>/dev/null; then
+	python3 - "$DIR/keys4.enc" <<'PY'
+import sys, hmac, hashlib, os
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+pw = b"testpassword123"
+key = hmac.new(pw, b"factotum keyfile", hashlib.sha256).digest()
+for i in range(1, 10000):
+    key = hmac.new(pw, key, hashlib.sha256).digest()
+nonce = os.urandom(12)
+pt = b"key proto=pass service=fkey1 user=old !password=x\n"
+ct = AESGCM(key).encrypt(nonce, pt, b"FKEY1\n")
+open(sys.argv[1], "wb").write(b"FKEY1\n" + nonce + ct)
+PY
+	cat > "$DIR/phase4.sh" <<INFERNO
+load std
+auth/factotum -f $GDIR/keys4.enc -p testpassword123
+sleep 1
+echo P4-keys: \`{cat /mnt/factotum/ctl}
+echo '--- phase4 done ---'
+INFERNO
+	OUT4=$(with_timeout 60 "$EMU" -r"$ROOT" -c1 sh "$GDIR/phase4.sh" 2>&1 < /dev/null || true)
+	echo "$OUT4" | grep -q '^P4-keys: .*service=fkey1' && ok "an FKEY1 key file is read" || bad "an FKEY1 file: $(echo "$OUT4" | grep -v fsqid | tail -3 | cut -c1-200 | tr '\n' '|')"
+	head -c 6 "$DIR/keys4.enc" | grep -q '^FKEY2' && ok "and written again as FKEY2" || bad "it is still $(head -c 6 "$DIR/keys4.enc")"
+	OUT5=$(with_timeout 60 "$EMU" -r"$ROOT" -c1 sh "$GDIR/phase4.sh" 2>&1 < /dev/null || true)
+	echo "$OUT5" | grep -q '^P4-keys: .*service=fkey1' && ok "which a second factotum reads" || bad "the moved file: $(echo "$OUT5" | grep -v fsqid | tail -3 | cut -c1-200 | tr '\n' '|')"
+else
+	echo "SKIP: no Python cryptography: an FKEY1 file not made"
+fi
 exit $rc

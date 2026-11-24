@@ -140,7 +140,7 @@ The file contains the previously crafted authentication certificate and the `bli
 .PP
 .I Verify
 displays a digest of the `blinded' version, as 32 words, so that it can be compared to that reported by the set-top-box owner over a secure independent mechanism (for example, telephone).
-The digest is the first 16 bytes of the SHA-256 of the signer's public key, the caller's, and the blinded certificate
+The digest is the first 16 bytes of the SHA-256 (SHA-384 when the signer's key is ML-DSA or SLH-DSA, whose certificates are under it) of the signer's public key, the caller's, and the blinded certificate
 (it was an MD5).
 A request the operator answers is removed from
 .BR /keydb/signed ,

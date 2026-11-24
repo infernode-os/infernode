@@ -2797,19 +2797,38 @@ Keyring_auth(void *fp)
 		kss_lo = ss_local;  ek_lo = hisek;	/* his ek is the smaller */
 		kss_hi = ss_remote; ek_hi = myek;
 	}
+	/*
+	 * In CNSA mode the combiner is SHA-512 (FIPS 180-4), the hash CNSA
+	 * 2.0 takes, with the ML-KEM-1024 secrets first (SP 800-56C rev. 2's
+	 * Z || T, the approved scheme's secret the Z) and its own label;
+	 * SHA3-512, which CNSA 2.0 has only inside ML-KEM and ML-DSA, stays
+	 * the combiner outside it.  Both ends of a connection are in the
+	 * mode or neither (ML-KEM-1024's lengths are refused by an end not in
+	 * it), so they agree on which.
+	 */
 	{
-		uchar dig[SHA3_512dlen];
+		uchar dig[SHA512dlen];
 		int m;
 
 		m = 0;
-		memmove(buf+m, "infernode-pq-sts-v2", 19); m += 19;
-		memmove(buf+m, cvb, n); m += n;
-		memmove(buf+m, kss_lo, MLKEM_SSLEN); m += MLKEM_SSLEN;
-		memmove(buf+m, kss_hi, MLKEM_SSLEN); m += MLKEM_SSLEN;
+		if(cnsa){
+			memmove(buf+m, "infernode-pq-sts-v3-cnsa", 24); m += 24;
+			memmove(buf+m, kss_lo, MLKEM_SSLEN); m += MLKEM_SSLEN;
+			memmove(buf+m, kss_hi, MLKEM_SSLEN); m += MLKEM_SSLEN;
+			memmove(buf+m, cvb, n); m += n;
+		}else{
+			memmove(buf+m, "infernode-pq-sts-v2", 19); m += 19;
+			memmove(buf+m, cvb, n); m += n;
+			memmove(buf+m, kss_lo, MLKEM_SSLEN); m += MLKEM_SSLEN;
+			memmove(buf+m, kss_hi, MLKEM_SSLEN); m += MLKEM_SSLEN;
+		}
 		memmove(buf+m, ek_lo, pklen); m += pklen;
 		memmove(buf+m, ek_hi, pklen); m += pklen;
-		sha3_512((uchar*)buf, m, dig);
-		f->ret->t1 = mem2array(dig, SHA3_512dlen);
+		if(cnsa)
+			sha512((uchar*)buf, m, dig, nil);
+		else
+			sha3_512((uchar*)buf, m, dig);
+		f->ret->t1 = mem2array(dig, SHA512dlen);
 		memset(dig, 0, sizeof(dig));
 	}
 	memset(cvb, 0, n);

@@ -20,6 +20,53 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
+- **Post-quantum key establishment for the password protocols (CNSA
+  2.0).** login(6) and secstore's PAK each had a classical
+  Diffie-Hellman exchange alone: a party with a quantum computer and a
+  recording of one login could find the password and read the session.
+  Each now runs ML-KEM beside it, the client's encapsulation key's seed
+  masked under the password and the Diffie-Hellman secret, so a guess is
+  checked only through the ML-KEM secret (one guess in each login an
+  impersonator takes part in, whether or not it can take logarithms),
+  and the session is made from both secrets. In CNSA mode ML-KEM-1024
+  and SHA-384 throughout. auth(2)'s confirmation of the ssl algorithm
+  is HMAC-SHA-384. Not compatible, on purpose: each protocol has one
+  exchange, in every mode, with nothing to negotiate down to, and the
+  break is made now while deployment is limited (why each change was
+  made, threat or compliance, is in `docs/compliance/CNSA-2.0.md` §5.1):
+  - **Login is version 3** (login(6)): suite 1 adds ML-KEM-768, suite 2
+    (CNSA) ML-KEM-1024, and there is a fourth and fifth message. A
+    version 2 end is told which version is spoken. Update logind and
+    every client together; keys, certificates and accounts are
+    unchanged.
+  - **secstore speaks version 5** (secstore(2)): version 4's account
+    and verifier, with ML-KEM-1024 and SHA-384 in the exchange.
+    secstored refuses the version 4 exchange, saying so; accounts at
+    version 4 need nothing. In CNSA mode client and server speak
+    version 5 alone, and an account still at version 1 or 3 is not
+    moved in the mode: log in once outside it.
+  - **auth(2)'s exchange is version 3** (`infernode-auth 3`): its
+    confirmation is HMAC-SHA-384 where it was HMAC-SHA-256. Every
+    authenticated 9P connection between a node updated and one not is
+    refused, saying the other end is of another version.
+
+- **Secrets made from passwords are made with SHA-384 (CNSA 2.0 G9), and
+  move at their next use.** None needs a new password. Not compatible:
+  - **An account's secret** (keys(6)) is PBKDF2-HMAC-SHA-384 salted by its
+    name, where it was the password's SHA-256. An account of the old form
+    is given the new at its next login; in CNSA mode it is refused until
+    then. keysrv is version 3 (its challenge says the form). createuser,
+    which wrote a SHA-1 no login took, writes the new form.
+  - **secstore version 6**: the verifier and the files' keys come from a
+    root of PBKDF2-HMAC-SHA-384, files are SGCM3, a second factor's slots
+    are wrapped under HMAC-SHA-384. An account, its files and its slots
+    are moved by their next login or unlock; in CNSA mode an account not
+    yet at version 6 is refused. A client before this one cannot read an
+    SGCM3 file.
+  - **factotum's key file** is FKEY2, and an FKEY1 file is rewritten when it
+    is read. **httpd(8)**'s password lines are `pbkdf2-sha384`; old ones are
+    still taken, but not in CNSA mode.
+
 - **The security review's second round: what the first left, closed.**
   The fixes and their tests are in `CLAUDE.md`'s table. What is not
   compatible with 0.11.0:
@@ -260,6 +307,34 @@ All notable changes to InferNode are documented in this file.
 
 ### Fixed
 
+- **A signer set up from a fresh tree now works, end to end.** Found by
+  driving two nodes at their consoles (`tests/host/twonode_auth_test.sh`):
+  `svc/auth` asked for the master key and then served no login, keyfs
+  having no `/mnt/keys` to mount on (no tree ships one: security-check
+  refuses it) — keyfs now makes it, owner-only, before asking for the
+  key; `auth/passwd` was dropped right after authenticating, keysrv
+  having no `/mnt/keysrv` — the tree ships it.
+- **A password typed ahead of its prompt is no longer echoed.**
+  getauthinfo, changelogin, passwd, keyfs, secstore-setup, factotum
+  and ftpfs printed the prompt before turning the console's echo off,
+  so a paste or a quick typist showed the first characters of the
+  password. Echo goes off first; `Login->readsecret` takes the prompt
+  and prints it then (an interface change: its callers are in the tree).
+- **The login screen unlocks in about half the time it took after the
+  PBKDF2 change.** The secstore keys were made twice, by wm/logon and
+  again by factotum (whose serving loop answered nothing meanwhile),
+  and each time the old version's keys too (100000 HMACs), which an
+  account moved to version 6 never uses. factotum makes its keys in the
+  thread that saves, and the old version's keys are made only when an
+  old account or file asks for them; factotum then lets them, and the
+  password, go.
+- **factotum makes a secstore account only where it can.** Any failed
+  unlock made one on the machine's own disk, a wrong password and
+  another machine's server included, and the user was told the setup's
+  error rather than the server's: now only when the server is this
+  machine's and says it has no account, and never over a verifier.
+- **secstore no longer prints its progress** ("step 3: g^x mod p...",
+  "ssl ok") on every connection; its errors are still said.
 - **An idle emu no longer spins or holds memory after Charon, a camera
   or a video window.** Three causes, each enough to keep a core busy
   for as long as emu ran:

@@ -26,24 +26,26 @@ include "arg.m";
 keydb := "/mnt/keys";
 
 #
-# The file's protocol, version 2 (keysrv(4)).  A read gives a challenge,
-# fresh after every write:
-#	keysrv 2 <challenge: 32 bytes in hex>
+# The file's protocol, version 3 (keysrv(4)).  A read gives the form of
+# the secret keyfs holds (keys(6): 2, PBKDF2-HMAC-SHA-384; 1, the old
+# SHA-256) and a challenge, fresh after every write:
+#	keysrv 3 <form> <challenge: 32 bytes in hex>
 # and a write answers it:
 #	<proof> [<new secret>]
-# with, for the secret keyfs(4) holds (the SHA-256 of the password),
+# with, for the secret keyfs(4) holds, in its form,
 #	PRK = HMAC-SHA-384(challenge, secret)
 #	proof = HKDF-Expand(PRK, "infernode keysrv 2 proof" || user, 48)
 #	key || nonce = HKDF-Expand(PRK, "infernode keysrv 2 new secret" || user, 44)
-#	new secret = AES-256-GCM(key, nonce, SHA-256 of the new password)
+#	new secret = AES-256-GCM(key, nonce, the new password's secret, new form)
+# Version 2 had no form, and the new secret was the password's SHA-256.
 # each in hex.  The proof was the hash of the stored secret, the same
 # every time: whoever was once sent it could send it again.  The new
 # secret came as typed and was stored so, which no login then matched.
 #
-Version: con "keysrv 2 ";
+Version: con "keysrv 3 ";
 Challen: con 32;
 Prooflen: con Keyring->SHA384dlen;
-Sealedlen: con Keyring->SHA256dlen + 16;
+Sealedlen: con Login->Secretlen + 16;
 Maxwrong: con 5;	# wrong proofs in one session, then no more are taken
 
 Keysrv: module
@@ -179,12 +181,15 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 	(offset, count, nil, rc) := <-file.read =>
 		if(rc == nil)
 			break;
+		form := 0;
 		if(err == nil){
 			# the user as it is now, not as it was when the session began
 			(keydir, secret, e) := getuser(user);
 			w = secret :: w;
 			if(e == nil && (keydir == nil || secret == nil))
 				e = "no existing secret";		# can't change it remotely until set
+			if(e == nil && (form = login->secretform(secret)) == 0)
+				e = "the secret held is neither form of keys(6)";
 			if(e != nil){
 				rc <-= (nil, e);
 				break;
@@ -194,7 +199,9 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 			rc <-= (nil, err);
 			break;
 		}
-		b := array of byte (Version + hex(chal));
+		# the challenge, and the form of the secret held (keys(6)),
+		# from which the client makes the secret to prove
+		b := array of byte (Version + string form + " " + hex(chal));
 		if(offset >= len b)
 			rc <-= (nil, nil);
 		else{
@@ -211,7 +218,7 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 		}
 		(nf, flds) := sys->tokenize(string data, " ");
 		if(nf < 1 || nf > 2 || len hd flds != 2*Prooflen){
-			wc <-= (0, "keysrv speaks version 2 (keysrv(4)); update passwd");
+			wc <-= (0, "keysrv speaks version 3 (keysrv(4)); update passwd");
 			break;
 		}
 		proof := unhex(hd flds);
@@ -264,9 +271,9 @@ worker(file: ref Sys->FileIO, user: string, exitc: chan of int)
 			wc <-= (0, nil);
 			break;
 		}
-		newsecret := kr->aesgcmdecrypt(kr->aesgcmsetup(key[0:32], key[32:]), sealed[0:Keyring->SHA256dlen], array of byte Wraplabel, sealed[Keyring->SHA256dlen:]);
+		newsecret := kr->aesgcmdecrypt(kr->aesgcmsetup(key[0:32], key[32:]), sealed[0:Login->Secretlen], array of byte Wraplabel, sealed[Login->Secretlen:]);
 		w = newsecret :: w;
-		if(newsecret == nil || len newsecret != Keyring->SHA256dlen){
+		if(newsecret == nil || login->secretform(newsecret) != Login->Newform){
 			wc <-= (0, "unacceptable secret");
 			break;
 		}

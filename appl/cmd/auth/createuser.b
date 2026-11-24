@@ -11,6 +11,9 @@ include "draw.m";
 include "keyring.m";
 	kr: Keyring;
 
+include "security.m";
+	login: Login;
+
 Createuser: module
 {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -24,6 +27,11 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	kr = load Keyring Keyring->PATH;
+	login = load Login Login->PATH;
+	if(login == nil){
+		sys->fprint(sys->fildes(2), "createuser: can't load %s: %r\n", Login->PATH);
+		return;
+	}
 
 	stdin = sys->fildes(0);
 	stdout = sys->fildes(1);
@@ -123,11 +131,15 @@ adduser(id, pw: string): string
 	}else
 		return "id already exists";
 
+	if((err = login->okname(id)) != nil)
+		return "bad user name: " + err;
+	# the account's secret as keys(6) has it (it was the password's
+	# SHA-1, which no login took: every account made here was refused)
 	newsecret: array of byte;
 	if(pw != ""){
 		pwbuf := array of byte pw;
-		newsecret = array[Keyring->SHA1dlen] of byte;
-		kr->sha1(pwbuf, len pwbuf, newsecret, nil);
+		newsecret = login->secret(id, pwbuf);
+		login->zero(pwbuf);
 	} else {
 		return "empty password";
 	}

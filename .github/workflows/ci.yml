@@ -827,7 +827,7 @@ jobs:
               tls_clientauth_test ssl_killedcall_test vid9p_hangup_test
               charon_netfile_test fetch_tools_test msg_email_bind_test editor_deputy_test
               matrix_compose_test llmsrv_ctl_test llmctl9p_test veltrosrv_gate_test veltro_kill_test
-              keyfs_file_test aescbc_test keytools_test login_test x509_chain_test
+              keyfs_file_test aescbc_test keytools_test login_test secstore_pak5_test secstore_migrate_test x509_chain_test
               mail9p_hostile_test pop3_tls_test webget_https_test legacy_ssl_gone_test
               cs_cancel_test registry_test secstore_cmd_test logon_unlock_test sntp_test
               vid9p_ctl_test wpa_log_test
@@ -865,6 +865,7 @@ jobs:
           - shard: 3
             tests: >-
               tools9p_integration_test activity_switch_test httpd_test httpd_auth_test
+              twonode_auth_test
           - shard: 4
             tests: >-
               secstore_logon_test osk_decoder_test factotum_persist_test secstore_apikey_test mpexp_test
@@ -1876,8 +1877,11 @@ jobs:
             # 247 s, tls_server 209 s).  At 2400 it was cut off again on
             # 2026-11-23, in its last tests (Whitespace, ToolArgsByName)
             # on four PRs, one of them a CHANGELOG edit: 2256 to 2398 s
-            # finished.  The backstop bounds a hang; the build takes about
-            # 2 minutes of the job's 75.
+            # finished.  The account secret's PBKDF2-HMAC-SHA-384 (200000
+            # iterations, CNSA 2.0 G9) made login 254 s and passwd 59 s
+            # (49 s and 5 s before); the derivation now hashes HMAC's pads
+            # once, half the time interpreted.  The backstop bounds a hang;
+            # the build takes about 2 minutes of the job's 75.
             backstop: 3300
     env:
       ROOT: ${{ github.workspace }}

@@ -51,6 +51,9 @@ The
 .B -g
 option names the least group to offer (14, 15 or 16) if a site wants a larger one;
 a client takes any of the three that is large enough for its mode.
+Each login also runs an ML-KEM exchange, hybrid with the Diffie-Hellman one:
+ML-KEM-768 for the default suite, ML-KEM-1024 (CNSA 2.0) for the CNSA suite;
+the session's keys and both proofs are made from both secrets and the password.
 The
 .I alpha
 and
@@ -100,8 +103,9 @@ its certificate is the one in the key file, which
 .IR keysrv (4)
 shows to prove it is the signer.
 .PP
-A client of the exchange before version 2 is told
-.BR "signer speaks login version 2" ;
+A client of an exchange before version 3 (version 2, which had no
+ML-KEM, or the one before it) is told
+.BR "signer speaks login version 3" ;
 nothing is negotiated.
 .SS "Failed attempts"
 .I Logind

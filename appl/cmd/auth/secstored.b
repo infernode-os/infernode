@@ -46,6 +46,10 @@ include "keyring.m";
 
 include "security.m";
 	ssl: SSL;
+	login: Login;
+
+include "secstore.m";
+	secstore: Secstore;
 
 include "encoding.m";
 	base64: Encoding;
@@ -88,6 +92,29 @@ VERSION3: con "secstore3";	# secstore2 retired: the client never offers it
 # more: it does not store or remove.
 #
 VERSION4: con "secstore4";
+#
+# Version 5 is version 4's account and verifier, its exchange with an
+# ML-KEM-1024 encapsulation beside the PAK and SHA-384 for its proofs
+# and session (secstore(2)'s PAK5, which this server calls for both).
+# A party that could take logarithms could try passwords against a
+# version 4 login it had recorded; at version 5 it has the one guess
+# per login it takes part in.  A version 5 session is a version 4 one
+# in what it may do.  The version 4 exchange is not spoken: a client
+# asking for it is told the account is at version 5 (and an older
+# version's exchange is still spoken, for an account to move).  In
+# CNSA mode (/env/cnsamode) version 5 alone is spoken.
+#
+VERSION5: con "secstore5";
+#
+# Version 6 is version 5's exchange with a verifier of its own, made
+# by the client from a file key's root of PBKDF2-HMAC-SHA-384
+# (secstore(2)'s mkfilekey6 and mkseckey6): version 4's came from a
+# root of HMAC-SHA256, which is not CNSA 2.0's hash.  An account is
+# given its version 6 verifier by a client in a session of an older
+# version (VERIFIER secstore6), kept beside the old until a version 6
+# login has worked.  In CNSA mode version 6 alone is spoken.
+#
+VERSION6: con "secstore6";
 Maxfilesize: con 128*1024;
 Maxmsg: con 4096;
 
@@ -259,8 +286,11 @@ init(nil: ref Draw->Context, args: list of string)
 	if(daytime == nil)
 		log("warning: daytime unavailable; failed-attempt lockout disabled");
 
-	if(kr == nil || ssl == nil || base64 == nil || dialler == nil || str == nil)
+	login = load Login Login->PATH;
+	secstore = load Secstore Secstore->PATH;
+	if(kr == nil || ssl == nil || base64 == nil || dialler == nil || str == nil || login == nil || secstore == nil)
 		fatal("cannot load required modules");
+	secstore->init();
 
 	initPAKparams();
 
@@ -415,6 +445,16 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 		writerr(fd, "bad protocol");
 		return (nil, nil, nil);
 	}
+	# the version 4 exchange has no ML-KEM: its accounts are spoken to
+	# at version 5, and a client of it told so
+	if(ver == VERSION4){
+		writerr(fd, "bad protocol: secstore4 is spoken as secstore5");
+		return (nil, nil, nil);
+	}
+	if(ver != VERSION6 && login->cnsamode()){
+		writerr(fd, "bad protocol: CNSA mode: secstore6 alone");
+		return (nil, nil, nil);
+	}
 
 	# C=<user>
 	C := ex("C=", hd flds); flds = tl flds;
@@ -457,14 +497,14 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	}
 	hexHi: string;
 	for(vl := verifiers; vl != nil; vl = tl vl)
-		if((hd vl).t0 == ver)
+		if((hd vl).t0 == verver(ver))
 			hexHi = (hd vl).t1;
 	if(hexHi == nil){
 		writerr(fd, "account version mismatch");
 		return (nil, nil, C);
 	}
 	Hi := IPint.strtoip(hexHi, 64);
-	if(!goodverifier(ver, hexHi)){
+	if(!goodverifier(verver(ver), hexHi)){
 		log(sys->sprint("the verifier kept for %s is not one", C));
 		writerr(fd, "no account");
 		return (nil, nil, C);
@@ -498,15 +538,69 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	sigma := mod(m.mul(Hi), params.p).expmod(y, params.p);
 	hexsigma := sigma.iptostr(64);
 
-	# Compute server verification hash
-	digest := shorthashver(ver, "server", C, sname, hexm, hexmu, hexsigma, hexHi);
-	ks := base64->enc(digest);
+	kc, session: array of byte;
+	if(ver == VERSION5 || ver == VERSION6){
+		# mu and S; then the client's ML-KEM key, the server's
+		# ciphertext for it as the verifier unmasks it, and the
+		# server's proof, made from both secrets
+		if(sys->fprint(fd, "mu=%s\nS=%s\n", hexmu, sname) < 0)
+			return (nil, nil, C);
+		n = sys->read(fd, buf, len buf);
+		if(n <= 0){
+			notefail(C);
+			return (nil, nil, C);
+		}
+		eks := ex("ek=", string buf[0:n]);
+		if(eks != nil && len eks > 0 && eks[len eks-1] == '\n')
+			eks = eks[0:len eks-1];
+		msg: array of byte;
+		if(eks != nil)
+			msg = base64->dec(eks);
+		if(msg == nil || len msg != Keyring->MLKEM1024_PKLEN){
+			writerr(fd, "bad ML-KEM key");
+			auditlog("secstore", "authfail", sys->sprint("user=%s reason=badkey", auditval(C)));
+			notefail(C);
+			return (nil, nil, C);
+		}
+		rl := 32;
+		ek := array[len msg] of byte;
+		ek[0:] = msg[0:len msg-rl];
+		ek[len msg-rl:] = secstore->pak5mask(ver, C, sname, hexm, hexmu, hexsigma, hexHi, msg[len msg-rl:]);
+		ct, k: array of byte;
+		{
+			(ct, k) = kr->mlkem1024_encaps(ek);
+		} exception {
+		"*" =>
+			ct = nil;
+		}
+		if(ct == nil || k == nil){
+			# FIPS 203's check of the key's clear half: it says
+			# nothing of the password
+			writerr(fd, "bad ML-KEM key");
+			auditlog("secstore", "authfail", sys->sprint("user=%s reason=badkey", auditval(C)));
+			notefail(C);
+			return (nil, nil, C);
+		}
+		proofs: array of byte;
+		(proofs, kc, session) = secstore->pak5keys(ver, C, sname, hexm, hexmu, hexsigma, hexHi, msg, ct, k);
+		erasekey(k);
+		if(sys->fprint(fd, "ct=%s\nk=%s\n", base64->enc(ct), base64->enc(proofs)) < 0){
+			erasekey(session);
+			return (nil, nil, C);
+		}
+	}else{
+		# Compute server verification hash
+		digest := shorthashver(ver, "server", C, sname, hexm, hexmu, hexsigma, hexHi);
+		ks := base64->enc(digest);
 
-	# Send mu, k (server hash), S (server name)
-	if(debug)
-		log(sys->sprint("PAK sending mu=%s... k=%s S=%s", hexmu[:20], ks, sname));
-	if(sys->fprint(fd, "mu=%s\nk=%s\nS=%s\n", hexmu, ks, sname) < 0){
-		return (nil, nil, C);
+		# Send mu, k (server hash), S (server name)
+		if(debug)
+			log(sys->sprint("PAK sending mu=%s... k=%s S=%s", hexmu[:20], ks, sname));
+		if(sys->fprint(fd, "mu=%s\nk=%s\nS=%s\n", hexmu, ks, sname) < 0){
+			return (nil, nil, C);
+		}
+		kc = shorthashver(ver, "client", C, sname, hexm, hexmu, hexsigma, hexHi);
+		session = shorthashver(ver, "session", C, sname, hexm, hexmu, hexsigma, hexHi);
 	}
 
 	# Read client verification: "k'=<hash>\n"
@@ -543,11 +637,7 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 		kprime = kprime[:len kprime - 1];
 
 	# Verify client hash
-	digest = shorthashver(ver, "client", C, sname, hexm, hexmu, hexsigma, hexHi);
-	kc := base64->enc(digest);
-	if(debug)
-		log(sys->sprint("PAK client k'=%q expected=%q", kprime, kc));
-	if(kprime != kc){
+	if(!secstore->samebytes(base64->dec(kprime), kc)){
 		# A client that proceeds with a wrong session key (e.g. a guessing tool
 		# that does not self-abort on the server-hash check). Also a failure.
 		writerr(fd, "client verifier didn't match");
@@ -556,7 +646,7 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 	}
 
 	# Set session secret (direction=1 for server, opposite of client's 0)
-	digest = shorthashver(ver, "session", C, sname, hexm, hexmu, hexsigma, hexHi);
+	digest := session;
 
 	# Zero sigma
 	for(i := 0; i < len hexsigma; i++)
@@ -581,14 +671,26 @@ pakserver(conn: ref Dial->Connection): (string, string, string)
 
 	# Authenticated: clear any accumulated failure state for this account.
 	recordok(C);
-	# logged in at version 4: the older verifier, kept while the
-	# account moved, is done with
-	if(ver == VERSION4 && len verifiers > 1){
-		e = writeuserfile(C, "PAK", array of byte (VERSION4 + " " + hexHi + "\n"));
-		if(e != nil)
-			log(sys->sprint("%s: can't drop the older verifier: %s", C, e));
-		else
-			log(sys->sprint("%s is at version 4 alone", C));
+	# logged in with a verifier: those older than it, kept while the
+	# account moved, are done with (a newer one, set in a session of
+	# this version and not yet logged in with, is kept)
+	if(len verifiers > 1){
+		text := "";
+		kept := 0;
+		for(wl := verifiers; wl != nil; wl = tl wl){
+			(v, h) := hd wl;
+			if(rank(v) >= rank(verver(ver))){
+				text += formatverifier(v, h) + "\n";
+				kept++;
+			}
+		}
+		if(kept < len verifiers){
+			e = writeuserfile(C, "PAK", array of byte text);
+			if(e != nil)
+				log(sys->sprint("%s: can't drop the older verifier: %s", C, e));
+			else
+				log(sys->sprint("%s: verifiers before %s dropped", C, verver(ver)));
+		}
 	}
 	return (C, ver, C);
 }
@@ -599,7 +701,7 @@ fileloop(conn: ref Dial->Connection, user: string, ver: string)
 {
 	fd := conn.dfd;
 	buf := array[Maxmsg] of byte;
-	v4 := ver == VERSION4;
+	v4 := ver == VERSION4 || ver == VERSION5 || ver == VERSION6;
 	shown := 0;	# this session has shown the account's vault key
 
 	for(;;){
@@ -974,20 +1076,21 @@ dorm(fd: ref Sys->FD, user: string, name: string, refuse: string)
 doverifier(fd: ref Sys->FD, user, ver, arg: string)
 {
 	(nf, f) := sys->tokenize(arg, " \t");
-	if(nf != 2 || hd f != VERSION4 || !goodverifier(VERSION4, hd tl f)){
-		writerr(fd, "not a version 4 verifier");
+	if(nf != 2 || (hd f != VERSION4 && hd f != VERSION6) || !goodverifier(hd f, hd tl f)){
+		writerr(fd, "not a version 4 or 6 verifier");
 		return;
 	}
-	text := VERSION4 + " " + hd tl f + "\n";
-	if(ver != VERSION4)
+	nv := hd f;
+	text := nv + " " + hd tl f + "\n";
+	# the verifier this session logged in with, kept beside a newer
+	# one until a login with that has worked; one of the same version
+	# is replaced (a new password)
+	sv := verver(ver);
+	if(rank(sv) < rank(nv))
 		for(vl := readverifiers(user); vl != nil; vl = tl vl){
 			(v, h) := hd vl;
-			if(v == ver){
-				if(v == VERSION1)
-					text += h + "\n";
-				else
-					text += v + " " + h + "\n";
-			}
+			if(v == sv)
+				text += formatverifier(v, h) + "\n";
 		}
 	e := writeuserfile(user, "PAK", array of byte text);
 	if(e != nil){
@@ -995,9 +1098,28 @@ doverifier(fd: ref Sys->FD, user, ver, arg: string)
 		writerr(fd, "can't record the verifier");
 		return;
 	}
-	log(sys->sprint("%s: version 4 verifier recorded (in a %s session)", user, ver));
+	log(sys->sprint("%s: %s verifier recorded (in a %s session)", user, nv, ver));
 	auditlog("secstore", "verifier", sys->sprint("user=%s session=%s", auditval(user), ver));
 	sys->fprint(fd, "OK");
+}
+
+# the order of the verifiers' versions
+rank(v: string): int
+{
+	case v {
+	VERSION1 =>	return 1;
+	VERSION3 =>	return 3;
+	VERSION4 =>	return 4;
+	VERSION6 =>	return 6;
+	}
+	return 0;
+}
+
+formatverifier(v, h: string): string
+{
+	if(v == VERSION1)
+		return h;
+	return v + " " + h;
 }
 
 # a verifier is a number of its group, not 0 or 1
@@ -1198,7 +1320,7 @@ initPAKparams()
 pakparams(version: string): ref PAKparams
 {
 	initPAKparams();
-	if(version == VERSION3 || version == VERSION4)
+	if(version == VERSION3 || version == VERSION4 || version == VERSION5 || version == VERSION6)
 		return pak3;
 	if(version == VERSION1)
 		return paklegacy;
@@ -1210,9 +1332,17 @@ hashis256(version: string): int
 	return version == VERSION3 || version == VERSION4;
 }
 
+# the verifier a version's exchange uses: version 5's is version 4's
+verver(version: string): string
+{
+	if(version == VERSION5)
+		return VERSION4;
+	return version;
+}
+
 exponentbits(version: string): int
 {
-	if(version == VERSION3 || version == VERSION4)
+	if(version == VERSION3 || version == VERSION4 || version == VERSION5 || version == VERSION6)
 		return 320;
 	return 240;
 }
@@ -1328,7 +1458,7 @@ readverifiers(user: string): list of (string, string)
 			vl = (VERSION1, hd flds) :: vl;
 		else if(nf >= 2){
 			version := hd flds;
-			if(version == VERSION1 || version == VERSION3 || version == VERSION4)
+			if(version == VERSION1 || version == VERSION3 || version == VERSION4 || version == VERSION6)
 				vl = (version, hd tl flds) :: vl;
 		}
 	}

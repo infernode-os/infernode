@@ -45,10 +45,24 @@ Login: module
 	okname:	fn(name: string): string;
 
 	# login(6)'s exchange
-	Version:	con 2;
-	Chacha:	con 1;	# suites: ChaCha20 and SHA-256
-	Aesgcm:	con 2;	# AES-256-GCM and SHA-384 (CNSA)
+	Version:	con 3;
+	Chacha:	con 1;	# suites: ChaCha20, SHA-256 and ML-KEM-768
+	Aesgcm:	con 2;	# AES-256-GCM, SHA-384 and ML-KEM-1024 (CNSA)
 	Noncelen:	con 32;
+	Rholen:	con 32;	# the seed at an ML-KEM encapsulation key's end (FIPS 203)
+
+	# An account's secret, as keyfs(4) holds it (keys(6)): PBKDF2 with
+	# HMAC-SHA-384 of the password, salted by the account's name, 48
+	# bytes.  The old form, the password's SHA-256, is still read, and an
+	# account in it is given the new one at its next login (login(6)).
+	Newform:	con 2;
+	Oldform:	con 1;
+	Secretlen:	con 48;
+	Oldsecretlen:	con 32;
+	Secretiter:	con 200000;
+	secret:	fn(name: string, password: array of byte): array of byte;
+	oldsecret:	fn(password: array of byte): array of byte;
+	secretform:	fn(s: array of byte): int;	# Newform, Oldform, or 0: neither
 	# a group's prime and its length in bytes; nil for none of login(6)'s
 	group:	fn(id: int): (ref Keyring->IPint, int);
 	exponent:	fn(p: ref Keyring->IPint): ref Keyring->IPint;	# uniform in 1..(p-1)/2-1
@@ -57,8 +71,18 @@ Login: module
 	nonce:	fn(): array of byte;
 	# x under the password's keystream, and back
 	mask:	fn(suite, group: int, name: string, pw, cnonce, snonce, x: array of byte): array of byte;
+	# the suite's ML-KEM: its encapsulation key's and ciphertext's lengths,
+	# and its three operations (nil where Keyring refuses a key or
+	# ciphertext, as it does an encapsulation key that is not one)
+	kemsizes:	fn(suite: int): (int, int);
+	kemkeygen:	fn(suite: int): (array of byte, array of byte);	# (ek, dk)
+	kemencaps:	fn(suite: int, ek: array of byte): (array of byte, array of byte);	# (ct, k)
+	kemdecaps:	fn(suite: int, dk, ct: array of byte): array of byte;	# k
+	# the encapsulation key's seed under a keystream of the password and
+	# the Diffie-Hellman secret, and back
+	kemmask:	fn(suite, group: int, name: string, pw, cnonce, snonce, z, rho: array of byte): array of byte;
 	# the client's proof, the signer's, and the session's secret
-	keys:	fn(suite: int, name: string, pw, hello, reply, share, z: array of byte):
+	keys:	fn(suite: int, name: string, pw, hello, reply, share, ct, z, k: array of byte):
 			(array of byte, array of byte, array of byte);
 	same:	fn(a, b: array of byte): int;	# equal, in time that does not say where not
 
@@ -77,8 +101,10 @@ Login: module
 	# A secret typed on io with the console's echo off: its bytes (the
 	# line edited as typed: backspace, ^U; no \r), or nil and why.  It
 	# is never a string, which cannot be cleared: the caller zeroes it.
+	# The prompt is printed on standard output once echo is off, so
+	# nothing typed ahead of it is echoed.
 	Maxsecret:	con 1024;
-	readsecret:	fn(io: ref Sys->FD): (array of byte, string);
+	readsecret:	fn(io: ref Sys->FD, prompt: string): (array of byte, string);
 	zero:	fn(a: array of byte);
 	runes:	fn(a: array of byte): int;	# characters in UTF-8
 

@@ -1125,35 +1125,58 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 	if(user == nil)
 		return "cannot tell who the user is (/dev/user)";
 
-	pwhash := secstore->mkseckey(pass);
-	pwhash2 := secstore->mkseckey2(pass);
-	rootkey := secstore->mkfilekey3(user, pass);
-	pwhash4 := secstore->mkseckey4(rootkey);
+	# every key the password gives, for an account and files of any
+	# version (secstore(2))
+	c := secstore->mkcreds(user, pass);
 
 	# Whatever the server sends, the answer is a string for the screen:
 	# an exception here went up through the input loop and out of init.
 	err: string;
 	{
-		err = connectfactotum1(user, recoverypass, fidopin,
-			pwhash, pwhash2, pwhash4, rootkey);
+		err = connectfactotum1(user, recoverypass, fidopin, c);
 	} exception e {
 	"*" =>
 		err = "secstore: " + e;
 	}
 	# the keys made from the password are done with, however it went
-	secstore->erasekey(pwhash);
-	secstore->erasekey(pwhash2);
-	secstore->erasekey(pwhash4);
-	secstore->erasekey(rootkey);
+	secstore->erasecreds(c);
 	return err;
 }
 
-connectfactotum1(user, recoverypass, fidopin: string,
-	pwhash, pwhash2, pwhash4, rootkey: array of byte): string
+#
+# The key file, if it opened under keys of the old form (SGCM2, its
+# root of HMAC-SHA256: secstore(2)), written again in the new under
+# root and replaced: the account's files move at its next login.  The
+# new file is opened again before it is stored, and the old one is
+# replaced only by a store the server says it took.
+#
+movefile(conn: ref Dial->Connection, name: string, plaintext, root: array of byte)
 {
-	# version 4 of the exchange; an account at an older version is
+	nf := secstore->encrypt3(plaintext, root);
+	if(nf == nil)
+		return;
+	back := secstore->decrypt3(nf, root, nil, nil);
+	same := back != nil && len back == len plaintext;
+	for(i := 0; same && i < len back; i++)
+		if(back[i] != plaintext[i])
+			same = 0;
+	if(back != nil)
+		secstore->erasekey(back);
+	if(!same){
+		sys->fprint(stderr, "logon: %s not moved to the new form: it did not read back\n", name);
+		return;
+	}
+	if(secstore->putfile(conn, name, nf) < 0)
+		sys->fprint(stderr, "logon: %s not moved to the new form: %r\n", name);
+	else
+		sys->fprint(stderr, "logon: %s moved to the new form (SGCM3)\n", name);
+}
+
+connectfactotum1(user, recoverypass, fidopin: string, c: ref Secstore->Creds): string
+{
+	# version 6 of the exchange; an account at an older version is
 	# moved to it by this login (secstore(2))
-	(conn, nil, diag) := secstore->connect4(secstoreaddr, user, pwhash, pwhash2, pwhash4);
+	(conn, nil, diag) := secstore->connect6(secstoreaddr, c);
 	if(conn == nil) {
 		if(diag != nil)
 			return "secstore: " + diag;
@@ -1161,7 +1184,6 @@ connectfactotum1(user, recoverypass, fidopin: string,
 	}
 
 	(file, absent, ferr) := secstore->fetch(conn, "factotum", 0);
-	secstore->bye(conn);
 
 	# An account with nothing stored yet has no file, and the server says
 	# so.  A file that could not be read is another matter: it was taken
@@ -1169,13 +1191,18 @@ connectfactotum1(user, recoverypass, fidopin: string,
 	# added was saved over the file that had not been read.  It is a
 	# failed unlock, and nothing is saved over what was not read.
 	if(absent) {
+		secstore->bye(conn);
 		sys->fprint(stderr, "logon: secstore has no factotum file for %s (a new account)\n", user);
 		return nil;
 	}
-	if(ferr != nil)
+	if(ferr != nil){
+		secstore->bye(conn);
 		return "secstore: cannot read the keys: " + ferr;
-	if(len file == 0)
+	}
+	if(len file == 0){
+		secstore->bye(conn);
 		return "secstore: the key file is empty (damaged); remove it with auth/secstore d factotum to start again";
+	}
 
 	# 2FA accounts encrypt the factotum blob under a data key wrapped in
 	# YubiKey/recovery key-slots; legacy password-only accounts have no slots
@@ -1190,7 +1217,7 @@ connectfactotum1(user, recoverypass, fidopin: string,
 	if(is2fa){
 		# Try the present YubiKey (touch); if recoverypass is given, unlock()
 		# also tries the recovery slot.
-		(dk, unlockerr) := twofaslot->unlock(user, rootkey, recoverypass, fidopin);	# touch + (FIDO PIN if UV)
+		(dk, unlockerr) := twofaslot->unlock(user, c, recoverypass, fidopin);	# touch + (FIDO PIN if UV)
 		if(dk != nil){
 			plaintext = secstore->decrypt3(file, dk, nil, nil);
 			if(plaintext != nil){
@@ -1198,6 +1225,14 @@ connectfactotum1(user, recoverypass, fidopin: string,
 				# the vault has been read under the data key: from
 				# now nothing under the password alone is the vault
 				twofaslot->markenrolled(user);
+				# a vault of the old form (SGCM2) is written again in
+				# the new, under the same data key; the server takes
+				# it from a session that has shown the vault key
+				if(!secstore->iscurrent(file)){
+					(nil, verr) := secstore->showvault(conn, secstore->vaultkey(dk));
+					if(verr == nil)
+						movefile(conn, "factotum", plaintext, dk);
+				}
 			}
 		}
 		# A vault still under the password is taken only while the
@@ -1209,8 +1244,9 @@ connectfactotum1(user, recoverypass, fidopin: string,
 		# was loaded with no second factor.
 		st := twofaslot->state(user);
 		if(plaintext == nil && (st == "enrolling" || st == "disabling"))
-			plaintext = secstore->decrypt3(file, rootkey, nil, nil);
+			(plaintext, nil) = secstore->openfile(file, c);
 		if(plaintext == nil){
+			secstore->bye(conn);
 			if(recoverypass == ""){
 				# NEEDRECOVERY tells logon to prompt for the recovery passphrase.
 				# Suffix the actual derive error so the screen can show "PIN
@@ -1222,15 +1258,21 @@ connectfactotum1(user, recoverypass, fidopin: string,
 			return "recovery passphrase did not unlock";
 		}
 	}else{
-		# the format written, and no other (secstore(2)): an older
-		# file is moved by auth/secstore m, with the password
-		plaintext = secstore->decrypt3(file, rootkey, nil, nil);
+		# SGCM3 under the version 6 root, or SGCM2 under the old root,
+		# which this login moves to the new; an older file is moved by
+		# auth/secstore m, with the password (secstore(2))
+		current: int;
+		(plaintext, current) = secstore->openfile(file, c);
 		if(plaintext == nil){
-			if(!secstore->iscurrent(file))
+			secstore->bye(conn);
+			if(!secstore->iscurrent(file) && !(len file >= 6 && string file[0:6] == "SGCM2\n"))
 				return "the keys are in an old format: move them with auth/secstore m factotum";
 			return "wrong password";
 		}
+		if(!current)
+			movefile(conn, "factotum", plaintext, c.root6);
 	}
+	secstore->bye(conn);
 
 	# Parse key lines and add to running factotum
 	lines := string plaintext;
@@ -1295,13 +1337,14 @@ createsecstoreacct(pass: string): string
 		return sys->sprint("can't create %s: %r", userdir);
 	fd = nil;
 
-	# version 4's verifier: from the file key's root, so that a guess
-	# costs as much against it as against the files (secstore(2))
-	rootkey := secstore->mkfilekey3(user, pass);
-	pwhash4 := secstore->mkseckey4(rootkey);
+	# version 6's verifier: from the file key's root (PBKDF2-HMAC-SHA-384),
+	# so that a guess costs as much against it as against the files
+	# (secstore(2))
+	rootkey := secstore->mkfilekey6(user, pass);
+	pwhash6 := secstore->mkseckey6(rootkey);
 	secstore->erasekey(rootkey);
-	hexHi := secstore->mkverifier(user, "secstore4", pwhash4);
-	secstore->erasekey(pwhash4);
+	hexHi := secstore->mkverifier(user, "secstore6", pwhash6);
+	secstore->erasekey(pwhash6);
 	if(hexHi == nil)
 		return "can't make the verifier";
 
@@ -1311,7 +1354,7 @@ createsecstoreacct(pass: string): string
 		return sys->sprint("can't create %s: %r", pakpath);
 	# all of it or no account: a verifier cut short is an account nobody
 	# can log in to, and the write's result was not looked at
-	b := array of byte (secstore->formatverifier("secstore4", hexHi) + "\n");
+	b := array of byte (secstore->formatverifier("secstore6", hexHi) + "\n");
 	if(sys->write(fd, b, len b) != len b){
 		e := sys->sprint("can't write %s: %r", pakpath);
 		fd = nil;

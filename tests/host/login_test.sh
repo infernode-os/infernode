@@ -2,7 +2,7 @@
 #
 # tests/host/login_test.sh
 #
-# login(6), version 2, from outside the tree's own code.
+# login(6), version 3, from outside the tree's own code.
 #
 # The exchange stands on three things that the Limbo test
 # (tests/login_test.b) can only take as given: that the groups it holds
@@ -14,7 +14,7 @@
 #     3526's formulas (pi, by Machin's series), checks each is a safe
 #     prime with 2 of order q and the top 64 bits ones, and compares
 #     them with the constants in appl/lib/login.b and tests/login_test.b;
-#   - tests/host/login/mkvectors.py computes the masked value, the two
+#   - tests/host/login/mkvectors.py computes the masked value, the masked ML-KEM seed, the two
 #     proofs and the session secret with Python's cryptography, from
 #     the page and none of the tree's code, and every value it prints
 #     must be in tests/login_test.b (testVectors compares them with the
@@ -43,7 +43,7 @@ if python3 -c 'import cryptography' 2>/dev/null; then
 		grep -q "\"$v\"" "$ROOT/tests/login_test.b" || echo "$v"
 	done)
 	n=$(python3 "$D/mkvectors.py" | grep -c ': [0-9a-f]\{32,\}$')
-	if [ "$n" = 10 ] && [ -z "$missing" ]; then
+	if [ "$n" = 13 ] && [ -z "$missing" ]; then
 		echo "PASS: the key derivation's known answers in tests/login_test.b are Python's"
 	else
 		echo "FAIL: known answers not in tests/login_test.b ($n made):"

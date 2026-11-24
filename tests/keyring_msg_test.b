@@ -689,9 +689,8 @@ setup(): string
 	if(mkdir(d+"/root") < 0 || mkdir(d+"/root/keydb") < 0 ||
 	   mkdir(d+"/mnt") < 0 || mkdir(d+"/mnt/keys") < 0 || mkdir(d+"/mnt/audit") < 0)
 		return sys->sprint("can't make %s: %r", d);
-	pw := array of byte Password;
-	dig := array[Keyring->SHA256dlen] of byte;
-	kr->sha256(pw, len pw, dig, nil);
+	# the account's secret as keyfs holds it (keys(6))
+	dig := login->secret(User, array of byte Password);
 	u := d+"/mnt/keys/"+User;
 	if(mkdir(u) < 0 || writefile(u+"/secret", dig) < 0 || writefile(u+"/expire", array of byte "never") < 0)
 		return sys->sprint("can't write %s's entry: %r", User);

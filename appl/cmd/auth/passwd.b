@@ -100,15 +100,16 @@ init(nil: ref Draw->Context, args: list of string)
 	# readsecret): they were strings, which a program cannot clear
 	# (the loop that "blanked" them changed a copy), and in raw mode a
 	# backspace typed was a character of the secret.
+	# old is the password as typed: which form of secret keyfs holds
+	# for it (keys(6)) is the key server's to say, in its challenge.
 	old: array of byte;
 	for(;;){
-		sys->print("Inferno secret: ");
-		(word, e) := login->readsecret(stdin);
+		(word, e) := login->readsecret(stdin, "Inferno secret: ");
 		if(word == nil)
 			err("can't read the secret: " + e);
 		if(len word == 0)
 			err("no secret given; nothing changed");
-		old = hashpw(word);
+		old = word;
 		e = putsecret(user, old, nil);
 		if(e != "wrong secret"){
 			if(e == nil)
@@ -123,8 +124,7 @@ init(nil: ref Draw->Context, args: list of string)
 		word: array of byte;
 		e: string;
 		for(;;){
-			sys->print("new secret [default = don't change]: ");
-			(word, e) = login->readsecret(stdin);
+			(word, e) = login->readsecret(stdin, "new secret [default = don't change]: ");
 			if(word == nil){
 				login->zero(old);
 				err("can't read the new secret; nothing changed");
@@ -141,8 +141,7 @@ init(nil: ref Draw->Context, args: list of string)
 			break;
 		}
 		# confirm password change
-		sys->print("confirm: ");
-		(word1, e1) := login->readsecret(stdin);
+		(word1, e1) := login->readsecret(stdin, "confirm: ");
 		if(word1 == nil || !eq(word, word1)){
 			login->zero(word);
 			login->zero(word1);
@@ -154,15 +153,17 @@ init(nil: ref Draw->Context, args: list of string)
 			continue;
 		}
 		login->zero(word1);
-		# What keyfs holds, and login(6) uses, is the SHA-256 of the
-		# password: the password itself was sent and stored, and the
-		# account could not log in again.
-		new := hashpw(word);
-		if(eq(new, old)){
-			login->zero(new);
+		# What keyfs holds, and login(6) uses, is the account's secret
+		# made from the password (keys(6): PBKDF2-HMAC-SHA-384 salted
+		# by the name), always of the new form: the password itself was
+		# once sent and stored, and the account could not log in again.
+		if(eq(word, old)){
+			login->zero(word);
 			sys->print("secret not changed\n");
 			break;
 		}
+		new := login->secret(user, word);
+		login->zero(word);
 		e = putsecret(user, old, new);
 		login->zero(new);
 		if(e != nil){
@@ -224,27 +225,17 @@ eq(a, b: array of byte): int
 	return 1;
 }
 
-# the SHA-256 of a password: what keyfs(4) holds (changelogin(8)).
-# The password is zeroed: it is not wanted again.
-hashpw(a: array of byte): array of byte
-{
-	hash := array[Keyring->SHA256dlen] of byte;
-	kr->sha256(a, len a, hash, nil);
-	login->zero(a);
-	return hash;
-}
-
 #
 # keysrv(4)'s file, version 2: read a challenge, write the proof that
 # we have the old secret and, to change it, the new one sealed under a
 # key made from the old (see keysrv.b).  The proof used to be a hash of
 # the password, the same every time, to whatever had answered.
 #
-Version: con "keysrv 2 ";
+Version: con "keysrv 3 ";
 Prooflabel: con "infernode keysrv 2 proof";
 Wraplabel: con "infernode keysrv 2 new secret";
 
-putsecret(user: string, old: array of byte, new: array of byte): string
+putsecret(user: string, oldpw: array of byte, new: array of byte): string
 {
 	fd := sys->open(keysrv+"/secret", Sys->ORDWR);
 	if(fd == nil)
@@ -255,13 +246,27 @@ putsecret(user: string, old: array of byte, new: array of byte): string
 		return sys->sprint("%r");
 	s := string buf[0:n];
 	if(len s <= len Version || s[0:len Version] != Version)
-		return "key server does not speak keysrv version 2 (keysrv(4))";
-	c := unhex(s[len Version:]);
+		return "key server does not speak keysrv version 3 (keysrv(4))";
+	# "keysrv 3 " form " " challenge: the form of the secret it holds
+	(nf, f) := sys->tokenize(s[len Version:], " ");
+	if(nf != 2)
+		return "key server's challenge is not one";
+	c := unhex(hd tl f);
 	if(c == nil || len c < 32)
 		return "key server's challenge is not one";
+	old: array of byte;
+	case int hd f {
+	Login->Newform =>
+		old = login->secret(user, oldpw);
+	Login->Oldform =>
+		old = login->oldsecret(oldpw);
+	* =>
+		return "key server's form of secret is not one of keys(6)'s";
+	}
 
 	prk := array[Keyring->SHA384dlen] of byte;
 	kr->hmac_sha384(old, len old, c, prk, nil);
+	login->zero(old);
 	msg := hex(expand(prk, array of byte (Prooflabel + user), Keyring->SHA384dlen));
 	if(new != nil){
 		key := expand(prk, array of byte (Wraplabel + user), 32+12);

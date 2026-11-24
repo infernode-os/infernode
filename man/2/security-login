@@ -16,7 +16,10 @@ cnsaalg:  fn(alg: string): string;
 cnsahash: fn(ha: string): string;
 cnsakey:  fn(info: ref Keyring->Authinfo): string;
 putstring: fn(fd: ref Sys->FD, s: string): string;
-readsecret: fn(io: ref Sys->FD): (array of byte, string);
+readsecret: fn(io: ref Sys->FD, prompt: string): (array of byte, string);
+secret:   fn(name: string, password: array of byte): array of byte;
+oldsecret: fn(password: array of byte): array of byte;
+secretform: fn(s: array of byte): int;
 zero:     fn(a: array of byte);
 runes:    fn(a: array of byte): int;
 charge:  fn(prog, name: string): (int, string);
@@ -161,6 +164,9 @@ and then
 to
 .BR /dev/consctl )
 and returns its bytes, without the newline, or nil and the reason.
+.I Prompt
+(nil for none) is printed on standard output only once echo is off:
+a secret typed ahead of a prompt printed first was echoed as it arrived.
 In raw mode the console edits nothing, so
 .B readsecret
 does: a backspace or delete removes the character before it,
@@ -171,8 +177,34 @@ the caller zeroes the array with
 when it is done.
 .B Runes
 counts the characters of UTF-8 in an array.
+.PP
+.B Secret
+makes the secret
+.IR keyfs (4)
+holds for the account
+.I name
+with
+.I password
+.RI ( keys (6)):
+48 bytes
+.RB ( Login->Secretlen )
+of PBKDF2 with HMAC-SHA-384,
+.B Login->Secretiter
+(200000) iterations, salted with
+.B "infernode login secret 2"
+a zero byte and
+.IR name .
+.B Oldsecret
+makes the old form, the password's SHA-256 (32 bytes,
+.BR Login->Oldsecretlen ).
+.B Secretform
+says by its length which a stored secret is:
+.BR Login->Newform ,
+.BR Login->Oldform ,
+or 0, neither.
+.PP
 .B Login
-itself zeroes the password's bytes and digest, the shared secret's bytes
+itself zeroes the password's bytes and secret, the shared secret's bytes
 and the session's keys before it returns;
 the password it is given is a string, and stays the caller's.
 .PP

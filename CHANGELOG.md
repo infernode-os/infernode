@@ -24,6 +24,24 @@ All notable changes to InferNode are documented in this file.
 
 ### Fixed
 
+- **The Raspberry Pi images have the login screen's choice of
+  interface, the Desktop, the agent and the plumber** (#1266). The card
+  images ran a boot of their own, `boot-baremetal.sh`, and every change
+  to the login screen after it was written went into the hosted boot
+  alone: from 0.10.0 to 0.12.0 a Pi offered no choice of Assistant or
+  Desktop, could not start the Desktop, and its Assistant had no
+  `llmsrv`, `tools9p`, `lucibridge`, wallet, messages or plumber.
+  `lib/lucifer/boot.sh` is now the boot every build runs. It does a
+  board's part where there is no host (the desktop's name space
+  narrowed, the remote-desktop listener, the headless check, the login
+  required, no halt), and starts the keyboard on the screen where the
+  screen is the keyboard: a board or a phone, not a hosted desktop
+  (`osk=on` for a kiosk). The plumber never started on a board: its
+  script was run by name from a FAT card, which has no execute bit. The
+  board CI runs when the boot or the login screen changes, and boots a
+  card under QEMU with a USB keyboard: the picker drawn, Down and Up
+  changing it, the first password set, the Desktop started, and the
+  Assistant's services running. Not run on a board.
 - **The Windows packages start on a new PC and under any user's
   folder** (#1264, after #1250). The DLLs beside the GUI emulator
   (`fido2`, `cbor`, `libcrypto`, `zlib`) need `VCRUNTIME140.dll`, which

@@ -49,6 +49,12 @@ int return0(void *a) { (void)a; return 0; }
 uvlong fastticks(uvlong *h) { (void)h; return fakemach.ticks * 1000 + 7; }
 char *boardcmdline(void) { return cmdline; }
 
+/* error() raises in the kernel: here it says what and leaves by escape, 2 */
+static char *lasterror;
+static int eve = 1;
+int iseve(void) { return eve; }
+void error(char *s) { lasterror = s; longjmp(escape, 2); }
+
 void
 release(void)
 {
@@ -396,6 +402,130 @@ insecure(void)
 	check(prngtry(buf, 4) == 0, "insecurerandom: prngtry answers");
 }
 
+/* the generator's bytes from the start, in Good mode: hwbyte's sequence */
+static void
+expected(uchar *p, int n, int skip)
+{
+	u64int st, save;
+	int i;
+
+	save = hwstate;
+	hwstate = 0x0123456789ABCDEFULL;
+	for(i = 0; i < skip; i++)
+		hwbyte();
+	for(i = 0; i < n; i++)
+		p[i] = hwbyte();
+	st = hwstate;
+	(void)st;
+	hwstate = save;
+}
+
+/*
+ * An rngassess boot (os/port/random.c, "Measuring the generator"): the
+ * first 4096 bytes are the capture's, taken before any kernel reader,
+ * in pieces as the generator gives them; the DRBG seeds from the bytes
+ * after; #c/hwrandom gives the bytes after that; neither file opens on
+ * another boot, or for anyone but eve.
+ */
+static void
+assess(void)
+{
+	static uchar want[4096+80+100], got[4096], raw[100];
+	uchar key[32];
+	char *e;
+	long n;
+
+	expected(want, sizeof want, 0);
+	cmdline = "console=0 rngassess";
+	hwmode = Good;
+	hwmax = 1000;			/* the capture takes several calls */
+	genrandom(key, sizeof key);
+	check(hwbytes == 4096 + 80, "rngassess: the capture's 4096 bytes, then the DRBG's 80, and no more");
+	check(memcmp(hwlast, want + 4096, 80) == 0, "rngassess: the DRBG seeded from the bytes after the capture");
+
+	n = hwrandombootread(got, sizeof got, 0);
+	check(n == 4096 && memcmp(got, want, 4096) == 0, "rngassess: hwrandomboot is the first 4096 bytes the generator gave");
+	n = hwrandombootread(got, 200, 4000);
+	check(n == 96 && memcmp(got, want + 4000, 96) == 0, "rngassess: hwrandomboot read at an offset, cut at its end");
+	check(hwrandombootread(got, 10, 4096) == 0, "rngassess: hwrandomboot at its end gives nothing");
+
+	n = hwrandomread(raw, sizeof raw);
+	check(n == 100 && memcmp(raw, want + 4096 + 80, 100) == 0, "rngassess: hwrandom gives the generator's next bytes as they are");
+
+	lasterror = nil;
+	if(setjmp(escape) == 0)
+		rngassessopen();
+	check(lasterror == nil, "rngassess: eve may open the files");
+	eve = 0;
+	if(setjmp(escape) == 0){
+		rngassessopen();
+		check(0, "rngassess: a user who is not eve opened the files");
+	}
+	check(lasterror != nil && strcmp(lasterror, Eperm) == 0, "rngassess: anyone but eve refused");
+	eve = 1;
+
+	cmdline = "console=0 rngassessx";
+	e = nil;
+	if(setjmp(escape) == 0)
+		rngassessopen();
+	else
+		e = lasterror;
+	check(e != nil && strstr(e, "does not say rngassess") != nil, "without the word (rngassessx is not it) the files refuse to open");
+}
+
+/* without rngassess no bytes are captured: the DRBG takes the first */
+static void
+noassess(void)
+{
+	uchar want[80], key[32];
+
+	expected(want, sizeof want, 0);
+	hwmode = Good;
+	genrandom(key, sizeof key);
+	check(hwbytes == 80 && memcmp(hwlast, want, 80) == 0, "no rngassess: the DRBG seeds from the generator's first 80 bytes");
+}
+
+/* a generator dry at boot: keys wait, then the capture is still the first bytes */
+static void
+assessdry(void)
+{
+	static uchar want[4096], got[4096];
+	uchar key[32];
+
+	expected(want, sizeof want, 0);
+	cmdline = "rngassess";
+	hwmode = Dry;
+	switchat = 3;
+	switchto = Good;
+	genrandom(key, sizeof key);
+	check(sleeps >= 3, "rngassess, dry at boot: the key waited for the generator");
+	check(hwrandombootread(got, sizeof got, 0) == 4096 && memcmp(got, want, 4096) == 0,
+		"rngassess, dry at boot: the capture is still the first 4096 bytes");
+}
+
+/* no generator: the files say so */
+static void
+assessnone(void)
+{
+	uchar b[16];
+	char *e;
+
+	cmdline = "rngassess insecurerandom";
+	hwmode = None;
+	e = nil;
+	if(setjmp(escape) == 0)
+		hwrandombootread(b, sizeof b, 0);
+	else
+		e = lasterror;
+	check(e != nil && strstr(e, "no hardware generator") != nil, "rngassess, no generator: hwrandomboot says so");
+	e = nil;
+	if(setjmp(escape) == 0)
+		hwrandomread(b, sizeof b);
+	else
+		e = lasterror;
+	check(e != nil && strstr(e, "no hardware generator") != nil, "rngassess, no generator: hwrandom says so");
+}
+
 static void
 vectors(void)
 {
@@ -654,6 +784,10 @@ static struct {
 	{ "adaptive proportion (SP 800-90B 4.4.2)", biased },
 	{ "a good source is not refused", unbiased },
 	{ "distinct requests", distinct },
+	{ "rngassess: the capture, the files, who may open them", assess },
+	{ "without rngassess", noassess },
+	{ "rngassess with a generator dry at boot", assessdry },
+	{ "rngassess with no generator", assessnone },
 };
 
 int

@@ -1,0 +1,80 @@
+.TH RNGDUMP 1
+.SH NAME
+rngdump \- the hardware random number generator's own bytes, for assessment
+.SH SYNOPSIS
+.B rngdump
+[
+.B -a
+] [
+.B -n
+.I bytes
+]
+.I file
+.br
+.B rngdump
+.B -b
+[
+.B -a
+]
+.I file
+.SH DESCRIPTION
+.I Rngdump
+writes bytes of the native kernel's hardware generator, as the board's
+driver gives them and before any deterministic generator, to
+.IR file ,
+for SP 800-90B's entropy assessment.
+It reads
+.BR /dev/hwrandom ,
+.I bytes
+of it (default 1000000), or with
+.BR -b ,
+.BR /dev/hwrandomboot ,
+the first 4096 bytes the generator gave on this boot.
+.B -a
+appends to
+.I file
+rather than replacing it.
+.PP
+When done it prints one line of
+.IB key = value
+pairs:
+.BR src ,
+.BR bytes ,
+.B ms
+and
+.B rate
+(bytes a second),
+.B sha256
+of what was written,
+.B mcv
+(the most common byte's count),
+.B chisq
+(chi-square of the byte counts, 255 degrees of freedom),
+.BR bit0 " to " bit7
+(ones in each bit position, per million) and
+.B lag1
+(bytes equal to the one before, per million).
+They show quickly a source that is plainly broken; the estimate is made on
+the host by
+.BR tools/entropy/assess.py .
+.SH FILES
+.TF /dev/hwrandomboot
+.TP
+.B /dev/hwrandom
+the generator's bytes, read as fast as it gives them
+.TP
+.B /dev/hwrandomboot
+this boot's first 4096
+.PD
+.PP
+Both are given only to eve, and only on a boot whose command line holds the
+word
+.BR rngassess ;
+on any other boot they refuse to open.
+.SH SOURCE
+.B /appl/cmd/rngdump.b
+.br
+.B /os/port/random.c
+.SH SEE ALSO
+.IR cons (3),
+.B docs/ENTROPY-ASSESSMENT.md

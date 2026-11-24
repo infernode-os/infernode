@@ -703,6 +703,8 @@ enum{
 	Qnull,
 	Qrandom,
 	Qnotquiterandom,
+	Qhwrandom,
+	Qhwrandomboot,
 	Qsysname,
 	Qtime,
 	Quser,
@@ -733,6 +735,8 @@ static Dirtab consdir[]=
 	"null",		{Qnull},	0,		0666,
 	"random",	{Qrandom},	0,		0444,
 	"notquiterandom", {Qnotquiterandom}, 0,	0444,
+	"hwrandom",	{Qhwrandom},	0,		0400,	/* random.c: rngassess boots only */
+	"hwrandomboot",	{Qhwrandomboot},	0,	0400,
 	"sysname",	{Qsysname},	0,		0664,
 	"time",		{Qtime},	0,		0664,
 	"user",		{Quser},	0,	0644,
@@ -1150,6 +1154,11 @@ consopen(Chan *c, int omode)
 		nexterror();
 	}
 	switch((ulong)c->qid.path){
+	case Qhwrandom:
+	case Qhwrandomboot:
+		rngassessopen();
+		break;
+
 	case Qconsctl:
 		if(!iseve())
 			error(Eperm);
@@ -1435,6 +1444,12 @@ consread(Chan *c, void *buf, long n, vlong offset)
 
 	case Qrandom:
 		return randomread(buf, n);
+
+	case Qhwrandom:
+		return hwrandomread(buf, n);
+
+	case Qhwrandomboot:
+		return hwrandombootread(buf, n, offset);
 
 	case Qmemory:
 		return poolread(buf, n, offset);
@@ -1832,7 +1847,7 @@ seedrand(void)
 	ulong r;
 
 	r = 0;
-	if(hwrandom((uchar*)&r, sizeof(r)) < 0)
+	if(rnghw((uchar*)&r, sizeof(r)) < 0)
 		r = 0;
 	randn = r ^ (ulong)fastticks(nil);
 	if(randn == 0)

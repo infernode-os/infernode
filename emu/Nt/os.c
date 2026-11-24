@@ -1168,6 +1168,36 @@ narrowen(wchar_t *ws)
 }
 
 
+/*
+ * The user's home as Windows has it (USERPROFILE), for lib/sh/profile:
+ * $emuhomedrive the drive's letter and $emuhomepath the rest, with /
+ * for \ (C:\Users\José -> C and /Users/José).  The profile took the home
+ * to be C:\Users\<account name>, which it is not when the account was
+ * renamed (the folder keeps its first name) or the folder was made as
+ * name.PCNAME; ~/.infernode then went where nobody looks, or nowhere.
+ * Called by main.c's emuinit once the environment group is made.
+ */
+void
+oshomeenv(void)
+{
+	wchar_t w[1024];
+	char *s, *p, drive[2];
+	DWORD n;
+
+	n = GetEnvironmentVariableW(L"USERPROFILE", w, nelem(w));
+	if(n < 3 || n >= nelem(w) || w[1] != L':' || w[2] != L'\\' || w[0] > 0x7F)
+		return;
+	s = narrowen(w);
+	for(p = s; *p; p++)
+		if(*p == '\\')
+			*p = '/';
+	drive[0] = s[0] >= 'a' && s[0] <= 'z' ? s[0] - 'a' + 'A' : s[0];
+	drive[1] = 0;
+	putenvq("emuhomedrive", drive, 1);
+	putenvq("emuhomepath", s+2, 1);
+	free(s);
+}
+
 int
 widebytes(wchar_t *ws)
 {

@@ -43,9 +43,14 @@ REM Strip Mark-of-the-Web from every file in the bundle. Unblock-File is
 REM idempotent and silent on already-unblocked files, so this is safe to
 REM run unconditionally. Without this, SmartScreen silently refuses to
 REM launch InferNode.exe after the user runs setup and double-clicks it.
+REM The folder goes to PowerShell in the environment, not inside quotes in
+REM the command: unpacked under C:\Users\O'Brien, the quoted folder ended at
+REM the apostrophe, the command did not parse, nothing was unblocked and
+REM SmartScreen went on refusing InferNode.exe.
 echo Clearing Mark-of-the-Web tags from bundle (one-time, silent)...
+set "INFERNODE_SETUP_DIR=%SCRIPT_DIR%"
 %PWSH% -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Get-ChildItem -LiteralPath '%SCRIPT_DIR%' -Recurse -File -Force -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue"
+    "Get-ChildItem -LiteralPath $env:INFERNODE_SETUP_DIR -Recurse -File -Force -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue"
 
 echo Launching %PWSH% %PS_SCRIPT% ...
 echo (log: %LOG%)

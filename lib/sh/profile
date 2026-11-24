@@ -36,6 +36,14 @@ if {~ $emuhost Nt} {
 	trfs '#UC:/' /n/local >[2] /dev/null
 	ls /n/local > /dev/null >[2] /dev/null		# settle the EXPASYNC export/mount before first use (host-root trfs race)
 	ghome=/n/local/Users/^$user
+	# The home Windows gives (USERPROFILE, from emu/Nt/os.c): not always
+	# Users\<account name>, as for an account renamed after its folder was
+	# made, or a folder made as name.PCNAME. Only C:\ is at /n/local.
+	if {~ $emuhomedrive C} {
+		if {~ $#emuhomepath 1} {
+			ghome=/n/local^$emuhomepath
+		}
+	}
 }
 if {~ $emuhost MacOSX Linux} {
 	trfs '#U*' /n/local >[2] /dev/null

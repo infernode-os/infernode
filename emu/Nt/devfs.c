@@ -363,9 +363,23 @@ fsinit(void)
 			panic("illegal root path");
 	}
 	n = GetFullPathName(wpath, MAXROOT, wrootdir, &last);
-	free(wpath);	
-	runestoutf(rootdir, wrootdir, MAXROOT);
+	free(wpath);
 	if(n >= MAXROOT || n == 0)
+		panic("illegal root path");
+	{
+		extern int widebytes(wchar_t*);	/* emu/Nt/os.c: UTF-8 bytes with the NUL */
+
+		if(widebytes(wrootdir) > MAXROOT)	/* three bytes a letter, in Chinese */
+			panic("root path too long as UTF-8 (%d bytes; %d at most)", widebytes(wrootdir)-1, MAXROOT-1);
+	}
+	runestoutf(rootdir, wrootdir, MAXROOT);
+	/*
+	 * n from here is rootdir's length in bytes: GetFullPathName counted
+	 * UTF-16 units, and rootdir[n] = 0 below cut a root with é or ü in it
+	 * by a byte for each ("'/dis' file does not exist").
+	 */
+	n = strlen(rootdir);
+	if(n == 0)
 		panic("illegal root path");
 
 	/* get rid of trailing \ */

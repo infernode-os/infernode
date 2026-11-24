@@ -418,6 +418,12 @@ emuinit(void *imod)
 			putenvq("emuwdir", wdir, 1);
 		free(wdir);
 	}
+#ifdef _WIN32
+	{
+		extern void oshomeenv(void);	/* emu/Nt/os.c: $emuhomedrive, $emuhomepath */
+		oshomeenv();
+	}
+#endif
 
 	kproc("main", disinit, imod, KPDUPFDG|KPDUPPG|KPDUPENVG);
 

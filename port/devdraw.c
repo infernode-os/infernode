@@ -1516,6 +1516,7 @@ drawmesg1(Client *client, void *av, int n)
 	Refx *refx;
 	CScreen *cs;
 	Refreshfn reffn;
+	Warp warp;
 
 	a = av;
 	m = 0;
@@ -2210,6 +2211,34 @@ drawmesg1(Client *client, void *av, int n)
 			printmesg(fmt="", a, 0);
 			m = 1;
 			drawflush();
+			continue;
+
+		/*
+		 * affine warp, as 9front has it (affinewarp(2)):
+		 * 'w' dstid[4] P[2*4] R[4*4] srcid[4] P[2*4] mskid[4] P[2*4] M[3*3*4] flags[1]
+		 * M is the inverse map in 19.13 fixed point; flags bit 0
+		 * smooths (bilinear), the rest are mkwarp's.
+		 */
+		case 'w':
+			printmesg(fmt="LPRLPLPb", a, 0);
+			m = 1+4+2*4+4*4+4+2*4+4+2*4+3*3*4+1;
+			if(n < m)
+				error(Eshortdraw);
+			dst = drawimage(client, a+1);
+			drawpoint(&p, a+5);
+			drawrectangle(&r, a+13);
+			src = drawimage(client, a+29);
+			drawpoint(&sp, a+33);
+			mask = drawimage(client, a+41);
+			drawpoint(&q, a+45);
+			for(ni = 0; ni < 9; ni++)
+				warp.m[ni/3][ni%3] = (int)BGLONG(a+53+4*ni);
+			warp.flags = a[53+3*3*4] >> 1;
+			if(!warpok(&warp))
+				error("warp matrix out of range");
+			op = drawclientop(client);
+			memlaffinewarp(dst, p, r, src, sp, mask, q, &warp, a[53+3*3*4]&1, op);
+			dstflush(dst, r);
 			continue;
 
 		/* write: 'y' id[4] R[4*4] data[x*1] */

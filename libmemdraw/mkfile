@@ -21,6 +21,7 @@ COMMONFILES=\
 	read.$O\
 	string.$O\
 	subfont.$O\
+	warp.$O\
 	write.$O\
 	
 SYSFILES=alloc.$O\

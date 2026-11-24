@@ -268,7 +268,7 @@ build_kernel() {
         objs+=("$o")
     done
 
-    for f in "$ROOT"/libmemdraw/{aa,aapath,arc,cmap,defont,ellipse,fillpoly,icossin,icossin2,line,poly,string,subfont,alloc,cload,draw,load,unload}.c \
+    for f in "$ROOT"/libmemdraw/{aa,aapath,arc,cmap,defont,ellipse,fillpoly,icossin,icossin2,line,poly,string,subfont,warp,alloc,cload,draw,load,unload}.c \
              "$ROOT"/libmemlayer/*.c "$ROOT"/libdraw/*.c; do
         case "$(basename "$f")" in test.c|mkfont.c|readcolmap.c) continue;; esac
         [[ -e "$f" ]] || continue

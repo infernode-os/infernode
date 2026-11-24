@@ -20,7 +20,7 @@ include "sys.m";
 
 include "keyring.m";
 	kr: Keyring;
-	IPint: import kr;
+	IPint, DigestState: import kr;
 
 include "security.m";
 
@@ -459,23 +459,42 @@ secret(name: string, password: array of byte): array of byte
 {
 	init();
 	salt := cat(array of byte "infernode login secret 2", cat(array[] of {byte 0}, array of byte name));
+	# HMAC's key padded to SHA-384's block (hashed first when longer),
+	# its inner and outer pads hashed once: each iteration is then two
+	# compressions, not four (hmac_sha384 hashed the pads at every call),
+	# and the iterations' sum is kept in an IPint, one builtin where a
+	# loop of 48 steps was (the suite is interpreted on some machines)
+	Block: con 128;
+	k := array[Block] of {* => byte 0};
+	if(len password > Block)
+		kr->sha384(password, len password, k[0:Keyring->SHA384dlen], nil);
+	else
+		k[0:] = password;
+	ip := array[Block] of byte;
+	op := array[Block] of byte;
+	for(i := 0; i < Block; i++){
+		ip[i] = k[i] ^ byte 16r36;
+		op[i] = k[i] ^ byte 16r5c;
+	}
+	is := kr->sha384(ip, Block, nil, nil);
+	os := kr->sha384(op, Block, nil, nil);
+	zero(k);
+	zero(ip);
+	zero(op);
 	u := array[len salt + 4] of byte;
 	u[0:] = salt;
 	u[len salt:] = array[] of {byte 0, byte 0, byte 0, byte 1};
-	t := array[Keyring->SHA384dlen] of byte;
-	kr->hmac_sha384(u, len u, password, t, nil);
-	u = array[Keyring->SHA384dlen] of byte;
-	u[0:] = t;
 	v := array[Keyring->SHA384dlen] of byte;
-	for(i := 1; i < Secretiter; i++){
-		kr->hmac_sha384(u, len u, password, v, nil);
-		for(j := 0; j < len t; j++)
-			t[j] ^= v[j];
-		(u, v) = (v, u);
+	kr->sha384(u, len u, v, is.copy());
+	kr->sha384(v, len v, v, os.copy());
+	t := IPint.bebytestoip(v);
+	for(i = 1; i < Secretiter; i++){
+		kr->sha384(v, len v, v, is.copy());
+		kr->sha384(v, len v, v, os.copy());
+		t = t.xor(IPint.bebytestoip(v));
 	}
-	zero(u);
 	zero(v);
-	return t;	# SHA384dlen is Secretlen
+	return bebytes(t, Secretlen);	# SHA384dlen is Secretlen
 }
 
 # the old form: the password's SHA-256

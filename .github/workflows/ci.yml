@@ -1870,8 +1870,14 @@ jobs:
             # was cut off in its last few tests on 2026-11-15, nothing
             # hung: the tests it had finished add up to 1801 s (crypto
             # 247 s, tls_server 209 s).  The backstop bounds a hang, and
-            # the job has 75 minutes.
-            backstop: 2400
+            # the job has 75 minutes.  At 2400 it was cut off again on
+            # 2026-11-24, nothing hung: on master the suite took 2229 s,
+            # and the account secret's PBKDF2-HMAC-SHA-384 (200000
+            # iterations, CNSA 2.0 G9) made login 254 s and passwd 59 s
+            # (49 s and 5 s before).  The derivation now hashes HMAC's
+            # pads once, half the time interpreted, and the backstop is
+            # 3000: the build takes about 10 minutes of the 75.
+            backstop: 3000
     env:
       ROOT: ${{ github.workspace }}
       OBJTYPE: ${{ matrix.arch }}

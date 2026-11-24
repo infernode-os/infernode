@@ -74,7 +74,10 @@ jobs:
   linux-amd64:
     name: Linux AMD64 Build & Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    # 46 to 53 minutes on 2026-11-23's PRs (the suite 14, wallet and
+    # secstore 9, the agent harness 8, apt-get 6): at 55 a slow runner
+    # cancelled it, and it is a required check
+    timeout-minutes: 75
     permissions:
       contents: read
     env:

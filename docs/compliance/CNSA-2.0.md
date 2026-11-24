@@ -133,6 +133,8 @@ reason.
 | login client (`login(2)`, `getauthinfo`) | Suite 2 alone; refuses a signer's key that is not ML-DSA-87, a signer's modulus under 3072 bits, a certificate not ML-DSA-87's under SHA-384/512. |
 | `auth/signer` | As logind for its key; certifies only keys of its own algorithm. Not started by default (signer(8)). |
 | `auth/factotum` | `genkey` makes ML-DSA-87 alone; `proto=sign` signs with an ML-DSA-87 key alone. |
+| `auth/factotum` `proto=p9any`, `proto=dp9ik` | Refused ("dp9ik is not available in CNSA mode"): 9front's authentication, for working with 9front, is classical (§3.8). |
+| `rcpu`, `rimport` (`rconnect(2)`) | Refused before anything is dialled, saying why (§3.8). |
 | `Keyring->auth` (every authenticated connection) | By the emulator's own switch (`CNSAMODE`): a key file that is not CNSA's whole is refused, each end told which part; the peer's key and certificate are held to the same; the exchange is signed over SHA-384 and a peer's signature over another hash is refused. (It took any key file and signed over SHA-256.) |
 | `auth(2)` (`client`, `server`, `auth`) | By `/env/cnsamode`: a key file that is not CNSA's whole is refused before anything is sent, with `cnsakey`'s reason. |
 
@@ -156,6 +158,30 @@ Known limits, stated rather than hidden:
   key and PAK verifier are HMAC-SHA-256 and SHA-256 (`appl/lib/secstore.b`), with
   AES-256-GCM for the files and the session: outside the mode's signature and
   key-establishment rules, and not SHA-384.
+
+### 3.8 Outside the mode: 9front's dp9ik
+
+`rcpu(1)` and `rimport(1)` reach 9front machines with 9front's own
+authentication, dp9ik (factotum's `p9any` and `dp9ik`, `dp9ik(2)`), and its
+TLS (`tlspsk(2)`). They are there to work with 9front and are classical
+cryptography: a PAK exchange on Ed448 made from a PBKDF2-HMAC-SHA1 hash of the
+password, tickets under ChaCha20-Poly1305, HKDF-SHA256, and TLS 1.2 with
+`TLS_PSK_WITH_CHACHA20_POLY1305_SHA256`. None of it is a CNSA 2.0 algorithm,
+none of it has a post-quantum part, and none of it is used by anything else in
+the system.
+
+- **Off unless asked for.** Nothing speaks dp9ik until a `proto=dp9ik` key is
+  given to factotum and `rcpu` or `rimport` is run.
+- **Refused in CNSA mode.** The factotum module and `rconnect(2)` each refuse to
+  start when `/env/cnsamode` is set, with the reason; a CNSA deployment has no
+  path to it (`tests/dp9ik_proto_test.b`'s CNSA).
+- **What it protects, and against whom.** The password stays in factotum; a
+  recorded conversation does not test guesses at it (the PAK). The session is
+  as strong as Ed448 and ChaCha20-Poly1305 classically, and a recording could be
+  read by a future quantum computer, as any 9front session can.
+- **What it exposes of InferNode.** `rcpu` serves the 9front machine a tree of
+  its own (the command's input and output, `dev/cons`, `env/rstatus`), not this
+  machine's name space as 9front's `rcpu` does; `rimport` serves nothing.
 
 ---
 

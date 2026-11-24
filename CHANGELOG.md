@@ -6,6 +6,19 @@ All notable changes to InferNode are documented in this file.
 
 ### Added
 
+- **9front compatibility: `rcpu` and `rimport`.** InferNode reaches
+  9front machines as 9front's own `rcpu` and `rimport` do: factotum's
+  `p9any` and `dp9ik` (9front's authentication, client side, the
+  password kept in factotum), TLS 1.2 keyed by the session secret
+  (`tlspsk(2)`), and the server's `rc`. `rimport host / /n/host` mounts
+  a 9front tree; `rcpu -h host -c cmd` runs a command there with its
+  input, output and exit status. The 9front side's `/mnt/term` is a
+  tree rcpu serves (the command's input and output, `dev/cons`), not
+  this machine's name space. Off until a `proto=dp9ik` key is given;
+  refused in CNSA mode, since dp9ik is classical cryptography (CNSA-2.0.md
+  §3.8). `dp9ik(2)` was checked against answers 9front 11952 gave, and
+  the commands against 9front itself under QEMU
+  (`tests/host/dp9ik_live_test.sh`). See `docs/9FRONT.md`.
 - **The camera on the Raspberry Pi 5.** `#V` drives RP1's CSI-2
   receiver on either camera connector and serves the Pi 4's
   `#V/unicam` files, so camsrv(4), `wm/camera`, vision(4) and the

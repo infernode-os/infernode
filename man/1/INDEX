@@ -104,7 +104,9 @@ plumb plumb
 prof prof
 ps ps
 pwd pwd
+rcpu rcpu
 rcmd rcmd
+rimport rcpu
 read read
 rm rm
 runas runas

@@ -737,6 +737,14 @@ jobs:
         # -> byte, and s[i] reads all 21 bits from compiled code.
         ROOT=. sh tests/host/utf21_test.sh
 
+    - name: Run dp9ik tests (9front's answers, JIT and interpreter)
+      run: |
+        # dp9ik(2) against answers 9front 11952 gave (Ed448 PAK, form1
+        # tickets, the session secret), by the Python reference and by
+        # the Limbo library under -c0 and -c1.
+        python3 -c 'import cryptography' 2>/dev/null || python3 -m pip install --quiet --user --break-system-packages cryptography 2>/dev/null || true
+        ROOT=. sh tests/host/dp9ik_test.sh
+
     - name: Run JIT fault and big arithmetic tests (JIT and interpreter)
       run: |
         # A fault in compiled code is caught by the handler around it,

@@ -24,8 +24,9 @@ implement FactotumProtoTest;
 # is refused wherever a certificate is a credential, and still verifies
 # as the signature it is (as auditverify verifies it).
 #
-# p9any: gone with p9sk1, whose tickets are DES (there is none), and a
-# start for either says so.  (Its faults, which had tests here: the
+# p9sk1: gone, its tickets being DES (there is none), and a start for it
+# says so; p9any is 9front's, with dp9ik alone.  (The old p9any's faults,
+# which had tests here: the
 # answer to an offer written into the offer's array, the last domain
 # taken, the caller's user= dropped, role=server running the client.)
 #
@@ -409,21 +410,33 @@ testSign(t: ref T)
 	t.assert(cert == nil && contains(err, "error"), "an op that is not one signs nothing: " + err);
 }
 
-# p9any and p9sk1 are gone (their tickets are DES, which is): a start for
-# either says so, role or not, and a key stored for p9sk1 is still a key
-# of a protocol with no module here, taken and listed.
+# p9sk1 is gone (its tickets are DES, which is): a start for it says so,
+# and a key stored for p9sk1 is still a key of a protocol with no module
+# here, taken and listed.  p9any is 9front's, offering dp9ik alone
+# (tests/dp9ik_proto_test.b has its conversations): the client's side
+# only, an offer of p9sk1 alone refused saying why, and a dp9ik key
+# checked when it is stored.
 testP9any(t: ref T)
 {
 	ctl(t, "key proto=p9sk1 dom=corp user=alice !password=x");
 	plain := "p9sk1 authentication is not available";
-	r := ask(t, "proto=p9any role=client");
-	t.assert(contains(r, "start: ") && contains(r, plain), "a start for p9any says the protocol is gone: " + r);
-	r = ask(t, "proto=p9any role=server");
-	t.assert(contains(r, plain), "for the server's side too: " + r);
-	r = ask(t, "proto=p9sk1 role=client dom=corp");
-	t.assert(contains(r, plain), "and for p9sk1 by name: " + r);
+	r := ask(t, "proto=p9sk1 role=client dom=corp");
+	t.assert(contains(r, "start: ") && contains(r, plain), "a start for p9sk1 says the protocol is gone: " + r);
 	t.assert(!contains(r, "does not exist") && !contains(r, "module"), "not that a file is missing");
 	t.assert(contains(keys(), "dom=corp"), "a p9sk1 key is kept as any key with no protocol module is");
+
+	r = ask(t, "proto=p9any role=server");
+	t.assert(contains(r, "role=client"), "p9any's server side is refused: " + r);
+
+	fd := newrpc(t);
+	t.assertseq(rpc(fd, "start proto=p9any role=client"), "ok", "p9any's client starts");
+	r = string rpcb(fd, array of byte "write v.2 p9sk1@corp\0");
+	t.assert(contains(r, "DES") && contains(r, "dp9ik"), "an offer of p9sk1 alone is refused saying why: " + r);
+
+	t.assert(contains(ctle("key proto=dp9ik user=alice !password=x"), "dom="), "a dp9ik key with no domain is refused");
+	t.assert(contains(ctle("key proto=dp9ik dom=corp !password=x"), "user="), "or no user");
+	t.assert(contains(ctle("key proto=dp9ik dom=corp user=alice"), "password"), "or no password");
+	t.assert(ctle("key proto=dp9ik dom=corp user=alice !password=x") == nil, "a whole dp9ik key is taken");
 }
 
 # auth/rpc with text as its standard input: what it prints

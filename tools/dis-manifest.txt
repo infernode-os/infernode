@@ -76,6 +76,8 @@ dis/auth/mkauthinfo.dis
 dis/auth/passwd.dis
 dis/auth/proto/btlink.dis
 dis/auth/proto/btltk.dis
+dis/auth/proto/dp9ik.dis
+dis/auth/proto/p9any.dis
 dis/auth/proto/btpin.dis
 dis/auth/proto/pass.dis
 dis/auth/proto/sign.dis
@@ -328,6 +330,7 @@ dis/lib/dhcpclient.dis
 dis/lib/dial.dis
 dis/lib/dialnorm.dis
 dis/lib/dialog.dis
+dis/lib/dp9ik.dis
 dis/lib/dict.dis
 dis/lib/dis.dis
 dis/lib/diskblocks.dis
@@ -730,6 +733,8 @@ dis/tests/destructor_test.dis
 dis/tests/devprog_nslock_test.dis
 dis/tests/devprog_read_test.dis
 dis/tests/dhcp_test.dis
+dis/tests/dp9ik_test.dis
+dis/tests/dp9ik_proto_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
 dis/tests/diswrite_test.dis

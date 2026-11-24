@@ -686,17 +686,64 @@ Currently only a few are implemented in Inferno:
 .PP
 .B P9any
 and
-.BR p9sk1 ,
-Plan 9's general authentication protocol and its shared-key protocol,
-are not implemented:
-.BR p9sk1 's
-tickets are encrypted with DES, which the system no longer has, and
-.B p9any
-offered nothing else.
+.BR dp9ik ,
+9front's authentication, are implemented for the client's side alone,
+for
+.IR rcpu (1)
+and
+.IR rimport (1)
+and anything else that speaks to a 9front server.
+.B P9any
+negotiates
+.B dp9ik
+and nothing else; an offer of
+.B p9sk1
+alone is refused, saying why.
+.B Dp9ik
+is a PAK exchange with the domain's auth server
+(SPAKE2-EE on Ed448, made from the password),
+form1 tickets sealed with ChaCha20-Poly1305,
+and a 256-byte session secret
+(see
+.IR dp9ik (2)):
+the password never leaves
+.IR factotum ,
+and a recorded conversation does not test guesses at it.
+It is classical cryptography, there to work with 9front, and is refused in CNSA mode
+.RB ( /env/cnsamode ,
+as
+.I factotum
+found it when it started).
+Its key is
+.IP
+.EX
+key proto=dp9ik dom=\fIauthdom\fP user=\fIuser\fP !password=\fIpassword\fP [auth=\fIaddr\fP]
+.EE
+.PP
+with
+.B !hex=
+(the 32 hexadecimal digits of the AES key 9front derives from the password) in place of
+.B !password=
+if wanted.
+The auth server is
+.BR auth= 's
+address (port 567, the ticket service, by default),
+or the one
+.IR ndb (6)
+names for the domain
+.RB ( authdom=\fIauthdom\fP
+.BR auth=\fIhost\fP ).
+A key with no
+.BR dom= ,
+.B user=
+or password is refused when it is stored.
+.PP
+.BR P9sk1 ,
+Plan 9's shared-key protocol, is not implemented:
+its tickets are encrypted with DES, which the system no longer has.
 A
 .B start
-naming either is refused, saying so.
-Nothing in the system asks for either:
+naming it is refused, saying so.
 .IR mount (1)
 and
 .IR namespace (6)
@@ -857,4 +904,6 @@ which everything that authenticates refuses once expired.
 .SH SOURCE
 .B /appl/cmd/auth/factotum
 .SH SEE ALSO
-.IR factotum (2)
+.IR factotum (2),
+.IR dp9ik (2),
+.IR rcpu (1)

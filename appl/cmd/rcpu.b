@@ -524,7 +524,9 @@ gfx(f: ref Gfiles, inq: chan of (int, Sys->Rread), out: ref Sys->FD)
 				raw = remove(fid, raw);
 				break;
 			}
-			case string d {
+			(nil, words) := sys->tokenize(string d, " \t\n");
+			if(words != nil)
+			case hd words {
 			"rawon" =>
 				if(!member(fid, raw))
 					raw = fid :: raw;

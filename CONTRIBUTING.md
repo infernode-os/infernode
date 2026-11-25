@@ -16,6 +16,68 @@ If you're new to the project:
 4. Try the [Interactive Tour](docs/TOUR.md) to explore features hands-on
 5. Look at issues labeled **good first issue** for approachable tasks
 
+## Open an Issue Before a Pull Request
+
+**Every pull request starts with an issue.** Before you write code, open an
+issue that says what you want to change and why, and wait for a maintainer
+to agree that it is wanted. Then open the pull request and link the issue
+in its description (`Closes #123` or `Refs #123`).
+
+This is policy, not a suggestion. A pull request with no linked issue, or
+whose issue a maintainer has not agreed to, will be closed with a pointer
+to this section. That is not a judgment of the code: open the issue, and
+once it is agreed, reopen the pull request or open a new one.
+
+Why: a maintainer can answer "is this wanted, and is this the right
+approach?" in minutes on an issue, before anyone has spent days on code.
+It is the same reason new file interfaces start with a
+[namespace sketch](#design-principles), and it protects your time as much
+as ours. Some well-made contributions are still not what the project needs,
+or not yet; it is far better to learn that before the work than after it.
+
+The only exceptions are typo fixes, broken links, and similarly trivial
+corrections, which may be sent as a pull request directly.
+
+### Large contributions
+
+New ports, new subsystems, new devices, and changes of more than a few
+hundred lines need more than agreement in principle. In the issue:
+
+- say what the whole piece of work is and where it ends;
+- break it into steps, each one reviewable on its own;
+- say what it will need from the project over time (CI, hardware, outside
+  tools or projects it depends on, who will maintain it).
+
+Then send **one step at a time**: keep no more than two pull requests open
+at once unless a maintainer asks for more, and do not stack pull requests
+on top of ones that have not been reviewed. Work arriving faster than it
+can be reviewed is not merged faster; it waits, goes stale, and gets
+closed.
+
+## AI-Assisted Contributions
+
+You may use AI tools to help write code, tests, or documentation. If you
+do:
+
+- **Say so** in the pull request, and say what for (for example, "code
+  written with an AI assistant and reviewed by me; tests written by hand").
+- **You are the author.** You must understand every line you submit, be
+  able to explain and defend it in review, and be prepared to maintain it.
+  "The model wrote it" is not an answer to a review question.
+- **Check that it is real.** Run the tests yourself. Do not submit claims,
+  test output, benchmarks, or references you have not verified.
+- **Keep the volume reviewable.** AI tools make it cheap to write a great
+  deal of code; reviewing it is not cheap. The issue-first rule and the
+  limit on open pull requests above apply in full.
+- **Respect licences.** Do not submit code an AI tool reproduced from
+  another project unless that project's licence allows it and you say
+  where it came from.
+
+Bots and agents you run may not open pull requests, issues, or comments
+here on their own; a person must be responsible for each one. (Tools the
+project itself runs, such as Dependabot, are the maintainers'
+responsibility.)
+
 ## Design Principles
 
 InferNode follows the Plan 9 / Inferno design tradition, taken seriously:
@@ -222,12 +284,14 @@ See [CLAUDE.md](CLAUDE.md) for the full testing API reference and build details.
 
 ### Workflow
 
-1. **Fork** the repository on GitHub
-2. **Clone** your fork and run `./hooks/install.sh`
-3. **Create a branch** from `master` for your work
-4. **Make your changes** and run the test suite
-5. **Commit** with clear, descriptive messages
-6. **Push** to your fork and open a **pull request**
+1. **Open an issue** and wait for a maintainer to agree to it (see
+   [Open an Issue Before a Pull Request](#open-an-issue-before-a-pull-request))
+2. **Fork** the repository on GitHub
+3. **Clone** your fork and run `./hooks/install.sh`
+4. **Create a branch** from `master` for your work
+5. **Make your changes** and run the test suite
+6. **Commit** with clear, descriptive messages
+7. **Push** to your fork and open a **pull request** that links the issue
 
 ### Build System Notes
 
@@ -271,6 +335,8 @@ vectors for decapsulation to verify round-trip correctness.
 
 ### Pull Request Guidelines
 
+- **Link the agreed issue** — see
+  [Open an Issue Before a Pull Request](#open-an-issue-before-a-pull-request)
 - **Keep PRs focused** — one logical change per PR
 - **Include tests** when changing behavior
 - **Update docs** when changing interfaces or adding features

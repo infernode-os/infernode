@@ -1,3 +1,13 @@
+## Issue
+
+Closes #
+
+<!--
+Every pull request needs an issue a maintainer has agreed to, linked
+above (typo and broken-link fixes excepted). A pull request without one
+will be closed: see CONTRIBUTING.md, "Open an Issue Before a Pull Request".
+-->
+
 ## Summary
 
 What does this PR do and why?
@@ -20,6 +30,7 @@ How was this tested?
 - [ ] No `.dis` build artifacts committed from `appl/` or `tests/`
 - [ ] Documentation updated (if applicable)
 - [ ] No secrets, API keys, or credentials included
+- [ ] AI tools were used for this PR (if checked, say for what in the Summary; see CONTRIBUTING.md, "AI-Assisted Contributions")
 
 Design principles (see [docs/DESIGN-PRINCIPLES.md](https://github.com/infernode-os/infernode/blob/master/docs/DESIGN-PRINCIPLES.md); check what applies):
 

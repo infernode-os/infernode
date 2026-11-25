@@ -6,7 +6,8 @@
 #
 #	tools/nativefuzz [-n runs] [-s seed] [-j jobs] [-t secs] [-e epochsecs]
 #		[-p procs] [-k] [-K kernel] [-m machine] [-x ops] [-v]
-#		[-C chaos]
+#		[-C chaos] [-R]
+#	tools/nativefuzz -r dir [-g port]
 #
 # Each run boots the kernel (tests/host/baremetal_test.sh builds it:
 # BAREMETAL_PLATFORMS=virt BAREMETAL_BUILD_DIR=$ROOT/tmp/bm) with a card
@@ -53,6 +54,16 @@
 #	-x	sysfuzz operations to leave out
 #	-v	sysfuzz says when each epoch is over
 #	-L	Progs left behind fail the run
+#	-R	record each run with QEMU's record/replay; a failed run's
+#		recording is kept with it. QEMU records one core only, so
+#		the seed's machine has one core (one VM) and -icount (a shift
+#		of 0, 2 or 5 where the seed chose none)
+#	-r	replay a failed run recorded with -R, from its directory: the
+#		same instructions, interrupts and console input, the console
+#		printed and compared with the one recorded
+#	-g	with -r, QEMU's gdb stub on this port, stopped before the
+#		first instruction; reverse-stepi and reverse-continue work
+#		(the recording starts from a snapshot)
 #	-C	a chaos kernel's faults (os/port/chaos.c, built with
 #		EXTRACFLAGS=-DCHAOS), as "malloc=2000,sleep=300,lock=500,yield=500":
 #		on in VMs 1-3 and the kernel's own procs while sysfuzz runs,
@@ -73,6 +84,7 @@ import os
 import random
 import re
 import select
+import shlex
 import shutil
 import subprocess
 import sys
@@ -90,21 +102,59 @@ CRASHCHAOS = re.compile(CRASH.pattern.replace(rb"(?m:^no free [a-z])|", b""))
 PROMPT = b"; "
 
 
-def machine(seed, fixed):
+def machine(seed, fixed, rr=False):
 	if fixed:
 		cpu, smp, gic, mem, ic = fixed.split(",")
 		return dict(cpu=cpu, smp=int(smp), gic=int(gic), mem=int(mem), icount=int(ic))
 	r = random.Random(seed)
-	return dict(cpu=r.choice(["cortex-a53", "cortex-a57", "cortex-a72", "max"]),
+	m = dict(cpu=r.choice(["cortex-a53", "cortex-a57", "cortex-a72", "max"]),
 		smp=r.choice([1, 2, 2, 3, 4, 4, 4]),
 		gic=r.choice([2, 3]),
 		mem=r.choice([512, 1024, 1024, 2048]),
 		icount=r.choice([-1, -1, -1, 0, 2, 5]))
+	if rr:
+		# QEMU (11.0) refuses to record more than one core, and records
+		# only under -icount
+		m["smp"] = 1
+		if m["icount"] < 0:
+			m["icount"] = r.choice([0, 2, 5])
+	return m
 
 
-def describe(m):
-	return "%s smp %d gicv%d %dMB %s" % (m["cpu"], m["smp"], m["gic"], m["mem"],
-		"icount %d" % m["icount"] if m["icount"] >= 0 else "mttcg")
+def describe(m, rr=False):
+	return "%s smp %d gicv%d %dMB %s%s" % (m["cpu"], m["smp"], m["gic"], m["mem"],
+		"icount %d" % m["icount"] if m["icount"] >= 0 else "mttcg", " recorded" if rr else "")
+
+
+def qemuargs(m, kernel, card, rr=None):
+	# rr: None, or (mode, directory): the recording (rr.bin) and the
+	# card's overlay (sd.qcow2), which holds the snapshot a replay
+	# starts from, are in the directory QEMU runs in
+	args = [QEMU, "-M", "virt,gic-version=%d" % m["gic"], "-cpu", m["cpu"], "-smp", str(m["smp"]),
+		"-m", str(m["mem"]), "-device", "virtio-rng-device"]
+	if rr:
+		# the card through blkreplay, so its reads are replayed in
+		# order; written to an overlay of its own, not snapshot=on,
+		# as the recording's snapshot needs a qcow2 to live in
+		args += ["-drive", "file=sd.qcow2,if=none,id=sd-direct",
+			"-drive", "driver=blkreplay,if=none,image=sd-direct,id=sd"]
+	else:
+		args += ["-drive", "file=%s,if=none,format=raw,id=sd,snapshot=on" % card]
+	args += ["-device", "virtio-blk-device,drive=sd",
+		"-kernel", kernel, "-display", "none", "-serial", "stdio", "-monitor", "none", "-nic", "none"]
+	if m["icount"] >= 0:
+		# sleep=off jumps the clock to the next deadline when every core
+		# is idle; with one core, QEMU (8.2) then never runs its main
+		# loop again: no serial input, no monitor, the guest idling in
+		# wfi as it should. One core sleeps in real time instead.
+		sleep = os.environ.get("NF_ICOUNT_SLEEP", "on" if m["smp"] == 1 else "off")
+		ic = "shift=%d,align=off,sleep=%s" % (m["icount"], sleep)
+		if rr:
+			ic += ",rr=%s,rrfile=rr.bin,rrsnapshot=start" % rr[0]
+		args += ["-icount", ic]
+	else:
+		args += ["-accel", "tcg,thread=multi"]
+	return args
 
 
 class Console:
@@ -149,21 +199,25 @@ class Console:
 
 
 def one(seed, a, card):
-	m = machine(seed, a.m)
-	args = [QEMU, "-M", "virt,gic-version=%d" % m["gic"], "-cpu", m["cpu"], "-smp", str(m["smp"]),
-		"-m", str(m["mem"]), "-device", "virtio-rng-device",
-		"-drive", "file=%s,if=none,format=raw,id=sd,snapshot=on" % card, "-device", "virtio-blk-device,drive=sd",
-		"-kernel", a.K, "-display", "none", "-serial", "stdio", "-monitor", "none", "-nic", "none"]
-	if m["icount"] >= 0:
-		# sleep=off jumps the clock to the next deadline when every core
-		# is idle; with one core, QEMU (8.2) then never runs its main
-		# loop again: no serial input, no monitor, the guest idling in
-		# wfi as it should. One core sleeps in real time instead.
-		sleep = os.environ.get("NF_ICOUNT_SLEEP", "on" if m["smp"] == 1 else "off")
-		args += ["-icount", "shift=%d,align=off,sleep=%s" % (m["icount"], sleep)]
+	m = machine(seed, a.m, a.R)
+	cwd = None
+	if a.R:
+		cwd = rundir(a, seed)
+		shutil.rmtree(cwd, ignore_errors=True)
+		os.makedirs(cwd)
+		shutil.copy(a.K, os.path.join(cwd, "kernel.img"))
+		# its symbols, for gdb on a replay
+		elf = re.sub(r"\.img$", ".elf", a.K)
+		if elf != a.K and os.path.exists(elf):
+			shutil.copy(elf, os.path.join(cwd, "kernel.elf"))
+		subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", "-b", card, "-F", "raw",
+			os.path.join(cwd, "sd.qcow2")], check=True)
+		args = qemuargs(m, "kernel.img", card, ("record", cwd))
+		with open(os.path.join(cwd, "qemu"), "w") as f:
+			f.write(shlex.join(["qemu-system-aarch64"] + args[1:]) + "\n")
 	else:
-		args += ["-accel", "tcg,thread=multi"]
-	p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+		args = qemuargs(m, a.K, card)
+	p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=cwd)
 	c = Console(p)
 	kind, why = None, ""
 	note = ""
@@ -325,12 +379,19 @@ def one(seed, a, card):
 			except (BrokenPipeError, OSError):
 				pass
 		if p.poll() is None:
-			p.kill()
+			# terminated, not killed: a recording is only whole once QEMU
+			# has flushed it
+			p.terminate()
 		try:
-			rest, _ = p.communicate(timeout=10)
+			rest, _ = p.communicate(timeout=30)
 			c.buf.extend(rest or b"")
 		except subprocess.TimeoutExpired:
-			pass
+			p.kill()
+			try:
+				rest, _ = p.communicate(timeout=10)
+				c.buf.extend(rest or b"")
+			except subprocess.TimeoutExpired:
+				pass
 	text = bytes(c.buf)
 	if kind is None:
 		cr = CRASH.search(text)
@@ -339,6 +400,73 @@ def one(seed, a, card):
 			e = text.find(b"\n", cr.end())
 			kind, why = "crash", text[s:e if e >= 0 else len(text)].decode(errors="replace").strip()[:200]
 	return seed, m, nvm, kind, why or note, text.decode(errors="replace")
+
+
+def rundir(a, seed):
+	return os.path.join(a.work, "run", str(seed))
+
+
+def keeprecording(a, seed, d, card):
+	# the run's recording and overlay, with the card and kernel it
+	# started from, beside its console: what -r needs, whatever is built
+	# or made afterwards
+	src = rundir(a, seed)
+	for f in ("rr.bin", "sd.qcow2", "kernel.img", "kernel.elf", "qemu"):
+		if os.path.exists(os.path.join(d, f)):
+			os.remove(os.path.join(d, f))
+		if os.path.exists(os.path.join(src, f)):
+			shutil.move(os.path.join(src, f), os.path.join(d, f))
+	shutil.copy(card, os.path.join(d, "card.img"))
+	subprocess.run(["qemu-img", "rebase", "-u", "-b", "card.img", "-F", "raw", os.path.join(d, "sd.qcow2")], check=True)
+	shutil.rmtree(src, ignore_errors=True)
+
+
+# what is not the machine's: nativefuzz's own lines in a console, and
+# QEMU's (its exit on a signal, after the prompt)
+MARKS = re.compile(rb"\n--- nativefuzz: [^\n]*---\n|qemu-system-aarch64: [^\n]*\n?")
+
+
+def replay(a):
+	d = os.path.abspath(a.r)
+	for f in ("rr.bin", "sd.qcow2", "kernel.img", "card.img", "machine", "console"):
+		if not os.path.exists(os.path.join(d, f)):
+			print("nativefuzz: %s has no %s (recorded with -R?)" % (d, f))
+			return 2
+	with open(os.path.join(d, "machine")) as f:
+		m = machine(0, f.read().strip())
+	args = qemuargs(m, "kernel.img", None, ("replay", d))
+	if a.g:
+		args += ["-gdb", "tcp::%d" % a.g, "-S"]
+		print("nativefuzz: gdb stub on port %d, stopped at the start: gdb %s -ex 'target remote :%d'" % (a.g,
+			os.path.join(d, "kernel.elf"), a.g), flush=True)
+	print("nativefuzz: replaying %s (%s)" % (d, describe(m, True)), flush=True)
+	p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=d)
+	out = bytearray()
+	try:
+		while True:
+			b = os.read(p.stdout.fileno(), 65536)
+			if not b:
+				break
+			out.extend(b)
+			sys.stdout.buffer.write(b)
+			sys.stdout.buffer.flush()
+	except KeyboardInterrupt:
+		p.terminate()
+	p.wait()
+	with open(os.path.join(d, "console.replay"), "wb") as f:
+		f.write(bytes(out))
+	with open(os.path.join(d, "console"), "rb") as f:
+		want = MARKS.sub(b"", f.read()).replace(b"\r\n", b"\n")
+	got = MARKS.sub(b"", bytes(out)).replace(b"\r\n", b"\n")
+	n = 0
+	while n < len(want) and n < len(got) and want[n] == got[n]:
+		n += 1
+	if n == len(want) == len(got) or n >= len(want.rstrip()) and n >= len(got.rstrip()):
+		print("\nnativefuzz: the replay's console is the recording's (%d bytes)" % len(got))
+		return 0
+	print("\nnativefuzz: the replay's console departs from the recording's at byte %d of %d (it has %d); "
+		"kept in %s" % (n, len(want), len(got), os.path.join(d, "console.replay")))
+	return 1
 
 
 def mkcard(path):
@@ -364,7 +492,11 @@ def main():
 	ap.add_argument("-v", action="store_true")
 	ap.add_argument("-L", action="store_true")
 	ap.add_argument("-C", default=None)
+	ap.add_argument("-R", action="store_true")
+	ap.add_argument("-r", default=None)
+	ap.add_argument("-g", type=int, default=None)
 	a = ap.parse_args()
+	a.work = os.path.join(ROOT, "tmp", "nativefuzz")
 	if a.C:
 		global CRASH
 		CRASH = CRASHCHAOS
@@ -372,18 +504,31 @@ def main():
 	if QEMU is None:
 		print("nativefuzz: no qemu-system-aarch64")
 		return 2
+	if a.r:
+		return replay(a)
+	if a.g:
+		print("nativefuzz: -g is for -r")
+		return 2
+	if a.R:
+		if shutil.which("qemu-img") is None:
+			print("nativefuzz: -R needs qemu-img")
+			return 2
+		if a.m and (machine(0, a.m)["smp"] != 1 or machine(0, a.m)["icount"] < 0):
+			print("nativefuzz: -R records one core under -icount: -m cpu,1,gic,memMB,shift")
+			return 2
 	for f in (a.K, os.path.join(ROOT, "dis", "tests", "sysfuzz.dis"), os.path.join(ROOT, "dis", "vm.dis")):
 		if not os.path.exists(f):
 			print("nativefuzz: no %s (build it first)" % f)
 			return 2
-	work = os.path.join(ROOT, "tmp", "nativefuzz")
+	work = a.work
 	os.makedirs(work, exist_ok=True)
 	with open(os.path.join(work, "rootpath"), "w") as f:
 		f.write("local\n")
 	card = os.path.join(work, "card.img")
 	mkcard(card)
 	seed = a.s if a.s is not None else int(time.time()) % 1000000
-	print("nativefuzz: seeds from %d, %d at once, %ds each, kernel %s" % (seed, a.j, a.t, a.K), flush=True)
+	print("nativefuzz: seeds from %d, %d at once, %ds each, kernel %s%s" % (seed, a.j, a.t, a.K,
+		", recorded" if a.R else ""), flush=True)
 
 	failed = 0
 	counts = {}
@@ -414,11 +559,16 @@ def main():
 					failed += 1
 					with open(os.path.join(d, "why"), "w") as f:
 						f.write("%s %s\n" % (kind, why))
-					print("FAIL seed %d (%s): %s: %s\n  kept in %s" % (s, describe(m), kind, why, d), flush=True)
+					if a.R:
+						keeprecording(a, s, d, card)
+					print("FAIL seed %d (%s): %s: %s\n  kept in %s%s" % (s, describe(m, a.R), kind, why, d,
+						"\n  replay: tools/nativefuzz -r %s" % d if a.R else ""), flush=True)
 					if not a.k:
 						stop = True
 				else:
-					print("seed %d (%s, %d VMs): pass%s" % (s, describe(m), nvm, " (" + why + ")" if why else ""), flush=True)
+					if a.R:
+						shutil.rmtree(rundir(a, s), ignore_errors=True)
+					print("seed %d (%s, %d VMs): pass%s" % (s, describe(m, a.R), nvm, " (" + why + ")" if why else ""), flush=True)
 	print("nativefuzz: %d runs: %s" % (n, " ".join("%s %d" % kv for kv in sorted(counts.items()))))
 	return 1 if failed else 0
 

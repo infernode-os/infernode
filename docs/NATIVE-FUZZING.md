@@ -51,6 +51,46 @@ sysfuzz whose check at the end fails (`wedged`), on not every sysfuzz
 finishing (`hang`), on the shell not answering afterwards (`dead`), and on
 Progs beyond sysfuzz's three harness-owned Progs left in VMs 1-3 (`leaked`).
 
+## Recording a run
+
+`-R` records each run with QEMU's record/replay: every interrupt, timer
+read, card read and console byte, so a failure seen once can be gone
+through again exactly, as many times as it takes:
+
+```sh
+tools/nativefuzz -R -n 20 -k                 # record; a failure keeps its recording
+tools/nativefuzz -r tmp/nativefuzz/fail/SEED # replay it, console compared with the recording's
+tools/nativefuzz -r tmp/nativefuzz/fail/SEED -g 1234   # under gdb, stopped at the start
+```
+
+QEMU (11.0) records one core only, and only under `-icount`, so a
+recorded seed's machine has one core (one VM) and a shift: the seed's,
+or 0, 2 or 5 where it chose none. Races between cores are out of its
+reach; what a single core still shows (a lock held over a sleep, a
+use after free, a Prog stuck in a 9P call, a pool corrupted) is not. A
+fixed machine for `-R` is `-m cpu,1,gic,memMB,shift`.
+
+A failed run's directory keeps, beside `console`, `machine` and `why`:
+the recording (`rr.bin`), the card's overlay (`sd.qcow2`, which holds
+the snapshot the replay starts from), the card it was made from, and the
+kernel as `kernel.img` and `kernel.elf`, so a rebuild does not spoil it.
+`-r` replays it with its console on standard output and in
+`console.replay`, and says whether that is the console recorded, byte
+for byte (nativefuzz's own lines and QEMU's set aside); a replay that
+departs from its recording says at which byte.
+
+With `-g` QEMU's gdb stub is on that port and the machine stops before
+its first instruction. Any gdb that reads AArch64 (`gdb-multiarch`, a
+gdb configured for `aarch64-elf`) attaches with
+`gdb DIR/kernel.elf -ex 'target remote :PORT'`. As the recording begins
+at a snapshot, `reverse-stepi`, `reverse-continue` and watchpoints
+running backwards work: put a watchpoint on the corrupted word and
+`reverse-continue` to the store that wrote it.
+
+A recording is large: about 650 MB for three minutes of a one-core
+`-icount 0` machine, more for longer runs. Each run in flight writes
+its own (`tmp/nativefuzz/run/SEED/`), and a run that passes deletes it.
+
 ## On the board
 
 Put the tree's `dis/` on the card (`tools/mkcard.py`, as

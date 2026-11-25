@@ -5,5 +5,9 @@
 
 void	portinit(uint64_t, uint64_t);
 void	porttest(void);
+void	proctest(void);
+
+/* the top of the RAM the allocators may use */
+extern unsigned long ramtop;
 
 #endif

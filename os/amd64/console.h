@@ -10,8 +10,10 @@
 
 #include <stdint.h>
 
+void	consputc(int);
 void	consprint(const char*);
 void	consprinthex(uint64_t);
 void	consprintdec(uint64_t);
+void	conshalt(void);
 
 #endif

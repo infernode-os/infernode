@@ -24,6 +24,8 @@
 #        threads; "pftest" faults outside the map and must report the
 #        page fault and panic.  A third, "porttest", exercises the
 #        os/port foundation: setlabel/gotolabel, _tas and spl masking.
+#        A fourth, "proctest", runs os/port's own scheduler: two kernel
+#        processes, sleep/wakeup through Rendezes, and a qlock.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM and runs the same "kerneltest".  QEMU refuses an ELF64 image ("give a
@@ -81,12 +83,21 @@ haveqemu=0
 CFLAGS="--target=x86_64-elf -ffreestanding -nostdlib
 	-fno-stack-protector -fno-pic -mno-red-zone -mno-sse -mno-mmx
 	-mcmodel=small -O2 -Wall -Wextra -Wno-unknown-pragmas
+	-ffunction-sections -fdata-sections
 	-I$ROOT/Inferno/amd64/include -I$ROOT/os/amd64
-	-I$ROOT/os/port -I$ROOT/include"
+	-I$ROOT/os/port -I$ROOT/include -I$ROOT/libinterp -I$BUILD"
+
+# os/port's error strings are generated from error.h, as its portmkfile
+# does: each declaration becomes its definition.
+sed 's/extern //;s,;.*/\* , = ",;s, \*/,";,' \
+	< "$ROOT/os/port/error.h" > "$BUILD/errstr.h"
 
 echo "== build"
 objs=
-for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c; do
+for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c \
+	"$ROOT"/os/port/proc.c "$ROOT"/os/port/qlock.c \
+	"$ROOT"/os/port/taslock.c "$ROOT"/os/port/alloc.c \
+	"$ROOT"/os/port/xalloc.c "$ROOT"/os/port/alarm.c; do
 	base=$(basename "$f")
 	o="$BUILD/${base%.*}_${base##*.}.o"
 	# shellcheck disable=SC2086
@@ -94,7 +105,8 @@ for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c; do
 	objs="$objs $o"
 done
 # shellcheck disable=SC2086
-$LLD -T "$ROOT/os/amd64/kernel.ld" -o "$BUILD/kernel.elf" $objs
+$LLD -T "$ROOT/os/amd64/kernel.ld" --gc-sections \
+	-o "$BUILD/kernel.elf" $objs
 
 fails=0
 
@@ -255,6 +267,15 @@ if [ "$have9vm" = 1 ]; then
 	require port "$out" "infernode/amd64: port: tas ok"
 	require port "$out" "infernode/amd64: port: spl ok"
 	require port "$out" "infernode/amd64: porttest passed"
+
+	ran="$ran proc"
+	out=$(capture 30 "$BUILD/proc.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test proctest" "$BUILD/kernel.elf")
+	check proc "$out"
+	require proc "$out" "proctest: A has qlock"
+	require proc "$out" "proctest: B has qlock"
+	require proc "$out" "proctest: A woke"
+	require proc "$out" "proctest: proctest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then

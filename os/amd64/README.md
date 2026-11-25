@@ -98,6 +98,55 @@ returns 0 and a later gotolabel returns 1 in the same frame; `_tas`
 takes, refuses and releases a word; and splhi/splx mask and restore
 interrupts.
 
+## os/port processes
+
+`proctest` runs upstream's own scheduler on that foundation. The chain
+is the native kernel's:
+
+```
+xinit     the base allocator over [end, ramtop)
+poolinit  malloc's pools on top of xalloc
+procinit  the Proc arena out of xalloc
+newproc   a Proc and its kernel stack
+kproc     a kernel process at p->sched
+schedinit the scheduler loop
+```
+
+`os/port/proc.c`, `qlock.c`, `taslock.c`, `alloc.c`, `xalloc.c` and
+`alarm.c` are compiled unmodified. `kprocchild` builds the initial
+Label (pc at the machine's `linkproc`, sp at the top of the kernel
+stack); the scheduler's `setlabel`/`gotolabel` then start it, and
+`sleep`/`wakeup` move procs between a Rendez and the run queue.
+
+`shim.c` is what is not ported yet, and only that:
+
+- `print`, `snprint`/`vsnprint` — a small formatter for the verbs the
+  kernel's own messages use, until libkern's fmt and `printfp.c`;
+- `vm0`, `currun`, `iprogpid`, `upkilled`, `addprog/delprog` — the Dis
+  VM is not linked yet, so the registry and VM queries have no answer;
+- `closefgrp`/`closepgrp`/`closeegrp`/`closesigs` — no namespaces or
+  groups exist yet;
+- `dumpstack`, `labelstack`, `debugkey`, `ixsummary`,
+  `procsave`/`procrestore` — unwinding, FP save and developer hooks;
+- `microdelay` — a pause loop until the PIT clock is calibrated.
+
+The test itself is real: two kernel processes, A and B. A takes and
+releases a QLock and sleeps on a Rendez; B takes the same QLock, wakes
+A and sleeps on a second Rendez; A wakes B, prints the pass line and
+halts. A lost wakeup, a broken error stack or a scheduler that resumes
+the wrong stack stops the boot.
+
+```
+proctest: A up
+proctest: A has qlock
+proctest: B up
+proctest: B has qlock
+proctest: A woke
+proctest: proctest passed
+```
+
+## Machine tests
+
 ## Machine tests
 
 Command line `kerneltest` crosses `int $3`, waits 20 timer ticks, then
@@ -174,10 +223,15 @@ infernode/amd64: port: labels ok
 infernode/amd64: port: tas ok
 infernode/amd64: port: spl ok
 infernode/amd64: porttest passed
+-- proc
+proctest: A has qlock
+proctest: B has qlock
+proctest: A woke
+proctest: proctest passed
 -- qemu
 ...
 infernode/amd64: kerneltest passed
-PASS: x86-64 boot (9vm ns display trap fault port qemu)
+PASS: x86-64 boot (9vm ns display trap fault port proc qemu)
 ```
 
 ## Layout
@@ -201,16 +255,20 @@ PASS: x86-64 boot (9vm ns display trap fault port qemu)
 | `arch.S` | setlabel/gotolabel and `_tas` |
 | `arch.c` | splhi/spllo/splx/islo |
 | `port.c` | `conf`, `machs`, `m`, `active`, and `portinit` |
-| `port.h` | the above, and `porttest` |
+| `port.h` | the above, and `porttest`/`proctest` |
 | `porttest.c` | the os/port foundation's boot test |
+| `proctest.c` | two os/port processes, a QLock and Rendezes |
+| `shim.c` | the pieces proc.c reaches for that are not ported yet |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- `os/port`: `proc.c` and `qlock.c` on this foundation — procs, sleep
-  and wakeup, the error machinery — then the clock, the allocators,
-  channels, devices and `devmnt`, so `../9vm`'s rings become the
+- The clock and preemption: `portclock.c` on the 8254, `hzclock` calling
+  `sched()`, so a CPU-bound process yields and `tsleep` has timeouts.
+- The Dis VM (`os/port/dis.c` + libinterp), which retires the `vm0` and
+  registry shims, and real `print` from libkern's fmt.
+- Channels, devices and `devmnt`, so `../9vm`'s rings become the
   mountable `#~/0`/`#~/1` (`host`/`ns`) instead of a boot test.
 - A framebuffer console over the display slots.
 - `os/ip`, the Dis VM and the amd64 JIT.

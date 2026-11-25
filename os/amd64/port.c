@@ -17,10 +17,91 @@
 #include "console.h"
 #include "port.h"
 
+/*
+ * Optional hooks os/port declares and a platform may leave nil.  The
+ * profiler, the scheduler trace and the software screen have no users
+ * yet.
+ */
+void	(*kproftick)(ulong);
+void	(*proctrace)(Proc*, int, vlong);
+void	(*screenputs)(char*, int);
+
+/*
+ * A new kernel process enters here on its own stack.  The scheduler's
+ * gotolabel has just restored its Label and set up, so this is an
+ * ordinary C frame.
+ */
+static void
+linkproc(void)
+{
+	/*
+	 * The outer handler every kernel process needs: a body that calls
+	 * error() without a handler of its own unwinds to here.  Name the
+	 * process rather than the trampoline.
+	 */
+	if(waserror()){
+		char *e;
+
+		e = "(no error string)";
+		if(up->env != nil && up->env->errstr != nil &&
+		   up->env->errstr[0] != '\0')
+			e = up->env->errstr;
+		print("linkproc: error() underflow in %lud:%s (kpfun %#p): %s\n",
+			up->pid, up->text, up->kpfun, e);
+	}else
+		(*up->kpfun)(up->arg);
+	pexit("end proc", 1);
+}
+
+void
+kprocchild(Proc *p, void (*func)(void*), void *arg)
+{
+	p->sched.pc = (uintptr)linkproc;
+	p->sched.sp = (uintptr)p->kstack + KSTACK - 8;
+	memset(p->sched.regs, 0, sizeof(p->sched.regs));
+	p->kpfun = func;
+	p->arg = arg;
+}
+
+/* no x87 state is live yet: the kernel is -mno-sse and runs no VM */
+void
+procsave(Proc *p)
+{
+	USED(p);
+}
+
+void
+procrestore(Proc *p)
+{
+	USED(p);
+}
+
+void
+fpinit(void)
+{
+}
+
+void
+fpoff(void)
+{
+}
+
+/*
+ * The clock's contribution.  Ticks are counted so sleep and the
+ * scheduler have a clock; preemption arrives with portclock.c.
+ */
+void
+hzclock(Ureg *ur)
+{
+	USED(ur);
+	m->ticks++;
+}
+
 Conf	conf;
 Mach	machs[MAXMACH];
 Mach	*m;
 struct Active active;
+unsigned long ramtop;
 
 void
 portinit(uint64_t membase, uint64_t memsize)
@@ -28,6 +109,7 @@ portinit(uint64_t membase, uint64_t memsize)
 	m = &machs[0];
 	m->machno = 0;
 
+	ramtop = membase + memsize;
 	conf.nmach = 1;
 	conf.nproc = 32;
 	conf.base0 = membase;

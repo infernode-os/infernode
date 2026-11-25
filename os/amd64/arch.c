@@ -66,3 +66,42 @@ islo(void)
 {
 	return (rdflags() & Iflag) != 0;
 }
+
+/*
+ * x86 has no caches for software to clean (the caches are coherent) and
+ * no store buffer for code to worry about in this direction; the
+ * compiler barrier is what stops the stores moving across the publish.
+ */
+void
+coherence(void)
+{
+	__asm__ volatile("mfence" ::: "memory");
+}
+
+/*
+ * The scheduler's idle wait: the caller is at splhi, so interrupts are
+ * opened across the hlt (or the wait would never end) and shut again
+ * before it returns.
+ */
+void
+idlehands(void)
+{
+	__asm__ volatile("sti; hlt; cli" ::: "memory");
+}
+
+/* One core: there is nobody to wake. */
+void
+idlewake(void)
+{
+}
+
+/* The panic and clock-check hooks os/port calls; nothing to do yet. */
+void
+setpanic(void)
+{
+}
+
+void
+clockcheck(void)
+{
+}

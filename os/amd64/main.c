@@ -70,8 +70,8 @@ serialinit(void)
 	outb(COM1+4, 0x0B);	/* DTR, RTS, OUT2 */
 }
 
-static void
-putc(int c)
+void
+consputc(int c)
 {
 	while((inb(COM1+5) & 0x20) == 0)
 		;
@@ -82,7 +82,7 @@ void
 consprint(const char *s)
 {
 	while(*s != 0)
-		putc(*s++);
+		consputc(*s++);
 }
 
 void
@@ -93,7 +93,7 @@ consprinthex(uint64_t v)
 
 	consprint("0x");
 	for(i = 60; i >= 0; i -= 4)
-		putc(dig[(v >> i) & 15]);
+		consputc(dig[(v >> i) & 15]);
 }
 
 void
@@ -108,7 +108,7 @@ consprintdec(uint64_t v)
 		v /= 10;
 	} while(v != 0);
 	while(i > 0)
-		putc(buf[--i]);
+		consputc(buf[--i]);
 }
 
 /* Is [pa, pa+len) inside the identity map boot.S builds? */
@@ -132,12 +132,12 @@ contains(const char *s, const char *t)
 	return 0;
 }
 
-static void
-halt(void)
+void
+conshalt(void)
 {
 	consprint("infernode/amd64: halted\n");
 	for(;;)
-		__asm__ volatile("hlt");
+		__asm__ volatile("cli; hlt");
 }
 
 void
@@ -161,7 +161,7 @@ main(uint32_t mbiaddr)
 	if(mbiaddr == 0 ||
 	   (uint64_t)mbiaddr + sizeof(struct multiboot_info) > IDENTMAP){
 		consprint("infernode/amd64: bad Multiboot information\n");
-		halt();
+		conshalt();
 	}
 	m = (struct multiboot_info*)(uintptr_t)mbiaddr;
 	consprint("infernode/amd64: flags ");
@@ -173,7 +173,6 @@ main(uint32_t mbiaddr)
 		consprint(" KiB, upper ");
 		consprintdec(m->mem_upper);
 		consprint(" KiB\n");
-		portinit(0x100000, (uint64_t)m->mem_upper * 1024);
 	}
 	/*
 	 * The command line is optional and its pointer is only usable
@@ -226,6 +225,17 @@ main(uint32_t mbiaddr)
 		}
 	}
 
+	{
+		uint64_t top;
+
+		top = 0x100000;
+		if(m->flags & (1u<<0))
+			top += (uint64_t)m->mem_upper * 1024;
+		if(ringpa != 0 && ringpa < top)
+			top = ringpa;
+		portinit(0x100000, top - 0x100000);
+	}
+
 	if(ringpa == 0)
 		consprint("infernode/amd64: no #~ host ring in the map\n");
 	else if(boardattach(&board, ringpa, ringlen) == 0 &&
@@ -240,6 +250,8 @@ main(uint32_t mbiaddr)
 		pftest();
 	if(cmdline != 0 && contains(cmdline, "porttest"))
 		porttest();
+	if(cmdline != 0 && contains(cmdline, "proctest"))
+		proctest();
 
-	halt();
+	conshalt();
 }

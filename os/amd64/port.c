@@ -15,7 +15,10 @@
 #include "dat.h"
 #include "fns.h"
 #include "console.h"
+#include "ureg.h"
 #include "port.h"
+
+extern char	end[];		/* from kernel.ld */
 
 /*
  * Optional hooks os/port declares and a platform may leave nil.  The
@@ -34,6 +37,7 @@ void	(*screenputs)(char*, int);
 static void
 linkproc(void)
 {
+	spllo();
 	/*
 	 * The outer handler every kernel process needs: a body that calls
 	 * error() without a handler of its own unwinds to here.  Name the
@@ -87,14 +91,99 @@ fpoff(void)
 }
 
 /*
- * The clock's contribution.  Ticks are counted so sleep and the
- * scheduler have a clock; preemption arrives with portclock.c.
+ * The clock tick, as os/port's machine layer provides it: count it,
+ * record where the process was, run the timed sleeps that are due, and
+ * preempt a running process if anything at its priority is ready.
+ *
+ * The inpreempt flag is what bounds the nesting: sched() returns only
+ * when this process is scheduled again, so the flag brackets exactly
+ * one preemption.  Without it each tick that arrives while the handler
+ * is still unwound would nest another Ureg and another set of frames on
+ * the same kernel stack.
  */
 void
 hzclock(Ureg *ur)
 {
-	USED(ur);
 	m->ticks++;
+	if(m->proc != nil)
+		m->proc->pc = ur->pc;
+	else
+		m->idleticks++;
+
+	if(kproftick != nil)
+		kproftick(ur->pc);
+
+	if((active.machs & (1<<m->machno)) == 0)
+		return;
+
+	checkalarms();
+
+	if(up != nil && up->state == Running && !up->inpreempt){
+		if(anyready()){
+			up->inpreempt = 1;
+			sched();
+			splhi();
+			up->inpreempt = 0;
+		}
+	}
+}
+
+/* The trap has a Trapframe; os/port asks for a Ureg.  The pc is the part
+ * the clock uses. */
+void
+portclocktick(uint64_t pc)
+{
+	Ureg u;
+
+	u.pc = (uintptr)pc;
+	u.sp = 0;
+	hzclock(&u);
+}
+
+int
+portactive(void)
+{
+	return up != nil;
+}
+
+/*
+ * The allocators and the process table, in the order the native kernel
+ * brings them up: xinit over [end, ramtop), malloc's pools on top, then
+ * procinit's arena out of xalloc.  Leaves up as a new boot process so
+ * kproc() has a creator.
+ */
+int
+portprocinit(void)
+{
+	Proc *p;
+	uintptr base;
+	ulong top;
+
+	top = ramtop;
+	/*
+	 * boot.S maps only the first GiB.  A loader that reports more RAM
+	 * must not make xinit hand out pages above the mapped range.
+	 */
+	if(top > 0x40000000UL)
+		top = 0x40000000UL;
+	base = ((uintptr)end + BY2PG-1) & ~(BY2PG-1);
+	if(top <= base || top - base < 4*1024*1024)
+		return -1;
+	conf.base0 = base;
+	conf.npage0 = (top - base) / BY2PG;
+	conf.npage = conf.npage0;
+	conf.nproc = 16;
+
+	xinit();
+	poolinit();
+	procinit();
+
+	p = newproc();
+	if(p == nil)
+		return -1;
+	up = p;
+	m->ticks = 1;
+	return 0;
 }
 
 Conf	conf;
@@ -110,6 +199,7 @@ portinit(uint64_t membase, uint64_t memsize)
 	m->machno = 0;
 
 	ramtop = membase + memsize;
+	active.machs = 1;
 	conf.nmach = 1;
 	conf.nproc = 32;
 	conf.base0 = membase;

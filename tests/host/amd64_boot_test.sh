@@ -25,7 +25,9 @@
 #        page fault and panic.  A third, "porttest", exercises the
 #        os/port foundation: setlabel/gotolabel, _tas and spl masking.
 #        A fourth, "proctest", runs os/port's own scheduler: two kernel
-#        processes, sleep/wakeup through Rendezes, and a qlock.
+#        processes, sleep/wakeup through Rendezes, and a qlock.  A fifth,
+#        "preemptest", proves the clock preempts a CPU-bound process and
+#        that a timed sleep expires.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM and runs the same "kerneltest".  QEMU refuses an ELF64 image ("give a
@@ -276,6 +278,13 @@ if [ "$have9vm" = 1 ]; then
 	require proc "$out" "proctest: B has qlock"
 	require proc "$out" "proctest: A woke"
 	require proc "$out" "proctest: proctest passed"
+
+	ran="$ran preempt"
+	out=$(capture 30 "$BUILD/preempt.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test preemptest" "$BUILD/kernel.elf")
+	check preempt "$out"
+	require preempt "$out" "preempt: hog advanced"
+	require preempt "$out" "preemptest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then

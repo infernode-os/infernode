@@ -252,6 +252,8 @@ main(uint32_t mbiaddr)
 		porttest();
 	if(cmdline != 0 && contains(cmdline, "proctest"))
 		proctest();
+	if(cmdline != 0 && contains(cmdline, "preemptest"))
+		preemptest();
 
 	conshalt();
 }

@@ -17,8 +17,6 @@
 #include "console.h"
 #include "port.h"
 
-extern char	end[];		/* from kernel.ld: end of the kernel image */
-
 static Rendez	rend1, rend2;
 static QLock	ql;
 
@@ -53,32 +51,10 @@ ptb(void *a)
 void
 proctest(void)
 {
-	Proc *p;
-	uintptr base;
-	unsigned long top;
-
-	top = ramtop;
-	base = ((uintptr)end + BY2PG-1) & ~(BY2PG-1);
-	if(top <= base || top - base < 4*1024*1024){
+	if(portprocinit() < 0){
 		consprint("proctest: no memory above the kernel\n");
 		return;
 	}
-	conf.base0 = base;
-	conf.npage0 = (top - base) / BY2PG;
-	conf.npage = conf.npage0;
-	conf.nproc = 16;
-
-	xinit();
-	poolinit();
-	procinit();
-
-	p = newproc();
-	if(p == nil){
-		consprint("proctest: newproc failed\n");
-		return;
-	}
-	up = p;
-	m->ticks = 1;
 
 	kproc("pt-a", pta, nil, 0);
 	kproc("pt-b", ptb, nil, 0);

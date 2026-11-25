@@ -12,6 +12,7 @@
 
 #include "console.h"
 #include "io.h"
+#include "port.h"
 #include "trap.h"
 #include "thread.h"
 
@@ -187,6 +188,16 @@ trap(Trapframe *f)
 	if(f->vector == 32){
 		ticks++;
 		outb(PIC1CMD, PICEOI);
+		/*
+		 * os/port's clock first: it counts m->ticks, runs due
+		 * sleeps and may preempt, in which case it returns only
+		 * when this process is scheduled again.  The mini
+		 * kernel's thread scheduler runs only when no os/port
+		 * process exists (the kerneltest boots).
+		 */
+		portclocktick(f->rip);
+		if(portactive())
+			return f;
 		return threadsched(f);
 	}
 	if(f->vector >= 40 && f->vector < 48)

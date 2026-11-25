@@ -145,6 +145,35 @@ proctest: A woke
 proctest: proctest passed
 ```
 
+## The clock and preemption
+
+The 8254 tick now drives os/port's scheduler. `linkproc` opens
+interrupts and `hzclock` runs from the IRQ0 handler: it counts
+`m->ticks`, records the interrupted pc in `up->pc`, runs `checkalarms()`
+— which is what expires a `tsleep` — and, when a process at the running
+process's priority is ready, calls `sched()`.
+
+The `inpreempt` flag bounds the nesting. `sched()` returns only when the
+process is scheduled again, so the flag brackets exactly one preemption;
+without it, each tick that arrived while the handler was still unwound
+would nest another frame on the same kernel stack until it ran off the
+bottom.
+
+`preemptest` proves both halves at once. A hog process never sleeps or
+yields; a watcher samples the hog's counter, `tsleep`s for 100 ms (a
+timeout, not a wakeup from another process), and requires the counter to
+have moved. Without preemption the watcher never runs; without a clock
+the sleep never expires.
+
+```
+preempt: hog advanced 60294981 in 100ms
+preemptest passed
+```
+
+The tick is the clock's resolution: `fastticks`, the nanosecond base and
+the wall clock (`tod.c`) are not ported yet, so sleeps are quantised to
+`HZ`.
+
 ## Machine tests
 
 ## Machine tests
@@ -228,10 +257,13 @@ proctest: A has qlock
 proctest: B has qlock
 proctest: A woke
 proctest: proctest passed
+-- preempt
+preempt: hog advanced 60294981 in 100ms
+preemptest passed
 -- qemu
 ...
 infernode/amd64: kerneltest passed
-PASS: x86-64 boot (9vm ns display trap fault port proc qemu)
+PASS: x86-64 boot (9vm ns display trap fault port proc preempt qemu)
 ```
 
 ## Layout
@@ -256,16 +288,18 @@ PASS: x86-64 boot (9vm ns display trap fault port proc qemu)
 | `arch.c` | splhi/spllo/splx/islo |
 | `port.c` | `conf`, `machs`, `m`, `active`, and `portinit` |
 | `port.h` | the above, and `porttest`/`proctest` |
+| `ureg.h` | the exception frame as os/port's clock and traps see it |
 | `porttest.c` | the os/port foundation's boot test |
 | `proctest.c` | two os/port processes, a QLock and Rendezes |
+| `preemptest.c` | the tick preempts a hog, and a timed sleep expires |
 | `shim.c` | the pieces proc.c reaches for that are not ported yet |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- The clock and preemption: `portclock.c` on the 8254, `hzclock` calling
-  `sched()`, so a CPU-bound process yields and `tsleep` has timeouts.
+- `portclock.c` and `tod.c`: `fastticks` and the wall clock, so timers
+  are sub-tick precise and the system has a time of day.
 - The Dis VM (`os/port/dis.c` + libinterp), which retires the `vm0` and
   registry shims, and real `print` from libkern's fmt.
 - Channels, devices and `devmnt`, so `../9vm`'s rings become the

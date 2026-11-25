@@ -42,9 +42,9 @@ ELF is for loaders that parse ELF64.
 native Harvey, Purgatorio/Inferno and GEFS guests. It loads the ELF64
 image, enters it in 32-bit protected mode with a Multiboot information
 structure, and emulates a 16550 console at 0x3F8. It is one Multiboot
-loader, not a dependency of the kernel. The 9vm board itself — the `#~`
-shared-memory host ring and the shared display — is a separate `os/9vm`
-stage.
+loader, not a dependency of the kernel. It also publishes the `#~`
+shared-memory 9P host ring, which `../9vm` drives; a boot under another
+loader has no host filesystem.
 
 ## Build and boot
 
@@ -61,12 +61,19 @@ when `clang` or `ld.lld` is absent, or when neither loader is available.
 -- 9vm
 infernode/amd64: booting (Multiboot)
 ...
+infernode/9vm: #~/0 host: 8 concurrent reads of 32744 bytes, 300000 bytes verified
+infernode/9vm: ring test passed
 infernode/amd64: halted
+-- ns
+...
+infernode/9vm: #~/1 ns: 8 concurrent reads of 100 bytes, replies out of order
+...
 -- qemu
 infernode/amd64: booting (Multiboot)
 ...
+infernode/amd64: no #~ host ring in the map
 infernode/amd64: halted
-PASS: x86-64 boot (9vm qemu)
+PASS: x86-64 boot (9vm ns qemu)
 ```
 
 ## Layout
@@ -74,12 +81,13 @@ PASS: x86-64 boot (9vm qemu)
 | file | |
 |-|-|
 | `boot.S` | the 32-bit stub: page tables, long mode, GDT, stack |
-| `main.c` | console, Multiboot parse, memory map, halt |
-| `kernel.ld` | links at 1 MiB; `.text.boot` first |
+| `main.c` | console, Multiboot parse, memory map, the `#~` handoff, halt |
+| `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
+| `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- `os/9vm`: the board — the `#~` ring (all eight slots, the full 32 KiB
-  message size and the `#~/ns` relay) and the shared display.
-- `os/port` and the device layer beneath this entry.
+- `os/port` and the device layer beneath this entry, so `../9vm`'s rings
+  become the mountable `#~/0`/`#~/1` (`host`/`ns`) instead of a boot test.
+- The shared display.
 - `os/ip`, the Dis VM and the amd64 JIT.

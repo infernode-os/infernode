@@ -1,21 +1,25 @@
 /*
- * os/amd64 -- the first x86-64 stage: console and the Multiboot map.
+ * os/amd64 -- the first x86-64 stage: console, Multiboot map, and the
+ * 9vm board when the boot loader offers one.
  *
  * A Multiboot boot loader enters the kernel in 32-bit protected mode
  * with a Multiboot information structure; boot.S enters long mode and
  * calls this.  The 16550 at 0x3F8 carries the console.  This file says
- * what the machine is and stops.
+ * what the machine is, hands the 9vm #~ region to os/9vm, and stops.
  *
- * The next stages add os/port beneath this: devices, os/ip, the Dis VM
- * and the userland.  The 9vm board -- the #~ host ring and the shared
- * display -- is a separate os/9vm stage.
+ * The next stages add os/port beneath this: the device layer, os/ip, the
+ * Dis VM and the userland.  The ring smoke test runs only when the
+ * command line contains "ringtest"; an ordinary boot just reports the
+ * ring it found.
  */
 
 #include <stdint.h>
 #include <stddef.h>
+#include "../9vm/board.h"
 
 #define COM1		0x3F8
 #define IDENTMAP	0x40000000u	/* boot.S identity-maps the first GiB */
+#define MMAP_HOSTRING	0x9009u		/* 9vm's #~ region */
 
 struct multiboot_info {
 	uint32_t flags;
@@ -83,26 +87,26 @@ putc(int c)
 	outb(COM1, (uint8_t)c);
 }
 
-static void
-print(const char *s)
+void
+consprint(const char *s)
 {
 	while(*s != 0)
 		putc(*s++);
 }
 
-static void
-printhex(uint64_t v)
+void
+consprinthex(uint64_t v)
 {
 	static const char dig[] = "0123456789abcdef";
 	int i;
 
-	print("0x");
+	consprint("0x");
 	for(i = 60; i >= 0; i -= 4)
 		putc(dig[(v >> i) & 15]);
 }
 
-static void
-printdec(uint64_t v)
+void
+consprintdec(uint64_t v)
 {
 	char buf[24];
 	int i;
@@ -123,10 +127,24 @@ inmap(uint64_t pa, uint64_t len)
 	return pa != 0 && len <= IDENTMAP && pa <= IDENTMAP - len;
 }
 
+static int
+contains(const char *s, const char *t)
+{
+	int i;
+
+	for(; *s != 0; s++){
+		for(i = 0; t[i] != 0 && s[i] == t[i]; i++)
+			;
+		if(t[i] == 0)
+			return 1;
+	}
+	return 0;
+}
+
 static void
 halt(void)
 {
-	print("infernode/amd64: halted\n");
+	consprint("infernode/amd64: halted\n");
 	for(;;)
 		__asm__ volatile("hlt");
 }
@@ -136,68 +154,90 @@ main(uint32_t mbiaddr)
 {
 	struct multiboot_info *m;
 	struct mmap_entry *e;
+	Board board;
+	char cmdbuf[256];
+	const char *cmdline;
 	uint8_t *p, *end;
+	uint64_t ringpa, ringlen;
 
 	serialinit();
-	print("infernode/amd64: booting (Multiboot)\n");
-	print("infernode/amd64: Multiboot at ");
-	printhex(mbiaddr);
-	print("\n");
+	consprint("infernode/amd64: booting (Multiboot)\n");
+	consprint("infernode/amd64: Multiboot at ");
+	consprinthex(mbiaddr);
+	consprint("\n");
 
 	if(mbiaddr == 0 ||
 	   (uint64_t)mbiaddr + sizeof(struct multiboot_info) > IDENTMAP){
-		print("infernode/amd64: bad Multiboot information\n");
+		consprint("infernode/amd64: bad Multiboot information\n");
 		halt();
 	}
 	m = (struct multiboot_info*)(uintptr_t)mbiaddr;
-	print("infernode/amd64: flags ");
-	printhex(m->flags);
-	print("\n");
+	consprint("infernode/amd64: flags ");
+	consprinthex(m->flags);
+	consprint("\n");
 	if(m->flags & (1u<<0)){
-		print("infernode/amd64: lower ");
-		printdec(m->mem_lower);
-		print(" KiB, upper ");
-		printdec(m->mem_upper);
-		print(" KiB\n");
+		consprint("infernode/amd64: lower ");
+		consprintdec(m->mem_lower);
+		consprint(" KiB, upper ");
+		consprintdec(m->mem_upper);
+		consprint(" KiB\n");
 	}
 	/*
 	 * The command line is optional and its pointer is only usable
-	 * while it is inside the identity map boot.S builds.  Read it a
-	 * byte at a time, and only from mapped addresses: a loader that
-	 * points outside the map, or leaves the string unterminated, must
-	 * cost a diagnostic, not a page fault.
+	 * while it is inside the identity map boot.S builds.  Copy it, a
+	 * byte at a time and only from mapped addresses, into a bounded
+	 * buffer: contains() below scans this copy, so a loader that
+	 * points outside the map or leaves the string unterminated costs
+	 * a test, not a page fault.
 	 */
+	cmdline = 0;
 	if((m->flags & (1u<<2)) && inmap(m->cmdline, 1)){
 		int i;
 
-		print("infernode/amd64: cmdline \"");
 		for(i = 0; i < 255; i++){
 			if(!inmap((uint64_t)m->cmdline + i, 1))
 				break;
-			if(((char*)(uintptr_t)m->cmdline)[i] == 0)
+			cmdbuf[i] = ((char*)(uintptr_t)m->cmdline)[i];
+			if(cmdbuf[i] == 0)
 				break;
-			putc(((char*)(uintptr_t)m->cmdline)[i]);
 		}
-		print("\"\n");
+		cmdbuf[i] = 0;
+		cmdline = cmdbuf;
+		consprint("infernode/amd64: cmdline \"");
+		consprint(cmdline);
+		consprint("\"\n");
 	}
 
+	ringpa = 0;
+	ringlen = 0;
 	if((m->flags & (1u<<6)) && inmap(m->mmap_addr, m->mmap_length)){
-		print("infernode/amd64: memory map\n");
+		consprint("infernode/amd64: memory map\n");
 		p = (uint8_t*)(uintptr_t)m->mmap_addr;
 		end = p + m->mmap_length;
 		while(p + 4 <= end){
 			e = (struct mmap_entry*)p;
 			if(e->size < 20 || p + 4 + e->size > end)
 				break;
-			print("  base ");
-			printhex(e->addr);
-			print(" len ");
-			printhex(e->len);
-			print(" type ");
-			printhex(e->type);
-			print("\n");
+			consprint("  base ");
+			consprinthex(e->addr);
+			consprint(" len ");
+			consprinthex(e->len);
+			consprint(" type ");
+			consprinthex(e->type);
+			consprint("\n");
+			if(e->type == MMAP_HOSTRING){
+				ringpa = e->addr;
+				ringlen = e->len;
+			}
 			p += 4 + e->size;
 		}
 	}
+
+	if(ringpa == 0)
+		consprint("infernode/amd64: no #~ host ring in the map\n");
+	else if(boardattach(&board, ringpa, ringlen) == 0 &&
+		cmdline != 0 && contains(cmdline, "ringtest"))
+		ringselftest(&board);
+
 	halt();
 }

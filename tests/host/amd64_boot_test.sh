@@ -2,21 +2,27 @@
 #
 # tests/host/amd64_boot_test.sh
 #
-# Build the first x86-64 kernel (os/amd64) and boot it under every
-# Multiboot loader that is available.  The kernel is generic; the
-# loaders are hosts:
+# Build the first x86-64 kernel (os/amd64) and its 9vm board (os/9vm),
+# and boot it under every Multiboot loader that is available.
 #
 #   9vm  (https://github.com/kiljoy001/9vm) is a KVM microVM runner for
 #        native Harvey, Purgatorio/Inferno and GEFS guests.  It loads the
 #        ELF64 image, enters it in 32-bit protected mode with a Multiboot
-#        information structure, and emulates a 16550 console at 0x3F8.
+#        information structure, emulates a 16550 console at 0x3F8, and
+#        serves #~ shared-memory 9P rings for the top 2 MiB of RAM.
+#        The test exports a small tree, asks the kernel for the ring
+#        smoke test, and checks that the host filesystem and the ns
+#        channel answer; the ns stub answers eight reads in reverse, so
+#        the guest has to match completions by buffer, not by order.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM.  QEMU refuses an ELF64 image ("give a
 #        32bit one") unless the header carries the a.out kludge
-#        addresses, and then loads the flat image instead.
+#        addresses, and then loads the flat image instead.  It offers no
+#        #~ ring; the kernel must still boot and report the map.
 #
-# Set NINEVM or QEMU to override the binaries.  Exits 77 (skip) when the
+# Set NINEVM, QEMU or HOSTCC to override the binaries; set NINEVM or QEMU
+# to the empty string to skip that loader.  Exits 77 (skip) when the
 # toolchain is missing or when neither loader is available.
 #
 # Run from the project root: ./tests/host/amd64_boot_test.sh
@@ -28,9 +34,13 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 CC=${CC:-$(command -v clang || true)}
 LLD=${LLD:-$(command -v ld.lld || true)}
 OBJCOPY=${OBJCOPY-$(command -v llvm-objcopy || command -v objcopy || true)}
+HOSTCC=${HOSTCC-$(command -v cc || command -v gcc || command -v clang || true)}
 NINEVM=${NINEVM-$ROOT/../9vm/9vm}
 QEMU=${QEMU-$(command -v qemu-system-x86_64 || true)}
 BUILD=${BAREMETAL_BUILD_DIR:-}
+
+# the pattern file the ring test verifies: byte i is 'a' + i%26
+SIZE=300000
 
 cleanup=0
 if [ -z "$BUILD" ]; then
@@ -63,10 +73,15 @@ CFLAGS="--target=x86_64-elf -ffreestanding -nostdlib
 echo "== build"
 # shellcheck disable=SC2086 # CFLAGS is a list of flags
 $CC $CFLAGS -c "$ROOT/os/amd64/boot.S" -o "$BUILD/boot.o"
+objs="$BUILD/boot.o"
+for f in "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c; do
+	o="$BUILD/$(basename "$f" .c).o"
+	# shellcheck disable=SC2086
+	$CC $CFLAGS -c "$f" -o "$o"
+	objs="$objs $o"
+done
 # shellcheck disable=SC2086
-$CC $CFLAGS -c "$ROOT/os/amd64/main.c" -o "$BUILD/main.o"
-$LLD -T "$ROOT/os/amd64/kernel.ld" -o "$BUILD/kernel.elf" \
-	"$BUILD/boot.o" "$BUILD/main.o"
+$LLD -T "$ROOT/os/amd64/kernel.ld" -o "$BUILD/kernel.elf" $objs
 
 fails=0
 
@@ -92,38 +107,84 @@ capture() {
 	cat "$_out"
 }
 
+require() {
+	# $1 loader name, $2 output, $3 line expected
+	case "$2" in
+	*"$3"*) ;;
+	*)
+		echo "MISSING ($1): $3" >&2
+		fails=$((fails + 1))
+		;;
+	esac
+}
+
 check() {
-	# $1 is the loader name, $2 its console output
+	# the lines every loader must produce
 	echo "-- $1"
 	printf '%s\n' "$2"
-	for want in \
-		"infernode/amd64: booting (Multiboot)" \
-		"infernode/amd64: Multiboot at" \
-		"infernode/amd64: memory map" \
-		"infernode/amd64: halted"
-	do
-		case "$2" in
-		*"$want"*) ;;
-		*)
-			echo "MISSING ($1): $want" >&2
-			fails=$((fails + 1))
-			;;
-		esac
-	done
+	require "$1" "$2" "infernode/amd64: booting (Multiboot)"
+	require "$1" "$2" "infernode/amd64: Multiboot at"
+	require "$1" "$2" "infernode/amd64: memory map"
+	require "$1" "$2" "infernode/amd64: halted"
 }
 
 ran=
 
 if [ "$have9vm" = 1 ]; then
+	mkdir -p "$BUILD/root/sub"
+	printf 'hello from 9vm\n' > "$BUILD/root/sub/hello.txt"
+	LC_ALL=C awk -v n="$SIZE" \
+		'BEGIN { for (i = 0; i < n; i++) printf "%c", 97 + i % 26 }' \
+		> "$BUILD/root/pattern.bin"
+	have=$(wc -c < "$BUILD/root/pattern.bin")
+	[ "$have" -eq "$SIZE" ] ||
+		skip "awk did not write the $SIZE-byte test file"
+
 	ran="$ran 9vm"
-	check 9vm "$(capture 10 "$BUILD/9vm.out" \
-		"$NINEVM" -m 256 -c "amd64 boot test" "$BUILD/kernel.elf")"
+	out=$(capture 30 "$BUILD/9vm.out" "$NINEVM" -m 256 -r "$BUILD/root" \
+		-c "amd64 boot test ringtest" "$BUILD/kernel.elf")
+	check 9vm "$out"
+	require 9vm "$out" "infernode/9vm: ring test passed"
+	require 9vm "$out" "infernode/9vm: #~/0 host: 8 concurrent reads"
+	require 9vm "$out" "$SIZE bytes verified"
+fi
+
+# The ns channel: 9vm relays #~/ns to a 9P server named with -ns.  The
+# stub answers Tversion and Tattach, which is all the boot test asks.
+if [ "$have9vm" = 1 ] && [ -n "$HOSTCC" ]; then
+	if $HOSTCC -O2 -o "$BUILD/ns9p" "$ROOT/tests/host/ns9p_stub.c" \
+		2>"$BUILD/ns9p.build"; then
+		"$BUILD/ns9p" "$BUILD/ns.sock" &
+		nspid=$!
+		i=0
+		while [ "$i" -lt 10 ]; do
+			[ -S "$BUILD/ns.sock" ] && break
+			sleep 1
+			i=$((i + 1))
+		done
+		ran="$ran ns"
+		out=$(capture 30 "$BUILD/ns.out" "$NINEVM" -m 256 \
+			-r "$BUILD/root" -ns "unix!$BUILD/ns.sock" \
+			-c "amd64 boot test ringtest" "$BUILD/kernel.elf")
+		kill "$nspid" 2>/dev/null || true
+		wait "$nspid" 2>/dev/null || true
+		check ns "$out"
+		require ns "$out" "infernode/9vm: ring test passed"
+		require ns "$out" "infernode/9vm: #~/1 ns: 9P2000 msize"
+		require ns "$out" "infernode/9vm: #~/1 ns: walked . while"
+		require ns "$out" "infernode/9vm: #~/1 ns: 8 concurrent reads of 100 bytes, replies out of order"
+	else
+		echo "SKIP: ns channel: the stub did not build" >&2
+		cat "$BUILD/ns9p.build" >&2
+	fi
+else
+	echo "SKIP: ns channel: no host C compiler" >&2
 fi
 
 if [ "$haveqemu" = 1 ]; then
 	ran="$ran qemu"
 	$OBJCOPY -O binary "$BUILD/kernel.elf" "$BUILD/kernel.bin"
-	check qemu "$(capture 10 "$BUILD/qemu.out" \
+	check qemu "$(capture 30 "$BUILD/qemu.out" \
 		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" -append "amd64 boot test" \
 		-display none -serial stdio -monitor none -no-reboot)"
 fi

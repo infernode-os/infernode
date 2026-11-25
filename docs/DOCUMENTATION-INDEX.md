@@ -127,6 +127,7 @@
 | [BAREMETAL.md](BAREMETAL.md) | **Bare metal, start here** - the manual: build, run under QEMU (`virt`, `raspi3b`), put it on a Pi 3B+ or 4B, the card's control files, the command line, `/dev/sysctl`, debug keys, devices, boot sequence, testing |
 | [BAREMETAL-BOARD-INTERFACE.md](BAREMETAL-BOARD-INTERFACE.md) | The contract between the shared native kernel and a board directory: files, hooks in call order, what the shared drivers call downward |
 | [BAREMETAL-PORTING-LESSONS.md](BAREMETAL-PORTING-LESSONS.md) | What a port to other hardware should take from the first one |
+| [SEL4.md](SEL4.md) | The native kernel on seL4: what seL4 replaces and what is kept, its verified configurations (Pi 4, Pi 5, one core), the architecture, the order of work, the assurance method and the gate |
 | [../os/bcm2837/README.md](../os/bcm2837/README.md) | Bare-metal Raspberry Pi 3B+ kernel: the engineering journal -- status, decisions, measurements, board runbook |
 | [../os/bcm2711/README.md](../os/bcm2711/README.md) | Bare-metal Raspberry Pi 4B: runs on a board since 2026-10-15 and under QEMU `raspi4b`; what was proved on the board, what was fixed to get there, what has not been tried |
 | [../os/bcm2712/README.md](../os/bcm2712/README.md) | Bare-metal Raspberry Pi 5: runs on a board since 2026-10-31, on no emulator; [INVENTORY.md](../os/bcm2712/INVENTORY.md) says what is proved, feature by feature |

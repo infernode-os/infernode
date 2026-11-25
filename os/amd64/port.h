@@ -8,6 +8,8 @@ void	porttest(void);
 void	proctest(void);
 void	preemptest(void);
 void	clocktest(void);
+void	qiotest(void);
+void	fmttest(void);
 
 /* the allocators and the process table, ready for kproc() */
 int	portprocinit(void);

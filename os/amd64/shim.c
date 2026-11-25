@@ -202,6 +202,20 @@ print(char *fmt, ...)
 	return outn;
 }
 
+/* iprint: the same, but callable at high spl; the console is polled */
+int
+iprint(char *fmt, ...)
+{
+	va_list ap;
+
+	emit = outc;
+	outn = 0;
+	va_start(ap, fmt);
+	vfmt(fmt, ap);
+	va_end(ap);
+	return outn;
+}
+
 int
 vsnprint(char *buf, int n, char *fmt, va_list ap)
 {
@@ -272,11 +286,6 @@ void
 labelstack(Proc *p)
 {
 	USED(p);
-}
-
-void
-ixsummary(void)
-{
 }
 
 Prog*

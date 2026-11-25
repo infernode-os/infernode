@@ -256,6 +256,10 @@ main(uint32_t mbiaddr)
 		preemptest();
 	if(cmdline != 0 && contains(cmdline, "clocktest"))
 		clocktest();
+	if(cmdline != 0 && contains(cmdline, "qiotest"))
+		qiotest();
+	if(cmdline != 0 && contains(cmdline, "fmttest"))
+		fmttest();
 
 	conshalt();
 }

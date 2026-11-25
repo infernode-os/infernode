@@ -119,7 +119,18 @@ extern struct Active
  * The current process.  With one core, m is a plain global and up is
  * m's proc field, which is what makes "up = p" per-processor on a
  * machine that has only one.
+ *
+ * up is not spelled `(m->proc)`: os/port files declare locals named m
+ * (qio.c's qread has `int m, n`), and a macro mentioning m would
+ * dereference that integer at every waserror().  The accessor names m
+ * only inside a function where no local can shadow it.
  */
 extern Mach	machs[MAXMACH];
 extern Mach	*m;
-#define	up	(m->proc)
+
+static inline Proc**
+upaddr(void)
+{
+	return &m->proc;
+}
+#define	up	(*upaddr())

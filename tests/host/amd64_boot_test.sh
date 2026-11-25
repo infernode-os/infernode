@@ -28,7 +28,9 @@
 #        processes, sleep/wakeup through Rendezes, and a qlock.  A fifth,
 #        "preemptest", proves the clock preempts a CPU-bound process and
 #        that a timed sleep expires.  A sixth, "clocktest", checks the
-#        TSC's rate through todget and the periodic timer queue.
+#        TSC's rate through todget and the periodic timer queue.  A
+#        seventh, "qiotest", moves data between two processes through a
+#        Block queue whose limit forces the writer to block too.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM and runs the same "kerneltest".  QEMU refuses an ELF64 image ("give a
@@ -102,7 +104,8 @@ for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c \
 	"$ROOT"/os/port/taslock.c "$ROOT"/os/port/alloc.c \
 	"$ROOT"/os/port/xalloc.c "$ROOT"/os/port/alarm.c \
 	"$ROOT"/os/port/portclock.c "$ROOT"/os/port/tod.c \
-	"$ROOT"/os/port/mul64fract.c; do
+	"$ROOT"/os/port/mul64fract.c "$ROOT"/os/port/qio.c \
+	"$ROOT"/os/port/allocb.c; do
 	base=$(basename "$f")
 	o="$BUILD/${base%.*}_${base##*.}.o"
 	# shellcheck disable=SC2086
@@ -295,6 +298,19 @@ if [ "$have9vm" = 1 ]; then
 	check clock "$out"
 	require clock "$out" "clock: slept"
 	require clock "$out" "clocktest passed"
+
+	ran="$ran qio"
+	out=$(capture 30 "$BUILD/qio.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test qiotest" "$BUILD/kernel.elf")
+	check qio "$out"
+	require qio "$out" "qio: read 11 \"hello world\""
+	require qio "$out" "qiotest passed"
+
+	ran="$ran fmt"
+	out=$(capture 30 "$BUILD/fmt.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test fmttest" "$BUILD/kernel.elf")
+	check fmt "$out"
+	require fmt "$out" "fmttest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then

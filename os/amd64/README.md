@@ -183,6 +183,33 @@ preemption and expired sleeps included. `addclock0link` timers work, and
 The interrupt is still the firing granularity: `timerset` has no one-shot
 to program, so a timer due between ticks fires on the next one.
 
+## Queues
+
+`os/port/allocb.c` and `qio.c` are compiled unmodified: the Block
+allocator and the Queue layer every stream and device sits on. `qread`
+blocks on a Rendez when the queue is empty, `qwrite` blocks when its
+limit is reached, and both are woken by the other side.
+
+`qiotest` makes both directions matter: a reader blocks on an empty
+queue; a writer `qwrite`s 11 bytes into a queue limited to 8, so the
+write itself must block until the reader consumes; a watchdog reports a
+lost wakeup instead of hanging the boot.
+
+`fmttest` checks that the formatter honours its sink: `%p` used to
+write through the console instead of `snprint`'s buffer, which showed
+up as an empty string and a wrong length.
+
+```
+qio: read 11 "hello world"
+qiotest passed
+```
+
+This is also where `up` had to stop being `(m->proc)`: `qread` declares
+`int m, n`, and the `waserror()` macro expanded `up` inside that scope,
+dereferencing the integer. `up` is now `(*upaddr())`, where `upaddr()`
+names `m` only where no local can shadow it — the same trap
+`os/arm64/dat.h` documents for x28.
+
 ## Machine tests
 
 Command line `kerneltest` crosses `int $3`, waits 20 timer ticks, then
@@ -271,10 +298,15 @@ preemptest passed
 infernode/amd64: clock: TSC 3597 MHz
 clock: slept 101 ms, 9 timer calls
 clocktest passed
+-- qio
+qio: read 11 "hello world"
+qiotest passed
+-- fmt
+fmttest passed
 -- qemu
 ...
 infernode/amd64: kerneltest passed
-PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qemu)
+PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt qemu)
 ```
 
 ## Layout
@@ -305,16 +337,19 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qemu)
 | `preemptest.c` | the tick preempts a hog, and a timed sleep expires |
 | `clock.c` | the TSC's rate, `fastticks`, `microdelay` |
 | `clocktest.c` | tod, the timer queue and the measured rate |
+| `qiotest.c` | Block queues blocking both ways between two processes |
+| `fmttest.c` | snprint writes to its buffer, `%p` included |
 | `shim.c` | the pieces proc.c reaches for that are not ported yet |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
+- Channels and devices (`os/port/chan.c`, `dev.c`, `devcons.c`), then
+  `devmnt`, so `../9vm`'s rings become the mountable `#~/0`/`#~/1`
+  (`host`/`ns`) instead of a boot test.
 - The Dis VM (`os/port/dis.c` + libinterp), which retires the `vm0` and
   registry shims, and real `print` from libkern's fmt.
-- Channels, devices and `devmnt`, so `../9vm`'s rings become the
-  mountable `#~/0`/`#~/1` (`host`/`ns`) instead of a boot test.
 - A finer timer source (PIT one-shot) if a driver needs sub-tick
   deadlines.
 - A framebuffer console over the display slots.

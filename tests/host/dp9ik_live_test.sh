@@ -67,6 +67,7 @@ mkdir -p "$ROOT/tmp"
 s=$ROOT/tmp/dp9ik_live.sh
 cat > "$s" <<EOF
 load std
+echo '=before' \`{ls /tmp | grep rcpu | wc -l}
 auth/factotum
 echo 'key proto=dp9ik dom=9front user=glenda !password=glendapass9f auth=tcp!127.0.0.1!$AUTH' > /mnt/factotum/ctl
 mkdir -p /tmp/9f
@@ -90,7 +91,7 @@ mkdir -p /tmp/9g
 echo '=wrong'; rimport tcp!127.0.0.1!$RCPU / /tmp/9g; echo 'wrong status' \$status
 echo '=done'; echo halt > /dev/sysctl
 EOF
-out=$(with_timeout 300 "$EMU" -c1 -r"$ROOT" /dis/sh.dis /tmp/dp9ik_live.sh 2>&1 < /dev/null)
+out=$(SDL_VIDEODRIVER=dummy with_timeout 300 "$EMU" -c1 -r"$ROOT" /dis/sh.dis /tmp/dp9ik_live.sh 2>&1 < /dev/null)
 rm -f "$s"
 
 rc=0
@@ -112,8 +113,57 @@ check '^exit status .*oops' "the remote's exit status"
 check '^rimport: .*wrong password' "a wrong password refused"
 check "can't create: /mnt/term/evil: permission denied" "the far end makes no file in rcpu's tree"
 check "can't create /mnt/term/mnt/d: permission denied" "nor a directory"
-check '^=left *0$' "and rcpu leaves no scratch tree behind"
+before=$(echo "$out" | sed -n 's/^=before *//p')
+check "^=left *${before:-0}\$" "and rcpu leaves no scratch tree behind"
 if echo "$out" | grep -q "^/mnt/term/\(bin\|dis\|usr\|n\|net\)"; then echo "FAIL: more than rcpu's tree served"; rc=1; fi
 echo "$out" | awk '/^=/{w=$1} /^[0-9.]+l [0-9.]+r [0-9.]+t$/{print "\ttime " w ": " $2}'
 [ $rc = 0 ] || echo "$out" | grep -v '^fs: ' | head -60
+
+# The graphical half (#1270): rcpu under wm/wm, 9front's programs in
+# windows here (tests/rcpu/drive.sh), the pictures checked by pixel.
+syms=$(nm "$EMU" 2>/dev/null || true)
+if [ -n "$syms" ] && ! printf '%s\n' "$syms" | grep -q sdl3_mainloop; then
+	echo "SKIP: graphics: $EMU is a headless build and has no display"
+	exit $rc
+fi
+G=tmp/dp9ik_live_gfx.$$
+mkdir -p "$ROOT/$G"
+trap 'exec 3>&-; kill $vmpid 2>/dev/null; wait $vmpid 2>/dev/null; rm -rf "$work" "$ROOT/$G"' EXIT
+(cd "$ROOT"; SDL_VIDEODRIVER=dummy with_timeout 240 "$EMU" -c1 -pheap=512m -pimage=512m -g1024x768 -r"$ROOT" \
+	/dis/sh.dis -c "bind -c /$G /tmp; wm/wm sh /tests/rcpu/drive.sh tcp!127.0.0.1!$RCPU tcp!127.0.0.1!$AUTH" \
+	</dev/null >"$ROOT/$G/log" 2>&1) || true
+step() { sed -n "s/^R $1 *//p" "$ROOT/$G/log" | head -1; }
+gcheck() {
+	if [ "$1" = 1 ]; then echo "PASS: $2"; else echo "FAIL: $2"; rc=1; fi
+}
+yes() { if "$@"; then echo 1; else echo 0; fi; }
+has() { python3 -I -c '
+import sys; sys.path.insert(0, sys.argv[1])
+from p9img2png import load
+im = load(sys.argv[2])
+want = set(sys.argv[3:])
+seen = set(im.px(x, y) for x in range(0, im.w, 2) for y in range(0, im.h, 2))
+sys.exit(0 if want <= seen else 1)' "$ROOT/tools" "$@"; }
+
+gcheck $(yes grep -q '^R done' "$ROOT/$G/log") "the graphical driver finished"
+gcheck $(yes [ "$(step text)" = "0 text only" ]) "a command that draws nothing gets no window"
+view=$(step view)
+gcheck $(yes [ "${view% * *}" = "cons consctl cursor draw kbd label mouse snarf winname" ]) \
+	"the far end has rcpu's display files"
+gcheck $(yes [ "${view#* * * * * * * * * }" = "1 1" ]) "and its draw lists no client of this machine's, nor screen"
+gcheck $(yes [ "$(step keywin)" = 1 ]) "a window for a program that asks"
+gcheck $(yes [ "$(step keys)" = "keys hello" ]) "keys typed in the window reach it (cons, raw)"
+case "$(step mouse)" in
+"mouse m "*)	gcheck 1 "and the pointer (mouse)" ;;
+*)		gcheck 0 "and the pointer (mouse)" ;;
+esac
+gcheck $(yes [ "$(step keysdone)" = 0 ]) "its window gone when it is"
+gcheck $(yes [ "$(step colors | cut -d' ' -f1)" = 1 ]) "colors has a window"
+gcheck $(yes has "$ROOT/$G/colors.img" FFFF00 FF0000) "colors drawn in it (its yellow and red, by pixel)"
+gcheck $(yes [ "$(step colorsgone)" = 0 ]) "the window gone with colors"
+gcheck $(yes [ "$(step rio | cut -d' ' -f1)" = 1 ]) "rio has a window"
+gcheck $(yes has "$ROOT/$G/rio.img" 55AAAA FFFF00) "rio drawn in it, colors in a rio window (by pixel)"
+gcheck $(yes [ "$(step riogone)" = 0 ]) "the window gone with rio"
+gcheck $(yes [ -z "$(ls "$ROOT/$G" | grep rcpu)" ]) "no scratch tree left by the graphical sessions"
+[ $rc = 0 ] || sed -n '1,40p' "$ROOT/$G/log"
 exit $rc

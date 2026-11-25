@@ -206,6 +206,10 @@ def one(seed, a, card):
 		shutil.rmtree(cwd, ignore_errors=True)
 		os.makedirs(cwd)
 		shutil.copy(a.K, os.path.join(cwd, "kernel.img"))
+		# its symbols, for gdb on a replay
+		elf = re.sub(r"\.img$", ".elf", a.K)
+		if elf != a.K and os.path.exists(elf):
+			shutil.copy(elf, os.path.join(cwd, "kernel.elf"))
 		subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", "-b", card, "-F", "raw",
 			os.path.join(cwd, "sd.qcow2")], check=True)
 		args = qemuargs(m, "kernel.img", card, ("record", cwd))
@@ -407,10 +411,11 @@ def keeprecording(a, seed, d, card):
 	# started from, beside its console: what -r needs, whatever is built
 	# or made afterwards
 	src = rundir(a, seed)
-	for f in ("rr.bin", "sd.qcow2", "kernel.img", "qemu"):
+	for f in ("rr.bin", "sd.qcow2", "kernel.img", "kernel.elf", "qemu"):
 		if os.path.exists(os.path.join(d, f)):
 			os.remove(os.path.join(d, f))
-		shutil.move(os.path.join(src, f), os.path.join(d, f))
+		if os.path.exists(os.path.join(src, f)):
+			shutil.move(os.path.join(src, f), os.path.join(d, f))
 	shutil.copy(card, os.path.join(d, "card.img"))
 	subprocess.run(["qemu-img", "rebase", "-u", "-b", "card.img", "-F", "raw", os.path.join(d, "sd.qcow2")], check=True)
 	shutil.rmtree(src, ignore_errors=True)
@@ -432,7 +437,8 @@ def replay(a):
 	args = qemuargs(m, "kernel.img", None, ("replay", d))
 	if a.g:
 		args += ["-gdb", "tcp::%d" % a.g, "-S"]
-		print("nativefuzz: gdb stub on port %d, stopped at the start: target remote :%d" % (a.g, a.g), flush=True)
+		print("nativefuzz: gdb stub on port %d, stopped at the start: gdb %s -ex 'target remote :%d'" % (a.g,
+			os.path.join(d, "kernel.elf"), a.g), flush=True)
 	print("nativefuzz: replaying %s (%s)" % (d, describe(m, True)), flush=True)
 	p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=d)
 	out = bytearray()

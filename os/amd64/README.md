@@ -1,8 +1,9 @@
 # os/amd64 — x86-64 native InferNode
 
-The first stage of the native x86-64 port: a Multiboot kernel that
+The native x86-64 kernel's first stages: a Multiboot kernel that
 identity-maps the first GiB with 2 MiB pages, enters long mode,
-initializes a 16550 console, and prints the Multiboot memory map.
+initializes a 16550 console, prints the Multiboot memory map, and runs
+a trap table, the 8254 timer and a preemptive round-robin run queue.
 
 ## The entry
 
@@ -28,6 +29,39 @@ hand.
 Besides the first GiB, the stub maps 64 MiB at 0xF8000000 for 9vm's shared
 display: the third PDPT entry points at a second page directory, whose
 entries 448..479 cover the window.
+
+## The machine layer
+
+`trapinit` builds an IDT for vectors 0..47 and loads it, remaps the 8259s
+to 0x20/0x28, and programs the 8254's channel 0 at `HZ` (100) in mode 2.
+The timer is the only source the PIC unmasks; interrupts stay off until a
+test asks for them.
+
+trap.S gives every vector its own stub, because whether the CPU pushes an
+error code is a property of the vector. The stubs push a dummy where it
+does not, push the vector, and join a common path that saves the rest of
+the frame and calls `trap(frame)`. In 64-bit mode the CPU's frame is five
+qwords (`SS`, `RSP`, `RFLAGS`, `CS`, `RIP`) even without a privilege
+change, so `Trapframe` carries all five; `trap.c` asserts its size.
+
+Exceptions report the vector, name, error code, RIP, RSP and — for a page
+fault — CR2, then panic except for the breakpoint, which returns.
+
+`trap()` returns a frame pointer, and that is the context switch: on every
+timer tick the scheduler saves the interrupted frame and returns another
+thread's. A thread that has never run only needs a frame built for it —
+RIP at its entry, `CS`/`SS` the kernel's selectors, `RFLAGS` with IF, and
+`RSP` at the top of its stack — and the same `iretq` path starts it.
+`thread.c` keeps four threads and a round-robin cursor.
+
+## Machine tests
+
+Command line `kerneltest` crosses `int $3`, waits 20 timer ticks, then
+creates two worker threads and waits 100 ticks: each worker must have run,
+roughly equally, or the test fails. `pftest` writes to `0xdead0000`,
+outside every mapping, and the page-fault report and panic are the
+expected end of that boot. `tests/host/amd64_boot_test.sh` runs both under
+9vm and the same `kerneltest` under QEMU.
 
 ## Boot loaders
 
@@ -79,12 +113,21 @@ infernode/9vm: display input: key 113 0
 infernode/9vm: display test passed
 vmdisplay: 2 frames verified, input sent
 ...
--- qemu
-infernode/amd64: booting (Multiboot)
+-- trap
 ...
-infernode/amd64: no #~ host ring in the map
+infernode/amd64: trap 3 breakpoint err 0x0 rip 0x100497 rsp 0x1085a0
+infernode/amd64: timer advanced 20 ticks
+infernode/amd64: threads a 20526128 b 20669239 over 102 ticks
+infernode/amd64: kerneltest passed
+-- fault
+infernode/amd64: pf test: writing 0xdead0000
+infernode/amd64: trap 14 page fault err 0x2 rip 0x100643 rsp 0x1085b0 cr2 0xdead0000
+infernode/amd64: panic
 infernode/amd64: halted
-PASS: x86-64 boot (9vm ns display qemu)
+-- qemu
+...
+infernode/amd64: kerneltest passed
+PASS: x86-64 boot (9vm ns display trap fault qemu)
 ```
 
 ## Layout
@@ -93,12 +136,22 @@ PASS: x86-64 boot (9vm ns display qemu)
 |-|-|
 | `boot.S` | the 32-bit stub: page tables, long mode, GDT, stack |
 | `main.c` | console, Multiboot parse, memory map, the `#~` handoff, halt |
+| `console.h` | the console interface the board and the machine share |
+| `io.h` | port I/O and the 8259/8254 inter-command delay |
+| `trap.h` | the interrupt frame, `HZ`, and interrupt masking |
+| `trap.S` | one entry stub per vector, and the common return path |
+| `trap.c` | the IDT, the 8259s, the 8254, exceptions, EOI |
+| `thread.h` | a thread and the run queue |
+| `thread.c` | thread creation, round-robin scheduling |
+| `ktest.h` | the machine boot tests |
+| `ktest.c` | `kerneltest` and `pftest` |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- `os/port` and the device layer beneath this entry, so `../9vm`'s rings
-  become the mountable `#~/0`/`#~/1` (`host`/`ns`) instead of a boot test.
-- The shared display.
+- `os/port`: procs on top of the run queue, then channels, devices and
+  `devmnt`, so `../9vm`'s rings become the mountable `#~/0`/`#~/1`
+  (`host`/`ns`) instead of a boot test.
+- A framebuffer console over the display slots.
 - `os/ip`, the Dis VM and the amd64 JIT.

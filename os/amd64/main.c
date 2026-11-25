@@ -17,6 +17,10 @@
 #include <stddef.h>
 #include "../9vm/board.h"
 #include "../9vm/display.h"
+#include "console.h"
+#include "io.h"
+#include "trap.h"
+#include "ktest.h"
 
 #define COM1		0x3F8
 #define IDENTMAP	0x40000000u	/* boot.S identity-maps the first GiB */
@@ -52,21 +56,6 @@ struct mmap_entry {
 	uint64_t len;
 	uint32_t type;
 } __attribute__((packed));
-
-static inline void
-outb(uint16_t port, uint8_t v)
-{
-	__asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port));
-}
-
-static inline uint8_t
-inb(uint16_t port)
-{
-	uint8_t v;
-
-	__asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
-	return v;
-}
 
 static void
 serialinit(void)
@@ -163,6 +152,7 @@ main(uint32_t mbiaddr)
 
 	serialinit();
 	consprint("infernode/amd64: booting (Multiboot)\n");
+	trapinit();
 	consprint("infernode/amd64: Multiboot at ");
 	consprinthex(mbiaddr);
 	consprint("\n");
@@ -242,6 +232,10 @@ main(uint32_t mbiaddr)
 
 	if(cmdline != 0 && contains(cmdline, "disptest"))
 		dispselftest();
+	if(cmdline != 0 && contains(cmdline, "kerneltest"))
+		kerneltest();
+	if(cmdline != 0 && contains(cmdline, "pftest"))
+		pftest();
 
 	halt();
 }

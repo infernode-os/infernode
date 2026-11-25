@@ -23,6 +23,7 @@
 #define _OS_9VM_BOARD_H_
 
 #include <stdint.h>
+#include "../amd64/console.h"
 
 /* The ring's message size and slot count. */
 #define P9_RING_SIZE		256
@@ -230,11 +231,6 @@ struct P9Read
 	uint8_t		*data;
 	uint32_t	len;
 };
-
-/* console, from os/amd64 */
-void	consprint(const char*);
-void	consprinthex(uint64_t);
-void	consprintdec(uint64_t);
 
 /* ring.c */
 int	boardattach(Board*, uint64_t, uint64_t);

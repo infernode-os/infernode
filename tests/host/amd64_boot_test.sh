@@ -19,8 +19,13 @@
 #        verifies them pixel by pixel and sends the input that lets the
 #        guest finish.
 #
+#        Two more boots exercise the machine layer: "kerneltest" crosses
+#        a breakpoint, waits for timer interrupts and runs two preempted
+#        threads; "pftest" faults outside the map and must report the
+#        page fault and panic.
+#
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
-#        Multiboot option ROM.  QEMU refuses an ELF64 image ("give a
+#        Multiboot option ROM and runs the same "kerneltest".  QEMU refuses an ELF64 image ("give a
 #        32bit one") unless the header carries the a.out kludge
 #        addresses, and then loads the flat image instead.  It offers no
 #        #~ ring; the kernel must still boot and report the map.
@@ -75,11 +80,10 @@ CFLAGS="--target=x86_64-elf -ffreestanding -nostdlib
 	-mcmodel=small -O2 -Wall -Wextra"
 
 echo "== build"
-# shellcheck disable=SC2086 # CFLAGS is a list of flags
-$CC $CFLAGS -c "$ROOT/os/amd64/boot.S" -o "$BUILD/boot.o"
-objs="$BUILD/boot.o"
-for f in "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c; do
-	o="$BUILD/$(basename "$f" .c).o"
+objs=
+for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c; do
+	base=$(basename "$f")
+	o="$BUILD/${base%.*}_${base##*.}.o"
 	# shellcheck disable=SC2086
 	$CC $CFLAGS -c "$f" -o "$o"
 	objs="$objs $o"
@@ -218,12 +222,36 @@ else
 	echo "SKIP: display: no host C compiler" >&2
 fi
 
+# The machine layer: traps, the timer and preemptive threads.
+if [ "$have9vm" = 1 ]; then
+	ran="$ran trap"
+	out=$(capture 30 "$BUILD/trap.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test kerneltest" "$BUILD/kernel.elf")
+	check trap "$out"
+	require trap "$out" "infernode/amd64: trap 3 breakpoint"
+	require trap "$out" "infernode/amd64: timer advanced"
+	require trap "$out" "infernode/amd64: threads a"
+	require trap "$out" "infernode/amd64: kerneltest passed"
+
+	ran="$ran fault"
+	out=$(capture 30 "$BUILD/fault.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test pftest" "$BUILD/kernel.elf")
+	check fault "$out"
+	require fault "$out" \
+		"infernode/amd64: trap 14 page fault err 0x0000000000000002"
+	require fault "$out" "cr2 0x00000000dead0000"
+	require fault "$out" "infernode/amd64: panic"
+fi
+
 if [ "$haveqemu" = 1 ]; then
 	ran="$ran qemu"
 	$OBJCOPY -O binary "$BUILD/kernel.elf" "$BUILD/kernel.bin"
-	check qemu "$(capture 30 "$BUILD/qemu.out" \
-		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" -append "amd64 boot test" \
-		-display none -serial stdio -monitor none -no-reboot)"
+	out=$(capture 30 "$BUILD/qemu.out" \
+		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" \
+		-append "amd64 boot test kerneltest" \
+		-display none -serial stdio -monitor none -no-reboot)
+	check qemu "$out"
+	require qemu "$out" "infernode/amd64: kerneltest passed"
 fi
 
 [ "$fails" = 0 ] || exit 1

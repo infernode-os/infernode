@@ -84,6 +84,9 @@ rstatus := "";
 drawctxt: ref Draw->Context;	# where windows go; made if none was given
 scope := "";			# this session's draw scope (draw(3))
 title := "rcpu";
+gfxpids: list of int;		# the display's processes, stopped with the session
+gfxquit: chan of int;		# to the display: the session is over
+gfxdone: chan of int;		# from it: the window is closed
 
 fail(s: string)
 {
@@ -155,6 +158,21 @@ init(ctxt: ref Draw->Context, args: list of string)
 	xerr := "";
 	if(sys->export(fd, root, Sys->EXPWAIT) < 0)
 		xerr = sys->sprint("export: %r");
+	# the session is over: its window goes with it (the window's own
+	# processes hold its connection, so it is closed, not left to them)
+	if(gfxquit != nil){
+		gfxquit <-= 1;
+		t := chan[1] of int;	# buffered: the timer never waits
+		spawn timer(t, 2000);
+		alt{
+		<-gfxdone =>
+			;
+		<-t =>
+			;	# the display is stuck: it is stopped below all the same
+		}
+	}
+	for(; gfxpids != nil; gfxpids = tl gfxpids)
+		kill(hd gfxpids);
 	rmtree(root);
 	if(xerr != "")
 		fail(xerr);
@@ -346,8 +364,13 @@ gfxfiles(dir: string, in, out: ref Sys->FD): int
 	f.label = mkfile(dir, "label");
 	f.snarf = mkfile(dir, "snarf");
 	inq := chan of (int, Sys->Rread);
-	spawn stdinproc(in, inq);
-	spawn gfx(f, inq, out);
+	pidc := chan of int;
+	spawn stdinproc(in, inq, pidc);
+	gfxpids = <-pidc :: gfxpids;
+	gfxquit = chan[1] of int;
+	gfxdone = chan[1] of int;
+	spawn gfx(f, inq, out, pidc);
+	gfxpids = <-pidc :: gfxpids;
 	return 1;
 }
 
@@ -360,8 +383,9 @@ mkfile(dir, name: string): ref Sys->FileIO
 }
 
 # reads of this command's input for cons, one at a time
-stdinproc(in: ref Sys->FD, q: chan of (int, Sys->Rread))
+stdinproc(in: ref Sys->FD, q: chan of (int, Sys->Rread), pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 	for(;;){
 		(n, rc) := <-q;
 		if(n > Sys->ATOMICIO)
@@ -382,8 +406,9 @@ Wait: adt {
 	rc:	Sys->Rread;
 };
 
-gfx(f: ref Gfiles, inq: chan of (int, Sys->Rread), out: ref Sys->FD)
+gfx(f: ref Gfiles, inq: chan of (int, Sys->Rread), out: ref Sys->FD, pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
 	win: ref Window;
 	name := "";
 	seq := 0;
@@ -584,6 +609,11 @@ gfx(f: ref Gfiles, inq: chan of (int, Sys->Rread), out: ref Sys->FD)
 			}
 			snarfs = addsnarf(snarfs, fid, string d);
 			wc <-= (len d, nil);
+
+		<-gfxquit =>
+			dropwin(win, name);
+			gfxdone <-= 1;
+			exit;
 
 		# the window's own events
 		c := <-wctl or
@@ -889,4 +919,17 @@ dropsnarf(l: list of (int, string), fid: int): list of (int, string)
 		if((hd l).t0 != fid)
 			r = hd l :: r;
 	return r;
+}
+
+kill(pid: int)
+{
+	fd := sys->open("/prog/"+string pid+"/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }

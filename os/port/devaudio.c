@@ -5,6 +5,7 @@
 #include	"fns.h"
 #include	"../port/error.h"
 #include	"audio.h"
+#include	"audio-tbls.h"
 
 Dirtab audiotab[] =
 {
@@ -14,16 +15,51 @@ Dirtab audiotab[] =
 	"audiostat",	{Qaudiostat},	0,	0444,
 };
 
+/* the output a channel is on: its attach spec's number, in c->dev */
+static Audioout*
+out(Chan *c)
+{
+	Audioout *o;
+
+	o = audioout(c->dev);
+	if(o == nil)
+		error(Enodev);
+	return o;
+}
+
 static void
 audioinit(void)
 {
-	audio_file_init();
+	Audioout *o;
+	int i;
+
+	for(i = 0; (o = audioout(i)) != nil; i++)
+		o->init();
 }
 
+/*
+ * #A is the board's first output and #A1 its second; #A0 is #A. Each is
+ * a device of its own, opened and stopped apart from the other, and
+ * nothing here mixes or switches them.
+ */
 static Chan*
 audioattach(char *spec)
 {
-	return devattach('A', spec);
+	Chan *c;
+	char *e;
+	ulong n;
+
+	n = 0;
+	if(spec != nil && *spec != 0){
+		n = strtoul(spec, &e, 10);
+		if(*e != 0)
+			error(Ebadspec);
+	}
+	if(audioout(n) == nil)
+		error(Enodev);
+	c = devattach('A', spec);
+	c->dev = n;
+	return c;
 }
 
 static Walkqid*
@@ -52,7 +88,7 @@ audioopen(Chan *c, int omode)
 	case Qaudiostat:
 		break;
 	case Qaudio:
-		audio_file_open(c, c->mode);
+		out(c)->open(c, c->mode);
 		break;
 	default:
 		error(Egreg);
@@ -73,7 +109,7 @@ audioclose(Chan *c)
 	case Qaudiostat:
 		break;
 	case Qaudio:
-		audio_file_close(c);
+		out(c)->close(c);
 		break;
 	default:
 		error(Egreg);
@@ -92,14 +128,14 @@ audioread(Chan *c, void *va, long count, vlong offset)
 		return devdirread(c, va, count, audiotab, nelem(audiotab), devgen);
 	switch(c->qid.path) {
 	case Qaudio:
-		return audio_file_read(c, va, count, offset);
+		return out(c)->read(c, va, count, offset);
 	case Qaudioctl:
 		buf = smalloc(READSTR);
 		if(waserror()){
 			free(buf);
 			nexterror();
 		}
-		n = ctlsummary(buf, READSTR, getaudiodev());
+		n = ctlsummary(buf, READSTR, out(c)->dev());
 		/*
 		 * count, the reader's: it was n, the text's length, so a
 		 * read of one byte was given all of it, past the buffer
@@ -120,7 +156,7 @@ audioread(Chan *c, void *va, long count, vlong offset)
 			free(buf);
 			nexterror();
 		}
-		n = audiostatus(buf, buf+READSTR) - buf;
+		n = out(c)->status(buf, buf+READSTR) - buf;
 		/*
 		 * count, the reader's: it was n, the text's length, so a
 		 * read of one byte was given all of it, past the buffer
@@ -139,9 +175,9 @@ audiowrite(Chan *c, void *va, long count, vlong offset)
 {
 	switch(c->qid.path) {
 	case Qaudio:
-		return audio_file_write(c, va, count, offset);
+		return out(c)->write(c, va, count, offset);
 	case Qaudioctl:
-		return audio_ctl_write(c, va, count, offset);
+		return out(c)->ctl(c, va, count, offset);
 	}
 	return 0;
 }

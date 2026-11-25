@@ -6960,7 +6960,7 @@ SRC="$ROOT/os/$PLAT"
 QEMUARGS="$PI4ARGS"
 SERIALARGS="-serial null -serial stdio"
 SHARED="$ROOT/os/bcm"
-SHAREDSKIP=""
+SHAREDSKIP="audiohdmi.c"	# the BCM2835 family's HDMI block; the Pi 4's is #1216's second phase
 ARCHSKIP=""
 PORTSKIP=""
 
@@ -7211,7 +7211,7 @@ run_bcm2712() {
 PLAT=bcm2712
 SRC="$ROOT/os/$PLAT"
 SHARED="$ROOT/os/bcm"
-SHAREDSKIP="audiopwm.c devcam.c devi2c.c devtouch.c dma.c emmc.c gpio.c sdhost.c timers.c uart.c.none uartmini.c uartpl011.c usbdwc.c"
+SHAREDSKIP="audiohdmi.c audiopwm.c devcam.c devi2c.c devtouch.c dma.c emmc.c gpio.c sdhost.c timers.c uart.c.none uartmini.c uartpl011.c usbdwc.c"
 ARCHSKIP=""
 PORTSKIP="devaudio.c ethermii.c pci.c usbxhcipci.c"
 platform_flags

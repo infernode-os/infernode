@@ -90,6 +90,7 @@ struct Draw
 	DName*	name;
 	int		vers;
 	Scope*	scopes;		/* attach specs seen, each a scope (below) */
+	int		nscope;
 	ulong		scopeid;	/* the last scope's id; ids are never used again */
 	int		softscreen;
 	int		blanked;	/* screen turned off */
@@ -155,6 +156,10 @@ struct DName
  * them.  A channel carries its scope's id in its dev; ids are never
  * used again, so a channel of a scope that is gone reaches nothing.
  */
+enum {
+	Maxscope	= 4096,	/* scopes made while the system runs */
+};
+
 struct Scope
 {
 	ulong	id;
@@ -1060,6 +1065,14 @@ drawattach(char *spec)
 			if(strcmp(s->name, spec) == 0)
 				break;
 		if(s == nil){
+			/*
+			 * Scopes are never freed (an id is never used again), so
+			 * there are only so many: a program making specs without
+			 * end does not grow the kernel's memory without end.
+			 */
+			if(sdraw.nscope >= Maxscope)
+				error("too many draw scopes");
+			sdraw.nscope++;
 			s = smalloc(sizeof(Scope));
 			s->name = smalloc(strlen(spec)+1);
 			strcpy(s->name, spec);	/* Flawfinder: ignore -- sized above */

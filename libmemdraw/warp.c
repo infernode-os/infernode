@@ -37,7 +37,7 @@
 
 /* 19.13 fixed point */
 #define FMASK		((1<<13) - 1)
-#define int2fix(n)	((vlong)(n)<<13)
+#define int2fix(n)	((vlong)(n)*(1<<13))	/* a multiply: n may be negative, and its shift is undefined */
 #define fix2int(n)	((n)>>13)
 #define fixmul(a,b)	((vlong)(a)*(vlong)(b) >> 13)
 #define fixfrac(n)	((int)((n)&FMASK))
@@ -130,7 +130,7 @@ getpixel_k1(Sampler *s, Point pt)
 	npack = 8-1;
 	off = pt.x & npack;
 	v = p[0] >> (npack-off) & 0x1;
-	return v*0xFFFFFF00 | 0xFF;
+	return v*0xFFFFFF00u | 0xFF;
 }
 
 static ulong
@@ -143,7 +143,7 @@ getpixel_k2(Sampler *s, Point pt)
 	npack = 8/2 - 1;
 	off = pt.x & npack;
 	v = p[0] >> 2*(npack-off) & 0x3;
-	return v*0x55555500 | 0xFF;
+	return (ulong)v*0x55555500u | 0xFF;
 }
 
 static ulong
@@ -156,7 +156,7 @@ getpixel_k4(Sampler *s, Point pt)
 	npack = 8/4 - 1;
 	off = pt.x & npack;
 	v = p[0] >> 4*(npack-off) & 0xF;
-	return v*0x11111100 | 0xFF;
+	return (ulong)v*0x11111100u | 0xFF;
 }
 
 static ulong
@@ -165,7 +165,7 @@ getpixel_k8(Sampler *s, Point pt)
 	uchar *p;
 
 	p = ROW(s->a, pt.y, s->bpl) + pt.x;
-	return p[0]*0x01010100 | 0xFF;
+	return (ulong)p[0]*0x01010100u | 0xFF;
 }
 
 static ulong
@@ -875,9 +875,30 @@ memaffinewarp(Memimage *d, Point dp0, Rectangle r, Memimage *s, Point sp0,
 	/* 9front's warp takes no mask: msk and mp are the protocol's */
 	if(!warpok(w))
 		return;
+	/*
+	 * A rectangle whose min is past its max is refused: clipping leaves
+	 * it so, and the upscale path's row copy took its negative width
+	 * for a size (9front checks it only on the way through layers).
+	 */
+	if(badrect(r))
+		return;
+	/*
+	 * Where the destination may be drawn: its clip within its
+	 * rectangle.  9front left dr the clip when the two did not meet
+	 * (rectclip's result unread), and drew outside the image: the clip
+	 * is the client's to set, so any client wrote past its pixels.
+	 */
 	dr = d->clipr;
-	rectclip(&dr, d->r);
+	if(rectclip(&dr, d->r) == 0)
+		return;
 	if(rectclip(&r, dr) == 0)
+		return;
+	/*
+	 * A clip is the client's too, and may be inverted: rectclip keeps
+	 * an inverted rectangle inverted, and the row copy below took its
+	 * negative width for a size.
+	 */
+	if(Dx(r) <= 0 || Dy(r) <= 0)
 		return;
 	if(r.min.x - (vlong)dp0.x > Maxoffset || r.min.x - (vlong)dp0.x < -Maxoffset
 	|| r.min.y - (vlong)dp0.y > Maxoffset || r.min.y - (vlong)dp0.y < -Maxoffset
@@ -886,6 +907,9 @@ memaffinewarp(Memimage *d, Point dp0, Rectangle r, Memimage *s, Point sp0,
 
 	samp.r = s->clipr;
 	if(rectclip(&samp.r, s->r) == 0)
+		return;
+	/* the same for the source, whose replication divides by its size */
+	if(Dx(samp.r) <= 0 || Dy(samp.r) <= 0)
 		return;
 
 	/* the software cursor off what is drawn and what is read */

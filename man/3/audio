@@ -3,6 +3,8 @@
 audio \- digital audio input and output
 .SH SYNOPSIS
 .B bind -a '#A' /dev
+.br
+.B bind -a '#A1' /dev
 .PP
 .B /dev/audio
 .br
@@ -178,10 +180,72 @@ and written to since), each a gap of
 seconds that was heard.
 The counts only go up: a program that wants a rate compares two readings.
 Only the native Raspberry Pi kernels serve it.
+.SS Outputs
+A native kernel serves each of its board's outputs as a device of its own:
+.B #A
+is the first,
+.B #A1
+the second, each with its own three files, opened and stopped apart from
+the other. Nothing mixes them or moves a stream from one to the other;
+which one is
+.B /dev/audio
+is the profile's
+.BR bind .
+.TP
+Raspberry Pi 3B+, 3A+
+.B #A
+is the 3.5 mm jack and
+.B #A1
+HDMI.
+.TP
+Raspberry Pi Zero 2 W
+.B #A
+is HDMI; the board has no jack.
+.TP
+Raspberry Pi 4
+.B #A
+is the jack. HDMI audio is not yet served.
+.PP
+HDMI plays 16-bit stereo at 32000, 44100 or 48000 Hz (of the rates
+a native kernel's
+.B audioctl
+takes, 44100 and 48000; the hosted emulator's stops at 44100) into the
+mode the firmware set up. A sink the firmware
+drove as DVI carries no sound, and the open is refused saying so;
+.B hdmi_drive=2
+in
+.B config.txt
+makes it drive HDMI. HDMI's
+.B audiostat
+line has more after
+.BR underruns :
+.B mode
+.RB ( hdmi
+or
+.BR dvi ),
+the state machine's and the pixel clocks in Hz
+.RB ( hsm ,
+.BR pixel ),
+the
+.B n
+and
+.B cts
+sent for the sink to make its audio clock from, and the audio FIFO's
+divider and control register
+.RB ( smp ,
+.BR mai ).
 .SH SOURCE
 .B /emu/port/devaudio*.c
 .br
 .B /emu/*/devaudio.c
+.br
+.B /os/port/devaudio.c
+.br
+.B /os/bcm/audiopwm.c
+.br
+.B /os/bcm/audiohdmi.c
+.br
+.B /os/bcm2837/audioout.c
 .br
 .B /os/*/devaudio.c
 .br

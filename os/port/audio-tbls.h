@@ -35,6 +35,7 @@ svp_t audio_rate_tbl[] = {
 	{ "11025", 11025 },	/* 11025 samples per second */
 	{ "22050", 22050 },	/* 22050 samples per second */
 	{ "44100", 44100 },	/* 44100 samples per second */
+	{ "48000", 48000 },	/* 48000: video's and most digital audio's; each driver says what it plays */
 	{nil},
 };
 

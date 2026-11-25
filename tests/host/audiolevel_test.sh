@@ -85,7 +85,7 @@ int
 main(void)
 {
 	static long plld[] = { 500000000, 750000000 };
-	static long rates[] = { 8000, 11025, 22050, 44100 };
+	static long rates[] = { 8000, 11025, 22050, 44100, 48000 };
 	static int amps[] = { 16000, 8000, 4000, 2000 };
 	static double tones[] = { 440, 441, 1000, 882 };
 	double w, r;

@@ -442,11 +442,12 @@ beside Raspberry Pi OS on its card:
 | Wi-Fi | `init: radio: firmware brcmfmac43436-sdio loaded`, `init: wifi: authenticated to …`, an address by DHCP, the network console on it |
 | Bluetooth | `init: bt: 98:fe:54:…` with `firmware /n/dos/firmware/SYN43430B0.hcd` in the card's `bt` file; 3 Mbaud, inquiry finds devices |
 | the camera | a Camera Module 2 (NoIR): `init: camera: /mnt/video 410 308 i420 30`, `camsrv` status `sensor=imx219`, 30 frames a second |
+| HDMI audio | `#A` is HDMI (the board has no jack: GPIO 40 and 41 are its camera's enable and its radio's power). `tone -d '#A/audio' left`, `right`, `both`, `sweep` heard from a TV's speakers; `#A/audiostat` says `mode hdmi`, `hsm 163682866`, the pixel clock, and no underruns |
 
-Not yet run: the HDMI output (no display attached; the firmware's
-656x416 without one), a device on the OTG port, HDMI audio (#1216; the
-board has no jack, and `audiopwm` refuses to start on it: the jack's
-pins, GPIO 40 and 41, are its camera's enable and its radio's power).
+HDMI audio is audio(3)'s `#A` on a Zero 2 W and `#A1` beside the jack
+on a 3B+ (#1216). The firmware chooses the video mode and whether the
+sink is HDMI or DVI; a DVI sink has no sound, and `hdmi_drive=2` in
+`config.txt` forces HDMI.
 
 What differs is the radio. A Zero 2 W has a CYW43436 or a CYW43436s,
 by when it was made; `cat '#l1/ether1/ifstats'` says which (`chip:

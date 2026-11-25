@@ -3,8 +3,8 @@
  * the board's RC filters, fed by DMA. Served as /dev/audio and
  * /dev/audioctl by os/port/devaudio.c exactly as the hosted emulator
  * serves them (audio(3)), so a program that plays on the emulator plays
- * here; this file is the platform half that file expects
- * (audio_file_open, audio_file_write, audio_ctl_write, ...).
+ * here; this file is the platform half that file expects, one of the
+ * board's outputs (audiopwmout; audio.h's Audioout).
  *
  * HOW THE SOUND IS MADE. A PWM channel in FIFO mode turns each word it
  * is given into one pulse whose width is that word out of a range;
@@ -35,8 +35,8 @@
  * not anyone is writing, which is a steady DC level after the filter
  * and therefore quiet. It keeps running after close for that reason.
  *
- * WHAT IS NOT HERE. Input (the jack has none), HDMI audio (a different
- * path through the VideoCore), and any format but PCM 8/16-bit, 1 or 2
+ * WHAT IS NOT HERE. Input (the jack has none), HDMI audio (audiohdmi.c,
+ * a second output), and any format but PCM 8/16-bit, 1 or 2
  * channels, at the rates audio(3) lists; a write in another format is
  * refused with Ebadarg by the generic layer's tables.
  */
@@ -51,15 +51,6 @@
 #include "../port/error.h"
 #include "../port/audio.h"
 
-#define Audio_Mic_Val		0
-#define Audio_Linein_Val	1
-#define Audio_Speaker_Val	2
-#define Audio_Headphone_Val	3
-#define Audio_Lineout_Val	4
-#define Audio_Pcm_Val		0
-#define Audio_Ulaw_Val		1
-#define Audio_Alaw_Val		2
-#include "../port/audio-tbls.h"
 #include "audioring.h"
 #include "audiolevel.h"
 
@@ -162,8 +153,8 @@ struct Ctlr {
 
 static Ctlr ctlr;
 
-Audio_t*
-getaudiodev(void)
+static Audio_t*
+pwmdev(void)
 {
 	return &ctlr.av;
 }
@@ -374,8 +365,8 @@ start(Ctlr *c)
 	c->running = 1;
 }
 
-void
-audio_file_init(void)
+static void
+pwminit(void)
 {
 	audio_info_init(&ctlr.av);
 	ctlr.frames = Maxframes;
@@ -386,8 +377,8 @@ audio_file_init(void)
 	ctlr.av.out.bits = 16;
 }
 
-void
-audio_file_open(Chan *c, int omode)
+static void
+pwmopen(Chan *c, int omode)
 {
 	USED(c);
 	if(omode == OREAD || omode == ORDWR)
@@ -406,8 +397,8 @@ audio_file_open(Chan *c, int omode)
 	qunlock(&ctlr.lk);
 }
 
-void
-audio_file_close(Chan *c)
+static void
+pwmclose(Chan *c)
 {
 	USED(c);
 	qlock(&ctlr.lk);
@@ -444,8 +435,8 @@ audio_file_close(Chan *c)
 	qunlock(&ctlr.lk);
 }
 
-long
-audio_file_read(Chan *c, void *va, long count, vlong offset)
+static long
+pwmread(Chan *c, void *va, long count, vlong offset)
 {
 	USED(c); USED(va); USED(count); USED(offset);
 	error("audio: the jack has no input");
@@ -474,8 +465,8 @@ level(int s, int gain, int *carry)
 	return audiolevel(s, gain, Audio_Max_Val, ctlr.range, carry);
 }
 
-long
-audio_file_write(Chan *c, void *va, long count, vlong offset)
+static long
+pwmwrite(Chan *c, void *va, long count, vlong offset)
 {
 	uchar *p;
 	long n, ba;
@@ -548,8 +539,8 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 	return count;
 }
 
-long
-audio_ctl_write(Chan *c, void *va, long count, vlong offset)
+static long
+pwmctl(Chan *c, void *va, long count, vlong offset)
 {
 	Audio_t tmp;
 
@@ -595,10 +586,23 @@ audio_ctl_write(Chan *c, void *va, long count, vlong offset)
  * (open, and written to since), each a gap of frames/rate seconds that
  * was heard. Counts only go up: a program compares two readings.
  */
-char*
-audiostatus(char *buf, char *e)
+static char*
+pwmstatus(char *buf, char *e)
 {
 	return seprint(buf, e, "engine %s open %d rate %lud chans %lud bits %lud frames %d ahead %d played %lud underruns %lud\n",
 		ctlr.running? "running" : "idle", ctlr.open, ctlr.av.out.rate, ctlr.av.out.chan, ctlr.av.out.bits,
 		ctlr.frames, ctlr.rg.ahead, ctlr.played, ctlr.underruns);
 }
+
+/* the jack, as one of the board's outputs: os/bcm2837/audioout.c and os/bcm2711's list it */
+Audioout audiopwmout = {
+	.name	= "jack",
+	.init	= pwminit,
+	.open	= pwmopen,
+	.read	= pwmread,
+	.write	= pwmwrite,
+	.ctl	= pwmctl,
+	.close	= pwmclose,
+	.status	= pwmstatus,
+	.dev	= pwmdev,
+};

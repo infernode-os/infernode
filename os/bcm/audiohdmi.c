@@ -89,6 +89,7 @@ enum {
 	Ramstatus	= 0x0a4,
 	Crpcfg		= 0x0a8,
 		Extcts		= 1<<24,
+		Crpdisable	= 1<<25,	/* no clock regeneration packets */
 	Cts0		= 0x0ac,
 	Cts1		= 0x0b0,
 	Sched		= 0x0c0,
@@ -118,6 +119,7 @@ enum {
 	Tipermap	= 16,
 
 	Pixelclock	= 9,		/* the mailbox's clock id */
+	Settlems	= 300,		/* silence after a change of rate, for the sink to lock */
 };
 
 #define HD(r)	(*(volatile u32int*)((uintptr)HDREGS + (r)))
@@ -159,6 +161,7 @@ struct Ctlr {
 	int	n;
 	ulong	cts;
 	u32int	smp;		/* what MAI_SMP was given */
+	ulong	settle;		/* ticks: no sound before this, after a new rate */
 	Audio_t	av;
 };
 
@@ -421,9 +424,14 @@ prepare(Ctlr *c, int rate)
 	c->n = 128 * rate / 1000;
 	cts = (uvlong)c->pixel * c->n / (128 * (uvlong)rate);
 	c->cts = cts;
-	HDMI(Crpcfg) = Extcts | c->n;
+	/*
+	 * The pair changes together: the sink is not sent the new N with
+	 * the old CTS, a clock it would chase, while they are written.
+	 */
+	HDMI(Crpcfg) = Crpdisable | Extcts | c->n;
 	HDMI(Cts0) = c->cts;
 	HDMI(Cts1) = c->cts;
+	HDMI(Crpcfg) = Extcts | c->n;
 	infoframe();
 	setstatus(iec);
 }
@@ -657,6 +665,9 @@ hdmiwrite(Chan *c, void *va, long count, vlong offset)
 	u32int *b;
 
 	USED(c); USED(offset);
+	/* a new rate: the sink is still locking to it (hdmictl) */
+	while((long)(ctlr.settle - MACHP(0)->ticks) > 0)
+		tsleep(&up->sleep, return0, 0, TK2MS(ctlr.settle - MACHP(0)->ticks) + 1);
 	qlock(&ctlr.lk);
 	if(waserror()){
 		ilock(&ctlr.rlk);
@@ -736,8 +747,16 @@ hdmictl(Chan *c, void *va, long count, vlong offset)
 	tmp.out.flags = 0;
 	if(!audioparse(va, count, &tmp))
 		error(Ebadarg);
-	if(tmp.in.flags != 0)
+	/*
+	 * A verb with no "in" or "out" sets both (audioparse), and was
+	 * refused here for the input it named: "rate 48000 chans 2 bits
+	 * 16", as tone(1) writes it, changed nothing, and the tone played
+	 * at the old rate. Only a line that sets input alone is refused;
+	 * the input half of one that sets both is dropped.
+	 */
+	if(tmp.in.flags != 0 && tmp.out.flags == 0)
 		error("audio: HDMI has no input");
+	tmp.in = ctlr.av.in;
 	qlock(&ctlr.lk);
 	if(waserror()){
 		qunlock(&ctlr.lk);
@@ -754,6 +773,14 @@ hdmictl(Chan *c, void *va, long count, vlong offset)
 	if(tmp.out.flags & AUDIO_RATE_FLAG && tmp.out.rate != ctlr.av.out.rate && ctlr.running){
 		dmastop(Dmachan);
 		prepare(&ctlr, tmp.out.rate);
+		/*
+		 * A new rate is a new stream to the sink, which mutes while it
+		 * locks to it: sound written at once was played into that, and
+		 * a tone after a change from 44.1 to 48 kHz began and ended
+		 * garbled on an HDMI TV where the same tone at an unchanged
+		 * rate was clean. Silence for a moment first (hdmiwrite).
+		 */
+		ctlr.settle = MACHP(0)->ticks + Settlems * HZ / 1000;
 		ring(&ctlr);
 		dmastart(Dmachan, ctlr.cb);
 	}

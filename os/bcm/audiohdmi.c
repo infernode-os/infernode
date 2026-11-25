@@ -148,6 +148,8 @@ struct Ctlr {
 	u32int	*quiet;		/* one block of silence, the words the interrupt copies */
 	Ring	rg;
 	int	woff;		/* words already in the writer's buffer */
+	uchar	part[4];	/* a frame begun by a write that ended in it */
+	int	npart;		/* its bytes */
 	int	frames;		/* frames per buffer: a multiple of Csblock */
 	ulong	played;
 	ulong	underruns;
@@ -582,6 +584,7 @@ hdmiopen(Chan *c, int omode)
 		error(Einuse);
 	start(&ctlr);
 	ctlr.sounding = 0;
+	ctlr.npart = 0;
 	ctlr.open = 1;
 	poperror();
 	qunlock(&ctlr.lk);
@@ -594,6 +597,7 @@ hdmiclose(Chan *c)
 	qlock(&ctlr.lk);
 	ctlr.open = 0;
 	ctlr.sounding = 0;
+	ctlr.npart = 0;		/* half a frame at the end is not played */
 	/* the last buffer, part written: the rest silence, and played */
 	if(ctlr.woff != 0){
 		u32int *b;
@@ -668,13 +672,22 @@ hdmiwrite(Chan *c, void *va, long count, vlong offset)
 	lg = ctlr.av.out.left;
 	rg = ctlr.av.out.right;
 	ba = bits * chans / Bits_Per_Byte;
-	if(count % ba)
-		error(Ebadarg);
 	p = va;
 	ilock(&ctlr.rlk);
 	ringunpark(&ctlr.rg);
 	iunlock(&ctlr.rlk);
-	for(n = 0; n < count; n += ba){
+	/*
+	 * A write need not be whole frames. It was refused if it was
+	 * not, and sound from a network connection -- cat from a TCP
+	 * stream, whose reads are what arrived -- stopped at the first
+	 * write with a frame cut in two. The part of a frame a write
+	 * ends with is kept, and the next write finishes it.
+	 */
+	for(n = 0; n < count; n++){
+		ctlr.part[ctlr.npart++] = p[n];
+		if(ctlr.npart < ba)
+			continue;
+		ctlr.npart = 0;
 		if(ctlr.woff == 0){
 			ringbegin(&ctlr.rg);
 			while(!roomfor(&ctlr))
@@ -684,11 +697,11 @@ hdmiwrite(Chan *c, void *va, long count, vlong offset)
 			iunlock(&ctlr.rlk);
 		}
 		if(bits == 16){
-			l = (short)(p[n] | (p[n+1] << 8));
-			r = chans == 2? (short)(p[n+2] | (p[n+3] << 8)) : l;
+			l = (short)(ctlr.part[0] | (ctlr.part[1] << 8));
+			r = chans == 2? (short)(ctlr.part[2] | (ctlr.part[3] << 8)) : l;
 		}else{
-			l = ((int)p[n] - 128) << 8;
-			r = chans == 2? ((int)p[n+1] - 128) << 8 : l;
+			l = ((int)ctlr.part[0] - 128) << 8;
+			r = chans == 2? ((int)ctlr.part[1] - 128) << 8 : l;
 		}
 		b = ctlr.buf[ctlr.rg.wbuf];
 		f = (ctlr.woff / 2) % Csblock;
@@ -746,6 +759,8 @@ hdmictl(Chan *c, void *va, long count, vlong offset)
 	}
 	if(tmp.out.flags & AUDIO_BUF_FLAG)
 		setframes(&ctlr, framesfor(tmp.out.buf));
+	if(tmp.out.bits != ctlr.av.out.bits || tmp.out.chan != ctlr.av.out.chan)
+		ctlr.npart = 0;		/* a frame begun in the old size is not one in the new */
 	tmp.out.flags = 0;
 	ctlr.av = tmp;
 	poperror();

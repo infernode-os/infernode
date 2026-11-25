@@ -254,6 +254,8 @@ main(uint32_t mbiaddr)
 		proctest();
 	if(cmdline != 0 && contains(cmdline, "preemptest"))
 		preemptest();
+	if(cmdline != 0 && contains(cmdline, "clocktest"))
+		clocktest();
 
 	conshalt();
 }

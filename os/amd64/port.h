@@ -7,6 +7,7 @@ void	portinit(uint64_t, uint64_t);
 void	porttest(void);
 void	proctest(void);
 void	preemptest(void);
+void	clocktest(void);
 
 /* the allocators and the process table, ready for kproc() */
 int	portprocinit(void);
@@ -17,5 +18,8 @@ int	portactive(void);
 
 /* the top of the RAM the allocators may use */
 extern unsigned long ramtop;
+
+/* the machine's timer tick count (trap.c) */
+uint64_t tickcount(void);
 
 #endif

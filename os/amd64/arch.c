@@ -17,6 +17,7 @@
 #include "mem.h"
 #include "dat.h"
 #include "fns.h"
+#include "console.h"
 
 enum
 {
@@ -99,6 +100,15 @@ idlewake(void)
 void
 setpanic(void)
 {
+}
+
+/* exit is the last resort of code that has already given up; there is
+ * no process to return to, so stop the machine. */
+void
+exit(int status)
+{
+	USED(status);
+	conshalt();
 }
 
 void

@@ -23,6 +23,12 @@ int	islo(void);
 /* arch.c: x86 is a coherent machine; the barrier orders the stores */
 void	coherence(void);
 
+/* clock.c: the TSC counter and its rate, and the PIT's interrupt */
+void	clockinit(void);
+uvlong	fastticks(uvlong*);
+void	timerset(uvlong);
+void	kmapinval(void);
+
 /* main.c: start a new kernel process at p->sched */
 void	kprocchild(Proc*, void(*)(void*), void*);
 

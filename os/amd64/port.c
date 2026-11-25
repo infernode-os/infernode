@@ -90,46 +90,13 @@ fpoff(void)
 {
 }
 
+
 /*
- * The clock tick, as os/port's machine layer provides it: count it,
- * record where the process was, run the timed sleeps that are due, and
- * preempt a running process if anything at its priority is ready.
- *
- * The inpreempt flag is what bounds the nesting: sched() returns only
- * when this process is scheduled again, so the flag brackets exactly
- * one preemption.  Without it each tick that arrives while the handler
- * is still unwound would nest another Ureg and another set of frames on
- * the same kernel stack.
+ * The trap has a Trapframe; os/port asks for a Ureg.  timerintr() walks
+ * the timer queue for this processor and runs the periodic clock Timer
+ * that logs the tick -- which is what calls hzclock(), preemption and
+ * expired sleeps included.
  */
-void
-hzclock(Ureg *ur)
-{
-	m->ticks++;
-	if(m->proc != nil)
-		m->proc->pc = ur->pc;
-	else
-		m->idleticks++;
-
-	if(kproftick != nil)
-		kproftick(ur->pc);
-
-	if((active.machs & (1<<m->machno)) == 0)
-		return;
-
-	checkalarms();
-
-	if(up != nil && up->state == Running && !up->inpreempt){
-		if(anyready()){
-			up->inpreempt = 1;
-			sched();
-			splhi();
-			up->inpreempt = 0;
-		}
-	}
-}
-
-/* The trap has a Trapframe; os/port asks for a Ureg.  The pc is the part
- * the clock uses. */
 void
 portclocktick(uint64_t pc)
 {
@@ -137,7 +104,7 @@ portclocktick(uint64_t pc)
 
 	u.pc = (uintptr)pc;
 	u.sp = 0;
-	hzclock(&u);
+	timerintr(&u, fastticks(nil));
 }
 
 int
@@ -176,6 +143,7 @@ portprocinit(void)
 
 	xinit();
 	poolinit();
+	timersinit();
 	procinit();
 
 	p = newproc();
@@ -199,6 +167,7 @@ portinit(uint64_t membase, uint64_t memsize)
 	m->machno = 0;
 
 	ramtop = membase + memsize;
+	clockinit();
 	active.machs = 1;
 	conf.nmach = 1;
 	conf.nproc = 32;

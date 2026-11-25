@@ -227,6 +227,12 @@ snprint(char *buf, int n, char *fmt, ...)
 }
 
 void
+_assert(char *s)
+{
+	panic("assertion failed: %s", s);
+}
+
+void
 putstrn(char *s, int n)
 {
 	while(n-- > 0)
@@ -320,20 +326,6 @@ void
 splxpc(int s)
 {
 	splx(s);
-}
-
-/*
- * A rough microsecond wait.  Nothing that needs a calibrated clock has
- * called it yet; the PIT arrives with portclock.c.
- */
-void
-microdelay(int us)
-{
-	volatile int i;
-
-	for(; us > 0; us--)
-		for(i = 0; i < 100; i++)
-			__asm__ volatile("pause");
 }
 
 void

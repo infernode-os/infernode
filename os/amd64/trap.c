@@ -31,6 +31,13 @@
 
 volatile uint64_t ticks;
 
+/* the machine's tick count, for the boot clock's fallback calibration */
+uint64_t
+tickcount(void)
+{
+	return ticks;
+}
+
 struct idtentry
 {
 	uint16_t	off0;

@@ -27,7 +27,8 @@
 #        A fourth, "proctest", runs os/port's own scheduler: two kernel
 #        processes, sleep/wakeup through Rendezes, and a qlock.  A fifth,
 #        "preemptest", proves the clock preempts a CPU-bound process and
-#        that a timed sleep expires.
+#        that a timed sleep expires.  A sixth, "clocktest", checks the
+#        TSC's rate through todget and the periodic timer queue.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM and runs the same "kerneltest".  QEMU refuses an ELF64 image ("give a
@@ -99,7 +100,9 @@ objs=
 for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c \
 	"$ROOT"/os/port/proc.c "$ROOT"/os/port/qlock.c \
 	"$ROOT"/os/port/taslock.c "$ROOT"/os/port/alloc.c \
-	"$ROOT"/os/port/xalloc.c "$ROOT"/os/port/alarm.c; do
+	"$ROOT"/os/port/xalloc.c "$ROOT"/os/port/alarm.c \
+	"$ROOT"/os/port/portclock.c "$ROOT"/os/port/tod.c \
+	"$ROOT"/os/port/mul64fract.c; do
 	base=$(basename "$f")
 	o="$BUILD/${base%.*}_${base##*.}.o"
 	# shellcheck disable=SC2086
@@ -285,6 +288,13 @@ if [ "$have9vm" = 1 ]; then
 	check preempt "$out"
 	require preempt "$out" "preempt: hog advanced"
 	require preempt "$out" "preemptest passed"
+
+	ran="$ran clock"
+	out=$(capture 30 "$BUILD/clock.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test clocktest" "$BUILD/kernel.elf")
+	check clock "$out"
+	require clock "$out" "clock: slept"
+	require clock "$out" "clocktest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then

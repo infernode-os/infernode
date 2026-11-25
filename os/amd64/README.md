@@ -128,7 +128,7 @@ stack); the scheduler's `setlabel`/`gotolabel` then start it, and
   groups exist yet;
 - `dumpstack`, `labelstack`, `debugkey`, `ixsummary`,
   `procsave`/`procrestore` — unwinding, FP save and developer hooks;
-- `microdelay` — a pause loop until the PIT clock is calibrated.
+
 
 The test itself is real: two kernel processes, A and B. A takes and
 releases a QLock and sleeps on a Rendez; B takes the same QLock, wakes
@@ -170,11 +170,18 @@ preempt: hog advanced 60294981 in 100ms
 preemptest passed
 ```
 
-The tick is the clock's resolution: `fastticks`, the nanosecond base and
-the wall clock (`tod.c`) are not ported yet, so sleeps are quantised to
-`HZ`.
+The tick drives os/port's own timer queue. `clockinit` measures the TSC
+against the 8254's channel 2 one-shot; when a virtual machine does not
+emulate that output (9vm does not), it falls back to ten channel 0 ticks,
+which are already arriving. `fastticks` is `rdtsc` at the measured rate,
+and `os/port/tod.c` derives the nanosecond clock from it.
+`os/port/portclock.c`'s `timerintr` walks the Timer queue on each tick
+and runs the periodic clock Timer, which is what calls `hzclock` —
+preemption and expired sleeps included. `addclock0link` timers work, and
+`microdelay` is now a calibrated TSC wait.
 
-## Machine tests
+The interrupt is still the firing granularity: `timerset` has no one-shot
+to program, so a timer due between ticks fires on the next one.
 
 ## Machine tests
 
@@ -260,10 +267,14 @@ proctest: proctest passed
 -- preempt
 preempt: hog advanced 60294981 in 100ms
 preemptest passed
+-- clock
+infernode/amd64: clock: TSC 3597 MHz
+clock: slept 101 ms, 9 timer calls
+clocktest passed
 -- qemu
 ...
 infernode/amd64: kerneltest passed
-PASS: x86-64 boot (9vm ns display trap fault port proc preempt qemu)
+PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qemu)
 ```
 
 ## Layout
@@ -292,17 +303,19 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt qemu)
 | `porttest.c` | the os/port foundation's boot test |
 | `proctest.c` | two os/port processes, a QLock and Rendezes |
 | `preemptest.c` | the tick preempts a hog, and a timed sleep expires |
+| `clock.c` | the TSC's rate, `fastticks`, `microdelay` |
+| `clocktest.c` | tod, the timer queue and the measured rate |
 | `shim.c` | the pieces proc.c reaches for that are not ported yet |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- `portclock.c` and `tod.c`: `fastticks` and the wall clock, so timers
-  are sub-tick precise and the system has a time of day.
 - The Dis VM (`os/port/dis.c` + libinterp), which retires the `vm0` and
   registry shims, and real `print` from libkern's fmt.
 - Channels, devices and `devmnt`, so `../9vm`'s rings become the
   mountable `#~/0`/`#~/1` (`host`/`ns`) instead of a boot test.
+- A finer timer source (PIT one-shot) if a driver needs sub-tick
+  deadlines.
 - A framebuffer console over the display slots.
 - `os/ip`, the Dis VM and the amd64 JIT.

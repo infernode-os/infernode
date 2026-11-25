@@ -54,6 +54,50 @@ RIP at its entry, `CS`/`SS` the kernel's selectors, `RFLAGS` with IF, and
 `RSP` at the top of its stack — and the same `iretq` path starts it.
 `thread.c` keeps four threads and a round-robin cursor.
 
+## The os/port foundation
+
+The next arc is upstream's os/port on top of this machine.  Its headers
+are Plan 9's, in Plan 9's include order — every .c includes:
+
+```
+#include "u.h"
+#include "../port/lib.h"
+#include "mem.h"
+#include "dat.h"
+#include "fns.h"
+```
+
+and this stage supplies the amd64 end of that:
+
+- `Inferno/amd64/include/u.h` and `lib9.h` — the LP64 type vocabulary
+  (`ulong` is 64 bits, as os/port assumes), the x87 control/status
+  constants, `USED`/`SET`, and the compiler's `<stdarg.h>`.
+- `mem.h` — `BY2WD` 8, `BY2PG` 4096, the identity `KADDR`/`PADDR`,
+  `KSTACK`, and `HZ`.
+- `dat.h` — `Label`, `Lock`, the x87 `FPU`, `Conf`, then
+  `../port/portdat.h` (so `Proc`, `Chan`, `Rendez`, `QLock` are the
+  real ones), then `Mach` and the one-CPU `m`/`up`.
+- `fns.h` — the machine functions, as `../arm64/fns.h` orders them.
+
+`arch.S` implements the two primitives everything else rests on:
+
+- `setlabel`/`gotolabel`, the error machinery's and the scheduler's
+  setjmp/longjmp. `setlabel` saves `rsp+8`, the stack as it will be
+  after its return, because `gotolabel` jumps to the saved pc instead
+  of returning through it; it also saves rbx, rbp and r12-r15, which
+  the skipped epilogues would have restored.
+- `_tas`, the test-and-set under `Lock`, a full-width `xchg`.
+
+`arch.c` maps Inferno's spl levels onto RFLAGS.IF, returning the flags
+so `splx` restores exactly what it found, and `port.c` defines the
+globals os/port expects (`conf`, `machs`, `m`, `active`) and fills the
+memory ones from the Multiboot map.
+
+The `porttest` command line proves the three contracts: setlabel
+returns 0 and a later gotolabel returns 1 in the same frame; `_tas`
+takes, refuses and releases a word; and splhi/splx mask and restore
+interrupts.
+
 ## Machine tests
 
 Command line `kerneltest` crosses `int $3`, waits 20 timer ticks, then
@@ -124,10 +168,16 @@ infernode/amd64: pf test: writing 0xdead0000
 infernode/amd64: trap 14 page fault err 0x2 rip 0x100643 rsp 0x1085b0 cr2 0xdead0000
 infernode/amd64: panic
 infernode/amd64: halted
+-- port
+infernode/amd64: port: 1 cpu, 65280 pages
+infernode/amd64: port: labels ok
+infernode/amd64: port: tas ok
+infernode/amd64: port: spl ok
+infernode/amd64: porttest passed
 -- qemu
 ...
 infernode/amd64: kerneltest passed
-PASS: x86-64 boot (9vm ns display trap fault qemu)
+PASS: x86-64 boot (9vm ns display trap fault port qemu)
 ```
 
 ## Layout
@@ -145,13 +195,22 @@ PASS: x86-64 boot (9vm ns display trap fault qemu)
 | `thread.c` | thread creation, round-robin scheduling |
 | `ktest.h` | the machine boot tests |
 | `ktest.c` | `kerneltest` and `pftest` |
+| `dat.h` | os/port's machine types: Label, Lock, FPU, Conf, Mach |
+| `fns.h` | the machine functions os/port asks for |
+| `mem.h` | word/page sizes, `HZ`, identity `KADDR`/`PADDR` |
+| `arch.S` | setlabel/gotolabel and `_tas` |
+| `arch.c` | splhi/spllo/splx/islo |
+| `port.c` | `conf`, `machs`, `m`, `active`, and `portinit` |
+| `port.h` | the above, and `porttest` |
+| `porttest.c` | the os/port foundation's boot test |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- `os/port`: procs on top of the run queue, then channels, devices and
-  `devmnt`, so `../9vm`'s rings become the mountable `#~/0`/`#~/1`
-  (`host`/`ns`) instead of a boot test.
+- `os/port`: `proc.c` and `qlock.c` on this foundation — procs, sleep
+  and wakeup, the error machinery — then the clock, the allocators,
+  channels, devices and `devmnt`, so `../9vm`'s rings become the
+  mountable `#~/0`/`#~/1` (`host`/`ns`) instead of a boot test.
 - A framebuffer console over the display slots.
 - `os/ip`, the Dis VM and the amd64 JIT.

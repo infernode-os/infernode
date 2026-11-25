@@ -21,6 +21,7 @@
 #include "io.h"
 #include "trap.h"
 #include "ktest.h"
+#include "port.h"
 
 #define COM1		0x3F8
 #define IDENTMAP	0x40000000u	/* boot.S identity-maps the first GiB */
@@ -172,6 +173,7 @@ main(uint32_t mbiaddr)
 		consprint(" KiB, upper ");
 		consprintdec(m->mem_upper);
 		consprint(" KiB\n");
+		portinit(0x100000, (uint64_t)m->mem_upper * 1024);
 	}
 	/*
 	 * The command line is optional and its pointer is only usable
@@ -236,6 +238,8 @@ main(uint32_t mbiaddr)
 		kerneltest();
 	if(cmdline != 0 && contains(cmdline, "pftest"))
 		pftest();
+	if(cmdline != 0 && contains(cmdline, "porttest"))
+		porttest();
 
 	halt();
 }

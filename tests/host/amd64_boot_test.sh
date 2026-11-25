@@ -22,7 +22,8 @@
 #        Two more boots exercise the machine layer: "kerneltest" crosses
 #        a breakpoint, waits for timer interrupts and runs two preempted
 #        threads; "pftest" faults outside the map and must report the
-#        page fault and panic.
+#        page fault and panic.  A third, "porttest", exercises the
+#        os/port foundation: setlabel/gotolabel, _tas and spl masking.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM and runs the same "kerneltest".  QEMU refuses an ELF64 image ("give a
@@ -75,9 +76,13 @@ haveqemu=0
 [ "$have9vm" = 1 ] || [ "$haveqemu" = 1 ] ||
 	skip "neither 9vm nor qemu-system-x86_64 found"
 
+# os/port's headers carry Plan 9 #pragmas clang does not know; the
+# include path is the one the native kernel build uses.
 CFLAGS="--target=x86_64-elf -ffreestanding -nostdlib
 	-fno-stack-protector -fno-pic -mno-red-zone -mno-sse -mno-mmx
-	-mcmodel=small -O2 -Wall -Wextra"
+	-mcmodel=small -O2 -Wall -Wextra -Wno-unknown-pragmas
+	-I$ROOT/Inferno/amd64/include -I$ROOT/os/amd64
+	-I$ROOT/os/port -I$ROOT/include"
 
 echo "== build"
 objs=
@@ -241,6 +246,15 @@ if [ "$have9vm" = 1 ]; then
 		"infernode/amd64: trap 14 page fault err 0x0000000000000002"
 	require fault "$out" "cr2 0x00000000dead0000"
 	require fault "$out" "infernode/amd64: panic"
+
+	ran="$ran port"
+	out=$(capture 30 "$BUILD/port.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test porttest" "$BUILD/kernel.elf")
+	check port "$out"
+	require port "$out" "infernode/amd64: port: labels ok"
+	require port "$out" "infernode/amd64: port: tas ok"
+	require port "$out" "infernode/amd64: port: spl ok"
+	require port "$out" "infernode/amd64: porttest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then

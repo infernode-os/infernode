@@ -851,7 +851,7 @@ jobs:
               usbdwc_bounds_test udp_len_test iproute_guard_test arp_enter_test ptclcsum_guard_test
               usbxhci_trblen_test ip6reasm_test ipifc_guard_test devip_guard_test tcp_isn_test
               bt9p_selftest_test
-              export_limits_test devip_conv_test arpadd_test devsd_part_test devether_rndis_test netif_multi_test devcmd_fdleak_test devprog_fdsnap_test errlabel_test flawfinder_filter_test print_heapfull_test load_heapfull_test nil_far_test jit_compile_fail_test jit_4gb_test limbo_stale_test slice_end_test draw_pools_test tk_nomem_test link_digest_test
+              export_limits_test devip_conv_test arpadd_test devsd_part_test devether_rndis_test netif_multi_test devcmd_fdleak_test devprog_fdsnap_test errlabel_test flawfinder_filter_test print_heapfull_test load_heapfull_test nil_far_test jit_compile_fail_test jit_4gb_test limbo_stale_test slice_end_test draw_pools_test drawwarp_fuzz_test tk_nomem_test link_digest_test
               emulator_leader_lifecycle_test exec_confinement_test
               font_regression_test ipchecksum_test ipint_release_test iproute_test
               jit_interp_handoff_test jit_real_test jsfs_test

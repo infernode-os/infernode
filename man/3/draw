@@ -4,6 +4,7 @@ draw \- screen graphics
 .SH SYNOPSIS
 .EX
 .B bind -a #i /dev
+.BI "bind -a #i" scope " dir"
 
 .B /dev/draw/new
 
@@ -63,6 +64,38 @@ to access the
 and
 .B refresh
 files associated with the connection.
+.PP
+Attached as
+.BI #i scope\f1,
+.I scope
+any text of up to 64 bytes, the device is what a program served it from
+elsewhere may reach, as
+.IR rcpu (1)
+serves it to a 9front machine.
+A client made through such an attach is of that scope, and:
+its top directory has
+.B draw
+and not
+.BR screen ;
+.B draw
+lists and opens only the scope's clients;
+its display image (image 0) is a 1\(mu1 image of its own, not the screen;
+the names it gives images are the scope's, and of the names it is
+given by name
+.RB ( n ,
+below) it finds only the scope's and unscoped names beginning
+.IB scope .\f1,
+which is how what made the scope gives it a window;
+it attaches only the scope's public screens;
+and it changes neither the colour map nor the debugging flag
+.RB ( D ).
+Every attach naming the same
+.I scope
+is the same scope while the system runs.
+A client attached as plain
+.B #i
+is not in any scope and sees only unscoped names; nothing else is
+different for it.
 .PP
 Via the 
 .B ctl

@@ -57,16 +57,60 @@ machine**:
 /mnt/term/env/rstatus         where the remote leaves its exit status
 ```
 
+and, where this machine has a display, what a graphical program draws with
+(below).
+
 `rimport` serves nothing at all; it only mounts.
+
+## 9front's graphical programs
+
+Run one through `rcpu` and it draws in a window here, as one run with 9front's
+`rcpu` from a rio window draws in that window. There is no flag:
+
+```sh
+rcpu -h cirno -c acme
+rcpu -h cirno -c 'page picture.png'
+rcpu -h cirno -c rio          # a 9front desktop in the window
+```
+
+The window appears when a program first asks for it (`/dev/winname`), so a
+command that draws nothing never gets one. It goes when the program does, when
+its close button is pressed (the session goes on), and with the session.
+
+9front's own profile does the binding: for `service=cpu` it binds
+`/mnt/term/dev` after its `/dev`. rcpu serves there, beside `cons`:
+
+```
+/mnt/term/dev/draw/        the draw device, in a scope of the session's own
+/mnt/term/dev/winname      the window
+/mnt/term/dev/mouse        its pointer, 9front's form
+/mnt/term/dev/cursor       its cursor
+/mnt/term/dev/consctl      rawon: cons then gives the window's keys
+/mnt/term/dev/kbd          9front's raw keyboard (rio reads it)
+/mnt/term/dev/label        its label
+/mnt/term/dev/snarf        this machine's snarf buffer
+```
+
+**The scope** (draw(3)) is what keeps this to one window. Left as it was, any
+client of the draw device can read back the whole screen and draw over it, and
+find any image another program has named (Lucifer's presentation zone among
+them). A client in the session's scope gets a 1x1 image of its own in place of
+the screen, sees only the session's clients and names and the window rcpu
+names for it, attaches only the session's public screens, and changes neither
+the colour map nor the debugging flag. Programs on this machine attach the
+device unscoped, as before, and see nothing of the session's.
+
+The draw protocol is 9front's, its `w` message (affine warp, which 9front's
+`page` and image tools send) included, checked against 9front 11952's own
+answers (`tests/drawwarp_test.b`).
 
 ## What is not here (yet)
 
-- **A drawterm.** A 9front graphical program has no `/dev/draw` of this
-  machine's to draw on. InferNode's draw device speaks 9front's draw protocol,
-  its `w` message (affine warp, which 9front's `page` and image tools send)
-  included, checked against 9front 11952's own answers
-  (`tests/drawwarp_test.b`); serving it through rcpu with the mouse, keyboard
-  and snarf files is the next step.
+- **Keys held down.** The window's keys are typed characters: a `k` message
+  holds the character typed, and a key's release is sent at once, so a
+  program that watches keys held (a game) sees each as a tap.
+- **`wctl` and `wsys`.** A 9front program cannot move or resize its window, or
+  make another here (rio inside the window makes its own).
 - **Interrupts.** No note is sent to the far end, so `DEL` does not reach the
   remote command.
 - **`-p` (aan).** No session survives a dropped connection.

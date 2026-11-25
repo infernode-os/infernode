@@ -1,0 +1,43 @@
+# The seL4 target (docs/SEL4.md): tests/host/sel4_test.sh builds the
+# system image with the pinned Microkit SDK and boots it under QEMU's virt.
+name: seL4
+
+on:
+  pull_request:
+    paths:
+      - 'os/sel4/**'
+      - 'tools/sel4/**'
+      - 'tests/host/sel4_test.sh'
+      - '.github/workflows/sel4.yml'
+  push:
+    branches: [ master ]
+    paths:
+      - 'os/sel4/**'
+      - 'tools/sel4/**'
+      - 'tests/host/sel4_test.sh'
+      - '.github/workflows/sel4.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qemu-virt:
+    name: build and boot on QEMU virt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install clang, lld and QEMU
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang lld qemu-system-arm
+    - name: Build and boot
+      run: tests/host/sel4_test.sh

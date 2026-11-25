@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<system>
+    <protection_domain name="inferno">
+        <program_image path="hello.elf" />
+    </protection_domain>
+</system>

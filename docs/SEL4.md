@@ -12,6 +12,20 @@ seL4 one component at a time, with proofs where they pay. Limbo stays as it is.
 The C native kernel (`os/`, [BAREMETAL.md](BAREMETAL.md)) keeps shipping until
 the seL4 target reaches parity. The hosted emulator is unaffected.
 
+## Building
+
+```sh
+tests/host/sel4_test.sh
+```
+
+builds the system image and boots it under QEMU's `virt`. It uses the seL4
+Microkit SDK pinned in `tools/sel4/manifest.txt` (fetched into `tmp/sel4` by
+`tools/sel4/fetch.sh`, unpacked only after its SHA256 matched), clang and
+lld. `os/sel4/build.sh [BOARD [CONFIG]]` builds alone. Today the image holds
+one placeholder component (`os/sel4/hello`); the Inferno component replaces
+it. The SDK's kernels are its debug, release and benchmark builds, not
+seL4's verified configurations.
+
 ## Why
 
 The product is meant for defence and critical infrastructure. What those

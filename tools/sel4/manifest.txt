@@ -1,0 +1,15 @@
+# tools/sel4/manifest.txt -- the seL4 Microkit SDK the seL4 target builds
+# with, pinned by version, URL and SHA256.  Read by tools/sel4/fetch.sh.
+#
+# Format: 'key value' lines; anything else is a comment.
+#
+# The hash was taken from the first download (2026-11-25); GitHub's release
+# API, which publishes asset digests, was not reachable from where it was
+# taken. Confirm it against the release page when moving the pin.
+#
+# The SDK's kernels are the board's debug, release and benchmark builds, not
+# seL4's verified configurations; the verified build is made from seL4's own
+# configs/*_verified.cmake (docs/SEL4.md).
+version 2.4.0
+url https://github.com/seL4/microkit/releases/download/2.4.0/microkit-sdk-2.4.0-linux-x86-64.tar.gz
+sha256 10bc305713965a01e52b6c7567cea4952b0cc4dde4befa2e6e72b8dce2715f6b

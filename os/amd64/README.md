@@ -25,6 +25,10 @@ assembler emits PC-relative references even under `.code32`, and in
 would load from the wrong address. That one instruction is encoded by
 hand.
 
+Besides the first GiB, the stub maps 64 MiB at 0xF8000000 for 9vm's shared
+display: the third PDPT entry points at a second page directory, whose
+entries 448..479 cover the window.
+
 ## Boot loaders
 
 The kernel is generic: it needs a Multiboot 1 loader, not a particular
@@ -68,12 +72,19 @@ infernode/amd64: halted
 ...
 infernode/9vm: #~/1 ns: 8 concurrent reads of 100 bytes, replies out of order
 ...
+-- display
+...
+infernode/9vm: display 1024x768 XRGB32 at 0x00000000f8000000
+infernode/9vm: display input: key 113 0
+infernode/9vm: display test passed
+vmdisplay: 2 frames verified, input sent
+...
 -- qemu
 infernode/amd64: booting (Multiboot)
 ...
 infernode/amd64: no #~ host ring in the map
 infernode/amd64: halted
-PASS: x86-64 boot (9vm ns qemu)
+PASS: x86-64 boot (9vm ns display qemu)
 ```
 
 ## Layout

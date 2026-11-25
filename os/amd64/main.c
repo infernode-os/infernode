@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "../9vm/board.h"
+#include "../9vm/display.h"
 
 #define COM1		0x3F8
 #define IDENTMAP	0x40000000u	/* boot.S identity-maps the first GiB */
@@ -238,6 +239,9 @@ main(uint32_t mbiaddr)
 	else if(boardattach(&board, ringpa, ringlen) == 0 &&
 		cmdline != 0 && contains(cmdline, "ringtest"))
 		ringselftest(&board);
+
+	if(cmdline != 0 && contains(cmdline, "disptest"))
+		dispselftest();
 
 	halt();
 }

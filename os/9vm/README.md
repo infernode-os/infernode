@@ -2,9 +2,10 @@
 
 [9vm](https://github.com/kiljoy001/9vm) is a small KVM microVM runner for
 native Harvey, Purgatorio/Inferno and GEFS guests. What it offers a guest
-beyond a console is the **`#~` host ring**: a shared-memory 9P2000
+beyond a console is the **`#~` host ring** — a shared-memory 9P2000
 transport in the top 2 MiB of guest physical RAM, served by a host thread
-on another core. This directory is the guest side of it for `os/amd64`.
+on another core — and a **shared display**. This directory is the guest
+side of both for `os/amd64`.
 
 ## What the host publishes
 
@@ -52,6 +53,44 @@ The console labels them by index, `#~/0` and `#~/1`, the names the device
 layer will use; `host` and `ns` are the conventional names shown beside
 them. A boot with no `-ns` offers one channel, `#~/0`.
 
+## The shared display
+
+With `-display-shm NAME` 9vm creates a POSIX shared memory object, maps it
+into the guest at physical `0xF8000000`, and lets a viewer on the host
+attach to the same name. `boot.S` maps that window (32 2 MiB pages from
+`0xF8000000`, clear of the LAPIC, the IOAPIC and the virtio windows), so
+the guest addresses it directly.
+
+The region is the host's `struct vmdisplay`: two 1024x768 XRGB32
+framebuffer slots, a state/serial handshake, and a ring of 256 text input
+records of 96 bytes.
+
+- **Frames.** The guest draws into a slot, sets `written`, `slot_serial`
+  and `latest_serial`, and marks the slot `READY`. A viewer claims it from
+  `READY` to `READING`, copies it, and marks it `FREE`. Two slots mean a
+  viewer always has a complete frame to copy, even while the guest draws
+  the next one.
+- **Input.** A viewer writes a record (`key 113 0
+`, `down 12 34
+`, …)
+  into `input[head % 256]` and advances `input_head`; the guest reads at
+  `input_tail` and advances it.
+- **Presence.** The magic `0x56444c39` and version 1. A boot without
+  `-display-shm` has no region; the driver says `display: not offered`
+  and the test fails rather than faulting.
+
+`display.c` is the boot test: it clears the slots, draws two
+deterministic frames — red ramps with x, green with y, blue is x^y, and
+frame two carries a magenta block so the slots differ — publishes them,
+and waits (bounded) for one input record. It reads the record and prints
+it.
+
+`tests/host/vmdisplay_check.c` is the other half: started before 9vm, it
+waits for the shared memory to appear and for serial 2, verifies every
+pixel of both slots against the same function, checks the header and the
+scale, and then sends `key 113 0` — the input that lets the guest finish.
+A wrong frame exits non-zero with the offending pixel.
+
 ## What is here
 
 | file | |
@@ -59,7 +98,9 @@ them. A boot with no `-ns` offers one channel, `#~/0`.
 | `board.h` | the guest's copy of the ABI, the channel array and client types |
 | `ring.c` | attach, validate, slot allocation, submit, completion |
 | `p9.c` | 9P2000: version, attach, walk, open, read, clunk |
-| `selftest.c` | the boot smoke test, when the command line asks |
+| `selftest.c` | the ring boot test, when the command line asks |
+| `display.h` | the host's `struct vmdisplay`, and where it is mapped |
+| `display.c` | the display boot test: two frames, one input record |
 
 `ring.c` asserts the structure sizes and offsets at compile time against
 9vm's `9ring.h`, so a host-side change fails the build instead of
@@ -100,8 +141,10 @@ than a hung machine.
 
 `tests/host/amd64_boot_test.sh` builds the kernel, exports a small tree,
 runs the test under 9vm, and runs a second boot with `-ns` against a stub
-9P server (`tests/host/ns9p_stub.c`) to exercise the relay. It also boots
-under QEMU, which has no ring: the kernel must still report its map and
+9P server (`tests/host/ns9p_stub.c`) to exercise the relay. A third boot
+adds `-display-shm` and the command line `disptest`, and runs
+`tests/host/vmdisplay_check.c` alongside it. A fourth boots under QEMU,
+which has no ring and no display: the kernel must still report its map and
 halt.
 
 ```
@@ -117,6 +160,17 @@ infernode/9vm: #~/0 host: 8 concurrent reads of 32744 bytes, 300000 bytes verifi
 infernode/9vm: ring test passed
 ```
 
+and, on the display boot:
+
+```
+infernode/9vm: display 1024x768 XRGB32 at 0x00000000f8000000
+infernode/9vm: display: 2 frames, serial 2
+infernode/9vm: display: waiting for input
+infernode/9vm: display input: key 113 0
+infernode/9vm: display test passed
+vmdisplay: 2 frames verified, input sent
+```
+
 ## What this is not
 
 This is the transport, not the namespace. There is no fid table, no mount,
@@ -126,11 +180,13 @@ device (with `#~/0`, `#~/1` and their `host`/`ns` aliases) and `devmnt`
 arrive with `os/port`; then `selftest.c` goes away and `p9.c` is only the
 message carrier beneath `#~`.
 
-The shared-memory display (`vmdisplay`) is a later board driver.
+The display is a transport, not a console: there is no font, no terminal
+and no input translation. A real framebuffer console (`os/fb`) comes with
+`os/port`.
 
 ## Next
 
 - `os/port` beneath this entry, and `#~` as a device: `#~/0`/`#~/1` (and
   `host`/`ns`) as stream files for `devmnt`.
-- The shared display.
+- A framebuffer console and cursor over the display slots.
 - `os/ip`, the Dis VM and the amd64 JIT.

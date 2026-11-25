@@ -97,6 +97,30 @@ _start:
 	cmpl	$512, %ecx
 	jne	1b
 
+	/* pdpt[3] = pd2 | P | RW: the third GiB, which holds 9vm's
+	 * display window at 0xF8000000 */
+	movl	$bootpdpt, %edi
+	movl	$bootpd2, %eax
+	orl	$3, %eax
+	movl	%eax, 24(%edi)
+	movl	$0, 28(%edi)
+
+	/* 32 2 MiB pages: 0xF8000000..0xFBFFFFFF, clear of the IOAPIC
+	 * (0xFEC00000), the LAPIC (0xFEE00000) and the virtio windows.
+	 * The window is at PD index 448 of the third GiB, not at its
+	 * start, so the entries begin 448*8 bytes into pd2. */
+	movl	$bootpd2 + 448*8, %edi
+	movl	$0xF8000083, %eax	/* P | RW | PS */
+	xorl	%ecx, %ecx
+1:
+	movl	%eax, (%edi)
+	movl	$0, 4(%edi)
+	addl	$0x200000, %eax
+	addl	$8, %edi
+	incl	%ecx
+	cmpl	$32, %ecx
+	jne	1b
+
 	/* the 64-bit GDT: null, code, data */
 	movl	$bootgdt, %edi
 	xorl	%eax, %eax

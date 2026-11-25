@@ -14,6 +14,10 @@
 #        smoke test, and checks that the host filesystem and the ns
 #        channel answer; the ns stub answers eight reads in reverse, so
 #        the guest has to match completions by buffer, not by order.
+#        A third boot adds -display-shm: the guest draws two frames into
+#        the shared display at 0xF8000000, and tests/host/vmdisplay_check.c
+#        verifies them pixel by pixel and sends the input that lets the
+#        guest finish.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM.  QEMU refuses an ELF64 image ("give a
@@ -179,6 +183,39 @@ if [ "$have9vm" = 1 ] && [ -n "$HOSTCC" ]; then
 	fi
 else
 	echo "SKIP: ns channel: no host C compiler" >&2
+fi
+
+# The shared display: 9vm -display-shm maps it at 0xF8000000.  The guest
+# draws two frames and waits for one input record; the checker verifies
+# both slots and sends it.
+if [ "$have9vm" = 1 ] && [ -n "$HOSTCC" ]; then
+	if $HOSTCC -O2 -o "$BUILD/vmdisplay_check" \
+		"$ROOT/tests/host/vmdisplay_check.c" 2>"$BUILD/disp.build"; then
+		dname="/infernode-disp-$$"
+		"$BUILD/vmdisplay_check" "$dname" \
+			>"$BUILD/dispchk.out" 2>&1 &
+		chkpid=$!
+		ran="$ran display"
+		out=$(capture 40 "$BUILD/disp.out" "$NINEVM" -m 256 \
+			-display-shm "$dname" -c "amd64 boot test disptest" \
+			"$BUILD/kernel.elf")
+		check display "$out"
+		chkstatus=0
+		wait "$chkpid" || chkstatus=$?
+		cat "$BUILD/dispchk.out"
+		if [ "$chkstatus" -ne 0 ]; then
+			echo "MISSING (display): the host checker failed ($chkstatus)" >&2
+			fails=$((fails + 1))
+		fi
+		require display "$out" "infernode/9vm: display 1024x768"
+		require display "$out" "infernode/9vm: display input: key 113 0"
+		require display "$out" "infernode/9vm: display test passed"
+	else
+		echo "SKIP: display: the checker did not build" >&2
+		cat "$BUILD/disp.build" >&2
+	fi
+else
+	echo "SKIP: display: no host C compiler" >&2
 fi
 
 if [ "$haveqemu" = 1 ]; then

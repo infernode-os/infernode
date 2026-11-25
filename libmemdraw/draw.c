@@ -2348,7 +2348,14 @@ DBG print("dp %p v %lux lm %ux (v ^ *dp) & lm %lux\n", dp, v, lm, (v^*dp)&lm);
 						*dp ^= (v ^ *dp) & lm;
 						dp++;
 					}
-					*dp ^= (v ^ *dp) & rm;
+					/*
+					 * rm is 0 when the row ends on a byte: then
+					 * there is no byte of it here, and on the last
+					 * row this one is past the image (it was read
+					 * and written back).
+					 */
+					if(rm)
+						*dp ^= (v ^ *dp) & rm;
 				}
 			}else{		/* full bytes in middle */
 				dx /= ppb;
@@ -2363,7 +2370,8 @@ DBG print("dp %p v %lux lm %ux (v ^ *dp) & lm %lux\n", dp, v, lm, (v^*dp)&lm);
 					}
 					memset(dp, v, dx);
 					dp += dx;
-					*dp ^= (v ^ *dp) & rm;
+					if(rm)	/* as above */
+						*dp ^= (v ^ *dp) & rm;
 				}
 			}
 			return 1;

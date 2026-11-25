@@ -27,6 +27,14 @@ implement Rcpu;
 #	dev/consctl dev/kbd	rawon for cons; 9front's raw keyboard
 #	dev/label dev/snarf	its label; this machine's snarf buffer
 #
+# and this machine's fonts, read-only, which a program there may choose
+# (acme -f /mnt/term/fonts/combined/go.16.font): Plan 9's own format,
+# rendered here from TrueType with 256 levels of grey.  9front's rcpu
+# serves its terminal's whole name space, fonts among it, at /mnt/term;
+# this serves the fonts alone, at the place they have here.
+#
+#	fonts/			/fonts, bound read-only
+#
 
 include "sys.m";
 	sys: Sys;
@@ -231,6 +239,10 @@ mktree1(root: string)
 	if(st == nil)
 		fail(sys->sprint("file2chan: %r"));
 	spawn statusserve(st);
+	# this machine's fonts, for a program there to choose; read-only
+	if(sys->stat("/fonts").t0 >= 0
+	&& sys->create(root+"/fonts", Sys->OREAD, Sys->DMDIR|8r500) != nil)
+		sys->bind("/fonts", root+"/fonts", Sys->MREPL|Sys->MREADONLY);
 	# the far end makes nothing on this machine's disk: the two
 	# directories that are the scratch place's own are made read-only
 	ro := sys->nulldir;
@@ -247,7 +259,8 @@ rmtree(root: string)
 	d.mode = Sys->DMDIR|8r700;
 	sys->wstat(root, d);
 	sys->wstat(root+"/mnt", d);
-	for(l = list of {"/fd", "/dev", "/mnt/cpunote", "/mnt", "/env", ""}; l != nil; l = tl l)
+	sys->unmount(nil, root+"/fonts");
+	for(l = list of {"/fd", "/dev", "/mnt/cpunote", "/mnt", "/env", "/fonts", ""}; l != nil; l = tl l)
 		sys->remove(root + hd l);
 }
 

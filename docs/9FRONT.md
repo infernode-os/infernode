@@ -100,6 +100,20 @@ names for it, attaches only the session's public screens, and changes neither
 the colour map nor the debugging flag. Programs on this machine attach the
 device unscoped, as before, and see nothing of the session's.
 
+**This machine's fonts**, if you want them: rcpu serves InferNode's `fonts/`
+read-only at `/mnt/term/fonts`. They are in Plan 9's own font format, rendered
+from TrueType with 256 levels of grey, so a 9front program takes one as it
+would its own:
+
+```sh
+rcpu -h cirno -c 'acme -f /mnt/term/fonts/combined/go.16.font -F /mnt/term/fonts/combined/gomono.16.font'
+```
+
+or set `font=/mnt/term/fonts/combined/go.16.font` in your 9front profile.
+Nothing changes unless you ask: 9front's programs keep 9front's fonts by
+default. The first use of each glyph sends eight times the bytes a 9front
+bitmap glyph does, which shows only on a slow link.
+
 The draw protocol is 9front's, its `w` message (affine warp, which 9front's
 `page` and image tools send) included, checked against 9front 11952's own
 answers (`tests/drawwarp_test.b`).

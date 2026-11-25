@@ -53,6 +53,16 @@ scap /tmp/colors.img
 sleep 6
 echo R colorsgone `{nwin}
 
+# this machine's fonts, read-only: chosen by a program there, not written
+# (the refused write last: rc leaves the rest of the line after it)
+rcpu -h $cpu -c 'rm /mnt/term/fonts/dejavu/mkfile; ls /mnt/term/fonts/dejavu/mkfile; echo x > /mnt/term/fonts/evil' > /tmp/fontsw.out >[2=1]
+echo R wfonts `{grep 'mkfile$' /tmp/fontsw.out | wc -l}
+rcpu -h $cpu -c 'acme -f /mnt/term/fonts/combined/go.16.font /lib/namespace & sleep 14; kill acme | rc' > /tmp/fonts.out >[2=1] &
+sleep 12
+echo R fonts `{nwin}
+scap /tmp/fonts.img
+sleep 5
+
 # rio inside the window, running colors in a window of its own
 rcpu -h $cpu -c 'rio -i ''window -r 20 20 400 300 colors'' & sleep 15; kill rio | rc' > /tmp/rio.out >[2=1] &
 sleep 13

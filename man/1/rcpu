@@ -202,6 +202,17 @@ the window's label
 this machine's snarf buffer
 .PD
 .PP
+It serves this machine's fonts too, read-only, at
+.BR /mnt/term/fonts .
+They are in Plan 9's format, rendered here from TrueType with 256 levels
+of grey, and a 9front program uses one as it would its own:
+.BR "acme -f /mnt/term/fonts/combined/go.16.font" ,
+or
+.B $font
+in the 9front profile.
+Nothing uses them unless asked; a program's first use of each
+glyph sends eight times the bytes of a 9front bitmap's.
+.PP
 Both are refused in CNSA mode: 9front's authentication and its TLS are
 classical cryptography (Ed448, ChaCha20-Poly1305, SHA-256), and this is
 for working with 9front, not a part of CNSA 2.0.

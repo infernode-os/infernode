@@ -161,6 +161,17 @@ gcheck $(yes [ "$(step keysdone)" = 0 ]) "its window gone when it is"
 gcheck $(yes [ "$(step colors | cut -d' ' -f1)" = 1 ]) "colors has a window"
 gcheck $(yes has "$ROOT/$G/colors.img" FFFF00 FF0000) "colors drawn in it (its yellow and red, by pixel)"
 gcheck $(yes [ "$(step colorsgone)" = 0 ]) "the window gone with colors"
+gcheck $(yes [ "$(step fonts)" = 1 ]) "acme with this machine's font has a window"
+grey() { python3 -I -c '
+import sys; sys.path.insert(0, sys.argv[1])
+from p9img2png import load
+im = load(sys.argv[2])
+n = len(set(im.px(x, y) for x in range(0, im.w//2) for y in range(60, im.h//2)))
+sys.exit(0 if n > 50 else 1)' "$ROOT/tools" "$1"; }
+gcheck $(yes grey "$ROOT/$G/fonts.img") "its text in this machine's grey-level glyphs, not 9front's bitmaps"
+fw=$(step wfonts)
+gcheck $(yes test ! -e "$ROOT/fonts/evil") "the far end makes no file in this machine's fonts"
+gcheck $(yes test "$fw" = 1 -a -f "$ROOT/fonts/dejavu/mkfile") "nor removes one"
 gcheck $(yes [ "$(step rio | cut -d' ' -f1)" = 1 ]) "rio has a window"
 gcheck $(yes has "$ROOT/$G/rio.img" 55AAAA FFFF00) "rio drawn in it, colors in a rio window (by pixel)"
 gcheck $(yes [ "$(step riogone)" = 0 ]) "the window gone with rio"

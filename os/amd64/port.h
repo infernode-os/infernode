@@ -18,6 +18,10 @@ void	shelltest(void);
 void	nettest(void);
 void	pcitest(void);
 
+/* the 8259 line registry (trap.c) */
+int	intrenable(int, void (*)(void*), void*, char*);
+void	intrdisable(int);
+
 /* the console's receive poller (consinputinit, os/amd64/consinput.c) */
 void	consinputinit(void);
 

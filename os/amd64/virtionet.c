@@ -12,12 +12,13 @@
  * the configuration pair at 0xCF8/0xCFC (pci.c), a BAR mapped into the
  * identity map (mmiomap), and the capability walk.
  *
- * Receive is interrupt-free.  The device raises an interrupt for a used
- * buffer, and enabling one means unmasking an 8259 line, routing it
- * through trap.c and doing the receive work in a process anyway; the
- * whole path is a poll every 10ms instead.  Loopback timings are
- * unaffected, and a NIC test moves kilobytes, not megabytes.  The
- * interrupt is the obvious next step and changes only netproc.
+ * Receive is interrupt-driven: the device's INTx line (11, as the PCI
+ * config says) is unmasked, trap.c dispatches it, and the handler
+ * reads the ISR byte -- which is what deasserts the line -- then wakes
+ * the receive kproc.  The work itself (allocb, etheriqb) is not
+ * something an interrupt may do here.  The kproc still wakes on a
+ * 100ms timeout as a safety net, so a lost interrupt delays a frame
+ * rather than losing it.
  *
  * The other difference from the MMIO transport in os/virtio is the
  * header: a modern virtio-net buffer begins with twelve bytes of
@@ -75,7 +76,7 @@ enum
 	Nq		= 64,
 	Hdr		= 12,		/* virtio_net_hdr, modern */
 	Framemax	= 1514,
-	Pollms		= 10,
+	Pollms		= 100,		/* safety-net wakeup; an interrupt is immediate */
 
 	Vdwrite		= 1<<1,		/* the device writes this buffer */
 };
@@ -140,6 +141,11 @@ struct Ctlr
 
 	Lock		l;
 	int		started;
+	int		irq;
+	int		work;		/* an interrupt happened */
+	int		saidintr;
+	Rendez		r;
+	ulong		nintr;
 	ulong		nrx, ntx, ntxdone, nrxdrop, ntxfull, nrefill;
 };
 
@@ -398,6 +404,30 @@ nettransmit(Ether *e)
 		kick(c, Qtx, c->txnotify);
 }
 
+static int
+network(void *a)
+{
+	return ((Ctlr*)a)->work != 0;
+}
+
+/*
+ * Interrupt context.  Reading the ISR byte is what deasserts the
+ * device's INTx line, and it must happen here rather than after the
+ * EOI in trap.c; the receive work itself (allocb, etheriqb) is not
+ * something an interrupt may do, so it wakes the poller instead.
+ */
+static void
+netintr(void *a)
+{
+	Ctlr *c;
+
+	c = a;
+	if(c->isr[0] & 1)
+		c->nintr++;
+	c->work = 1;
+	wakeup(&c->r);
+}
+
 static void
 netproc(void *a)
 {
@@ -412,9 +442,22 @@ netproc(void *a)
 		txreap(c);
 		iunlock(&c->l);
 		nettransmit(c->edev);
+		if(c->nintr != 0 && !c->saidintr){
+			c->saidintr = 1;
+			print("ether: virtio-net interrupt-driven (irq %d)\n", c->irq);
+		}
 		if(++ticks % 100 == 0)
 			netlink(c);
-		tsleep(&up->sleep, return0, nil, Pollms);
+		if(c->work)
+			c->work = 0;
+		else
+			/*
+			 * The interrupt wakes this at once.  The timeout is
+			 * the safety net for a lost or spurious one, and is
+			 * what makes the driver work before any has been
+			 * seen.
+			 */
+			tsleep(&c->r, network, c, Pollms);
 	}
 }
 
@@ -462,9 +505,9 @@ vnetifstat(Ether *e, void *a, long n, ulong off)
 	}
 	snprint(p, READSTR,
 		"virtio-net pci %d:%d.%d modern transport, header %d bytes\n"
-		"rx %lud tx %lud txdone %lud rxdrop %lud txfull %lud refill %lud\n"
+		"intr %lud rx %lud tx %lud txdone %lud rxdrop %lud txfull %lud refill %lud\n"
 		"rxidx %ud/%ud txidx %ud/%ud\n",
-		c->dev, c->fn, 0, Hdr, c->nrx, c->ntx, c->ntxdone,
+		c->dev, c->fn, 0, Hdr, c->nintr, c->nrx, c->ntx, c->ntxdone,
 		c->nrxdrop, c->ntxfull, c->nrefill,
 		c->rxlast, c->rxused->idx, c->txlast, c->txused->idx);
 	n = readstr(off, a, n, p);
@@ -603,11 +646,14 @@ virtionetlink(void)
 	pciwrite16(0, c->dev, c->fn, 0x04,
 		pcicfgr16(0, c->dev, c->fn, 0x04) | 0x6);
 
+	c->irq = pcicfgr8(0, c->dev, c->fn, 0x3C);
+	print("ether: virtio-net irq %d\n", c->irq);
 	if(startdev(c) < 0){
 		print("ether: virtio-net at %d:%d.%d did not start\n", c->dev, c->fn);
 		return;
 	}
 	fillrx(c);
+	intrenable(c->irq, netintr, c, "virtio-net");
 
 	if(c->feats & Netfmac)
 		for(i = 0; i < Eaddrlen; i++)

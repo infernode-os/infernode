@@ -104,6 +104,78 @@ setgate(int v, void (*stub)(void))
 	idt[v].zero = 0;
 }
 
+/*
+ * The interrupt registry.
+ *
+ * Sixteen lines, one handler each.  A PCI device's INTx line is one of
+ * these; the handler is expected to quiesce its device (read the
+ * status register that clears it) BEFORE the EOI below, because the
+ * line is level-triggered: acknowledging first would let the still
+ * asserted line interrupt again immediately.
+ */
+typedef struct Intr Intr;
+struct Intr
+{
+	void	(*fn)(void*);
+	void	*arg;
+};
+static Intr	intrs[16];
+static uint8_t	pic1mask = 0xFE;	/* IRQ0: the timer */
+static uint8_t	pic2mask = 0xFF;
+
+/*
+ * Let a line through.  Anything on the slave 8259 also needs the
+ * cascade line (IRQ2) open on the master, or it never arrives.
+ */
+int
+intrenable(int irq, void (*fn)(void*), void *arg, char *name)
+{
+	(void)name;
+	if(irq < 0 || irq > 15 || fn == 0)
+		return -1;
+	intrs[irq].fn = fn;
+	intrs[irq].arg = arg;
+	if(irq < 8)
+		pic1mask &= ~(1 << irq);
+	else{
+		pic1mask &= ~(1 << 2);
+		pic2mask &= ~(1 << (irq - 8));
+	}
+	outb(PIC1DATA, pic1mask);
+	outb(PIC2DATA, pic2mask);
+	return irq;
+}
+
+void
+intrdisable(int irq)
+{
+	if(irq < 0 || irq > 15)
+		return;
+	intrs[irq].fn = 0;
+	intrs[irq].arg = 0;
+	if(irq < 8)
+		pic1mask |= 1 << irq;
+	else
+		pic2mask |= 1 << (irq - 8);
+	outb(PIC1DATA, pic1mask);
+	outb(PIC2DATA, pic2mask);
+}
+
+static void
+picdispatch(Trapframe *f)
+{
+	int irq;
+
+	irq = (int)f->vector - 32;
+	if(irq < 0 || irq > 15)
+		return;
+	if(intrs[irq].fn != 0)
+		(*intrs[irq].fn)(intrs[irq].arg);
+	if(irq >= 8)
+		outb(PIC2CMD, PICEOI);
+	outb(PIC1CMD, PICEOI);
+}
+
 /* the 8259s: remap to 0x20/0x28 and enable only the timer */
 static void
 picinit(void)
@@ -207,8 +279,6 @@ trap(Trapframe *f)
 			return f;
 		return threadsched(f);
 	}
-	if(f->vector >= 40 && f->vector < 48)
-		outb(PIC2CMD, PICEOI);
-	outb(PIC1CMD, PICEOI);
+	picdispatch(f);
 	return f;
 }

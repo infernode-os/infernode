@@ -751,6 +751,7 @@ if [ "$haveqemu" = 1 ]; then
 		-display none -serial stdio -monitor none -no-reboot)
 	check qemu-net "$out"
 	require qemu-net "$out" "ether: virtio-net"
+	require qemu-net "$out" "ether: virtio-net interrupt-driven (irq 11)"
 	require qemu-net "$out" "nettest: 127.0.0.1/8 on ipifc"
 	require qemu-net "$out" "nettest: ether0 up at 10.0.2.15/24"
 	require qemu-net "$out" "nettest: icmp echo reply from 10.0.2.2"

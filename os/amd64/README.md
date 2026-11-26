@@ -412,10 +412,17 @@ configuration, so one driver finds the device under either loader.
 Two queues, 64 receive buffers posted and a descriptor per frame. A
 modern transport's buffers begin with twelve bytes of virtio_net_hdr
 (ten on the legacy one); no offload is negotiated, so it is zeroes out
-and ignored in. **The interrupt is not used**: receive is a poll every
-10 ms, because an interrupt would mean unmasking an 8259 line and doing
-the work in a process anyway. The next step is to wire IRQ 11 and take
-the poll out of the idle path.
+and ignored in.
+
+Receive is **interrupt-driven**. The device's INTx line (11, as the
+PCI configuration says) is unmasked through `intrenable()`, `trap.c`
+dispatches it, and the handler reads the ISR byte — which is what
+deasserts the line — then wakes the receive process. The work itself
+(`allocb`, `etheriqb`) is not something an interrupt may do here. The
+process still wakes on a 100 ms timeout as a safety net, so a lost
+interrupt delays a frame rather than losing it; the boot prints
+`interrupt-driven (irq 11)` the first time one arrives, and the harness
+requires that line.
 
 ```
 ether: virtio-net at pci 3:0.0 common 0xfe000000 notify 0xfe003000 devcfg 0xfe002000

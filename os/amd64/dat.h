@@ -41,16 +41,29 @@ struct Lock
 };
 
 /*
- * x87 state, as os/port's FP save/restore expects it.  Nothing saves or
- * restores it yet -- the kernel is built -mno-sse and does not run the
- * Dis VM -- but Proc embeds an FPU, so the shape has to exist now.
+ * Floating point state, as FXSAVE64 writes it: x87 (FCW, FSW, FTW, the
+ * data pointers, ST0-ST7) followed by MXCSR, MXCSR_MASK and XMM0-XMM15
+ * -- 512 bytes in all.
+ *
+ * The layout is the hardware's, not ours: fp.S hands the address
+ * straight to FXSAVE64/FXRSTOR64, through an aligned stack slot,
+ * because an Osenv's FPenv sits at `malloc(sizeof(Prog)+sizeof(Osenv))`
+ * -- a block aligned for malloc's largest type, which is not 16 bytes,
+ * at an offset that is not either.
+ *
+ * Deliberately NOT declared 16-byte aligned.  Saying it was made clang
+ * zero an Osenv's copy with `movaps %xmm0, 0x140(%r14)` in newprog,
+ * and #GP the first time a Limbo program spawned another: the address
+ * is not aligned in the block malloc returned.  The hardware alignment
+ * requirement is met where the instruction runs, inside fp.S, not in
+ * the declaration.
+ *
+ * FPenv (in Osenv, beside the other per-process state Dis swaps) and
+ * FPU (in Proc, for the scheduler) are the same image.
  */
 struct FPenv
 {
-	u16int	fcr;		/* control word */
-	u16int	fsr;		/* status word */
-	u16int	tag;		/* tag word */
-	uchar	regs[8][10];	/* ST(0)-ST(7) */
+	uchar	state[512];
 };
 
 enum
@@ -62,10 +75,7 @@ enum
 
 struct FPU
 {
-	u16int	fcr;
-	u16int	fsr;
-	u16int	tag;
-	uchar	regs[8][10];
+	uchar	state[512];
 };
 
 /*

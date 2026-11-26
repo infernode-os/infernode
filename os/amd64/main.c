@@ -278,6 +278,8 @@ main(uint32_t mbiaddr)
 		ringdevtest();
 	if(cmdline != 0 && contains(cmdline, "mounttest"))
 		mounttest();
+	if(cmdline != 0 && contains(cmdline, "vmtest"))
+		vmtest();
 
 	conshalt();
 }

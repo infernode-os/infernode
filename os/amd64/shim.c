@@ -4,8 +4,8 @@
  *
  * Most of what used to be here has been replaced by the real thing:
  * kstrdup, kstrcpy, incref/decref came with chan.c; resrcwait and
- * closesigs with pgrp.c; ixsummary with qio.c.  What remains is the Dis
- * VM's placeholder, the stack unwinder, the debug keys, and a few small
+ * closesigs with pgrp.c; ixsummary with qio.c.  What remains is the
+ * stack unwinder, the debug keys, the board's reset and a few small
  * adapters.
  */
 
@@ -17,35 +17,29 @@
 #include "console.h"
 #include <interp.h>
 
-struct Vm vm0;
-
 /* the kernel's build date, which dev.c records as a file's mtime */
 ulong kerndate;
 
+/*
+ * modinit -- register the built-in Dis modules.  Upstream's native
+ * kernels generate this from the "mod" section of the kernel
+ * configuration (os/port/mkdevc); this port has no mkdevc yet, and
+ * links exactly two:
+ *
+ *   $Sys   what a Limbo program calls to open, read, write, sleep
+ *   $Math  sin, cos, sqrt and the rest, plus the %g/%e/%f format verbs
+ *
+ * $Draw and $Tk need the draw device and the widget library; $Keyring
+ * needs the crypto stack.  Both are separate stages.
+ */
+extern void sysmodinit(void);
+extern void mathmodinit(void);
+
 void
-addprog(Proc *p)
+modinit(void)
 {
-	USED(p);
-}
-
-/* the /prog registry and VM queries have no answers until dis.c */
-Prog*
-currun(void)
-{
-	return nil;
-}
-
-int
-iprogpid(void *iprog)
-{
-	USED(iprog);
-	return -1;
-}
-
-int
-upkilled(void)
-{
-	return 0;
+	sysmodinit();
+	mathmodinit();
 }
 
 void
@@ -104,19 +98,6 @@ screenhexkey(void)
 }
 
 void
-renameproguser(char *old, char *new)
-{
-	USED(old);
-	USED(new);
-}
-
-char*
-heapaudittext(void)
-{
-	return "";
-}
-
-void
 randominit(void)
 {
 }
@@ -167,15 +148,20 @@ labelstack(Proc *p)
 }
 
 void
-closeegrp(Egrp *g)
-{
-	USED(g);
-}
-
-void
 splxpc(int s)
 {
 	splx(s);
+}
+
+char*
+strdup(char *s)
+{
+	char *t;
+
+	t = malloc(strlen(s)+1);
+	if(t != nil)
+		strcpy(t, s);
+	return t;
 }
 
 char*

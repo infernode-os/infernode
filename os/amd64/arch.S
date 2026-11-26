@@ -49,6 +49,19 @@ gotolabel:
 	jmp	*%rdx
 
 /*
+ * ulong getcallerpc(void *): the pc of the call site that asked.
+ *
+ * os/amd64/fns.h defines this as a macro for kernel C, but libinterp
+ * compiles against lib9.h and calls the function declared in
+ * os/port/lib.h.  The return address at entry is exactly the caller's
+ * pc after the call, which is what the macro's builtin yields.
+ */
+	.globl	getcallerpc
+getcallerpc:
+	movq	(%rsp), %rax
+	ret
+
+/*
  * ulong _tas(ulong *key): test and set, returning the old value.
  * The kernel's spin locks (os/port/taslock.c) call this; it must be a
  * full-width exchange, since Lock.key is a ulong.

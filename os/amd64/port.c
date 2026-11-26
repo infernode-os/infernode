@@ -63,28 +63,47 @@ kprocchild(Proc *p, void (*func)(void*), void *arg)
 	p->sched.pc = (uintptr)linkproc;
 	p->sched.sp = (uintptr)p->kstack + KSTACK - 8;
 	memset(p->sched.regs, 0, sizeof(p->sched.regs));
+	p->fpsave = initfp;
+	p->fpstate = FPINIT;
 	p->kpfun = func;
 	p->arg = arg;
 }
 
-/* no x87 state is live yet: the kernel is -mno-sse and runs no VM */
+/*
+ * libinterp compiles Dis REALs to SSE instructions, so a process's
+ * XMM/x87/MXCSR state is part of what a context switch must preserve.
+ * The scheduler calls these around setlabel/gotolabel; fp.S does the
+ * FXSAVE64/FXRSTOR64, through an aligned stack slot because a
+ * Prog's Osenv is a malloc'd block of no particular alignment.
+ */
 void
 procsave(Proc *p)
 {
-	USED(p);
+	FPsave(&p->fpsave);
+	p->fpstate = FPACTIVE;
 }
 
 void
 procrestore(Proc *p)
 {
-	USED(p);
+	/*
+	 * A process that has never run has no state of its own; give it
+	 * the architectural default rather than whatever the scheduler
+	 * happened to have in the registers.
+	 */
+	if(p->fpstate == FPINIT){
+		p->fpsave = initfp;
+		p->fpstate = FPACTIVE;
+	}
+	FPrestore(&p->fpsave);
 }
 
-void
-fpinit(void)
-{
-}
-
+/*
+ * fpoff is for a port with lazy FP switching (CR0.TS).  This one saves
+ * and restores eagerly at every switch, so there is nothing to turn
+ * off; the name has to exist because os/port/devcons.c offers it to a
+ * process as #c/consctl "fpoff".
+ */
 void
 fpoff(void)
 {
@@ -161,16 +180,18 @@ portprocinit(void)
 }
 
 Conf	conf;
+FPU	initfp;		/* fpinit in arch.S/fp.S records the reset state here */
 Mach	machs[MAXMACH];
 Mach	*m;
 struct Active active;
 unsigned long ramtop;
 
-/* kernel flags devcons and libinterp read; both off at this stage */
-int	cflag;
+/*
+ * consoleprint is the console's own switch.  cflag, strictlink and
+ * keepbroken belong to libinterp (os/port/dis.c, libinterp/link.c) and
+ * are defined there; the port must not define them a second time.
+ */
 int	consoleprint;
-int	strictlink;
-int	keepbroken;
 
 void
 portinit(uint64_t membase, uint64_t memsize)
@@ -179,6 +200,7 @@ portinit(uint64_t membase, uint64_t memsize)
 	m->machno = 0;
 
 	ramtop = membase + memsize;
+	fpinit();		/* before any process can be switched to */
 	clockinit();
 	serwrite = conswrite;
 	active.machs = 1;

@@ -168,6 +168,20 @@ longmode:
 	movw	%ax, %fs
 	movw	%ax, %gs
 
+	/*
+	 * Enable the SSE register file for FXSAVE64/FXRSTOR64: CR4.OSFXSR
+	 * (bit 9) and CR4.OSXMMEXCPT (bit 10), and make sure CR0.EM/TS are
+	 * clear.  libinterp compiles Dis REALs to SSE instructions, and
+	 * the scheduler saves that state with FXSAVE; without these bits
+	 * the first FXRSTOR after a context switch would fault.
+	 */
+	movq	%cr4, %rax
+	orq	$0x600, %rax
+	movq	%rax, %cr4
+	movq	%cr0, %rax
+	andq	$~0xc, %rax
+	movq	%rax, %cr0
+
 	leaq	stack_top(%rip), %rsp
 	movl	$bootmbi, %eax
 	movl	(%rax), %edi

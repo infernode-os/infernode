@@ -236,6 +236,24 @@ now: the formatter is libkern's (`vseprint`), the console is
 `os/amd64/print.c` is the seam `dofmt` asks for (the format lock, and the
 `%e`/`%f`/`%g` and `%r` verbs this kernel declines).
 
+## The #~ device
+
+`os/9vm/dev9vm.c` (compiled with the board) exposes the rings as
+`#~/host` and `#~/ns`: byte streams carrying complete 9P2000 messages.
+The device table gains it, and `ringdevtest` runs a whole 9P2000
+conversation through it — version, attach, a two-element walk, open,
+read, clunk — using the kernel's own `convS2M`/`convM2S`:
+
+```
+ringdev: 9P2000 msize 32768
+ringdev: read 15 "hello from 9vm
+ringdevtest passed
+```
+
+That is the connection `devmnt` will mount. The test is run with the
+harness's exported root (`-r "$BUILD/root"`), so the file it reads is
+the host's `sub/hello.txt`.
+
 ## Machine tests
 
 Command line `kerneltest` crosses `int $3`, waits 20 timer ticks, then
@@ -334,10 +352,14 @@ chantest: read 5 "hello"
 chantest: sysname "infernode"
 console from #c/cons
 chantest passed
+-- ringdev
+ringdev: 9P2000 msize 32768
+ringdev: read 15 "hello from 9vm
+ringdevtest passed
 -- qemu
 ...
 infernode/amd64: kerneltest passed
-PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt chan qemu)
+PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt chan ringdev qemu)
 ```
 
 ## Layout
@@ -373,15 +395,15 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 | `devtab.c` | the kernel's device table, currently one pipe device |
 | `chantest.c` | kpipe, devattach, walk, open, write, read |
 | `print.c` | the fmt seam: format lock, `%e/%f/%g`, `%r` |
+| `ringdevtest.c` | a 9P2000 conversation over `#~/host` |
 | `shim.c` | the pieces proc.c reaches for that are not ported yet |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- `devroot.c` with a root image, then `devmnt`, so `../9vm`'s rings
-  become the mountable `#~/0`/`#~/1` (`host`/`ns`) instead of a boot
-  test — and the ring needs its own `#~` device in front of `devmnt`.
+- `devmnt` and a mount point: the `#~` stream is ready to be mounted,
+  which needs the 9P client and a root namespace to mount into.
 - The Dis VM (`os/port/dis.c` + libinterp), which retires the `vm0` and
   registry shims; it needs a Limbo compiler to generate `runt.h` and
   `sysmod.h`.

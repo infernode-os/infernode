@@ -205,7 +205,7 @@ p9mount(P9Client *c, Ring *r, uint32_t msize)
 
 int
 p9attach(P9Client *c, uint32_t fid, const char *uname, const char *aname,
-	Qid *q)
+	P9Qid *q)
 {
 	uint8_t m[128];
 	RingMsg rm;
@@ -253,7 +253,7 @@ p9attach(P9Client *c, uint32_t fid, const char *uname, const char *aname,
  */
 int
 p9walk(P9Client *c, uint32_t fid, uint32_t newfid, const char **names,
-	int nname, Qid *qids, int nqmax, int *nqid)
+	int nname, P9Qid *qids, int nqmax, int *nqid)
 {
 	uint8_t m[512];
 	RingMsg rm;
@@ -312,7 +312,7 @@ p9walk(P9Client *c, uint32_t fid, uint32_t newfid, const char **names,
 }
 
 int
-p9open(P9Client *c, uint32_t fid, int mode, Qid *q, uint32_t *iounit)
+p9open(P9Client *c, uint32_t fid, int mode, P9Qid *q, uint32_t *iounit)
 {
 	uint8_t m[16];
 	RingMsg rm;

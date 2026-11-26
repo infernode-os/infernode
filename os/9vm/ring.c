@@ -96,6 +96,7 @@ ringinit(Ring *r, P9Channel *ch, P9HostBuffer *buf)
 	r->ch = ch;
 	r->buf = buf;
 	r->lock = 0;
+	r->open = 0;
 	r->used = 0;
 	r->ready = 0;
 	r->inflight = 0;
@@ -329,6 +330,87 @@ ringrecv(Ring *r, RingMsg *m)
 		__asm__ volatile("pause");
 	}
 	return -1;
+}
+
+/*
+ * Waits for any completion, for the stream device: a 9P client writes
+ * requests and reads replies by tag, so the device does not need to
+ * know which request a reply belongs to, only that one is ready.
+ * Returns 0, -1 on timeout, -2 on a refused request (slot freed).
+ */
+int
+ringwaitany(Ring *r, RingMsg *m)
+{
+	uint32_t spins, i;
+
+	for(spins = 0; spins < P9_RINGSPINS; spins++){
+		rlock(r);
+		reap(r);
+		if(r->ready){
+			for(i = 0; i < P9_HOST_SLOTS; i++)
+				if(r->ready & 1u<<i)
+					break;
+			r->ready &= ~(1u<<i);
+			m->slot = i;
+			m->len = r->len[i];
+			if(r->status[i] != 0){
+				/* refused: the completion was consumed */
+				r->used &= ~(1u<<i);
+				if(r->inflight > 0)
+					r->inflight--;
+				m->slot = -1;
+				runlock(r);
+				return -2;
+			}
+			runlock(r);
+			return 0;
+		}
+		runlock(r);
+		__asm__ volatile("pause");
+	}
+	return -1;
+}
+
+/*
+ * Takes one ready completion without waiting, for retiring requests a
+ * client wrote and never read.  -1 when none, -2 when one was refused
+ * and its buffer has been released.
+ */
+int
+ringpoll(Ring *r, RingMsg *m)
+{
+	uint32_t i;
+	int st;
+
+	m->slot = -1;
+	rlock(r);
+	reap(r);
+	if(r->ready == 0){
+		runlock(r);
+		return -1;
+	}
+	for(i = 0; i < P9_HOST_SLOTS; i++)
+		if(r->ready & 1u<<i)
+			break;
+	r->ready &= ~(1u<<i);
+	m->len = r->len[i];
+	st = r->status[i];
+	if(st != 0){
+		r->used &= ~(1u<<i);
+		if(r->inflight > 0)
+			r->inflight--;
+		/*
+		 * The completion is consumed and the buffer released, so
+		 * the caller must NOT ringdone() it -- but it still has to
+		 * forget the request, which is what the slot is for.
+		 */
+		m->slot = i;
+		runlock(r);
+		return -2;
+	}
+	m->slot = i;
+	runlock(r);
+	return 0;
 }
 
 /* Returns the buffer to the pool. */

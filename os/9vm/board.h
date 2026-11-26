@@ -167,6 +167,15 @@ struct Ring
 	 */
 	uint32_t	seq[P9_HOST_SLOTS];
 	uint32_t	nseq;
+	/*
+	 * A ring is one 9P connection, and completions are collected from
+	 * it without regard to which stream submitted them.  Two opens of
+	 * #~/host would therefore race for each other's replies, and the
+	 * one that did not submit the request would discard it.  The
+	 * device enforces one open per channel; this is where it records
+	 * that.
+	 */
+	int		open;
 };
 
 /* A request in flight. */
@@ -200,8 +209,8 @@ struct Board
 };
 
 /* A qid, as on the wire: type[1] vers[4] path[8]. */
-typedef struct Qid Qid;
-struct Qid
+typedef struct P9Qid P9Qid;
+struct P9Qid
 {
 	uint8_t		type;
 	uint32_t	vers;
@@ -232,8 +241,13 @@ struct P9Read
 	uint32_t	len;
 };
 
+/* the board once attached, for the #~ device */
+extern Board	*vmboard;
+
 /* ring.c */
 int	boardattach(Board*, uint64_t, uint64_t);
+int	ringwaitany(Ring*, RingMsg*);
+int	ringpoll(Ring*, RingMsg*);
 Ring*	boardchan(Board*, int);
 const char* boardchanname(Board*, int);
 int	ringsubmit(Ring*, const void*, uint32_t, RingMsg*);
@@ -242,9 +256,9 @@ void	ringdone(Ring*, RingMsg*);
 
 /* p9.c */
 int	p9mount(P9Client*, Ring*, uint32_t);
-int	p9attach(P9Client*, uint32_t, const char*, const char*, Qid*);
-int	p9walk(P9Client*, uint32_t, uint32_t, const char**, int, Qid*, int, int*);
-int	p9open(P9Client*, uint32_t, int, Qid*, uint32_t*);
+int	p9attach(P9Client*, uint32_t, const char*, const char*, P9Qid*);
+int	p9walk(P9Client*, uint32_t, uint32_t, const char**, int, P9Qid*, int, int*);
+int	p9open(P9Client*, uint32_t, int, P9Qid*, uint32_t*);
 int	p9psubmit(P9Client*, uint32_t, uint64_t, uint32_t, int, P9Read*);
 int	p9pcollect(P9Client*, int, P9Read*);
 int	p9pread(P9Client*, uint32_t, uint64_t, uint32_t, int, P9Read*);

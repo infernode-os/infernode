@@ -13,11 +13,13 @@
 #include "fns.h"
 
 extern Dev	consdevtab;
+extern Dev	hostringdevtab;
 extern Dev	pipedevtab;
 
 Dev*	devtab[] =
 {
 	&consdevtab,		/* 'c' -- /dev/cons and friends */
+	&hostringdevtab,	/* '~' -- 9vm's host rings as 9P streams */
 	&pipedevtab,		/* '|' -- pipes */
 	nil,
 };

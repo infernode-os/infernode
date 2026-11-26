@@ -95,7 +95,7 @@ ringselftest(Board *b)
 	P9Read rd[P9_HOST_SLOTS];	/* the host channel's batch */
 	P9Read nrd[P9_HOST_SLOTS];	/* each other channel's, while it runs */
 	const char *names[2], *dot[1];
-	Qid q, wq[P9_Maxwelem];
+	P9Qid q, wq[P9_Maxwelem];
 	uint64_t off, total;
 	uint32_t iounit, chunk, nchunk, i;
 	int ci, nq, last, firstslot;

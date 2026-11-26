@@ -125,7 +125,8 @@ for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c \
 	"$ROOT"/libkern/strncmp.c "$ROOT"/libkern/strtoll.c \
 	"$ROOT"/libkern/tokenize.c \
 	"$ROOT"/os/port/devcons.c "$ROOT"/os/port/parse.c \
-	"$ROOT"/os/port/latin1.c; do
+	"$ROOT"/os/port/latin1.c "$ROOT"/libkern/convS2M.c \
+	"$ROOT"/libkern/convM2S.c; do
 	base=$(basename "$f")
 	o="$BUILD/${base%.*}_${base##*.}.o"
 	# shellcheck disable=SC2086
@@ -339,6 +340,17 @@ if [ "$have9vm" = 1 ]; then
 	require chan "$out" "chantest: read 5 \"hello\""
 	require chan "$out" "chantest passed"
 	require chan "$out" "console from #c/cons"
+
+	ran="$ran ringdev"
+	out=$(capture 30 "$BUILD/ringdev.out" "$NINEVM" -m 256 \
+		-r "$BUILD/root" -c "amd64 boot test ringdevtest" \
+		"$BUILD/kernel.elf")
+	check ringdev "$out"
+	require ringdev "$out" "ringdev: 9P2000 msize 32768"
+	require ringdev "$out" "ringdev: a second open of the channel is refused"
+	require ringdev "$out" "ringdev: the channel reopens after a clean close"
+	require ringdev "$out" "ringdev: read 15 \"hello from 9vm"
+	require ringdev "$out" "ringdevtest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then

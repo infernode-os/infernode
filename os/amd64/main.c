@@ -24,6 +24,9 @@
 #include "port.h"
 
 #define COM1		0x3F8
+
+Board	*vmboard;		/* the attached board, for the #~ device */
+static Board	board;		/* outlives main's frame, which never returns */
 #define IDENTMAP	0x40000000u	/* boot.S identity-maps the first GiB */
 #define MMAP_HOSTRING	0x9009u		/* 9vm's #~ region */
 
@@ -245,9 +248,11 @@ main(uint32_t mbiaddr)
 
 	if(ringpa == 0)
 		consprint("infernode/amd64: no #~ host ring in the map\n");
-	else if(boardattach(&board, ringpa, ringlen) == 0 &&
-		cmdline != 0 && contains(cmdline, "ringtest"))
-		ringselftest(&board);
+	else if(boardattach(&board, ringpa, ringlen) == 0){
+		vmboard = &board;
+		if(cmdline != 0 && contains(cmdline, "ringtest"))
+			ringselftest(&board);
+	}
 
 	if(cmdline != 0 && contains(cmdline, "disptest"))
 		dispselftest();
@@ -269,6 +274,8 @@ main(uint32_t mbiaddr)
 		fmttest();
 	if(cmdline != 0 && contains(cmdline, "chantest"))
 		chantest();
+	if(cmdline != 0 && contains(cmdline, "ringdevtest"))
+		ringdevtest();
 
 	conshalt();
 }

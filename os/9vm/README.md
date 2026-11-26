@@ -101,6 +101,7 @@ A wrong frame exits non-zero with the offending pixel.
 | `selftest.c` | the ring boot test, when the command line asks |
 | `display.h` | the host's `struct vmdisplay`, and where it is mapped |
 | `display.c` | the display boot test: two frames, one input record |
+| `dev9vm.c` | `#~/host` and `#~/ns`: the rings as 9P streams |
 
 `ring.c` asserts the structure sizes and offsets at compile time against
 9vm's `9ring.h`, so a host-side change fails the build instead of
@@ -171,14 +172,31 @@ infernode/9vm: display test passed
 vmdisplay: 2 frames verified, input sent
 ```
 
-## What this is not
+## The #~ device
 
-This is the transport, not the namespace. There is no fid table, no mount,
-no `#~` device, and no fallback to virtio-9p — the ring is the 9vm host
-transport, and a boot without it has no host filesystem at all. The `#~`
-device (with `#~/0`, `#~/1` and their `host`/`ns` aliases) and `devmnt`
-arrive with `os/port`; then `selftest.c` goes away and `p9.c` is only the
-message carrier beneath `#~`.
+`dev9vm.c` exposes the rings as device files: `#~/host` and `#~/ns` are
+byte streams carrying complete 9P2000 messages. A write submits one
+T-message to that channel's ring; a read returns one R-message in the
+order the host completes them, buffering a reply that does not fit in
+one read so a client that reads the size and then the body works
+unmodified. The device holds no fid table and speaks no 9P itself: that
+is `devmnt`'s job, and the point is that the connection it mounts is the
+ring.
+
+`os/9vm/p9.c` and `selftest.c` keep their own small client for the boot
+tests; their qid type is now `P9Qid`, because the kernel's `Qid` lives
+in the same translation unit as the device.
+
+## Mounting it
+
+`devmnt` mounts the stream: the kernel's root device supplies a
+namespace, `kmount` hands `#~/host` to the 9P client, and a path under
+the mount point is served by 9vm's hostfs through the ring. The mount
+test reads `/n/sub/hello.txt` that way, with no socket and no virtio.
+
+The `display` is still a test transport rather than a console, and there
+is no fallback to virtio-9p — the ring is the 9vm host transport, and a
+boot without it has no host filesystem at all.
 
 The display is a transport, not a console: there is no font, no terminal
 and no input translation. A real framebuffer console (`os/fb`) comes with
@@ -186,7 +204,7 @@ and no input translation. A real framebuffer console (`os/fb`) comes with
 
 ## Next
 
-- `os/port` beneath this entry, and `#~` as a device: `#~/0`/`#~/1` (and
-  `host`/`ns`) as stream files for `devmnt`.
+- `devmnt` and a mount point, so `#~/host` becomes a mounted filesystem.
+- `#~/0`/`#~/1` aliases once there is more than one host filesystem.
 - A framebuffer console and cursor over the display slots.
 - `os/ip`, the Dis VM and the amd64 JIT.

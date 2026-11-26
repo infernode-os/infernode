@@ -16,6 +16,8 @@
 #include "console.h"
 #include "port.h"
 
+extern int	cflag;
+
 void
 shelltest(void)
 {
@@ -66,6 +68,9 @@ shelltest(void)
 	 * for fd 0/1/2 and loads the init module by name, so it needs the
 	 * namespace, the descriptor group and the environment above.
 	 */
+	/* the shell and the network test run compiled: the generator has
+	 * been through one module; this is the rest of Limbo */
+	cflag = 1;
 	kproc("dis", disinit, "/init.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);
 	schedinit();
 }

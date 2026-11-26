@@ -15,6 +15,8 @@
 #include "console.h"
 #include "port.h"
 
+extern int	cflag;
+
 void
 nettest(void)
 {
@@ -58,6 +60,9 @@ nettest(void)
 	pg->dot = root;
 	pg->slash = root;
 
+	/* the shell and the network test run compiled: the generator has
+	 * been through one module; this is the rest of Limbo */
+	cflag = 1;
 	kproc("dis", disinit, "/nettest.dis", KPDUPPG|KPDUPFDG|KPDUPENVG);
 	schedinit();
 }

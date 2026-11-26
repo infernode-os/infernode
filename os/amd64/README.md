@@ -325,8 +325,13 @@ build's, which keeps generated code off the heap; an executable-only
 pool is the improvement to make when there is a page allocator to make
 it with.
 
-`cflag` is the switch, read once per module at load. `interptest` sets
-`0` and `jittest` sets `1`, both running the same `/jittest.dis` — a
+`cflag` is the switch, read once per module at load. The shell and
+network boots set it too, so `sh`, its five libraries, its builtins,
+`cat` and `nettest` are all compiled: "jit: Sh compiled, 214400 bytes"
+appears before the first prompt, and the harness requires it.  The
+vmtest boot stays interpreted, which keeps both paths in the suite.
+`interptest` sets `0` and `jittest` sets `1`, both running the same
+`/jittest.dis` — a
 loop, REALs and their formatting, a string and an array, a case,
 recursion, an exception and a spawn with a channel — and the harness
 requires the same lines from both. The generator's own line says it

@@ -41,7 +41,8 @@
 #        does the same for a second of ticks to prove the scheduler saves
 #        the FP state, and halts the machine.
 #
-#        A twelfth, "shelltest", boots to a prompt: init binds #c at
+#        A twelfth, "shelltest", boots to a prompt with the JIT on:
+#        init binds #c at
 #        /dev, #p at /prog and #I at /net, mounts #~/ns at /n/remote
 #        when the loader offers it, and runs /dis/sh.dis.  The harness
 #        types a command and then "echo halt > /dev/sysctl" through a
@@ -663,6 +664,8 @@ if [ "$have9vm" = 1 ]; then
 		wait "$nsspid" 2>/dev/null || true
 		check shell "$out"
 		require shell "$out" "init: #~/ns mounted at /n/remote"
+		require shell "$out" "jit: Sh compiled"
+		require shell "$out" "jit: Cat compiled"
 		require shell "$out" "hello from ns"
 	else
 		out=$(shellboot shell "$BUILD/shell9.out" \
@@ -670,6 +673,7 @@ if [ "$have9vm" = 1 ]; then
 			"$NINEVM" -m 256 \
 			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
 		check shell "$out"
+		require shell "$out" "jit: Sh compiled"
 		require shell "$out" "hello from the shell"
 	fi
 	require shell "$out" "init: starting the shell"
@@ -695,6 +699,7 @@ if [ "$have9vm" = 1 ]; then
 			"$BUILD/kernel.elf")
 	fi
 	check net "$out"
+	require net "$out" "jit: Nettest compiled"
 	require net "$out" "nettest: #I bound at /net"
 	require net "$out" "nettest: 127.0.0.1/8 on ipifc"
 	require net "$out" "nettest: no ethernet device"
@@ -777,6 +782,7 @@ if [ "$haveqemu" = 1 ]; then
 		-append "amd64 boot test shelltest" \
 		-display none -serial stdio -monitor none -no-reboot)
 	check qemu-shell "$out"
+	require qemu-shell "$out" "jit: Sh compiled"
 	require qemu-shell "$out" "init: starting the shell"
 	require qemu-shell "$out" "init: no #~ namespace to mount"
 	require qemu-shell "$out" "hello from the shell"
@@ -813,6 +819,7 @@ PY
 	kill "$nicechopid" 2>/dev/null || true
 	wait "$nicechopid" 2>/dev/null || true
 	check qemu-net "$out"
+	require qemu-net "$out" "jit: Nettest compiled"
 	require qemu-net "$out" "ether: virtio-net"
 	require qemu-net "$out" "ether: virtio-net interrupt-driven (irq 11)"
 	require qemu-net "$out" "nettest: 127.0.0.1/8 on ipifc"

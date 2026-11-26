@@ -366,16 +366,23 @@ terminal, binds `#p` at `/prog`, which is where `sh` opens
 `/dis/sh.dis` with `-l`.
 
 The root image carries what the shell loads: `Filepat`, `String`,
-`Bufio`, `Env` and `Arg`, `load std` for control flow, and `echo`.  The
-profile is `os/amd64/profile`, not the bare-metal one -- no secstored,
-DNS or desktop to complain about.
+`Bufio`, `Env` and `Arg`, `load std` for control flow, and the commands
+a person reaches for first -- `echo`, `cat`, `ls` (with `readdir`,
+`daytime` and `string`), `cd`, `pwd` (with `workdir`), `date` and `ps`.
+The profile is `os/amd64/profile`, not the bare-metal one -- no
+secstored, DNS or desktop to complain about.
 
 ```
 init: the root image is up
 init: starting the shell
 
-; echo hello from the shell
-hello from the shell
+; cd /dis; ls
+pwd.dis
+sh
+sh.dis
+vmtest.dis
+; cat /n/remote/hello
+hello from ns
 ; echo halt > /dev/sysctl
 infernode/amd64: halted
 ```

@@ -203,6 +203,14 @@ $PYTHON "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
 	/dis/sh/std.dis="$ROOT/dis/sh/std.dis" \
 	/dis/echo.dis="$ROOT/dis/echo.dis" \
 	/dis/cat.dis="$ROOT/dis/cat.dis" \
+	/dis/ls.dis="$ROOT/dis/ls.dis" \
+	/dis/cd.dis="$ROOT/dis/cd.dis" \
+	/dis/pwd.dis="$ROOT/dis/pwd.dis" \
+	/dis/date.dis="$ROOT/dis/date.dis" \
+	/dis/ps.dis="$ROOT/dis/ps.dis" \
+	/dis/lib/readdir.dis="$ROOT/dis/lib/readdir.dis" \
+	/dis/lib/daytime.dis="$ROOT/dis/lib/daytime.dis" \
+	/dis/lib/workdir.dis="$ROOT/dis/lib/workdir.dis" \
 	/lib/sh/profile="$ROOT/os/amd64/profile" ||
 	skip "mkrootfs.py failed"
 
@@ -657,7 +665,7 @@ if [ "$have9vm" = 1 ]; then
 			i=$((i + 1))
 		done
 		out=$(shellboot shell "$BUILD/shell9.out" \
-			"cat /n/remote/hello" "hello from ns" \
+			"cd /dis; ls; cat /n/remote/hello" "hello from ns" \
 			"$NINEVM" -m 256 -ns "unix!$BUILD/nsshell.sock" \
 			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
 		kill "$nsspid" 2>/dev/null || true
@@ -666,14 +674,17 @@ if [ "$have9vm" = 1 ]; then
 		require shell "$out" "init: #~/ns mounted at /n/remote"
 		require shell "$out" "jit: Sh compiled"
 		require shell "$out" "jit: Cat compiled"
+		require shell "$out" "jit: Ls compiled"
+		require shell "$out" "sh.dis"
 		require shell "$out" "hello from ns"
 	else
 		out=$(shellboot shell "$BUILD/shell9.out" \
-			"echo hello from the shell" "hello from the shell" \
+			"cd /dis; ls; echo hello from the shell" "hello from the shell" \
 			"$NINEVM" -m 256 \
 			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
 		check shell "$out"
 		require shell "$out" "jit: Sh compiled"
+		require shell "$out" "sh.dis"
 		require shell "$out" "hello from the shell"
 	fi
 	require shell "$out" "init: starting the shell"
@@ -777,7 +788,7 @@ if [ "$haveqemu" = 1 ]; then
 
 	ran="$ran qemu-shell"
 	out=$(shellboot qemu-shell "$BUILD/shellq.out" \
-		"echo hello from the shell" "hello from the shell" \
+		"cd /dis; ls; echo hello from the shell" "hello from the shell" \
 		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" \
 		-append "amd64 boot test shelltest" \
 		-display none -serial stdio -monitor none -no-reboot)
@@ -785,6 +796,7 @@ if [ "$haveqemu" = 1 ]; then
 	require qemu-shell "$out" "jit: Sh compiled"
 	require qemu-shell "$out" "init: starting the shell"
 	require qemu-shell "$out" "init: no #~ namespace to mount"
+	require qemu-shell "$out" "sh.dis"
 	require qemu-shell "$out" "hello from the shell"
 
 	# Loopback needs no hardware, so the network test runs here too;

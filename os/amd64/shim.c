@@ -1,13 +1,12 @@
 /*
- * os/amd64/shim.c -- the few kernel-library pieces proc.c reaches for
- * that are not ported yet.
+ * os/amd64/shim.c -- the kernel-library pieces the port still reaches
+ * for from files that are not linked yet.
  *
- * Each is the real thing at this kernel's scale: print and panic format
- * the verbs the kernel's own messages use (the full Plan 9 fmt arrives
- * with libkern), kstrdup allocates, incref/decref are atomic.  The VM is
- * a placeholder for the Dis interpreter: newproc records it, nothing
- * runs against it yet.  The /prog registry, the stack unwinder and the
- * debug keys are absent rather than wrong.
+ * Most of what used to be here has been replaced by the real thing:
+ * kstrdup, kstrcpy, incref/decref came with chan.c; resrcwait and
+ * closesigs with pgrp.c; ixsummary with qio.c.  What remains is the Dis
+ * VM's placeholder, the stack unwinder, the debug keys, and a few small
+ * adapters.
  */
 
 #include "u.h"
@@ -20,186 +19,54 @@
 
 struct Vm vm0;
 
+/* the host owner, until devcons defines it: stat strings need a name */
+char *eve = "inferno";
+
+/* the kernel's build date, which dev.c records as a file's mtime */
+ulong kerndate;
+
 void
 addprog(Proc *p)
 {
 	USED(p);
 }
 
-/* only reached when the Proc arena is exhausted; say so and stop */
-void
-resrcwait(char *reason)
+/* the /prog registry and VM queries have no answers until dis.c */
+Prog*
+currun(void)
 {
-	panic("out of resource: %s", reason);
-}
-
-void
-kstrdup(char **p, char *s)
-{
-	char *t;
-	ulong n;
-
-	n = strlen(s) + 1;
-	t = malloc(n);
-	if(t == nil)
-		panic("kstrdup");
-	memmove(t, s, n);
-	free(*p);
-	*p = t;
+	return nil;
 }
 
 int
-incref(Ref *r)
+iprogpid(void *iprog)
 {
-	return __atomic_add_fetch(&r->ref, 1, __ATOMIC_SEQ_CST);
+	USED(iprog);
+	return -1;
 }
 
 int
-decref(Ref *r)
+upkilled(void)
 {
-	int x;
-
-	x = __atomic_sub_fetch(&r->ref, 1, __ATOMIC_SEQ_CST);
-	if(x < 0)
-		panic("decref");
-	return x;
+	return 0;
 }
 
 /*
- * A small formatter behind print and snprint, with a sink so the same
- * parser writes to the console or to a buffer.  Verbs: %s %c %d %ld
- * %lud %x %lx %lux %p %#x %#p %%.  Anything else prints literally, which
- * is a visible bug rather than a silent one.
+ * print and panic go through the same formatter as snprint: libkern's
+ * vseprint, which dev.c's device layer links anyway.
  */
-static int	outn;
-static char	*snbuf;
-static int	snlen;
-static int	snmax;
-
-static void
-outc(int c)
-{
-	consputc(c);
-	outn++;
-}
-
-static void
-snc(int c)
-{
-	if(snlen < snmax - 1)
-		snbuf[snlen++] = c;
-}
-
-static void	(*emit)(int) = outc;
-
-static void
-xdigits(uvlong v)
-{
-	static char dig[] = "0123456789abcdef";
-	int i;
-
-	for(i = 60; i >= 0; i -= 4)
-		emit(dig[(v >> i) & 15]);
-}
-
-static void
-vfmt(char *fmt, va_list ap)
-{
-	char *s;
-	vlong sv;
-	uvlong v;
-	int c, lng;
-
-	for(; *fmt != '\0'; fmt++){
-		if(*fmt != '%'){
-			emit(*fmt);
-			continue;
-		}
-		fmt++;
-		if(*fmt == '%'){
-			emit('%');
-			continue;
-		}
-		c = 0;
-		if(*fmt == '#'){
-			c = '#';
-			fmt++;
-		}
-		lng = 0;
-		while(*fmt == 'l'){
-			lng++;
-			fmt++;
-		}
-		if(*fmt == 'u' && (fmt[1] == 'd' || fmt[1] == 'x'))
-			fmt++;
-		switch(*fmt){
-		case 'c':
-			emit(va_arg(ap, int));
-			break;
-		case 's':
-			s = va_arg(ap, char*);
-			if(s == nil)
-				s = "(nil)";
-			while(*s != 0)
-				emit(*s++);
-			break;
-		case 'd':
-			sv = lng ? (vlong)va_arg(ap, long) : (vlong)va_arg(ap, int);
-			if(sv < 0){
-				emit('-');
-				sv = -sv;
-			}
-			{
-				char b[24];
-				int i;
-
-				i = 0;
-				do {
-					b[i++] = '0' + sv % 10;
-					sv /= 10;
-				} while(sv != 0);
-				while(i > 0)
-					emit(b[--i]);
-			}
-			break;
-		case 'x':
-			v = lng ? (uvlong)va_arg(ap, ulong) : (uvlong)va_arg(ap, uint);
-			if(c == '#')
-				emit('0');
-			if(c == '#')
-				emit('x');
-			xdigits(v);
-			break;
-		case 'p':
-			v = (uvlong)(uintptr)va_arg(ap, void*);
-			if(c == '#')
-				emit('0');
-			if(c == '#')
-				emit('x');
-			xdigits(v);
-			break;
-		default:
-			emit('%');
-			if(c)
-				emit(c);
-			if(*fmt != '\0')
-				emit(*fmt);
-			break;
-		}
-	}
-}
-
 int
 print(char *fmt, ...)
 {
 	va_list ap;
+	char buf[PRINTSIZE];
+	int n;
 
-	emit = outc;
-	outn = 0;
 	va_start(ap, fmt);
-	vfmt(fmt, ap);
+	n = vseprint(buf, buf+sizeof(buf), fmt, ap) - buf;
 	va_end(ap);
-	return outn;
+	putstrn(buf, n);
+	return n;
 }
 
 /* iprint: the same, but callable at high spl; the console is polled */
@@ -207,43 +74,14 @@ int
 iprint(char *fmt, ...)
 {
 	va_list ap;
-
-	emit = outc;
-	outn = 0;
-	va_start(ap, fmt);
-	vfmt(fmt, ap);
-	va_end(ap);
-	return outn;
-}
-
-int
-vsnprint(char *buf, int n, char *fmt, va_list ap)
-{
-	emit = snc;
-	snbuf = buf;
-	snlen = 0;
-	snmax = n;
-	vfmt(fmt, ap);
-	buf[snlen] = 0;
-	return snlen;
-}
-
-int
-snprint(char *buf, int n, char *fmt, ...)
-{
-	va_list ap;
-	int r;
+	char buf[PRINTSIZE];
+	int n;
 
 	va_start(ap, fmt);
-	r = vsnprint(buf, n, fmt, ap);
+	n = vseprint(buf, buf+sizeof(buf), fmt, ap) - buf;
 	va_end(ap);
-	return r;
-}
-
-void
-_assert(char *s)
-{
-	panic("assertion failed: %s", s);
+	putstrn(buf, n);
+	return n;
 }
 
 void
@@ -257,14 +95,22 @@ void
 panic(char *fmt, ...)
 {
 	va_list ap;
+	char buf[PRINTSIZE];
+	int n;
 
-	emit = outc;
 	consprint("infernode/amd64: panic: ");
 	va_start(ap, fmt);
-	vfmt(fmt, ap);
+	n = vseprint(buf, buf+sizeof(buf), fmt, ap) - buf;
 	va_end(ap);
+	putstrn(buf, n);
 	consprint("\n");
 	conshalt();
+}
+
+void
+_assert(char *s)
+{
+	panic("assertion failed: %s", s);
 }
 
 /* the kernel features this stage does not have */
@@ -288,67 +134,30 @@ labelstack(Proc *p)
 	USED(p);
 }
 
-Prog*
-currun(void)
-{
-	return nil;
-}
-
-int
-iprogpid(void *iprog)
-{
-	USED(iprog);
-	return -1;
-}
-
-int
-upkilled(void)
-{
-	return 0;
-}
-
 void
 closeegrp(Egrp *g)
 {
 	USED(g);
 }
 
-void
-closefgrp(Fgrp *g)
+/* the time(2)-style seconds devdir records */
+long
+seconds(void)
 {
-	USED(g);
+	return (long)(todget(nil) / 1000000000LL);
 }
 
+/* the 9P client's mount teardown, which has no mounts to tear down yet */
 void
-closepgrp(Pgrp *g)
+muxclose(Mnt *m)
 {
-	USED(g);
-}
-
-void
-closesigs(Skeyset *k)
-{
-	USED(k);
+	USED(m);
 }
 
 void
 splxpc(int s)
 {
 	splx(s);
-}
-
-void
-kstrcpy(char *s, char *t, int ns)
-{
-	int nt;
-
-	if(s == nil || t == nil || ns <= 0)
-		return;
-	nt = strlen(t);
-	if(nt >= ns)
-		nt = ns - 1;
-	memmove(s, t, nt);
-	s[nt] = 0;
 }
 
 char*

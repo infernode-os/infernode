@@ -120,14 +120,13 @@ stack); the scheduler's `setlabel`/`gotolabel` then start it, and
 
 `shim.c` is what is not ported yet, and only that:
 
-- `print`, `snprint`/`vsnprint` — a small formatter for the verbs the
-  kernel's own messages use, until libkern's fmt and `printfp.c`;
-- `vm0`, `currun`, `iprogpid`, `upkilled`, `addprog/delprog` — the Dis
-  VM is not linked yet, so the registry and VM queries have no answer;
-- `closefgrp`/`closepgrp`/`closeegrp`/`closesigs` — no namespaces or
-  groups exist yet;
-- `dumpstack`, `labelstack`, `debugkey`, `ixsummary`,
-  `procsave`/`procrestore` — unwinding, FP save and developer hooks;
+- `vm0`, `currun`, `iprogpid`, `upkilled`, `addprog` — the Dis VM is
+  not linked yet, so the registry and VM queries have no answer;
+- `closeegrp`, `seconds`, `debugkey` — `devenv.c` (#e) and `devcons.c`
+  (#c) are not linked;
+- `muxclose` — `devmnt.c` is not linked, and there are no mounts;
+- `dumpstack`, `labelstack`, `procsave`/`procrestore` — the unwinder and
+  FP save;
 
 
 The test itself is real: two kernel processes, A and B. A takes and
@@ -209,6 +208,25 @@ This is also where `up` had to stop being `(m->proc)`: `qread` declares
 dereferencing the integer. `up` is now `(*upaddr())`, where `upaddr()`
 names `m` only where no local can shadow it — the same trap
 `os/arm64/dat.h` documents for x28.
+
+## Channels and devices
+
+`os/port/dev.c`, `chan.c`, `devpipe.c`, `pgrp.c` and `sysfile.c` are
+compiled unmodified, with a one-entry device table (`os/amd64/devtab.c`).
+`chantest` calls `kpipe`, which takes the real path — `devno` through the
+device table, `devattach`, the pipe's directory walk, `devopen` — then
+writes on one end and reads the other through the file-descriptor table.
+
+```
+chantest: read 5 "hello"
+chantest passed
+```
+
+Linking `chan.c` also brought libkern's formatter (`vseprint` and the
+`fmt` family), so `print` and `snprint` are now the real ones: the
+hand-rolled parser is gone. `os/amd64/print.c` is the machine seam
+`dofmt` asks for — the format lock, and the `%e`/`%f`/`%g` and `%r`
+verbs this kernel declines to format.
 
 ## Machine tests
 
@@ -303,10 +321,13 @@ qio: read 11 "hello world"
 qiotest passed
 -- fmt
 fmttest passed
+-- chan
+chantest: read 5 "hello"
+chantest passed
 -- qemu
 ...
 infernode/amd64: kerneltest passed
-PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt qemu)
+PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt chan qemu)
 ```
 
 ## Layout
@@ -339,17 +360,21 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt qem
 | `clocktest.c` | tod, the timer queue and the measured rate |
 | `qiotest.c` | Block queues blocking both ways between two processes |
 | `fmttest.c` | snprint writes to its buffer, `%p` included |
+| `devtab.c` | the kernel's device table, currently one pipe device |
+| `chantest.c` | kpipe, devattach, walk, open, write, read |
+| `print.c` | the fmt seam: format lock, `%e/%f/%g`, `%r` |
 | `shim.c` | the pieces proc.c reaches for that are not ported yet |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- Channels and devices (`os/port/chan.c`, `dev.c`, `devcons.c`), then
-  `devmnt`, so `../9vm`'s rings become the mountable `#~/0`/`#~/1`
-  (`host`/`ns`) instead of a boot test.
+- `devcons.c` (#c) and `devroot.c` with a root image, then `devmnt`, so
+  `../9vm`'s rings become the mountable `#~/0`/`#~/1` (`host`/`ns`)
+  instead of a boot test.
 - The Dis VM (`os/port/dis.c` + libinterp), which retires the `vm0` and
-  registry shims, and real `print` from libkern's fmt.
+  registry shims; it needs a Limbo compiler to generate `runt.h` and
+  `sysmod.h`.
 - A finer timer source (PIT one-shot) if a driver needs sub-tick
   deadlines.
 - A framebuffer console over the display slots.

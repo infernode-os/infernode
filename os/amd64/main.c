@@ -260,6 +260,8 @@ main(uint32_t mbiaddr)
 		qiotest();
 	if(cmdline != 0 && contains(cmdline, "fmttest"))
 		fmttest();
+	if(cmdline != 0 && contains(cmdline, "chantest"))
+		chantest();
 
 	conshalt();
 }

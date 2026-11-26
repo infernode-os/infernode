@@ -20,9 +20,6 @@ eq(char *got, char *want, int n)
 	return strcmp(got, want) == 0 && n == strlen(want);
 }
 
-static int
-check(char *fmt, ...);
-
 void
 fmttest(void)
 {
@@ -31,9 +28,9 @@ fmttest(void)
 
 	ok = 1;
 	n = snprint(b, sizeof(b), "%p", (void*)0x1234);
-	ok &= eq(b, "0000000000001234", n);
+	ok &= eq(b, "1234", n);
 	n = snprint(b, sizeof(b), "%#p", (void*)0x1234);
-	ok &= eq(b, "0x0000000000001234", n);
+	ok &= eq(b, "0x1234", n);
 	n = snprint(b, sizeof(b), "%d", -42);
 	ok &= eq(b, "-42", n);
 	n = snprint(b, sizeof(b), "%lud", 123456789);
@@ -41,7 +38,7 @@ fmttest(void)
 	n = snprint(b, sizeof(b), "%s %c", "hi", '!');
 	ok &= eq(b, "hi !", n);
 	n = snprint(b, sizeof(b), "%lux", 0xdeadbeefUL);
-	ok &= eq(b, "00000000deadbeef", n);
+	ok &= eq(b, "deadbeef", n);
 
 	if(ok)
 		consprint("fmttest passed\n");

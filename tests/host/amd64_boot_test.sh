@@ -30,7 +30,9 @@
 #        that a timed sleep expires.  A sixth, "clocktest", checks the
 #        TSC's rate through todget and the periodic timer queue.  A
 #        seventh, "qiotest", moves data between two processes through a
-#        Block queue whose limit forces the writer to block too.
+#        Block queue whose limit forces the writer to block too.  An
+#        eighth, "chantest", drives the device table and channels end to
+#        end with a pipe.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM and runs the same "kerneltest".  QEMU refuses an ELF64 image ("give a
@@ -105,7 +107,21 @@ for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c \
 	"$ROOT"/os/port/xalloc.c "$ROOT"/os/port/alarm.c \
 	"$ROOT"/os/port/portclock.c "$ROOT"/os/port/tod.c \
 	"$ROOT"/os/port/mul64fract.c "$ROOT"/os/port/qio.c \
-	"$ROOT"/os/port/allocb.c; do
+	"$ROOT"/os/port/allocb.c "$ROOT"/os/port/dev.c \
+	"$ROOT"/os/port/chan.c "$ROOT"/os/port/devpipe.c \
+	"$ROOT"/os/port/pgrp.c "$ROOT"/os/port/sysfile.c \
+	"$ROOT"/libkern/vseprint.c "$ROOT"/libkern/dofmt.c \
+	"$ROOT"/libkern/fmt.c "$ROOT"/libkern/fmtprint.c \
+	"$ROOT"/libkern/fmtquote.c "$ROOT"/libkern/fmtstr.c \
+	"$ROOT"/libkern/fmtvprint.c "$ROOT"/libkern/seprint.c \
+	"$ROOT"/libkern/vsnprint.c "$ROOT"/libkern/snprint.c \
+	"$ROOT"/libkern/sprint.c "$ROOT"/libkern/smprint.c \
+	"$ROOT"/libkern/vsmprint.c "$ROOT"/libkern/rune.c \
+	"$ROOT"/libkern/cleanname.c "$ROOT"/libkern/convD2M.c \
+	"$ROOT"/libkern/convM2D.c "$ROOT"/libkern/memchr.c \
+	"$ROOT"/libkern/strchr.c "$ROOT"/libkern/strncpy.c \
+	"$ROOT"/libkern/utflen.c "$ROOT"/libkern/utfnlen.c \
+	"$ROOT"/libkern/utfrune.c; do
 	base=$(basename "$f")
 	o="$BUILD/${base%.*}_${base##*.}.o"
 	# shellcheck disable=SC2086
@@ -311,6 +327,13 @@ if [ "$have9vm" = 1 ]; then
 		-c "amd64 boot test fmttest" "$BUILD/kernel.elf")
 	check fmt "$out"
 	require fmt "$out" "fmttest passed"
+
+	ran="$ran chan"
+	out=$(capture 30 "$BUILD/chan.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test chantest" "$BUILD/kernel.elf")
+	check chan "$out"
+	require chan "$out" "chantest: read 5 \"hello\""
+	require chan "$out" "chantest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then

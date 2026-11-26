@@ -189,7 +189,7 @@ sed 's/extern //;s,;.*/\* , = ",;s, \*/,";,' \
 # boot to run.
 [ -n "$PYTHON" ] || skip "python3 not found (it generates the root image)"
 $PYTHON "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
-	/n= /n/remote= /m= /dev= /prog= /net= /tmp= \
+	/n= /n/remote= /n/host= /m= /dev= /prog= /net= /tmp= \
 	/init.dis="$BUILD/init.dis" \
 	/nettest.dis="$BUILD/nettest.dis" \
 	/jittest.dis="$BUILD/jittest.dis" \
@@ -668,7 +668,7 @@ if [ "$have9vm" = 1 ]; then
 			i=$((i + 1))
 		done
 		out=$(shellboot shell "$BUILD/shell9.out" \
-			"ls /dis; echo ramfs-works > /tmp/x; cat /tmp/x; cat /n/remote/hello" \
+			"ls /n/host/dis/echo.dis; /n/host/dis/echo.dis ring-to-host; cat /n/remote/hello" \
 			"hello from ns" \
 			"$NINEVM" -m 256 -ns "unix!$BUILD/nsshell.sock" \
 			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
@@ -681,8 +681,9 @@ if [ "$have9vm" = 1 ]; then
 		require shell "$out" "jit: Ls compiled"
 		require shell "$out" "jit: MemFS compiled"
 		require shell "$out" "init: memfs mounted at /tmp"
-		require shell "$out" "sh.dis"
-		require shell "$out" "$(printf '\nramfs-works\n')"
+		require shell "$out" "init: #~/host mounted at /n/host"
+		require shell "$out" "/dis/echo.dis"
+		require shell "$out" "$(printf '\nring-to-host\n')"
 		require shell "$out" "hello from ns"
 	else
 		out=$(shellboot shell "$BUILD/shell9.out" \

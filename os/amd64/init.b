@@ -75,6 +75,19 @@ init()
 		sys->print("init: #~/ns mounted at /n/remote\n");
 
 	#
+	# The host's own filesystem, when the loader exports one.  This is
+	# how a shell gets commands without a bigger kernel image: the
+	# module is read over #~, mounted by devmnt, and compiled here.
+	#
+	host := sys->open("#~/host", Sys->ORDWR);
+	if(host == nil)
+		sys->print("init: no #~ host filesystem to mount\n");
+	else if(sys->mount(host, nil, "/n/host", Sys->MREPL, "") < 0)
+		sys->print("init: mount #~/host /n/host: %r\n");
+	else
+		sys->print("init: #~/host mounted at /n/host\n");
+
+	#
 	# A writable /tmp.  memfs is a Limbo 9P server: it makes a pipe,
 	# spawns itself to serve it, and mounts the pipe on /tmp.  The
 	# server is an ordinary Prog in this VM, so the filesystem is the

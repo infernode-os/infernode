@@ -459,6 +459,22 @@ That is the ring transport as a file server, not a network device:
 `#~` carries 9P, devmnt mounts it, and the shell does not know or care
 that the bytes arrived through shared memory.
 
+`init.b` also mounts the host's own filesystem (`#~/host`) at `/n/host`
+when the loader exports one, which is how a shell gets commands without
+a bigger kernel image -- the module is read over the ring, compiled
+here, and run:
+
+```
+; ls /n/host/dis/echo.dis; /n/host/dis/echo.dis ring-to-host
+/n/host/dis/echo.dis
+ring-to-host
+```
+
+Fourteen 9P requests crossed the ring for that one line: the mount, the
+lookup, the open, the reads of a module the kernel has never seen, and
+the clunk. The shell, the loader and the JIT are all on the far side of
+it, and none of them knows the file came from the host.
+
 ## The card: virtio-net over PCI
 
 `os/amd64/virtionet.c` drives the modern (1.0) virtio PCI network
@@ -684,10 +700,14 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 
 ## Next
 
-- An executable-only pool for the JIT instead of RWX kernel memory.
-- More of a root image: the rest of the shell's commands and libraries.
-- A root that survives a reboot: memfs is RAM, and the image is read
+- More of a root image, or a root served over `#~` rather than compiled
+  in: the transport is there and now carries a module load.
+- A root that survives a reboot: memfs is RAM and the image is read
   only.
+- The JIT's code lives in RWX kernel memory. Making that an
+  executable-only pool means teaching the kernel non-executable pages,
+  which changes how its own memory works; it is deliberately not being
+  done by reaching into the current identity map.
 - A receive path that uses IRQ4 when the loader raises it, with the
   poll as the fallback (QEMU does, 9vm does not).
 - A finer timer source (PIT one-shot) if a driver needs sub-tick

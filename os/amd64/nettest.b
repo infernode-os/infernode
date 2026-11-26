@@ -72,7 +72,7 @@ watchdog()
 	halt();
 }
 
-Pingread: con 3000;	# ms to wait for an echo reply
+Pingread: con 8000;	# ms to wait: slirp under TCG can take seconds
 
 pingread(d: ref Sys->FD, rep: array of byte, got: chan of int)
 {

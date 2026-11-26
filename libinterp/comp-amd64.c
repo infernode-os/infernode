@@ -15,6 +15,12 @@
 #include "interp.h"
 #include "raise.h"
 
+#ifdef INFERNO_NATIVE
+#ifndef NULL
+#define NULL	((void*)0)	/* lib9.h has nil; this code was written hosted */
+#endif
+#endif
+
 #ifdef _WIN32
 /* Forward declarations to avoid windows.h/interp.h type conflicts */
 __declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);
@@ -25,7 +31,9 @@ __declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);
 #define PAGE_READWRITE	0x04
 #define PAGE_EXECUTE_READWRITE	0x40
 #else
+#ifndef INFERNO_NATIVE
 #include <sys/mman.h>
+#endif
 #endif
 #ifdef __APPLE__
 #include <pthread.h>
@@ -114,6 +122,28 @@ jitmalloc(size_t size)
 	return NULL;
 }
 #else
+#ifdef INFERNO_NATIVE
+/*
+ * Bare metal: the kernel maps all of RAM without NX, so ordinary kernel
+ * memory is executable and malloc is the allocator for it.  There is
+ * no mmap to place code with, and the rel32 reach the hosted allocator
+ * works for does not arise -- kernel text and heap are both inside the
+ * identity-mapped first GiB.  (comp-arm64.c makes the same choice for
+ * the same reason; the W^X posture is weaker here, and is noted there.)
+ */
+static void
+jitfree(void *p, size_t size)
+{
+	USED(size);
+	free(p);
+}
+
+static void*
+jitmalloc(size_t size)
+{
+	return malloc(size);
+}
+#else
 /*
  * MAP_JIT is what the hardened runtime's allow-jit entitlement admits
  * on macOS; Intel Macs do not enforce its write protection, but the
@@ -170,6 +200,7 @@ jitmalloc(size_t size)
 	}
 	return NULL;
 }
+#endif	/* INFERNO_NATIVE */
 #endif
 
 #define DOT			((uvlong)code)
@@ -3420,13 +3451,10 @@ freejitcode(void *p, ulong size)
 {
 	if(p == nil || size == 0)
 		return;
-#ifdef _WIN32
-	/* jitmalloc() hands back a pointer past an unwind header, and the
-	 * registration has to be undone before the memory is released. */
+	/* jitmalloc() hands back a pointer past an unwind header on
+	 * Windows, and the registration has to be undone before the
+	 * memory is released; jitfree() knows which allocator it was. */
 	jitfree(p, size);
-#else
-	munmap(p, size);
-#endif
 }
 
 /*
@@ -3684,6 +3712,14 @@ compile(Module *m, int size, Modlink *ml)
 
 #ifndef __APPLE__
 	segflush(text, textsize);
+#endif
+#ifdef INFERNO_NATIVE
+	/*
+	 * One line per compiled module, so a bare-metal boot can say that
+	 * the generator ran rather than that the module quietly fell back
+	 * to the interpreter (parsemod ignores a compile's return value).
+	 */
+	print("jit: %s compiled, %d bytes\n", m->name, textsize);
 #endif
 
 	text = nil;	/* the module's now */

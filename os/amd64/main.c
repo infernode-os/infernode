@@ -286,6 +286,10 @@ main(uint32_t mbiaddr)
 		nettest();
 	if(cmdline != 0 && contains(cmdline, "pcitest"))
 		pcitest();
+	if(cmdline != 0 && contains(cmdline, "jittest"))
+		jittest();
+	if(cmdline != 0 && contains(cmdline, "interptest"))
+		interptest();
 
 	conshalt();
 }

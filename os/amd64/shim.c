@@ -21,6 +21,19 @@
 ulong kerndate;
 
 /*
+ * There is no C-level environment in this kernel.  libinterp asks once:
+ * comp-amd64.c reads INFERNODE_NOJIT so a hosted test can turn the JIT
+ * off without rebuilding.  A kernel's switch is cflag, set by the boot
+ * that wants the generator; nil here is "not set", which is the truth.
+ */
+char*
+getenv(char *name)
+{
+	USED(name);
+	return nil;
+}
+
+/*
  * postnote -- deliver a note to a process.
  *
  * os/port/proc.c has no note mechanism in this port.  The one thing

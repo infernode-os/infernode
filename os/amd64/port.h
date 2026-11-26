@@ -17,6 +17,8 @@ void	vmtest(void);
 void	shelltest(void);
 void	nettest(void);
 void	pcitest(void);
+void	jittest(void);
+void	interptest(void);
 
 /* the 8259 line registry (trap.c) */
 int	intrenable(int, void (*)(void*), void*, char*);

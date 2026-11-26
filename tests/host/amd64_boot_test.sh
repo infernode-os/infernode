@@ -49,6 +49,11 @@
 #        before it sends the halt.  Under 9vm with the ns stub the
 #        command is "cat /n/remote/hello", read through the ring.
 #
+#        "jittest" and "interptest" run the same module with the code
+#        generator on and off; the harness requires the same answers
+#        from both, and a "compiled" line from the generator (a compile
+#        that fails falls back to the interpreter silently).
+#
 #        A thirteenth, "nettest", links os/ip and proves it moves data:
 #        loopback at 127.0.0.1, an ICMP echo, a TCP echo through the
 #        handshake, and the host namespace mounted.  Under QEMU it is
@@ -136,7 +141,7 @@ CFLAGS="--target=x86_64-elf -ffreestanding -nostdlib
 CFLAGS_VM="--target=x86_64-elf -ffreestanding -nostdlib
 	-fno-stack-protector -fno-pic -mno-red-zone -msse2
 	-mcmodel=small -O2 -Wall -Wextra -Wno-unknown-pragmas
-	-ffunction-sections -fdata-sections
+	-DINFERNO_NATIVE -ffunction-sections -fdata-sections
 	-I$ROOT/Inferno/amd64/include -I$ROOT/os/amd64
 	-I$ROOT/os/port -I$ROOT/include -I$ROOT/libinterp
 	-I$ROOT/libmp -I$BUILD"
@@ -167,6 +172,8 @@ sed 's/extern //;s,;.*/\* , = ",;s, \*/,";,' \
 	skip "limbo could not compile os/amd64/init.b"
 "$LIMBO" -I"$ROOT/module" -o "$BUILD/nettest.dis" "$ROOT/os/amd64/nettest.b" ||
 	skip "limbo could not compile os/amd64/nettest.b"
+"$LIMBO" -I"$ROOT/module" -o "$BUILD/jittest.dis" "$ROOT/os/amd64/jittest.b" ||
+	skip "limbo could not compile os/amd64/jittest.b"
 
 # The kernel's root filesystem: /n and /m for the mount test, /dev for
 # init to bind #c on, the Dis modules for the VM and the shell, and the
@@ -184,6 +191,7 @@ $PYTHON "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
 	/n= /n/remote= /m= /dev= /prog= /net= /tmp= \
 	/init.dis="$BUILD/init.dis" \
 	/nettest.dis="$BUILD/nettest.dis" \
+	/jittest.dis="$BUILD/jittest.dis" \
 	/dis/vmtest.dis="$BUILD/vmtest.dis" \
 	/dis/sh.dis="$ROOT/dis/sh.dis" \
 	/dis/lib/filepat.dis="$ROOT/dis/lib/filepat.dis" \
@@ -291,6 +299,7 @@ objs="$objs $BUILD/fpwork.o"
 # and a real the test computes are the point.
 for f in "$ROOT"/libinterp/*.c; do
 	case "$(basename "$f")" in
+	comp-amd64.c|das-amd64.c) ;;	# the one generator and its disassembler
 	comp-*.c|das-*.c|draw.c|tk.c|decgen.c|i420.c|tensor.c|bayer.c|keyring.c) continue;;
 	esac
 	o="$BUILD/libinterp-$(basename "$f").o"
@@ -699,6 +708,35 @@ if [ "$have9vm" = 1 ]; then
 	fi
 	require net "$out" "nettest passed"
 
+	# The JIT, and the interpreter it must agree with: the same module,
+	# the same answers.  A compile that fails falls back silently, so
+	# the "compiled" line is what says the generator ran.
+	for _gen in 1 0; do
+		if [ "$_gen" = 1 ]; then
+			_gname=jit
+			_gword=jittest
+			_gexpect="jittest: cflag 1 (compiling Dis to amd64)"
+		else
+			_gname=interp
+			_gword=interptest
+			_gexpect="jittest: cflag 0 (interpreter only)"
+		fi
+		ran="$ran $_gname"
+		out=$(capture 30 "$BUILD/$_gname.out" "$NINEVM" -m 256 \
+			-c "amd64 boot test $_gword" "$BUILD/kernel.elf")
+		check "$_gname" "$out"
+		require "$_gname" "$out" "$_gexpect"
+		if [ "$_gen" = 1 ]; then
+			require "$_gname" "$out" "jit: Jittest compiled"
+		fi
+		require "$_gname" "$out" "jittest: sum=499500"
+		require "$_gname" "$out" "jittest: real=3"
+		require "$_gname" "$out" "jittest: fact=720"
+		require "$_gname" "$out" "jittest: caught fail:deliberate"
+		require "$_gname" "$out" "jittest: spawn=7"
+		require "$_gname" "$out" "jittest passed"
+	done
+
 	# The PCI bus as the loader presents it. 9vm always has the
 	# virtio-9p host device at 0:1.0; finding it is what the
 	# networking driver's scan depends on.
@@ -784,6 +822,19 @@ PY
 	require qemu-net "$out" "nettest: tcp echo over ether0"
 	require qemu-net "$out" "nettest: no #~ namespace on this loader"
 	require qemu-net "$out" "nettest passed"
+
+	# The same module, compiled by the generator, on the emulated CPU.
+	ran="$ran qemu-jit"
+	out=$(capture 30 "$BUILD/qemu-jit.out" \
+		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" \
+		-append "amd64 boot test jittest" \
+		-display none -serial stdio -monitor none -no-reboot)
+	check qemu-jit "$out"
+	require qemu-jit "$out" "jit: Jittest compiled"
+	require qemu-jit "$out" "jittest: real=3"
+	require qemu-jit "$out" "jittest: caught fail:deliberate"
+	require qemu-jit "$out" "jittest: spawn=7"
+	require qemu-jit "$out" "jittest passed"
 fi
 
 [ "$fails" = 0 ] || exit 1

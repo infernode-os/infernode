@@ -83,10 +83,16 @@ void	(*heapmonitor)(int, void*, ulong);
 static void
 freetypecode(Type *t)
 {
-#if defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64)
-	freetypejit(t);		/* free() on a native kernel, munmap() hosted: comp-arm64.c and comp-riscv64.c know which */
-#elif !defined(INFERNO_NATIVE) && (defined(__x86_64__) || defined(_M_X64))
-	freetypejit(t);		/* hosted amd64: back to comp-amd64.c's free list, for the next type */
+#if defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64) || defined(__x86_64__) || defined(_M_X64)
+	/*
+	 * The code generators keep type code in slabs of their own and
+	 * hand it back to a free list; t->initialize points INTO a slab,
+	 * not at the start of an allocation, so free() is never right.
+	 * amd64 was listed as hosted-only here, and the native kernel then
+	 * freed a slab interior pointer: the pool's header magic was
+	 * whatever generated code preceded it.
+	 */
+	freetypejit(t);
 #else
 	free(t->initialize);
 #endif

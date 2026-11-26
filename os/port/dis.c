@@ -1674,10 +1674,20 @@ addrun(Prog *p)
 	 * nil->compiled quietly returned junk; with no memory there (RISC-V,
 	 * no paging) it is a load access fault in the boot's first addrun.
 	 */
+#if !defined(__x86_64__) && !defined(_M_X64)
+	/*
+	 * On a fixed-width instruction set a compiled Prog's saved PC is
+	 * four-byte aligned, so the low bits being set means it is not a
+	 * native PC.  x86 instructions are byte-granular and every
+	 * address is legal: this test reported the shell's own scheduler
+	 * as corruption, once per quantum, and there is nothing to test
+	 * in its place.
+	 */
 	if(p->reg.M != nil && p->reg.M != H && p->reg.M->compiled && ((uintptr)p->reg.PC & 3))
 		print("BUG: addrun: prog %d %s R.PC=%p (prog %p) from %#p\n",
 			p->pid, p->reg.M->m? p->reg.M->m->name : "?", p->reg.PC,
 			p->reg.M->m? (void*)p->reg.M->m->prog : nil, getcallerpc(&p));
+#endif
 	chkprog(p, "addrun");
 	chkprog(isched.runtl, "addrun.tl");
 	if(isched.runhd == nil)
@@ -2366,6 +2376,8 @@ vmachine(void*)
 			 * found bad names the quantum -- this Prog, this module,
 			 * this pc -- during which it happened.
 			 */
+#if !defined(__x86_64__) && !defined(_M_X64)
+			/* the alignment test is meaningless on byte-granular code */
 			{
 				Prog *q;
 				for(q = isched.runhd; q != nil; q = q->link)
@@ -2376,6 +2388,7 @@ vmachine(void*)
 							pid, modname, r->reg.PC, r->reg.M != H && r->reg.M->m? (void*)r->reg.M->m->prog : nil, r->state);
 					}
 			}
+#endif
 
 			if(up->nerrlab != nerr){
 				/*

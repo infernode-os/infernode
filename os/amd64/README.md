@@ -250,9 +250,23 @@ ringdev: read 15 "hello from 9vm
 ringdevtest passed
 ```
 
-That is the connection `devmnt` will mount. The test is run with the
-harness's exported root (`-r "$BUILD/root"`), so the file it reads is
-the host's `sub/hello.txt`.
+`mounttest` takes it the rest of the way: the kernel's root device
+(`devroot`, with a generated one-directory image) supplies the namespace
+root and its `/n`; `kmount(fd, -1, "/n", MREPL, "")` hands the `#~/host`
+stream to `devmnt`, which negotiates 9P, attaches and records the mount;
+opening `/n/sub/hello.txt` then walks through the mount into 9vm's
+exported tree.
+
+```
+mounttest: #~/host mounted on /n
+mounttest: read 15 "hello from 9vm
+"
+mounttest passed
+```
+
+The harness generates the root image with `tools/mkrootfs.py` (`/n=`)
+and runs both tests with `-r "$BUILD/root"`, so the files read are the
+host's, not fixtures.
 
 ## Machine tests
 
@@ -356,10 +370,14 @@ chantest passed
 ringdev: 9P2000 msize 32768
 ringdev: read 15 "hello from 9vm
 ringdevtest passed
+-- mount
+mounttest: #~/host mounted on /n
+mounttest: read 15 "hello from 9vm
+mounttest passed
 -- qemu
 ...
 infernode/amd64: kerneltest passed
-PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt chan ringdev qemu)
+PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt chan ringdev mount qemu)
 ```
 
 ## Layout
@@ -396,14 +414,18 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 | `chantest.c` | kpipe, devattach, walk, open, write, read |
 | `print.c` | the fmt seam: format lock, `%e/%f/%g`, `%r` |
 | `ringdevtest.c` | a 9P2000 conversation over `#~/host` |
+| `mounttest.c` | mount that connection on /n and read through it |
 | `shim.c` | the pieces proc.c reaches for that are not ported yet |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
 | `kernel.ld` | links at 1 MiB; `.multiboot` and `.text.boot` first |
 
 ## Next
 
-- `devmnt` and a mount point: the `#~` stream is ready to be mounted,
-  which needs the 9P client and a root namespace to mount into.
+- Mount `#~/ns` beside `#~/host`, and build a real root image (a `/dev`
+  directory, the shell's modules) instead of the test's `/n`.
+- The Dis VM (`os/port/dis.c` + libinterp); it needs a Limbo compiler for
+  `runt.h`/`sysmod.h`.
+- `os/ip` and the amd64 JIT.
 - The Dis VM (`os/port/dis.c` + libinterp), which retires the `vm0` and
   registry shims; it needs a Limbo compiler to generate `runt.h` and
   `sysmod.h`.

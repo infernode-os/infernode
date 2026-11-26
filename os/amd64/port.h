@@ -12,6 +12,7 @@ void	qiotest(void);
 void	fmttest(void);
 void	chantest(void);
 void	ringdevtest(void);
+void	mounttest(void);
 
 /* the allocators and the process table, ready for kproc() */
 int	portprocinit(void);

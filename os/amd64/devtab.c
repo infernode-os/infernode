@@ -14,12 +14,16 @@
 
 extern Dev	consdevtab;
 extern Dev	hostringdevtab;
+extern Dev	mntdevtab;
 extern Dev	pipedevtab;
+extern Dev	rootdevtab;
 
 Dev*	devtab[] =
 {
+	&rootdevtab,		/* '/' -- the namespace root */
 	&consdevtab,		/* 'c' -- /dev/cons and friends */
 	&hostringdevtab,	/* '~' -- 9vm's host rings as 9P streams */
+	&mntdevtab,		/* 'M' -- the 9P client behind mount */
 	&pipedevtab,		/* '|' -- pipes */
 	nil,
 };

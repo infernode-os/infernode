@@ -39,6 +39,7 @@ enum
 	Tread		= 116,
 	Rread		= 117,
 	Qtdir		= 0x80,
+	QTFILE		= 0x00,
 	Maxmsg		= 8192,
 	Nread		= 8,		/* Treads collected before answering */
 	Iounit		= 100,		/* the read size the guest will use */
@@ -146,6 +147,48 @@ rattach(int fd, uint16_t tag)
 
 static int	rerror(int, uint16_t, const char*);
 
+/* fid -> name, so a read can tell hello from the batching data file */
+static struct
+{
+	int		used;
+	uint32_t	fid;
+	char		name[32];
+} fids[8];
+
+static void
+setfid(uint32_t fid, const char *name, int n)
+{
+	int i, j;
+
+	if(n >= (int)sizeof(fids[0].name))
+		n = sizeof(fids[0].name) - 1;
+	for(i = 0; i < 8; i++)
+		if(fids[i].used && fids[i].fid == fid)
+			break;
+	if(i == 8)
+		for(i = 0; i < 8; i++)
+			if(!fids[i].used)
+				break;
+	if(i == 8)
+		return;
+	fids[i].used = 1;
+	fids[i].fid = fid;
+	for(j = 0; j < n; j++)
+		fids[i].name[j] = name[j];
+	fids[i].name[n] = 0;
+}
+
+static char*
+getfid(uint32_t fid)
+{
+	int i;
+
+	for(i = 0; i < 8; i++)
+		if(fids[i].used && fids[i].fid == fid)
+			return fids[i].name;
+	return "";
+}
+
 static int
 ropen(int fd, uint16_t tag)
 {
@@ -180,11 +223,28 @@ rread(int fd, uint16_t tag, uint64_t off, uint32_t count)
 }
 
 static int
+rreadbuf(int fd, uint16_t tag, const uint8_t *data, uint32_t count)
+{
+	uint8_t m[11 + Maxread];
+
+	if(count > Maxread)
+		count = Maxread;
+	p32(m, 11 + count);
+	m[4] = Rread;
+	p16(m+5, tag);
+	p32(m+7, count);
+	memmove(m+11, data, count);
+	return writen(fd, m, 11 + count);
+}
+
+static int
 rwalk(int fd, uint16_t tag, const uint8_t *req, uint32_t len)
 {
 	uint8_t m[9 + 16*13];
-	uint16_t nwname;
-	uint32_t n;
+	uint16_t nwname, wl;
+	uint32_t n, fid, newfid, ftype;
+	const uint8_t *p;
+	char name[32];
 	int i;
 
 	if(len < 17)
@@ -192,13 +252,40 @@ rwalk(int fd, uint16_t tag, const uint8_t *req, uint32_t len)
 	nwname = g16(req+15);
 	if(nwname > 16)
 		return rerror(fd, tag, "too many walk elements");
+	fid = g32(req+7);
+	newfid = g32(req+11);
+	p = req + 17;
+	name[0] = 0;
+	for(i = 0; i < nwname; i++){
+		if(p + 2 > req + len)
+			return rerror(fd, tag, "short walk name");
+		wl = g16(p);
+		p += 2;
+		if(p + wl > req + len)
+			return rerror(fd, tag, "short walk name");
+		{
+			int k, c;
+
+			c = wl < sizeof(name) - 1 ? wl : (int)sizeof(name) - 1;
+			for(k = 0; k < c; k++)
+				name[k] = p[k];
+			name[c] = 0;
+		}
+		p += wl;
+	}
+	if(nwname == 0){
+		strncpy(name, getfid(fid), sizeof(name) - 1);
+		name[sizeof(name) - 1] = 0;
+	}
+	setfid(newfid, name, strlen(name));
+	ftype = strcmp(name, "hello") == 0 ? QTFILE : Qtdir;
 	n = 9 + 13*nwname;
 	p32(m, n);
 	m[4] = Rwalk;
 	p16(m+5, tag);
 	p16(m+7, nwname);
 	for(i = 0; i < nwname; i++){
-		m[9 + 13*i] = Qtdir;
+		m[9 + 13*i] = ftype;
 		p32(m+10 + 13*i, 0);
 		p32(m+14 + 13*i, 1);
 		p32(m+18 + 13*i, 0);
@@ -297,6 +384,20 @@ main(int argc, char **argv)
 		case Tread:
 			if(len < 23)
 				return 0;
+			if(strcmp(getfid(g32(m+7)), "hello") == 0){
+				static const char hello[] = "hello from ns\n";
+				uint64_t off = g64(m+11);
+				uint32_t cnt = g32(m+19);
+				uint32_t total = sizeof(hello) - 1;
+
+				if(off >= total)
+					cnt = 0;
+				else if(cnt > total - off)
+					cnt = total - off;
+				if(rreadbuf(c, tag, (const uint8_t*)hello + off, cnt) < 0)
+					return 0;
+				break;
+			}
 			if(nreads < Nread){
 				reads[nreads].tag = tag;
 				reads[nreads].off = g64(m+11);

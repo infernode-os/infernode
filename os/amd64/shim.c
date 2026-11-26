@@ -172,13 +172,6 @@ closeegrp(Egrp *g)
 	USED(g);
 }
 
-/* the 9P client's mount teardown, which has no mounts to tear down yet */
-void
-muxclose(Mnt *m)
-{
-	USED(m);
-}
-
 void
 splxpc(int s)
 {

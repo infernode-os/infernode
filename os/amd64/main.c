@@ -280,6 +280,8 @@ main(uint32_t mbiaddr)
 		mounttest();
 	if(cmdline != 0 && contains(cmdline, "vmtest"))
 		vmtest();
+	if(cmdline != 0 && contains(cmdline, "shelltest"))
+		shelltest();
 
 	conshalt();
 }

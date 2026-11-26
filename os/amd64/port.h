@@ -14,6 +14,10 @@ void	chantest(void);
 void	ringdevtest(void);
 void	mounttest(void);
 void	vmtest(void);
+void	shelltest(void);
+
+/* the console's receive poller (consinputinit, os/amd64/consinput.c) */
+void	consinputinit(void);
 
 /* the allocators and the process table, ready for kproc() */
 int	portprocinit(void);

@@ -209,7 +209,16 @@ portinit(uint64_t membase, uint64_t memsize)
 	conf.base0 = membase;
 	conf.npage0 = memsize / BY2PG;
 	conf.npage = conf.npage0;
-	conf.ialloc = 4096;
+	/*
+	 * What interrupt-time allocation may hold, in bytes of block
+	 * (BALLOC, so the queue's own limit is in the same currency).
+	 * It was 4K while nothing allocated at interrupt time; the
+	 * console's receive poller is the first such user, and one byte
+	 * of type-ahead costs a whole Block: 4K is about twenty
+	 * characters, and a command line is longer than that.  The other
+	 * native ports use 128K, which is roughly seven hundred.
+	 */
+	conf.ialloc = 128*1024;
 	conf.pipeqsize = 8 * 1024;
 
 	consprint("infernode/amd64: port: ");

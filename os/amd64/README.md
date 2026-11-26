@@ -310,6 +310,43 @@ The program is `os/amd64/vmtest.b`, compiled by the harness and placed
 in the root image at `/dis/vmtest.dis`; it writes `halt` to `#c/sysctl`
 when it has finished, which is what ends the boot.
 
+## Console input and the shell
+
+The console was write-only until this stage.  `os/amd64/consinput.c`
+adds the receive side: a kernel process samples the 16550's line-status
+register every 10 ms, translates CR to NL, echoes (with a real erase for
+backspace, since nothing else does), and hands each byte to `kbdputc`.
+Polled on purpose: 9vm emulates the 16550's registers faithfully but does
+not raise IRQ4, so an interrupt path would work under QEMU and never
+under the loader the harness uses.
+
+`init.b` is the first Limbo program a shell boot runs.  It binds `#c` at
+`/dev`, so `/dev/cons` is the file `sh` stats to decide it is on a
+terminal, binds `#p` at `/prog`, which is where `sh` opens
+`/prog/<pid>/wait` to reap the commands it starts, and hands over to
+`/dis/sh.dis` with `-l`.
+
+The root image carries what the shell loads: `Filepat`, `String`,
+`Bufio`, `Env` and `Arg`, `load std` for control flow, and `echo`.  The
+profile is `os/amd64/profile`, not the bare-metal one -- no secstored,
+DNS or desktop to complain about.
+
+```
+init: the root image is up
+init: starting the shell
+
+; echo hello from the shell
+hello from the shell
+; echo halt > /dev/sysctl
+infernode/amd64: halted
+```
+
+The harness boots this under 9vm and QEMU and types at it through a
+fifo, one line at a time: the first only after init says the shell is
+starting, and `halt` only after the shell has answered.  The 16550's
+receive FIFO is sixteen bytes on QEMU, and the shell is not reading when
+the loader starts.
+
 ## Machine tests
 
 Command line `kerneltest` crosses `int $3`, waits 20 timer ticks, then
@@ -458,10 +495,14 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 | `ringdevtest.c` | a 9P2000 conversation over `#~/host` |
 | `mounttest.c` | mount that connection on /n and read through it |
 | `vmtest.c` | hand the machine to the Dis VM and run a Limbo program |
+| `shelltest.c` | boot to a shell instead of a test module |
+| `init.b` | the kernel's init: bind #c and #p, then run sh |
+| `profile` | the shell's /lib/sh/profile for this root image |
+| `consinput.c` | the 16550's receive side, polled, echoed |
 | `vmtest.b` | that program: integers, REALs, strings and arrays |
 | `nocomp.c` | no code generator: the interpreter runs every module |
 | `fpwork.c` | a second SSE user, to prove the scheduler saves FP state |
-| `libc.c` | strrchr, strstr, strtol and strtoul, which libc would supply |
+| `libc.c` | strrchr, strstr, strtol/strtoul, abs and abort, which libc would supply |
 | `fp.S` | FXSAVE64/FXRSTOR64, and `fpinit`'s reset image |
 | `shim.c` | the pieces proc.c reaches for that are not ported yet |
 | `mem.c` | memcpy/memmove/memset/memcmp/strlen, for a freestanding kernel |
@@ -469,14 +510,13 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 
 ## Next
 
-- A real root image: `/dev`, `/dis/sh.dis` and the modules the shell
-  loads, so `disinit` has a shell to run and the VM boots to a prompt
-  instead of a test program.
+- More of a root image: the rest of the shell's commands and libraries,
+  and a writable /tmp that is not in the read-only image.
 - The amd64 code generator (`comp-amd64.c` with a kernel `mmap` and a
   code window), so `cflag` can be turned on.
-- Console input from the 16550's receive interrupt into `#c/cons`, which
-  is what a shell needs and a test program does not.
-- Mount `#~/ns` beside `#~/host` as part of that root, and `os/ip`.
+- Mount `#~/ns` beside `#~/host` at boot, and `os/ip`.
+- A receive path that uses IRQ4 when the loader raises it, with the
+  poll as the fallback (QEMU does, 9vm does not).
 - A finer timer source (PIT one-shot) if a driver needs sub-tick
   deadlines.
 - A framebuffer console over the display slots.

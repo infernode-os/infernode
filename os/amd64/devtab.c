@@ -16,6 +16,7 @@ extern Dev	consdevtab;
 extern Dev	hostringdevtab;
 extern Dev	mntdevtab;
 extern Dev	pipedevtab;
+extern Dev	progdevtab;
 extern Dev	rootdevtab;
 
 Dev*	devtab[] =
@@ -24,6 +25,7 @@ Dev*	devtab[] =
 	&consdevtab,		/* 'c' -- /dev/cons and friends */
 	&hostringdevtab,	/* '~' -- 9vm's host rings as 9P streams */
 	&mntdevtab,		/* 'M' -- the 9P client behind mount */
+	&progdevtab,		/* 'p' -- /prog: wait, ctl, status, heap */
 	&pipedevtab,		/* '|' -- pipes */
 	nil,
 };

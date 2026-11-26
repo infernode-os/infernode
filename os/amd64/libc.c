@@ -176,6 +176,22 @@ strtoul(char *s, char **e, int base)
 }
 
 /*
+ * abs() and labs(): os/port/devprog.c formats a signed offset with
+ * abs(), and cannot use the int form of a value that is a long.
+ */
+int
+abs(int v)
+{
+	return v < 0 ? -v : v;
+}
+
+long
+labs(long v)
+{
+	return v < 0 ? -v : v;
+}
+
+/*
  * abort() is libc's "this cannot happen".  In a kernel the only honest
  * answer is the panic path; libinterp/gc.c and validstk.c reach it only
  * when the interpreter's own invariants are broken.

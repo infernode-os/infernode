@@ -1,0 +1,13 @@
+# The shell profile for the kernel's root image.
+#
+# sh reads this only with -l, which init passes.
+#
+# Control flow lives in loadable modules under /dis/sh, not in sh
+# itself, so without "load std" a shell can run commands and pipelines
+# but has no if, while or for at all -- "for(i in 1 2 3)" fails looking
+# for ./for.
+load std
+
+# The default path is already (/dis .); stated here so that it is
+# written down somewhere a person can read and change.
+path=(/dis .)

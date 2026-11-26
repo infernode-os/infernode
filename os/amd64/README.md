@@ -475,6 +475,24 @@ lookup, the open, the reads of a module the kernel has never seen, and
 the clunk. The shell, the loader and the JIT are all on the far side of
 it, and none of them knows the file came from the host.
 
+With the host's `/dis` unioned after the image's, the rest of Inferno's
+commands come with it -- and so do the libraries they load, because a
+union at `/dis` does not reach inside a directory the image already
+has: the image's `/dis/lib` wins, and the host's has to be unioned
+there too. Then `awk` runs, 205 320 bytes of native code compiled from
+a module read over the ring, with `Regex` and `Rand` beside it:
+
+```
+; bind -a /n/host/dis /dis; bind -a /n/host/dis/lib /dis/lib
+; awk 'BEGIN{print "awk-works"; exit}'
+jit: Awk compiled, 205320 bytes
+jit: Regex compiled, 18976 bytes
+jit: Rand compiled, 1024 bytes
+awk-works
+```
+
+Twenty-four 9P requests crossed the ring for that command line.
+
 ## The card: virtio-net over PCI
 
 `os/amd64/virtionet.c` drives the modern (1.0) virtio PCI network

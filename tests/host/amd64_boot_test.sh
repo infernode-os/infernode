@@ -203,6 +203,7 @@ $PYTHON "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
 	/dis/sh/std.dis="$ROOT/dis/sh/std.dis" \
 	/dis/echo.dis="$ROOT/dis/echo.dis" \
 	/dis/cat.dis="$ROOT/dis/cat.dis" \
+	/dis/bind.dis="$ROOT/dis/bind.dis" \
 	/dis/ls.dis="$ROOT/dis/ls.dis" \
 	/dis/cd.dis="$ROOT/dis/cd.dis" \
 	/dis/pwd.dis="$ROOT/dis/pwd.dis" \
@@ -668,7 +669,7 @@ if [ "$have9vm" = 1 ]; then
 			i=$((i + 1))
 		done
 		out=$(shellboot shell "$BUILD/shell9.out" \
-			"ls /n/host/dis/echo.dis; /n/host/dis/echo.dis ring-to-host; cat /n/remote/hello" \
+			"bind -a /n/host/dis /dis; bind -a /n/host/dis/lib /dis/lib; awk 'END{print NR}' /n/host/os/amd64/nettest.b; cat /n/remote/hello" \
 			"hello from ns" \
 			"$NINEVM" -m 256 -ns "unix!$BUILD/nsshell.sock" \
 			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
@@ -678,12 +679,12 @@ if [ "$have9vm" = 1 ]; then
 		require shell "$out" "init: #~/ns mounted at /n/remote"
 		require shell "$out" "jit: Sh compiled"
 		require shell "$out" "jit: Cat compiled"
-		require shell "$out" "jit: Ls compiled"
 		require shell "$out" "jit: MemFS compiled"
 		require shell "$out" "init: memfs mounted at /tmp"
 		require shell "$out" "init: #~/host mounted at /n/host"
-		require shell "$out" "/dis/echo.dis"
-		require shell "$out" "$(printf '\nring-to-host\n')"
+		require shell "$out" "jit: Awk compiled"
+		_nlines=$(wc -l < "$ROOT/os/amd64/nettest.b")
+		require shell "$out" "$(printf '\n%d\n' "$_nlines")"
 		require shell "$out" "hello from ns"
 	else
 		out=$(shellboot shell "$BUILD/shell9.out" \

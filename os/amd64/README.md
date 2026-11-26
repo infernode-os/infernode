@@ -362,8 +362,14 @@ under the loader the harness uses.
 `init.b` is the first Limbo program a shell boot runs.  It binds `#c` at
 `/dev`, so `/dev/cons` is the file `sh` stats to decide it is on a
 terminal, binds `#p` at `/prog`, which is where `sh` opens
-`/prog/<pid>/wait` to reap the commands it starts, and hands over to
-`/dis/sh.dis` with `-l`.
+`/prog/<pid>/wait` to reap the commands it starts, mounts a writable
+`/tmp`, and hands over to `/dis/sh.dis` with `-l`.
+
+The `/tmp` filesystem is `memfs`, an ordinary Limbo 9P server: it makes
+a pipe, spawns itself to serve it, and mounts the pipe on `/tmp`.  That
+is the Inferno answer to a RAM filesystem -- the same kind of object as
+everything above it, not a kernel special case -- and it is compiled by
+the JIT like everything else the shell loads.
 
 The root image carries what the shell loads: `Filepat`, `String`,
 `Bufio`, `Env` and `Arg`, `load std` for control flow, and the commands
@@ -376,6 +382,8 @@ secstored, DNS or desktop to complain about.
 init: the root image is up
 init: starting the shell
 
+; echo ramfs-works > /tmp/x; cat /tmp/x
+ramfs-works
 ; cd /dis; ls
 pwd.dis
 sh
@@ -392,6 +400,13 @@ fifo, one line at a time: the first only after init says the shell is
 starting, and `halt` only after the shell has answered.  The 16550's
 receive FIFO is sixteen bytes on QEMU, and the shell is not reading when
 the loader starts.
+
+The receive poller is this kernel's first interrupt-time allocator, and
+that found the port's `conf.ialloc` still at 4K: type-ahead is charged
+by `BALLOC`, a whole Block per character, so 4K is about twenty
+characters and a command line is longer.  It is 128K now, as on the
+other native ports -- about seven hundred characters, which the queue's
+own limit caps first.
 
 ## The network and the host namespace
 
@@ -670,10 +685,9 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 ## Next
 
 - An executable-only pool for the JIT instead of RWX kernel memory.
-- Compile the shell and the network test with `cflag` 1 once the
-  generator has been through more of Limbo than one module.
-- More of a root image: the rest of the shell's commands and libraries,
-  and a writable /tmp that is not in the read-only image.
+- More of a root image: the rest of the shell's commands and libraries.
+- A root that survives a reboot: memfs is RAM, and the image is read
+  only.
 - A receive path that uses IRQ4 when the loader raises it, with the
   poll as the fallback (QEMU does, 9vm does not).
 - A finer timer source (PIT one-shot) if a driver needs sub-tick

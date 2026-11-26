@@ -208,6 +208,9 @@ $PYTHON "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
 	/dis/pwd.dis="$ROOT/dis/pwd.dis" \
 	/dis/date.dis="$ROOT/dis/date.dis" \
 	/dis/ps.dis="$ROOT/dis/ps.dis" \
+	/dis/memfs.dis="$ROOT/dis/memfs.dis" \
+	/dis/lib/styx.dis="$ROOT/dis/lib/styx.dis" \
+	/dis/lib/styxlib.dis="$ROOT/dis/lib/styxlib.dis" \
 	/dis/lib/readdir.dis="$ROOT/dis/lib/readdir.dis" \
 	/dis/lib/daytime.dis="$ROOT/dis/lib/daytime.dis" \
 	/dis/lib/workdir.dis="$ROOT/dis/lib/workdir.dis" \
@@ -665,7 +668,8 @@ if [ "$have9vm" = 1 ]; then
 			i=$((i + 1))
 		done
 		out=$(shellboot shell "$BUILD/shell9.out" \
-			"cd /dis; ls; cat /n/remote/hello" "hello from ns" \
+			"ls /dis; echo ramfs-works > /tmp/x; cat /tmp/x; cat /n/remote/hello" \
+			"hello from ns" \
 			"$NINEVM" -m 256 -ns "unix!$BUILD/nsshell.sock" \
 			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
 		kill "$nsspid" 2>/dev/null || true
@@ -675,7 +679,10 @@ if [ "$have9vm" = 1 ]; then
 		require shell "$out" "jit: Sh compiled"
 		require shell "$out" "jit: Cat compiled"
 		require shell "$out" "jit: Ls compiled"
+		require shell "$out" "jit: MemFS compiled"
+		require shell "$out" "init: memfs mounted at /tmp"
 		require shell "$out" "sh.dis"
+		require shell "$out" "$(printf '\nramfs-works\n')"
 		require shell "$out" "hello from ns"
 	else
 		out=$(shellboot shell "$BUILD/shell9.out" \
@@ -788,7 +795,7 @@ if [ "$haveqemu" = 1 ]; then
 
 	ran="$ran qemu-shell"
 	out=$(shellboot qemu-shell "$BUILD/shellq.out" \
-		"cd /dis; ls; echo hello from the shell" "hello from the shell" \
+		"ls /dis; echo ramfs-works > /tmp/x; cat /tmp/x; echo shell-ok" "shell-ok" \
 		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" \
 		-append "amd64 boot test shelltest" \
 		-display none -serial stdio -monitor none -no-reboot)
@@ -796,8 +803,10 @@ if [ "$haveqemu" = 1 ]; then
 	require qemu-shell "$out" "jit: Sh compiled"
 	require qemu-shell "$out" "init: starting the shell"
 	require qemu-shell "$out" "init: no #~ namespace to mount"
+	require qemu-shell "$out" "jit: MemFS compiled"
 	require qemu-shell "$out" "sh.dis"
-	require qemu-shell "$out" "hello from the shell"
+	require qemu-shell "$out" "$(printf '\nramfs-works\n')"
+	require qemu-shell "$out" "shell-ok"
 
 	# Loopback needs no hardware, so the network test runs here too;
 	# with a virtio card on QEMU's user network, the guest also reaches

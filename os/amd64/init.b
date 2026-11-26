@@ -74,6 +74,27 @@ init()
 	else
 		sys->print("init: #~/ns mounted at /n/remote\n");
 
+	#
+	# A writable /tmp.  memfs is a Limbo 9P server: it makes a pipe,
+	# spawns itself to serve it, and mounts the pipe on /tmp.  The
+	# server is an ordinary Prog in this VM, so the filesystem is the
+	# same kind of thing as everything above it, not a kernel special
+	# case.  The mount is in this process's namespace, which is the
+	# one sh inherits.
+	#
+	memfs := load Command "/dis/memfs.dis";
+	if(memfs == nil)
+		sys->print("init: cannot load memfs: %r\n");
+	else {
+		{
+			memfs->init(nil, "memfs" :: "/tmp" :: nil);
+			sys->print("init: memfs mounted at /tmp\n");
+		} exception e {
+		"fail:*" =>
+			sys->print("init: memfs: %s\n", e);
+		}
+	}
+
 	sys->print("\ninit: the root image is up\n");
 	sys->print("init: starting the shell\n\n");
 

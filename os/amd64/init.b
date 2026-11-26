@@ -49,6 +49,29 @@ init()
 	if(sys->bind("#p", "/prog", Sys->MREPL) < 0)
 		sys->print("init: bind #p /prog: %r\n");
 
+	#
+	# The network.  No interface is configured here; #I is present so
+	# that a shell (or a program) can bind loopback or a real medium
+	# with the tools it has.  The root image carries an empty /net.
+	#
+	if(sys->bind("#I", "/net", Sys->MREPL) < 0)
+		sys->print("init: bind #I /net: %r\n");
+
+	#
+	# The host's namespace channel, when the loader offers one.  This
+	# is a 9P file server reached through #~, not a network device --
+	# the point of the ring transport.  QEMU has no ring, and 9vm
+	# publishes #~/ns only when it was given a server to relay to, so
+	# a loader without one is not an error.
+	#
+	ns := sys->open("#~/ns", Sys->ORDWR);
+	if(ns == nil)
+		sys->print("init: no #~ namespace to mount\n");
+	else if(sys->mount(ns, nil, "/n/remote", Sys->MREPL, "") < 0)
+		sys->print("init: mount #~/ns /n/remote: %r\n");
+	else
+		sys->print("init: #~/ns mounted at /n/remote\n");
+
 	sys->print("\ninit: the root image is up\n");
 	sys->print("init: starting the shell\n\n");
 

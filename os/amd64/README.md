@@ -347,6 +347,57 @@ starting, and `halt` only after the shell has answered.  The 16550's
 receive FIFO is sixteen bytes on QEMU, and the shell is not reading when
 the loader starts.
 
+## The network and the host namespace
+
+`os/ip` is linked whole (sixteen files) and `#I` joins the device
+table, with `ipprotoinit[]` written out in `os/amd64/ipproto.c` because
+this port has no `mkdevc` to generate it from a configuration: `ipifc`
+first — it owns interfaces — then `icmp`, `icmp6`, `udp` and `tcp`.
+Loopback is registered before the device table is reset, so
+`bind loopback` finds its medium.
+
+`nettest` proves the stack moves data with no hardware at all:
+
+```
+nettest: #I bound at /net
+nettest: 127.0.0.1/8 on ipifc 0
+nettest: icmp echo reply, 36 bytes
+nettest: tcp echo over loopback
+nettest: #~/ns mounted at /n/remote
+nettest: ns read 14 "hello from ns"
+nettest passed
+```
+
+ICMP covers `ipoput4`, the route lookup, the loopback medium, `ipiput4`,
+the protocol demultiplexer and the checksum — `ptclbsum` is a plain C
+implementation (`os/amd64/ipchecksum.c`) because no upstream os/ port
+has an x86-64 one. TCP adds the handshake, sequence-number arithmetic
+and an ordered stream in both directions; the sequence comparisons are
+where LP64 breaks silently, so a wrong answer stalls rather than
+corrupts.
+
+There is no hardware entropy source (`rnghw` returns -1), so TCP's
+initial sequence number is mixed from `nrand` and the clock, as tcp.c
+does on any board without a generator. `os/ip/bootp.c` is not imported:
+the `bootp`/`bootpread` hooks are nil, which is what devip tests for.
+The router-daemon interface refuses rather than inventing an empty route
+table.
+
+The other half of the boot is the host namespace. `init.b` binds `#I`
+at `/net` and mounts `#~/ns` at `/n/remote` when the loader offers it —
+9vm publishes that channel only when given a server to relay to, so a
+loader without one prints one line and carries on. With the stub
+serving a file, the shell reads it through the namespace:
+
+```
+; cat /n/remote/hello
+hello from ns
+```
+
+That is the ring transport as a file server, not a network device:
+`#~` carries 9P, devmnt mounts it, and the shell does not know or care
+that the bytes arrived through shared memory.
+
 ## Machine tests
 
 Command line `kerneltest` crosses `int $3`, waits 20 timer ticks, then
@@ -499,6 +550,10 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 | `init.b` | the kernel's init: bind #c and #p, then run sh |
 | `profile` | the shell's /lib/sh/profile for this root image |
 | `consinput.c` | the 16550's receive side, polled, echoed |
+| `ipproto.c` | ipprotoinit[], commonuser/commonerror, the hooks os/ip needs |
+| `ipchecksum.c` | ptclbsum, the ones-complement checksum os/ip is built on |
+| `nettest.c` | boot to the network test |
+| `nettest.b` | loopback ICMP and TCP, and the host namespace |
 | `vmtest.b` | that program: integers, REALs, strings and arrays |
 | `nocomp.c` | no code generator: the interpreter runs every module |
 | `fpwork.c` | a second SSE user, to prove the scheduler saves FP state |
@@ -510,11 +565,13 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 
 ## Next
 
-- More of a root image: the rest of the shell's commands and libraries,
-  and a writable /tmp that is not in the read-only image.
+- A network device, so the stack is not only loopback: 9vm offers
+  virtio-net, which means a virtio-pci driver and an `ethermedium`
+  binding. `os/ip/ethermedium.c` and `#l` are already linked.
 - The amd64 code generator (`comp-amd64.c` with a kernel `mmap` and a
   code window), so `cflag` can be turned on.
-- Mount `#~/ns` beside `#~/host` at boot, and `os/ip`.
+- More of a root image: the rest of the shell's commands and libraries,
+  and a writable /tmp that is not in the read-only image.
 - A receive path that uses IRQ4 when the loader raises it, with the
   poll as the fallback (QEMU does, 9vm does not).
 - A finer timer source (PIT one-shot) if a driver needs sub-tick

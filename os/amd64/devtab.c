@@ -13,6 +13,7 @@
 #include "fns.h"
 
 extern Dev	consdevtab;
+extern Dev	ipdevtab;
 extern Dev	hostringdevtab;
 extern Dev	mntdevtab;
 extern Dev	pipedevtab;
@@ -26,6 +27,7 @@ Dev*	devtab[] =
 	&hostringdevtab,	/* '~' -- 9vm's host rings as 9P streams */
 	&mntdevtab,		/* 'M' -- the 9P client behind mount */
 	&progdevtab,		/* 'p' -- /prog: wait, ctl, status, heap */
+	&ipdevtab,		/* 'I' -- /net: the TCP/IP stack */
 	&pipedevtab,		/* '|' -- pipes */
 	nil,
 };

@@ -15,9 +15,13 @@ void	ringdevtest(void);
 void	mounttest(void);
 void	vmtest(void);
 void	shelltest(void);
+void	nettest(void);
 
 /* the console's receive poller (consinputinit, os/amd64/consinput.c) */
 void	consinputinit(void);
+
+/* the media a kernel configuration opts into (os/ip) */
+void	loopbackmediumlink(void);
 
 /* the allocators and the process table, ready for kproc() */
 int	portprocinit(void);

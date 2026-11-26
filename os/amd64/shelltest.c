@@ -26,6 +26,12 @@ shelltest(void)
 		consprint("shelltest: no memory above the kernel\n");
 		return;
 	}
+	/*
+	 * The loopback medium, before the device table is reset: #I's
+	 * reset registers the protocols, and "bind loopback" looks the
+	 * medium up by name when an interface asks for it.
+	 */
+	loopbackmediumlink();
 	chandevreset();
 	chandevinit();
 

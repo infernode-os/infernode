@@ -282,6 +282,8 @@ main(uint32_t mbiaddr)
 		vmtest();
 	if(cmdline != 0 && contains(cmdline, "shelltest"))
 		shelltest();
+	if(cmdline != 0 && contains(cmdline, "nettest"))
+		nettest();
 
 	conshalt();
 }

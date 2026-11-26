@@ -42,14 +42,20 @@
 #        the FP state, and halts the machine.
 #
 #        A twelfth, "shelltest", boots to a prompt: init binds #c at
-#        /dev and #p at /prog and runs /dis/sh.dis.  The harness types
-#        "echo hello from the shell" and then "echo halt > /dev/sysctl"
-#        through a fifo, one line at a time, and requires the shell's
-#        answer before it sends the halt.
+#        /dev, #p at /prog and #I at /net, mounts #~/ns at /n/remote
+#        when the loader offers it, and runs /dis/sh.dis.  The harness
+#        types a command and then "echo halt > /dev/sysctl" through a
+#        fifo, one line at a time, and requires the shell's answer
+#        before it sends the halt.  Under 9vm with the ns stub the
+#        command is "cat /n/remote/hello", read through the ring.
+#
+#        A thirteenth, "nettest", links os/ip and proves it moves data
+#        with no hardware: loopback at 127.0.0.1, an ICMP echo, a TCP
+#        echo through the handshake, and the host namespace mounted.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
-#        Multiboot option ROM and runs "kerneltest", "vmtest" and
-#        "shelltest".  QEMU
+#        Multiboot option ROM and runs "kerneltest", "vmtest",
+#        "shelltest" and "nettest".  QEMU
 #        refuses an ELF64 image ("give a 32bit one") unless the header
 #        carries the a.out kludge addresses, and then loads the flat
 #        image instead.  It offers no #~ ring; the kernel must still boot
@@ -113,7 +119,8 @@ CFLAGS="--target=x86_64-elf -ffreestanding -nostdlib
 	-mcmodel=small -O2 -Wall -Wextra -Wno-unknown-pragmas
 	-ffunction-sections -fdata-sections
 	-I$ROOT/Inferno/amd64/include -I$ROOT/os/amd64
-	-I$ROOT/os/port -I$ROOT/include -I$ROOT/libinterp -I$BUILD"
+	-I$ROOT/os/port -I$ROOT/include -I$ROOT/libinterp
+	-I$ROOT/libmp -I$BUILD"
 
 # The same include path with SSE enabled, for libinterp and the two
 # kernel files that must see an XMM argument or hold a double.
@@ -122,7 +129,8 @@ CFLAGS_VM="--target=x86_64-elf -ffreestanding -nostdlib
 	-mcmodel=small -O2 -Wall -Wextra -Wno-unknown-pragmas
 	-ffunction-sections -fdata-sections
 	-I$ROOT/Inferno/amd64/include -I$ROOT/os/amd64
-	-I$ROOT/os/port -I$ROOT/include -I$ROOT/libinterp -I$BUILD"
+	-I$ROOT/os/port -I$ROOT/include -I$ROOT/libinterp
+	-I$ROOT/libmp -I$BUILD"
 
 # os/port's error strings are generated from error.h, as its portmkfile
 # does: each declaration becomes its definition.
@@ -148,6 +156,8 @@ sed 's/extern //;s,;.*/\* , = ",;s, \*/,";,' \
 	skip "limbo could not compile os/amd64/vmtest.b"
 "$LIMBO" -I"$ROOT/module" -o "$BUILD/init.dis" "$ROOT/os/amd64/init.b" ||
 	skip "limbo could not compile os/amd64/init.b"
+"$LIMBO" -I"$ROOT/module" -o "$BUILD/nettest.dis" "$ROOT/os/amd64/nettest.b" ||
+	skip "limbo could not compile os/amd64/nettest.b"
 
 # The kernel's root filesystem: /n and /m for the mount test, /dev for
 # init to bind #c on, the Dis modules for the VM and the shell, and the
@@ -162,8 +172,9 @@ sed 's/extern //;s,;.*/\* , = ",;s, \*/,";,' \
 # boot to run.
 [ -n "$PYTHON" ] || skip "python3 not found (it generates the root image)"
 $PYTHON "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
-	/n= /m= /dev= /prog= /tmp= \
+	/n= /n/remote= /m= /dev= /prog= /net= /tmp= \
 	/init.dis="$BUILD/init.dis" \
+	/nettest.dis="$BUILD/nettest.dis" \
 	/dis/vmtest.dis="$BUILD/vmtest.dis" \
 	/dis/sh.dis="$ROOT/dis/sh.dis" \
 	/dis/lib/filepat.dis="$ROOT/dis/lib/filepat.dis" \
@@ -173,6 +184,7 @@ $PYTHON "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" \
 	/dis/lib/arg.dis="$ROOT/dis/lib/arg.dis" \
 	/dis/sh/std.dis="$ROOT/dis/sh/std.dis" \
 	/dis/echo.dis="$ROOT/dis/echo.dis" \
+	/dis/cat.dis="$ROOT/dis/cat.dis" \
 	/lib/sh/profile="$ROOT/os/amd64/profile" ||
 	skip "mkrootfs.py failed"
 
@@ -217,13 +229,24 @@ for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c \
 	"$ROOT"/os/port/devmnt.c "$ROOT"/os/port/nocache.c \
 	"$ROOT"/libkern/convS2M.c "$ROOT"/libkern/convM2S.c \
 	"$ROOT"/libkern/fcallfmt.c "$ROOT"/libkern/strecpy.c \
-	"$ROOT"/libkern/memccpy.c "$BUILD"/rootfs.c; do
+	"$ROOT"/libkern/memccpy.c "$ROOT"/libkern/getfields.c \
+	"$ROOT"/os/port/netaux.c "$ROOT"/os/ip/*.c \
+	"$ROOT"/libsec/sha2.c "$ROOT"/libsec/hmac.c \
+	"$ROOT"/libsec/sha256block.c "$ROOT"/libsec/sha512block.c \
+	"$ROOT"/libsec/securezero.c "$BUILD"/rootfs.c; do
 	# fpwork.c is built with VFLAGS below: it is the SSE user.
 	case "$(basename "$f")" in fpwork.c) continue;; esac
 	base=$(basename "$f")
 	o="$BUILD/${base%.*}_${base##*.}.o"
+	# os/ip is imported wholesale: warnings suppressed, except the two
+	# that mark Plan 9 C dialect, which are errors for the same reason
+	# the os/port files are.
+	case "$f" in
+	"$ROOT"/os/ip/*) wf="-Wno-everything -Werror=incompatible-pointer-types -Werror=implicit-function-declaration";;
+	*) wf=;;
+	esac
 	# shellcheck disable=SC2086
-	$CC $CFLAGS -c "$f" -o "$o"
+	$CC $CFLAGS $wf -c "$f" -o "$o"
 	objs="$objs $o"
 done
 
@@ -328,10 +351,13 @@ shellboot() {
 	# once init says the shell is starting; halt is sent only once the
 	# shell has answered it, so the halt cannot overtake the echo.
 	#
-	# $1 label, $2 output file, then the loader command.
+	# $1 label, $2 output file, $3 the line to type, $4 what it must
+	# print, then the loader command.
 	_label=$1
 	_out=$2
-	shift 2
+	_cmd=$3
+	_expect=$4
+	shift 4
 	rm -f "$BUILD/shellin"
 	mkfifo "$BUILD/shellin"
 	: > "$_out"
@@ -343,10 +369,10 @@ shellboot() {
 			sleep 1
 			i=$((i + 1))
 		done
-		printf 'echo hello from the shell\n' >&3 || exit 0
+		printf '%s\n' "$_cmd" >&3 || exit 0
 		i=0
 		while [ "$i" -lt 30 ]; do
-			grep -q "hello from the shell" "$_out" 2>/dev/null && break
+			grep -q "$_expect" "$_out" 2>/dev/null && break
 			sleep 1
 			i=$((i + 1))
 		done
@@ -601,11 +627,66 @@ if [ "$have9vm" = 1 ]; then
 	require vm "$out" "vmtest passed"
 
 	ran="$ran shell"
-	out=$(shellboot shell "$BUILD/shell9.out" "$NINEVM" -m 256 \
-		-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
-	check shell "$out"
+	if [ -x "$BUILD/ns9p" ]; then
+		"$BUILD/ns9p" "$BUILD/nsshell.sock" &
+		nsspid=$!
+		i=0
+		while [ "$i" -lt 10 ]; do
+			[ -S "$BUILD/nsshell.sock" ] && break
+			sleep 1
+			i=$((i + 1))
+		done
+		out=$(shellboot shell "$BUILD/shell9.out" \
+			"cat /n/remote/hello" "hello from ns" \
+			"$NINEVM" -m 256 -ns "unix!$BUILD/nsshell.sock" \
+			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
+		kill "$nsspid" 2>/dev/null || true
+		wait "$nsspid" 2>/dev/null || true
+		check shell "$out"
+		require shell "$out" "init: #~/ns mounted at /n/remote"
+		require shell "$out" "hello from ns"
+	else
+		out=$(shellboot shell "$BUILD/shell9.out" \
+			"echo hello from the shell" "hello from the shell" \
+			"$NINEVM" -m 256 \
+			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
+		check shell "$out"
+		require shell "$out" "hello from the shell"
+	fi
 	require shell "$out" "init: starting the shell"
-	require shell "$out" "hello from the shell"
+
+	ran="$ran net"
+	if [ -x "$BUILD/ns9p" ]; then
+		"$BUILD/ns9p" "$BUILD/nsnet.sock" &
+		nsnpid=$!
+		i=0
+		while [ "$i" -lt 10 ]; do
+			[ -S "$BUILD/nsnet.sock" ] && break
+			sleep 1
+			i=$((i + 1))
+		done
+		out=$(capture 40 "$BUILD/net.out" "$NINEVM" -m 256 \
+			-r "$BUILD/root" -ns "unix!$BUILD/nsnet.sock" \
+			-c "amd64 boot test nettest" "$BUILD/kernel.elf")
+		kill "$nsnpid" 2>/dev/null || true
+		wait "$nsnpid" 2>/dev/null || true
+	else
+		out=$(capture 40 "$BUILD/net.out" "$NINEVM" -m 256 \
+			-r "$BUILD/root" -c "amd64 boot test nettest" \
+			"$BUILD/kernel.elf")
+	fi
+	check net "$out"
+	require net "$out" "nettest: #I bound at /net"
+	require net "$out" "nettest: 127.0.0.1/8 on ipifc"
+	require net "$out" "nettest: icmp echo reply"
+	require net "$out" "nettest: tcp echo over loopback"
+	if [ -x "$BUILD/ns9p" ]; then
+		require net "$out" "nettest: #~/ns mounted at /n/remote"
+		require net "$out" "nettest: ns read 14"
+	else
+		require net "$out" "nettest: no #~ namespace on this loader"
+	fi
+	require net "$out" "nettest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then
@@ -632,12 +713,27 @@ if [ "$haveqemu" = 1 ]; then
 
 	ran="$ran qemu-shell"
 	out=$(shellboot qemu-shell "$BUILD/shellq.out" \
+		"echo hello from the shell" "hello from the shell" \
 		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" \
 		-append "amd64 boot test shelltest" \
 		-display none -serial stdio -monitor none -no-reboot)
 	check qemu-shell "$out"
 	require qemu-shell "$out" "init: starting the shell"
+	require qemu-shell "$out" "init: no #~ namespace to mount"
 	require qemu-shell "$out" "hello from the shell"
+
+	# Loopback needs no hardware, so the network test runs here too.
+	ran="$ran qemu-net"
+	out=$(capture 40 "$BUILD/qemu-net.out" \
+		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" \
+		-append "amd64 boot test nettest" \
+		-display none -serial stdio -monitor none -no-reboot)
+	check qemu-net "$out"
+	require qemu-net "$out" "nettest: 127.0.0.1/8 on ipifc"
+	require qemu-net "$out" "nettest: icmp echo reply"
+	require qemu-net "$out" "nettest: tcp echo over loopback"
+	require qemu-net "$out" "nettest: no #~ namespace on this loader"
+	require qemu-net "$out" "nettest passed"
 fi
 
 [ "$fails" = 0 ] || exit 1

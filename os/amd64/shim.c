@@ -21,6 +21,51 @@
 ulong kerndate;
 
 /*
+ * postnote -- deliver a note to a process.
+ *
+ * os/port/proc.c has no note mechanism in this port.  The one thing
+ * os/ip asks of it -- loopbackmedium.c posts "unbind" to its reader and
+ * then waits for it to die -- needs exactly one effect: the target's
+ * blocking read must return.  A note interrupts the target's sleep the
+ * way a kill does, without marking it killed, so the reader's error
+ * path exits and the unbind finishes.
+ */
+/*
+ * libsec/sha2.c asks sha256arm64ok() unconditionally and takes the
+ * portable _sha256block path when it says no.  This is x86-64, so it
+ * always says no; the blocks function must exist for the linker and
+ * must never run -- a stub that quietly did nothing would produce
+ * wrong digests, and a digest that is wrong is worse than one that
+ * cannot be computed.
+ */
+int
+sha256arm64ok(void)
+{
+	return 0;
+}
+
+void
+sha256arm64blocks(u32int *h, const uchar *p, ulong n)
+{
+	USED(h);
+	USED(p);
+	USED(n);
+	panic("sha256arm64blocks ran on x86-64");
+}
+
+int
+postnote(Proc *p, int dolock, char *n, int flag)
+{
+	USED(dolock);
+	USED(n);
+	USED(flag);
+	if(p == nil)
+		return 0;
+	swiproc(p, 1);
+	return 1;
+}
+
+/*
  * modinit -- register the built-in Dis modules.  Upstream's native
  * kernels generate this from the "mod" section of the kernel
  * configuration (os/port/mkdevc); this port has no mkdevc yet, and

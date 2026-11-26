@@ -32,7 +32,9 @@ shelltest(void)
 	 * medium up by name when an interface asks for it.
 	 */
 	loopbackmediumlink();
+	ethermediumlink();
 	chandevreset();
+	virtionetlink();
 	chandevinit();
 
 	pg = newpgrp();

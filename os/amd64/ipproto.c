@@ -51,6 +51,20 @@ commonuser(void)
 	return eve;
 }
 
+/*
+ * Turn a file descriptor into a Chan.
+ *
+ * os/ip needs this because ethermedium.c holds its device open across
+ * the life of the binding: kdial() hands back a descriptor, but a
+ * descriptor belongs to the calling process's Fgrp and the medium
+ * outlives that call.  A Chan is what it can own.
+ */
+Chan*
+commonfdtochan(int fd, int mode, int chkmnt, int iref)
+{
+	return fdtochan(up->env->fgrp, fd, mode, chkmnt, iref);
+}
+
 /* the caller's error string, for os/ip's error reporting */
 char*
 commonerror(void)

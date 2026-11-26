@@ -398,6 +398,48 @@ That is the ring transport as a file server, not a network device:
 `#~` carries 9P, devmnt mounts it, and the shell does not know or care
 that the bytes arrived through shared memory.
 
+## The card: virtio-net over PCI
+
+`os/amd64/virtionet.c` drives the modern (1.0) virtio PCI network
+device that both QEMU and 9vm present. It is also the kernel's first
+PCI driver, so `os/amd64/pci.c` carries the parts of a bus a driver
+needs and no more: the configuration pair at 0xCF8/0xCFC, and
+`mmiomap()`, which fills in the boot page table entry covering a BAR and
+marks it uncached. The capability list says which BAR holds the common
+configuration, the doorbell, the ISR byte and the device's own
+configuration, so one driver finds the device under either loader.
+
+Two queues, 64 receive buffers posted and a descriptor per frame. A
+modern transport's buffers begin with twelve bytes of virtio_net_hdr
+(ten on the legacy one); no offload is negotiated, so it is zeroes out
+and ignored in. **The interrupt is not used**: receive is a poll every
+10 ms, because an interrupt would mean unmasking an 8259 line and doing
+the work in a process anyway. The next step is to wire IRQ 11 and take
+the poll out of the idle path.
+
+```
+ether: virtio-net at pci 3:0.0 common 0xfe000000 notify 0xfe003000 devcfg 0xfe002000
+ether: virtio-net 52:54:00:12:34:56 is #l (ether0)
+nettest: ether0 up at 10.0.2.15/24 on ipifc 1
+nettest: icmp echo reply from 10.0.2.2 (36 bytes)
+```
+
+The harness gives QEMU `-device virtio-net-pci,netdev=n0,disable-legacy=on`
+on a user-network backend, configures 10.0.2.15/24 and pings the slirp
+gateway; the frames cross the virtio rings in both directions, and the
+reply is an ARP resolution and an ICMP exchange, not a loopback
+shortcut. 9vm's card is a TAP device, which needs CAP_NET_ADMIN to
+open, so the 9vm network boot runs without one and checks that the
+absence is reported and loopback still works.
+
+DIVERGENCE FROM UPSTREAM: `os/ip/ethermedium.c` sends the first ARP
+request for a new entry at once. It used to refuse anything within a
+second of the entry's creation time, and `NOW` is milliseconds since
+boot: a machine whose first packet leaves before it is a second old had
+that request dropped with nothing to retry it, so the packet sat in the
+cache for ever. The kernels upstream runs on take longer to reach their
+first packet.
+
 ## Machine tests
 
 Command line `kerneltest` crosses `int $3`, waits 20 timer ticks, then
@@ -553,7 +595,10 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 | `ipproto.c` | ipprotoinit[], commonuser/commonerror, the hooks os/ip needs |
 | `ipchecksum.c` | ptclbsum, the ones-complement checksum os/ip is built on |
 | `nettest.c` | boot to the network test |
-| `nettest.b` | loopback ICMP and TCP, and the host namespace |
+| `nettest.b` | loopback and ether0: ICMP, TCP, and the host namespace |
+| `pci.c` | PCI configuration space (0xCF8/0xCFC) and `mmiomap` |
+| `virtionet.c` | the modern virtio-net PCI driver, polled |
+| `pcitest.c` | what the loader put on the PCI bus |
 | `vmtest.b` | that program: integers, REALs, strings and arrays |
 | `nocomp.c` | no code generator: the interpreter runs every module |
 | `fpwork.c` | a second SSE user, to prove the scheduler saves FP state |
@@ -565,9 +610,7 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 
 ## Next
 
-- A network device, so the stack is not only loopback: 9vm offers
-  virtio-net, which means a virtio-pci driver and an `ethermedium`
-  binding. `os/ip/ethermedium.c` and `#l` are already linked.
+- The virtio-net interrupt (IRQ 11) and RX without the 10 ms poll.
 - The amd64 code generator (`comp-amd64.c` with a kernel `mmap` and a
   code window), so `cflag` can be turned on.
 - More of a root image: the rest of the shell's commands and libraries,

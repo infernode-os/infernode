@@ -14,6 +14,7 @@
 
 extern Dev	consdevtab;
 extern Dev	ipdevtab;
+extern Dev	etherdevtab;
 extern Dev	hostringdevtab;
 extern Dev	mntdevtab;
 extern Dev	pipedevtab;
@@ -28,6 +29,7 @@ Dev*	devtab[] =
 	&mntdevtab,		/* 'M' -- the 9P client behind mount */
 	&progdevtab,		/* 'p' -- /prog: wait, ctl, status, heap */
 	&ipdevtab,		/* 'I' -- /net: the TCP/IP stack */
+	&etherdevtab,		/* 'l' -- #l: the Ethernet data path */
 	&pipedevtab,		/* '|' -- pipes */
 	nil,
 };

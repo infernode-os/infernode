@@ -56,6 +56,8 @@ init()
 	#
 	if(sys->bind("#I", "/net", Sys->MREPL) < 0)
 		sys->print("init: bind #I /net: %r\n");
+	if(sys->bind("#l", "/net", Sys->MAFTER) < 0)
+		sys->print("init: bind #l /net: %r\n");
 
 	#
 	# The host's namespace channel, when the loader offers one.  This

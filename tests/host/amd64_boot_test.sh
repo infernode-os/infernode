@@ -49,13 +49,21 @@
 #        before it sends the halt.  Under 9vm with the ns stub the
 #        command is "cat /n/remote/hello", read through the ring.
 #
-#        A thirteenth, "nettest", links os/ip and proves it moves data
-#        with no hardware: loopback at 127.0.0.1, an ICMP echo, a TCP
-#        echo through the handshake, and the host namespace mounted.
+#        A thirteenth, "nettest", links os/ip and proves it moves data:
+#        loopback at 127.0.0.1, an ICMP echo, a TCP echo through the
+#        handshake, and the host namespace mounted.  Under QEMU it is
+#        given a virtio-net-pci device on a user-network backend, so
+#        the same boot also brings ether0 up at 10.0.2.15 and pings the
+#        slirp gateway -- the frames cross the virtio rings in both
+#        directions.  Under 9vm there is no TAP to be had (that needs
+#        CAP_NET_ADMIN), so the boot checks that the absence is
+#        reported and loopback still works.
 #
 #   qemu-system-x86_64 loads the flat image (kernel.bin) through its
 #        Multiboot option ROM and runs "kerneltest", "vmtest",
-#        "shelltest" and "nettest".  QEMU
+#        "shelltest" and "nettest".  The network test gets a
+#        virtio-net-pci device (modern transport) on QEMU's user-mode
+#        network.  QEMU
 #        refuses an ELF64 image ("give a 32bit one") unless the header
 #        carries the a.out kludge addresses, and then loads the flat
 #        image instead.  It offers no #~ ring; the kernel must still boot
@@ -230,6 +238,7 @@ for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c \
 	"$ROOT"/libkern/convS2M.c "$ROOT"/libkern/convM2S.c \
 	"$ROOT"/libkern/fcallfmt.c "$ROOT"/libkern/strecpy.c \
 	"$ROOT"/libkern/memccpy.c "$ROOT"/libkern/getfields.c \
+	"$ROOT"/os/port/devether.c "$ROOT"/os/port/netif.c \
 	"$ROOT"/os/port/netaux.c "$ROOT"/os/ip/*.c \
 	"$ROOT"/libsec/sha2.c "$ROOT"/libsec/hmac.c \
 	"$ROOT"/libsec/sha256block.c "$ROOT"/libsec/sha512block.c \
@@ -678,6 +687,7 @@ if [ "$have9vm" = 1 ]; then
 	check net "$out"
 	require net "$out" "nettest: #I bound at /net"
 	require net "$out" "nettest: 127.0.0.1/8 on ipifc"
+	require net "$out" "nettest: no ethernet device"
 	require net "$out" "nettest: icmp echo reply"
 	require net "$out" "nettest: tcp echo over loopback"
 	if [ -x "$BUILD/ns9p" ]; then
@@ -687,6 +697,16 @@ if [ "$have9vm" = 1 ]; then
 		require net "$out" "nettest: no #~ namespace on this loader"
 	fi
 	require net "$out" "nettest passed"
+
+	# The PCI bus as the loader presents it. 9vm always has the
+	# virtio-9p host device at 0:1.0; finding it is what the
+	# networking driver's scan depends on.
+	ran="$ran pci"
+	out=$(capture 30 "$BUILD/pci.out" "$NINEVM" -m 256 \
+		-c "amd64 boot test pcitest" "$BUILD/kernel.elf")
+	check pci "$out"
+	require pci "$out" "pci 0:1.0 1af4:1049"
+	require pci "$out" "pcitest passed"
 fi
 
 if [ "$haveqemu" = 1 ]; then
@@ -726,11 +746,14 @@ if [ "$haveqemu" = 1 ]; then
 	ran="$ran qemu-net"
 	out=$(capture 40 "$BUILD/qemu-net.out" \
 		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" \
+		-netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-legacy=on \
 		-append "amd64 boot test nettest" \
 		-display none -serial stdio -monitor none -no-reboot)
 	check qemu-net "$out"
+	require qemu-net "$out" "ether: virtio-net"
 	require qemu-net "$out" "nettest: 127.0.0.1/8 on ipifc"
-	require qemu-net "$out" "nettest: icmp echo reply"
+	require qemu-net "$out" "nettest: ether0 up at 10.0.2.15/24"
+	require qemu-net "$out" "nettest: icmp echo reply from 10.0.2.2"
 	require qemu-net "$out" "nettest: tcp echo over loopback"
 	require qemu-net "$out" "nettest: no #~ namespace on this loader"
 	require qemu-net "$out" "nettest passed"

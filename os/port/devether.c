@@ -74,6 +74,7 @@
 #include	"../port/error.h"
 #include	"../port/netif.h"
 #include	"../port/etherif.h"
+#include	"kernel.h"	/* kchanio, for the USB endpoint path */
 
 
 /*

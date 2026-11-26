@@ -558,8 +558,16 @@ sendarp(Ipifc *ifc, Arpent *a)
 	Etherarp *e;
 	Etherrock *er = ifc->arg;
 
-	/* don't do anything if it's been less than a second since the last */
-	if(NOW - a->ctime < 1000){
+	/*
+	 * Rate-limit to one request a second -- but the FIRST one is sent
+	 * at once.  ctime is zero on a new entry, and NOW is milliseconds
+	 * since boot: on a machine that reaches its first packet less
+	 * than a second after boot the test below refused it, and
+	 * nothing retries an IPv4 resolution, so the packet sat in the
+	 * cache for ever.  The kernels upstream runs on take longer to
+	 * get here; this one does not.
+	 */
+	if(a->ctime != 0 && NOW - a->ctime < 1000){
 		arprelease(er->f->arp, a);
 		return;
 	}

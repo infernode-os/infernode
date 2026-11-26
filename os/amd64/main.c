@@ -284,6 +284,8 @@ main(uint32_t mbiaddr)
 		shelltest();
 	if(cmdline != 0 && contains(cmdline, "nettest"))
 		nettest();
+	if(cmdline != 0 && contains(cmdline, "pcitest"))
+		pcitest();
 
 	conshalt();
 }

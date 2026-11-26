@@ -193,6 +193,7 @@ longmode:
 
 	.section .bss
 	.align 4096
+	.globl	bootpd2		/* pci.c maps MMIO windows through it */
 bootscratch:
 bootpml4:	.skip	4096
 bootpdpt:	.skip	4096

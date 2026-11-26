@@ -1,16 +1,22 @@
 implement Nettest;
 
 #
-# The network, end to end, with no hardware: #I is bound at /net, the
-# loopback medium is bound to a fresh interface, 127.0.0.1/8 is put on
-# it, and an ICMP echo goes out through ipoput4, across loopback, back
-# in through ipiput4, is answered by icmp.c, and is delivered to this
-# conversation.  Checksums, the route lookup, the interface's self
-# addresses and the protocol demultiplexer are all on that path.
+# The network, end to end.
 #
-# It also mounts the host's namespace channel, when the loader offers
-# one, which is the other half of what makes this an Infernode: /n/remote
-# is a 9P file server reached through #~, not through a network device.
+# #I is bound at /net and #l is merged beside it, then loopback is
+# brought up at 127.0.0.1/8.  If the machine has a virtio-net device
+# (QEMU with -device virtio-net-pci; 9vm when it has a TAP it is
+# allowed to open), ether0 is bound as a second interface with
+# 10.0.2.15/24 and an ICMP echo goes to the QEMU user-network gateway,
+# which is the only path that exercises the NIC.
+#
+# TCP is a loopback echo: a listener announces 9999, a client connects
+# to 127.0.0.1!9999, and the listener sends back what it reads.  That
+# is the handshake, the sequence arithmetic and an ordered stream in
+# both directions.
+#
+# Last, the host namespace: #~/ns mounted at /n/remote and a file read
+# through it, when the loader offers the channel.
 #
 
 include "sys.m";
@@ -65,15 +71,90 @@ watchdog()
 	halt();
 }
 
+Pingread: con 3000;	# ms to wait for an echo reply
+
+pingread(d: ref Sys->FD, rep: array of byte, got: chan of int)
+{
+	got <-= sys->read(d, rep, len rep);
+}
+
+pingtimer(t: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	t <-= 1;
+}
+
 #
-# The listening half of the TCP echo.  The listener has to be a
-# separate thread because opening .../listen blocks until somebody
-# connects; when it does, the open returns the NEW conversation that
-# carries the accepted connection.
+# One ICMP echo to addr, through a conversation of its own.  Returns 0
+# on a reply and -1 otherwise; the caller decides whether that is a
+# failure.  The reply is waited for with a bound, so a wrong answer
+# prints the driver's counters instead of hanging the boot.
 #
+ping(addr: string): int
+{
+	c: ref Sys->FD;
+	n: int;
+	conv: string;
+
+	(c, conv) = clone("/net/icmp");
+	if(c == nil){
+		sys->print("nettest: clone icmp: %r\n");
+		return -1;
+	}
+	if(sys->fprint(c, "%s", "connect " + addr + "!1") < 0){
+		sys->print("nettest: icmp connect %s: %r\n", addr);
+		return -1;
+	}
+	d := sys->open("/net/icmp/" + conv + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("nettest: open icmp data: %r\n");
+		return -1;
+	}
+	req := array[Ipsize + Hdrsize + 8] of byte;
+	req[Ipsize] = byte Echoreq;
+	req[Ipsize + 7] = byte 1;
+	if(sys->write(d, req, len req) != len req){
+		sys->print("nettest: icmp write to %s: %r\n", addr);
+		return -1;
+	}
+	rep := array[256] of byte;
+	got := chan[1] of int;
+	spawn pingread(d, rep, got);
+	t := chan[1] of int;
+	spawn pingtimer(t, Pingread);
+	alt {
+	n = <-got =>
+		;
+	<-t =>
+		sys->print("nettest: no echo reply from %s in %d ms\n", addr, Pingread);
+		return -1;
+	}
+	if(n < Ipsize + Hdrsize || int rep[Ipsize] != Echoreply){
+		sys->print("nettest: no echo reply from %s\n", addr);
+		return -1;
+	}
+	sys->print("nettest: icmp echo reply from %s (%d bytes)\n", addr, n);
+	return 0;
+}
+
+dumpfile(path: string)
+{
+	fd: ref Sys->FD;
+
+	fd = sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	sys->print("nettest: %s:\n%s\n", path, string buf[0:n]);
+}
+
 tcplistener(sync: chan of int)
 {
-	(a, aconv) := clone("/net/tcp");
+	a: ref Sys->FD;
+	aconv: string;
+
+	(a, aconv) = clone("/net/tcp");
 	if(a == nil){
 		sync <-= 0;
 		return;
@@ -106,8 +187,16 @@ init(nil: ref Draw->Context, nil: list of string)
 
 	if(sys->bind("#I", "/net", Sys->MREPL) < 0)
 		fail("bind #I /net: " + sys->sprint("%r"));
+	if(sys->bind("#l", "/net", Sys->MAFTER) < 0)
+		sys->print("nettest: bind #l /net: %r\n");
 	sys->print("nettest: #I bound at /net\n");
 
+	spawn watchdog();
+
+	#
+	# Loopback first: it is always there, and the TCP echo below uses
+	# it whatever else the machine has.
+	#
 	(ifc, ifcno) := clone("/net/ipifc");
 	if(ifc == nil)
 		fail("clone ipifc: " + sys->sprint("%r"));
@@ -117,36 +206,51 @@ init(nil: ref Draw->Context, nil: list of string)
 		fail("add 127.0.0.1/8: " + sys->sprint("%r"));
 	sys->print("nettest: 127.0.0.1/8 on ipifc %s\n", ifcno);
 
-	(icmp, conv) := clone("/net/icmp");
-	if(icmp == nil)
-		fail("clone icmp: " + sys->sprint("%r"));
-	if(sys->fprint(icmp, "connect 127.0.0.1!1") < 0)
-		fail("icmp connect: " + sys->sprint("%r"));
-	d := sys->open("/net/icmp/" + conv + "/data", Sys->ORDWR);
-	if(d == nil)
-		fail("open icmp data: " + sys->sprint("%r"));
+	#
+	# The card, when there is one.  devether makes ether0 whether or
+	# not a driver filled it in; a driver that did leaves the device's
+	# address in /net/ether0/addr, and an unfilled one is all zeroes.
+	#
+	ether := 0;
+	if((afd := sys->open("/net/ether0/addr", Sys->OREAD)) != nil) {
+		abuf := array[64] of byte;
+		an := sys->read(afd, abuf, len abuf);
+		for(i := 0; i < an; i++){
+			c := int abuf[i];
+			if(c != '0' && c != ':' && c != '\n'){
+				ether = 1;
+				break;
+			}
+		}
+	}
+	if(ether){
+		(eifc, eifcno) := clone("/net/ipifc");
+		if(eifc == nil)
+			fail("clone ipifc for ether: " + sys->sprint("%r"));
+		if(sys->fprint(eifc, "bind ether /net/ether0") < 0)
+			fail("bind ether /net/ether0: " + sys->sprint("%r"));
+		if(sys->fprint(eifc, "add 10.0.2.15 255.255.255.0") < 0)
+			fail("add 10.0.2.15/24: " + sys->sprint("%r"));
+		sys->print("nettest: ether0 up at 10.0.2.15/24 on ipifc %s\n", eifcno);
+	} else
+		sys->print("nettest: no ethernet device\n");
 
-	req := array[Ipsize + Hdrsize + 8] of byte;
-	req[Ipsize] = byte Echoreq;
-	req[Ipsize + 7] = byte 1;		# sequence
-	spawn watchdog();
-	if(sys->write(d, req, len req) != len req)
-		fail("icmp write: " + sys->sprint("%r"));
-
-	rep := array[256] of byte;
-	n := sys->read(d, rep, len rep);
-	if(n < Ipsize + Hdrsize)
-		fail(sys->sprint("no echo reply (read %d): %r", n));
-	if(int rep[Ipsize] != Echoreply)
-		fail(sys->sprint("unexpected icmp type %d", int rep[Ipsize]));
-	sys->print("nettest: icmp echo reply, %d bytes\n", n);
+	if(ether){
+		if(ping("10.0.2.2") < 0){
+			dumpfile("/net/ether0/stats");
+			dumpfile("/net/ether0/ifstats");
+			fail("no ICMP reply from the gateway");
+		}
+	} else {
+		if(ping("127.0.0.1") < 0)
+			fail("no ICMP reply from loopback");
+	}
 
 	#
-	# TCP proves the hard part: a three-way handshake, sequence
-	# numbers advancing on both sides, windows, and an ordered byte
-	# stream in each direction.  Every segment compares sequence
-	# numbers through seq_lt and friends, so a wrong answer stalls the
-	# connection rather than corrupting it.
+	# TCP over loopback: a listener announces 9999, this connects to
+	# it, and the listener echoes.  The sequence comparisons are where
+	# LP64 broke silently elsewhere in this tree, so a wrong answer
+	# stalls the connection rather than corrupting it.
 	#
 	sync := chan of int;
 	spawn tcplistener(sync);
@@ -171,9 +275,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	sys->print("nettest: tcp echo over loopback\n");
 
 	#
-	# The host namespace, when this loader offers one.  9vm publishes
-	# #~/ns only when it was given a server to relay to; QEMU has no
-	# ring at all.  A loader without one is not a failure.
+	# The host namespace, when this loader offers one.
 	#
 	ns := sys->open("#~/ns", Sys->ORDWR);
 	if(ns == nil)

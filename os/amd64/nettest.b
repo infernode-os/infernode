@@ -35,6 +35,7 @@ Echoreq:	con 8;
 Echoreply:	con 0;
 Pingwait:	con 20000;	# ms; loopback answers in one, QEMU TCG is slow
 Tcpport:	con "9999";
+Nicport:	con "45999";	# the host's echo server, reached through slirp
 
 halt()
 {
@@ -241,6 +242,29 @@ init(nil: ref Draw->Context, nil: list of string)
 			dumpfile("/net/ether0/ifstats");
 			fail("no ICMP reply from the gateway");
 		}
+
+		#
+		# And TCP across the card: slirp forwards 10.0.2.2 to the
+		# host's loopback, where the harness has an echo server.
+		# This is the handshake and the ordered stream travelling
+		# over virtio rather than over loopback.
+		#
+		(nc, nconv) := clone("/net/tcp");
+		if(nc == nil)
+			fail("clone tcp for ether: " + sys->sprint("%r"));
+		if(sys->fprint(nc, "connect 10.0.2.2!" + Nicport) < 0)
+			fail("tcp/ether connect: " + sys->sprint("%r"));
+		nd := sys->open("/net/tcp/" + nconv + "/data", Sys->ORDWR);
+		if(nd == nil)
+			fail("open tcp/ether data: " + sys->sprint("%r"));
+		nmsg := array of byte "hello-nic";
+		if(sys->write(nd, nmsg, len nmsg) != len nmsg)
+			fail("tcp/ether write: " + sys->sprint("%r"));
+		nbuf := array[64] of byte;
+		nn := sys->read(nd, nbuf, len nbuf);
+		if(nn != len nmsg || string nbuf[0:nn] != "hello-nic")
+			fail(sys->sprint("tcp/ether echo: read %d: %r", nn));
+		sys->print("nettest: tcp echo over ether0\n");
 	} else {
 		if(ping("127.0.0.1") < 0)
 			fail("no ICMP reply from loopback");

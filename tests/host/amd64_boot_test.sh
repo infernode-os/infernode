@@ -53,9 +53,10 @@
 #        loopback at 127.0.0.1, an ICMP echo, a TCP echo through the
 #        handshake, and the host namespace mounted.  Under QEMU it is
 #        given a virtio-net-pci device on a user-network backend, so
-#        the same boot also brings ether0 up at 10.0.2.15 and pings the
-#        slirp gateway -- the frames cross the virtio rings in both
-#        directions.  Under 9vm there is no TAP to be had (that needs
+#        the same boot also brings ether0 up at 10.0.2.15, pings the
+#        slirp gateway, and opens a TCP connection to a host echo
+#        server at 10.0.2.2 -- the frames cross the virtio rings in
+#        both directions, interrupts and all.  Under 9vm there is no TAP to be had (that needs
 #        CAP_NET_ADMIN), so the boot checks that the absence is
 #        reported and loopback still works.
 #
@@ -742,13 +743,37 @@ if [ "$haveqemu" = 1 ]; then
 	require qemu-shell "$out" "init: no #~ namespace to mount"
 	require qemu-shell "$out" "hello from the shell"
 
-	# Loopback needs no hardware, so the network test runs here too.
+	# Loopback needs no hardware, so the network test runs here too;
+	# with a virtio card on QEMU's user network, the guest also reaches
+	# the host: 10.0.2.2 is the gateway and the host's loopback, and
+	# nettest connects to the echo server below through it.
 	ran="$ran qemu-net"
+	cat > "$BUILD/nicecho.py" <<'PY'
+import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", 45999))
+except OSError as e:
+    print("nicecho: bind: %s" % e, file=sys.stderr)
+    raise SystemExit(1)
+s.listen(1)
+c, _ = s.accept()
+d = c.recv(128)
+c.sendall(d)
+c.close()
+s.close()
+PY
+	"$PYTHON" -u "$BUILD/nicecho.py" &
+	nicechopid=$!
+	sleep 1
 	out=$(capture 40 "$BUILD/qemu-net.out" \
 		"$QEMU" -m 256 -kernel "$BUILD/kernel.bin" \
 		-netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-legacy=on \
 		-append "amd64 boot test nettest" \
 		-display none -serial stdio -monitor none -no-reboot)
+	kill "$nicechopid" 2>/dev/null || true
+	wait "$nicechopid" 2>/dev/null || true
 	check qemu-net "$out"
 	require qemu-net "$out" "ether: virtio-net"
 	require qemu-net "$out" "ether: virtio-net interrupt-driven (irq 11)"
@@ -756,6 +781,7 @@ if [ "$haveqemu" = 1 ]; then
 	require qemu-net "$out" "nettest: ether0 up at 10.0.2.15/24"
 	require qemu-net "$out" "nettest: icmp echo reply from 10.0.2.2"
 	require qemu-net "$out" "nettest: tcp echo over loopback"
+	require qemu-net "$out" "nettest: tcp echo over ether0"
 	require qemu-net "$out" "nettest: no #~ namespace on this loader"
 	require qemu-net "$out" "nettest passed"
 fi

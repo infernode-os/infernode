@@ -429,13 +429,17 @@ ether: virtio-net at pci 3:0.0 common 0xfe000000 notify 0xfe003000 devcfg 0xfe00
 ether: virtio-net 52:54:00:12:34:56 is #l (ether0)
 nettest: ether0 up at 10.0.2.15/24 on ipifc 1
 nettest: icmp echo reply from 10.0.2.2 (36 bytes)
+nettest: tcp echo over ether0
 ```
 
 The harness gives QEMU `-device virtio-net-pci,netdev=n0,disable-legacy=on`
 on a user-network backend, configures 10.0.2.15/24 and pings the slirp
 gateway; the frames cross the virtio rings in both directions, and the
 reply is an ARP resolution and an ICMP exchange, not a loopback
-shortcut. 9vm's card is a TAP device, which needs CAP_NET_ADMIN to
+shortcut.  It then opens a TCP connection to 10.0.2.2:45999 -- the
+gateway is also the host's loopback under slirp -- and echoes a string
+back from a server the harness starts, so the handshake, the sequence
+arithmetic and the byte stream run over virtio. 9vm's card is a TAP device, which needs CAP_NET_ADMIN to
 open, so the 9vm network boot runs without one and checks that the
 absence is reported and loopback still works.
 

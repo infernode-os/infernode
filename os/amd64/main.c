@@ -133,6 +133,13 @@ contains(const char *s, const char *t)
 }
 
 void
+conswrite(char *s, int n)
+{
+	while(n-- > 0)
+		consputc(*s++);
+}
+
+void
 conshalt(void)
 {
 	consprint("infernode/amd64: halted\n");

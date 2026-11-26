@@ -38,6 +38,12 @@ void	procrestore(Proc*);
 void	fpinit(void);
 void	fpoff(void);
 
+/* the software screen hook devcons may call; nil here */
+extern void (*screenputs)(char*, int);
+
+/* the board's boot-watchdog release; nothing to release here */
+void	booted(void);
+
 /* arch.c: the scheduler's idle wait, and one-core wakeups */
 void	idlehands(void);
 void	idlewake(void);

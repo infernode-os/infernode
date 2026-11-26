@@ -143,13 +143,19 @@ portprocinit(void)
 
 	xinit();
 	poolinit();
+	printinit();		/* the console input queue, before #c is used */
 	timersinit();
 	procinit();
+
+	/* the host owner and this machine's name, for devdir and #c */
+	kstrdup(&eve, "inferno");
+	kstrdup(&sysname, "infernode");
 
 	p = newproc();
 	if(p == nil)
 		return -1;
 	up = p;
+	kstrdup(&up->env->user, eve);	/* the boot process is the host owner */
 	m->ticks = 1;
 	return 0;
 }
@@ -160,6 +166,12 @@ Mach	*m;
 struct Active active;
 unsigned long ramtop;
 
+/* kernel flags devcons and libinterp read; both off at this stage */
+int	cflag;
+int	consoleprint;
+int	strictlink;
+int	keepbroken;
+
 void
 portinit(uint64_t membase, uint64_t memsize)
 {
@@ -168,6 +180,7 @@ portinit(uint64_t membase, uint64_t memsize)
 
 	ramtop = membase + memsize;
 	clockinit();
+	serwrite = conswrite;
 	active.machs = 1;
 	conf.nmach = 1;
 	conf.nproc = 32;

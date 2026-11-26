@@ -121,7 +121,11 @@ for f in "$ROOT"/os/amd64/*.S "$ROOT"/os/amd64/*.c "$ROOT"/os/9vm/*.c \
 	"$ROOT"/libkern/convM2D.c "$ROOT"/libkern/memchr.c \
 	"$ROOT"/libkern/strchr.c "$ROOT"/libkern/strncpy.c \
 	"$ROOT"/libkern/utflen.c "$ROOT"/libkern/utfnlen.c \
-	"$ROOT"/libkern/utfrune.c; do
+	"$ROOT"/libkern/utfrune.c "$ROOT"/libkern/atol.c \
+	"$ROOT"/libkern/strncmp.c "$ROOT"/libkern/strtoll.c \
+	"$ROOT"/libkern/tokenize.c \
+	"$ROOT"/os/port/devcons.c "$ROOT"/os/port/parse.c \
+	"$ROOT"/os/port/latin1.c; do
 	base=$(basename "$f")
 	o="$BUILD/${base%.*}_${base##*.}.o"
 	# shellcheck disable=SC2086
@@ -334,6 +338,7 @@ if [ "$have9vm" = 1 ]; then
 	check chan "$out"
 	require chan "$out" "chantest: read 5 \"hello\""
 	require chan "$out" "chantest passed"
+	require chan "$out" "console from #c/cons"
 fi
 
 if [ "$haveqemu" = 1 ]; then

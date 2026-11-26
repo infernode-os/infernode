@@ -55,6 +55,32 @@ chantest(void)
 		print("chantest failed\n");
 		conshalt();
 	}
+	/* #c: a readable file, then the console through the device */
+	fd[0] = kopen("#c/sysname", OREAD);
+	if(fd[0] < 0){
+		print("chantest: open #c/sysname: %s\n", up->env->errstr);
+		conshalt();
+	}
+	n = kread(fd[0], b, sizeof(b)-1);
+	b[n > 0 ? n : 0] = 0;
+	print("chantest: sysname \"%s\"\n", b);
+	if(n <= 0 || strcmp(b, "infernode") != 0){
+		print("chantest failed: sysname\n");
+		conshalt();
+	}
+	kclose(fd[0]);
+
+	fd[0] = kopen("#c/cons", OWRITE);
+	if(fd[0] < 0){
+		print("chantest: open #c/cons: %s\n", up->env->errstr);
+		conshalt();
+	}
+	if(kwrite(fd[0], "console from #c/cons\n", 21) != 21){
+		print("chantest: write #c/cons: %s\n", up->env->errstr);
+		conshalt();
+	}
+	kclose(fd[0]);
+
 	print("chantest passed\n");
 	conshalt();
 }

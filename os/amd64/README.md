@@ -120,11 +120,14 @@ stack); the scheduler's `setlabel`/`gotolabel` then start it, and
 
 `shim.c` is what is not ported yet, and only that:
 
-- `vm0`, `currun`, `iprogpid`, `upkilled`, `addprog` — the Dis VM is
-  not linked yet, so the registry and VM queries have no answer;
-- `closeegrp`, `seconds`, `debugkey` — `devenv.c` (#e) and `devcons.c`
-  (#c) are not linked;
+- `vm0`, `currun`, `iprogpid`, `upkilled`, `addprog`, `strictlink`,
+  `keepbroken`, `heapaudittext`, `renameproguser` — the Dis VM is not
+  linked yet;
 - `muxclose` — `devmnt.c` is not linked, and there are no mounts;
+- `randominit`/`randomread`/`hwrandom*` — no generator, and `genrandom`
+  panics rather than making a key that only looks random;
+- `reboot`/`halt`/`tryboot` — there is nowhere to return to, so they stop
+  the machine;
 - `dumpstack`, `labelstack`, `procsave`/`procrestore` — the unwinder and
   FP save;
 
@@ -211,22 +214,27 @@ names `m` only where no local can shadow it — the same trap
 
 ## Channels and devices
 
-`os/port/dev.c`, `chan.c`, `devpipe.c`, `pgrp.c` and `sysfile.c` are
-compiled unmodified, with a one-entry device table (`os/amd64/devtab.c`).
-`chantest` calls `kpipe`, which takes the real path — `devno` through the
-device table, `devattach`, the pipe's directory walk, `devopen` — then
-writes on one end and reads the other through the file-descriptor table.
+`os/port/dev.c`, `chan.c`, `devpipe.c`, `devcons.c`, `pgrp.c` and
+`sysfile.c` are compiled unmodified, with a two-entry device table
+(`os/amd64/devtab.c`: `#c` and `#|`). `chantest` calls `kpipe`, which
+takes the real path — `devno` through the device table, `devattach`, the
+pipe's directory walk, `devopen` — then writes on one end and reads the
+other through the file-descriptor table. It then opens `#c/sysname`
+through `namec` and reads the machine name, and writes to `#c/cons`,
+which reaches the UART through devcons's console path.
 
 ```
 chantest: read 5 "hello"
+chantest: sysname "infernode"
+console from #c/cons
 chantest passed
 ```
 
-Linking `chan.c` also brought libkern's formatter (`vseprint` and the
-`fmt` family), so `print` and `snprint` are now the real ones: the
-hand-rolled parser is gone. `os/amd64/print.c` is the machine seam
-`dofmt` asks for — the format lock, and the `%e`/`%f`/`%g` and `%r`
-verbs this kernel declines to format.
+`devcons.c` owns `print`, `panic`, `putstrn`, `debugkey` and `seconds`
+now: the formatter is libkern's (`vseprint`), the console is
+`serwrite` — the machine hands it the polled UART — and
+`os/amd64/print.c` is the seam `dofmt` asks for (the format lock, and the
+`%e`/`%f`/`%g` and `%r` verbs this kernel declines).
 
 ## Machine tests
 
@@ -323,6 +331,8 @@ qiotest passed
 fmttest passed
 -- chan
 chantest: read 5 "hello"
+chantest: sysname "infernode"
+console from #c/cons
 chantest passed
 -- qemu
 ...
@@ -369,9 +379,9 @@ PASS: x86-64 boot (9vm ns display trap fault port proc preempt clock qio fmt cha
 
 ## Next
 
-- `devcons.c` (#c) and `devroot.c` with a root image, then `devmnt`, so
-  `../9vm`'s rings become the mountable `#~/0`/`#~/1` (`host`/`ns`)
-  instead of a boot test.
+- `devroot.c` with a root image, then `devmnt`, so `../9vm`'s rings
+  become the mountable `#~/0`/`#~/1` (`host`/`ns`) instead of a boot
+  test — and the ring needs its own `#~` device in front of `devmnt`.
 - The Dis VM (`os/port/dis.c` + libinterp), which retires the `vm0` and
   registry shims; it needs a Limbo compiler to generate `runt.h` and
   `sysmod.h`.

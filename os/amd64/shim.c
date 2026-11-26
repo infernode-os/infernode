@@ -19,9 +19,6 @@
 
 struct Vm vm0;
 
-/* the host owner, until devcons defines it: stat strings need a name */
-char *eve = "inferno";
-
 /* the kernel's build date, which dev.c records as a file's mtime */
 ulong kerndate;
 
@@ -51,81 +48,116 @@ upkilled(void)
 	return 0;
 }
 
+void
+dumpstack(void)
+{
+}
+
+/* the board's "booted" watchdog release; there is no watchdog here */
+void
+booted(void)
+{
+}
+
 /*
- * print and panic go through the same formatter as snprint: libkern's
- * vseprint, which dev.c's device layer links anyway.
+ * The console device reaches for a few things this stage does not have:
+ * the board's reset, the software screen's debug keys, the Dis VM's
+ * user renaming and heap audit, and a randomness source.
+ *
+ * genrandom PANICS rather than filling a buffer with something weak: a
+ * key that looks random and is not is worse than a kernel that says it
+ * has no generator.  randomread returns no bytes and randominit is
+ * quiet; nothing in this stage asks for them.
  */
-int
-print(char *fmt, ...)
-{
-	va_list ap;
-	char buf[PRINTSIZE];
-	int n;
-
-	va_start(ap, fmt);
-	n = vseprint(buf, buf+sizeof(buf), fmt, ap) - buf;
-	va_end(ap);
-	putstrn(buf, n);
-	return n;
-}
-
-/* iprint: the same, but callable at high spl; the console is polled */
-int
-iprint(char *fmt, ...)
-{
-	va_list ap;
-	char buf[PRINTSIZE];
-	int n;
-
-	va_start(ap, fmt);
-	n = vseprint(buf, buf+sizeof(buf), fmt, ap) - buf;
-	va_end(ap);
-	putstrn(buf, n);
-	return n;
-}
-
 void
-putstrn(char *s, int n)
+reboot(void)
 {
-	while(n-- > 0)
-		consputc(*s++);
-}
-
-void
-panic(char *fmt, ...)
-{
-	va_list ap;
-	char buf[PRINTSIZE];
-	int n;
-
-	consprint("infernode/amd64: panic: ");
-	va_start(ap, fmt);
-	n = vseprint(buf, buf+sizeof(buf), fmt, ap) - buf;
-	va_end(ap);
-	putstrn(buf, n);
-	consprint("\n");
 	conshalt();
 }
 
 void
-_assert(char *s)
+halt(void)
 {
-	panic("assertion failed: %s", s);
-}
-
-/* the kernel features this stage does not have */
-void
-debugkey(Rune c, char *s, void (*f)(void), int x)
-{
-	USED(c);
-	USED(s);
-	USED(f);
-	USED(x);
+	conshalt();
 }
 
 void
-dumpstack(void)
+tryboot(void)
 {
+	conshalt();
+}
+
+void
+uartputs(char *s, int n)
+{
+	conswrite(s, n);
+}
+
+void
+screendumpkey(void)
+{
+}
+
+void
+screenhexkey(void)
+{
+}
+
+void
+renameproguser(char *old, char *new)
+{
+	USED(old);
+	USED(new);
+}
+
+char*
+heapaudittext(void)
+{
+	return "";
+}
+
+void
+randominit(void)
+{
+}
+
+ulong
+randomread(void *p, ulong n)
+{
+	USED(p);
+	USED(n);
+	return 0;
+}
+
+void
+genrandom(uchar *p, int n)
+{
+	USED(p);
+	USED(n);
+	panic("genrandom: this kernel has no random generator");
+}
+
+/* no hardware generator: say so rather than invent bytes */
+void
+rngassessopen(void)
+{
+}
+
+long
+hwrandomread(void *p, long n)
+{
+	USED(p);
+	USED(n);
+	return -1;
+}
+
+long
+hwrandombootread(void *p, long n, vlong t)
+{
+	USED(p);
+	USED(n);
+	USED(t);
+	return -1;
 }
 
 void
@@ -138,13 +170,6 @@ void
 closeegrp(Egrp *g)
 {
 	USED(g);
-}
-
-/* the time(2)-style seconds devdir records */
-long
-seconds(void)
-{
-	return (long)(todget(nil) / 1000000000LL);
 }
 
 /* the 9P client's mount teardown, which has no mounts to tear down yet */

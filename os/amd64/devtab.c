@@ -12,10 +12,12 @@
 #include "dat.h"
 #include "fns.h"
 
+extern Dev	consdevtab;
 extern Dev	pipedevtab;
 
 Dev*	devtab[] =
 {
+	&consdevtab,		/* 'c' -- /dev/cons and friends */
 	&pipedevtab,		/* '|' -- pipes */
 	nil,
 };

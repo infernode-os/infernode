@@ -65,6 +65,7 @@ typedef struct FChar FChar;
 typedef struct Refresh Refresh;
 typedef struct Refx Refx;
 typedef struct DName DName;
+typedef struct Scope Scope;
 
 ulong blanktime = 30;	/* in minutes; a half hour */
 
@@ -88,6 +89,9 @@ struct Draw
 	int		nname;
 	DName*	name;
 	int		vers;
+	Scope*	scopes;		/* attach specs seen, each a scope (below) */
+	int		nscope;
+	ulong		scopeid;	/* the last scope's id; ids are never used again */
 	int		softscreen;
 	int		blanked;	/* screen turned off */
 	ulong		blanktime;	/* time of last operation */
@@ -111,6 +115,7 @@ struct Client
 	int		op;
 	uchar*		path;	/* a path arriving in pieces ('U'), for the next 'G' or 'g' */
 	int		npath;
+	ulong		scope;	/* the scope it was made in; 0, none */
 };
 
 struct Refresh
@@ -132,6 +137,34 @@ struct DName
 	Client	*client;
 	DImage*		dimage;
 	int			vers;
+	ulong		scope;	/* the scope it was given in; 0, none */
+};
+
+/*
+ * A scope: what a client attached as #i<spec>, spec not empty, sees of
+ * the draw device (draw(3)), so that a program served the device from
+ * elsewhere -- rcpu(1)'s far end -- reaches only its own:
+ *  - the top directory has draw and not screen;
+ *  - draw lists and opens only the scope's clients;
+ *  - a client's image 0 is a 1x1 image of its own, not the screen;
+ *  - names it gives are the scope's, and it finds only the scope's,
+ *    and unscoped names beginning "<spec>.", which is how what made
+ *    the scope gives it a window;
+ *  - it attaches only the scope's public screens, and does not change
+ *    the colour map or the debugging flag.
+ * Unscoped clients see only unscoped names; nothing else changes for
+ * them.  A channel carries its scope's id in its dev; ids are never
+ * used again, so a channel of a scope that is gone reaches nothing.
+ */
+enum {
+	Maxscope	= 4096,	/* scopes made while the system runs */
+};
+
+struct Scope
+{
+	ulong	id;
+	char*	name;
+	Scope*	next;
 };
 
 struct FChar
@@ -162,6 +195,7 @@ struct DImage
 	FChar*		fchar;
 	DScreen*	dscreen;	/* 0 if not a window */
 	DImage*	fromname;	/* image this one is derived from, by name */
+	ulong		nscope;	/* the scope of the name it came by */
 	DImage*		next;
 };
 
@@ -180,6 +214,7 @@ struct DScreen
 	DImage	*dfill;
 	Memscreen*	screen;
 	Client*		owner;
+	ulong		scope;	/* the owner's scope, which may attach it if public */
 	DScreen*	next;
 };
 
@@ -268,6 +303,8 @@ drawgen(Chan *c, char *name, Dirtab *tab, int x, int s, Dir *dp)
 			devdir(c, q, "draw", 0, eve, 0555, dp);
 			break;
 		case 1:
+			if(c->dev != 0)
+				return -1;	/* a scope has no screen */
 			/*
 			 * screen: the display, as an image file. Length 0
 			 * because it is not known until it is read and a
@@ -293,7 +330,7 @@ drawgen(Chan *c, char *name, Dirtab *tab, int x, int s, Dir *dp)
 		}
 		else if(s <= sdraw.nclient){
 			cl = sdraw.client[s-1];
-			if(cl == 0)
+			if(cl == 0 || cl->scope != c->dev)
 				return 0;
 			sprint(up->genbuf, "%d", cl->clientid);
 			mkqid(&q, (s<<QSHIFT)|Q3rd, 0, QTDIR);
@@ -467,16 +504,49 @@ drawcmp(char *a, char *b, int n)
 }
 
 DName*
-drawlookupname(int n, char *str)
+drawlookupname(ulong scope, int n, char *str)
 {
 	DName *name, *ename;
 
 	name = sdraw.name;
 	ename = &name[sdraw.nname];
 	for(; name<ename; name++)
-		if(drawcmp(name->name, str, n) == 0)
+		if(name->scope == scope && drawcmp(name->name, str, n) == 0)
 			return name;
 	return 0;
+}
+
+static Scope*
+drawscope(ulong id)
+{
+	Scope *s;
+
+	for(s = sdraw.scopes; s != nil; s = s->next)
+		if(s->id == id)
+			return s;
+	return nil;
+}
+
+/* the name str[0:n] as client sees it: its scope's, or one given it */
+static DName*
+drawfindname(Client *client, int n, char *str)
+{
+	DName *dn;
+	Scope *s;
+	int l;
+
+	if(client->scope == 0)
+		return drawlookupname(0, n, str);
+	dn = drawlookupname(client->scope, n, str);
+	if(dn != nil)
+		return dn;
+	s = drawscope(client->scope);
+	if(s == nil)
+		return nil;
+	l = strlen(s->name);
+	if(n > l+1 && memcmp(str, s->name, l) == 0 && str[l] == '.')
+		return drawlookupname(0, n, str);
+	return nil;
 }
 
 int
@@ -491,7 +561,7 @@ drawgoodname(DImage *d)
 			return 0;
 	if(d->name == nil)
 		return 1;
-	n = drawlookupname(strlen(d->name), d->name);
+	n = drawlookupname(d->nscope, strlen(d->name), d->name);
 	if(n==nil || n->vers!=d->vers)
 		return 0;
 	return 1;
@@ -561,6 +631,7 @@ drawinstall(Client *client, int id, Memimage *i, DScreen *dscreen)
 	d->nfchar = 0;
 	d->fchar = 0;
 	d->fromname = 0;
+	d->nscope = 0;
 	d->dscreen = dscreen;
 	d->next = client->dimage[id&HASHMASK];
 	client->dimage[id&HASHMASK] = d;
@@ -609,6 +680,7 @@ drawinstallscreen(Client *client, DScreen *d, int id, DImage *dimage, DImage *df
 		d->public = public;
 		d->next = dscreen;
 		d->owner = client;
+		d->scope = client->scope;
 		dscreen = d;
 	}
 	c->dscreen = d;
@@ -762,7 +834,7 @@ drawaddname(Client *client, DImage *di, int n, char *str)
 	name = sdraw.name;
 	ename = &name[sdraw.nname];
 	for(; name<ename; name++)
-		if(drawcmp(name->name, str, n) == 0)
+		if(name->scope == client->scope && drawcmp(name->name, str, n) == 0)
 			error(Enameused);
 	t = smalloc((sdraw.nname+1)*sizeof(DName));
 	memmove(t, sdraw.name, sdraw.nname*sizeof(DName));
@@ -774,6 +846,7 @@ drawaddname(Client *client, DImage *di, int n, char *str)
 	new->name[n] = 0;
 	new->dimage = di;
 	new->client = client;
+	new->scope = client->scope;
 	new->vers = ++sdraw.vers;
 }
 
@@ -972,13 +1045,48 @@ deletescreenimage(void)
 static Chan*
 drawattach(char *spec)
 {
+	Chan *c;
+	Scope *s;
+	ulong id;
+
+	id = 0;
 	qlock(&sdraw.l);
-	if(!initscreenimage()){
+	if(waserror()){
 		qunlock(&sdraw.l);
+		nexterror();
+	}
+	if(!initscreenimage())
 		error("no frame buffer");
+	if(spec != nil && spec[0] != '\0'){
+		/* #i<spec>: a scope (above), made at its first attach */
+		if(strlen(spec) > 64)
+			error(Ebadarg);
+		for(s = sdraw.scopes; s != nil; s = s->next)
+			if(strcmp(s->name, spec) == 0)
+				break;
+		if(s == nil){
+			/*
+			 * Scopes are never freed (an id is never used again), so
+			 * there are only so many: a program making specs without
+			 * end does not grow the kernel's memory without end.
+			 */
+			if(sdraw.nscope >= Maxscope)
+				error("too many draw scopes");
+			sdraw.nscope++;
+			s = smalloc(sizeof(Scope));
+			s->name = smalloc(strlen(spec)+1);
+			strcpy(s->name, spec);	/* Flawfinder: ignore -- sized above */
+			s->id = ++sdraw.scopeid;
+			s->next = sdraw.scopes;
+			sdraw.scopes = s;
+		}
+		id = s->id;
 	}
 	qunlock(&sdraw.l);
-	return devattach('i', spec);
+	poperror();
+	c = devattach('i', spec);
+	c->dev = id;
+	return c;
 }
 
 static Walkqid*
@@ -1010,9 +1118,12 @@ drawopen(Chan *c, int omode)
 	}
 
 	if(QID(c->qid) == Qnew){
+		if(c->dev != 0 && drawscope(c->dev) == nil)
+			error(Eperm);
 		cl = drawnewclient();
 		if(cl == 0)
 			error(Enodev);
+		cl->scope = c->dev;
 		c->qid.path = Qctl|((cl->slot+1)<<QSHIFT);
 	}
 
@@ -1022,21 +1133,41 @@ drawopen(Chan *c, int omode)
 
 	case Qscreen:
 		/* no client, nothing to allocate: it is just the screen */
+		if(c->dev != 0)
+			error(Eperm);
 		break;
 
 	case Qctl:
 		cl = drawclient(c);
+		if(cl->scope != c->dev)
+			error(Eperm);
 		if(cl->busy)
 			error(Einuse);
-		cl->busy = 1;
 		flushrect = Rect(10000, 10000, -10000, -10000);
-		drawinstall(cl, 0, screenimage, 0);
+		if(cl->scope == 0)
+			drawinstall(cl, 0, screenimage, 0);
+		else if(drawlookup(cl, 0, 0) == nil){
+			/* a scope's image 0 is its own, not the screen */
+			Memimage *z;
+
+			z = allocmemimage(Rect(0, 0, 1, 1), screenimage->chan);
+			if(z == nil)
+				error(Edrawmem);
+			memfillcolor(z, DBlack);
+			if(drawinstall(cl, 0, z, 0) == nil){
+				freememimage(z);
+				error(Edrawmem);
+			}
+		}
+		cl->busy = 1;
 		incref(&cl->r);
 		break;
 	case Qcolormap:
 	case Qdata:
 	case Qrefresh:
 		cl = drawclient(c);
+		if(cl->scope != c->dev)
+			error(Eperm);
 		incref(&cl->r);
 		break;
 	}
@@ -1251,8 +1382,11 @@ drawread(Chan *c, void *a, long n, vlong off)
 	 * look at the panel. That it could not be answered any other way
 	 * has already cost more than this device did.
 	 */
-	if(QID(c->qid) == Qscreen)
+	if(QID(c->qid) == Qscreen){
+		if(c->dev != 0)
+			error(Eperm);
 		return drawreadscreen(a, n, off);
+	}
 
 	cl = drawclient(c);
 	qlock(&sdraw.l);
@@ -1266,7 +1400,7 @@ drawread(Chan *c, void *a, long n, vlong off)
 			error(Eshortread);
 		if(cl->infoid < 0)
 			error(Enodrawimage);
-		if(cl->infoid == 0){
+		if(cl->infoid == 0 && cl->scope == 0){
 			i = screenimage;
 			if(i == nil)
 				error(Enodrawimage);
@@ -1385,6 +1519,8 @@ drawwrite(Chan *c, void *a, long n, vlong off)
 		break;
 
 	case Qcolormap:
+		if(cl->scope != 0)
+			error(Eperm);	/* the colour map is the machine's */
 #ifdef COLORMAP
 		drawactive(1);	/* to restore map from backup */
 		m = n;
@@ -1671,6 +1807,8 @@ drawmesg1(Client *client, void *av, int n)
 			m = 1+1;
 			if(n < m)
 				error(Eshortdraw);
+			if(client->scope != 0)
+				error(Eperm);
 			drawdebug = a[1];
 			continue;
 
@@ -1837,7 +1975,7 @@ drawmesg1(Client *client, void *av, int n)
 			dstid = BGLONG(a+1);
 			if(drawlookup(client, dstid, 0))
 				error(Eimageexists);
-			dn = drawlookupname(j, (char*)a+6);
+			dn = drawfindname(client, j, (char*)a+6);
 			if(dn == nil)
 				error(Enoname);
 			if(drawinstall(client, dstid, dn->dimage->image, 0) == 0)
@@ -1846,6 +1984,7 @@ drawmesg1(Client *client, void *av, int n)
 			if(di == 0)
 				error("draw: cannot happen");
 			di->vers = dn->vers;
+			di->nscope = dn->scope;
 			di->name = smalloc(j+1);
 			di->fromname = dn->dimage;
 			di->fromname->ref++;
@@ -1875,7 +2014,7 @@ drawmesg1(Client *client, void *av, int n)
 			if(c)
 				drawaddname(client, di, j, (char*)a+7);
 			else{
-				dn = drawlookupname(j, (char*)a+7);
+				dn = drawlookupname(client->scope, j, (char*)a+7);
 				if(dn == nil)
 					error(Enoname);
 				if(dn->dimage != di)
@@ -2157,7 +2296,8 @@ drawmesg1(Client *client, void *av, int n)
 			if(dstid == 0)
 				error(Ebadarg);
 			dscrn = drawlookupdscreen(dstid);
-			if(dscrn==0 || (dscrn->public==0 && dscrn->owner!=client))
+			if(dscrn==0 || (dscrn->owner!=client
+			&& (dscrn->public==0 || dscrn->scope!=client->scope)))
 				error(Enodrawscreen);
 			if(dscrn->screen->image->chan != BGLONG(a+5))
 				error("inconsistent chan");

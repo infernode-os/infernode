@@ -130,6 +130,89 @@ from which no note is ever read (interrupts are not passed on), and
 where the server leaves the command's exit status, which becomes
 .IR rcpu 's.
 .PP
+Where this machine has a display, a 9front graphical program run this
+way draws in a window here, as one run with 9front's
+.I rcpu
+from a rio window draws in that window; there is no flag for it.
+9front's profile for
+.B $service
+.B cpu
+binds
+.B /mnt/term/dev
+after its own
+.BR /dev ,
+and
+.I rcpu
+serves there, beside
+.BR cons :
+.TF dev/consctl
+.TP
+.B dev/draw
+the draw device in a scope of the session's own (see
+.IR draw (3)):
+its programs reach the images they make and their window,
+not the screen, another window or another program's images
+.TP
+.B dev/winname
+the window's name.
+The window is made when a program first reads this, so a command that
+draws nothing has none; it goes when no program has
+.B dev/mouse
+open, when its close button is pressed (the session goes on), and with
+the session
+.TP
+.B dev/mouse
+the window's pointer, in 9front's form
+.RB ( m ,
+or
+.B r
+on a resize, then x, y, buttons and time in milliseconds);
+a write moves the pointer
+.TP
+.B dev/cursor
+the window's cursor, in 9front's form
+.TP
+.B dev/consctl
+.B rawon
+and
+.BR rawoff ;
+while a program has it raw, and no program reads
+.BR dev/kbd ,
+.B dev/cons
+gives the window's keys rather than this command's input
+.TP
+.B dev/kbd
+the window's keys as 9front's
+.IR kbdfs (8)
+gives them:
+.BR k ,
+.B c
+and
+.B K
+messages, each a string ended by a zero byte; 9front's
+.I rio
+reads it, so
+.B rcpu -h cirno -c rio
+gives a 9front desktop in the window
+.TP
+.B dev/label
+the window's label
+.TP
+.B dev/snarf
+this machine's snarf buffer
+.PD
+.PP
+It serves this machine's fonts too, read-only, at
+.BR /mnt/term/fonts .
+They are in Plan 9's format, rendered here from TrueType with 256 levels
+of grey, and a 9front program uses one as it would its own:
+.BR "acme -f /mnt/term/fonts/combined/go.16.font" ,
+or
+.B $font
+in the 9front profile.
+Nothing uses them unless asked; a program's first use of each
+glyph sends eight times the bytes of a 9front bitmap's.
+.PP
 Both are refused in CNSA mode: 9front's authentication and its TLS are
 classical cryptography (Ed448, ChaCha20-Poly1305, SHA-256), and this is
 for working with 9front, not a part of CNSA 2.0.
@@ -141,6 +224,13 @@ rimport cirno / /n/cirno
 ls /n/cirno/usr/glenda
 rcpu -h cirno -c 'cat /dev/sysname; ps | wc -l'
 .EE
+.PP
+Run 9front's acme, or its rio, in a window here:
+.IP
+.EX
+rcpu -h cirno -c acme
+rcpu -h cirno -c rio
+.EE
 .SH SOURCE
 .B /appl/cmd/rcpu.b
 .br
@@ -151,14 +241,22 @@ rcpu -h cirno -c 'cat /dev/sysname; ps | wc -l'
 .IR cpu (1),
 .IR dp9ik (2),
 .IR factotum (4),
-.IR import (4)
+.IR import (4),
+.IR draw (3)
 .SH BUGS
 Notes (an interrupt) are not sent to the far end, and 9front's
 .B -p
 (the
 .I aan
 filter, which keeps a session across a dropped connection) is not offered.
-There is no drawterm: a 9front program has no
-.B /dev/draw
-of this machine's in
-.BR /mnt/term .
+.PP
+The window's keys are typed characters: a
+.B k
+message holds the character typed, not the key pressed, and a key's
+release is sent at once, so a program that watches keys held down (a
+game) sees each as a tap.
+.B dev/wctl
+and
+.B env/wsys
+are not served: a 9front program cannot move or resize its window,
+or make another here.

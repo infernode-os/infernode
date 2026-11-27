@@ -44,8 +44,8 @@ display: ref Display;
 
 RUNMS: con 3000;
 LIMITMS: con 250;
-W: con 1600;
-H: con 1200;
+W: con 800;
+H: con 600;
 
 run(name: string, testfn: ref fn(t: ref T))
 {

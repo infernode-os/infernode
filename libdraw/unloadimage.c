@@ -61,11 +61,9 @@ unloadimage(Image *i, Rectangle r, uchar *data, int ndata)
 		BPLONG(a+17, r.min.y+dy);
 		if(flushimage(d, 0) < 0)
 			return -1;
-		if(d->local == 0)
-			release();
+		release();
 		n = kchanio(d->datachan, data+ntot, ndata-ntot, OREAD);
-		if(d->local == 0)
-			acquire();
+		acquire();
 		if(n < 0)
 			return n;
 		ntot += n;

@@ -2609,11 +2609,10 @@ doflush(Display *d)
 	if(n <= 0)
 		return 1;
 
-	if(d->local == 0)
-		release();
+	/* the display's lock, not the VM, keeps the buffer (lockdisplay) */
+	release();
 	if((m = kchanio(d->datachan, d->buf, n, OWRITE)) != n){
-		if(d->local == 0)
-			acquire();
+		acquire();
 		kgerrstr(err, sizeof err);
 		if(_drawdebug || strcmp(err, "screen id in use") != 0 && strcmp(err, exImage) != 0){
 			print("flushimage fail: (%d not %d) d=%lux: %s\n", m, n, (ulong)d, err);
@@ -2629,8 +2628,7 @@ doflush(Display *d)
 		return -1;
 	}
 	d->bufp = d->buf;
-	if(d->local == 0)
-		acquire();
+	acquire();
 	return 1;
 }
 
@@ -2728,7 +2726,7 @@ bufimage(Display *d, int n)
 		return 0;
 	}
 	if(d->bufp+n > d->buf+Displaybufsize){
-		if(d->local==0 && currun()!=libqlowner(d->qlock)) {
+		if(currun()!=libqlowner(d->qlock)) {
 			print("bufimage: %lux %lux\n", (ulong)libqlowner(d->qlock), (ulong)currun());
 			abort();
 		}

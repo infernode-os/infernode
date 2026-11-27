@@ -256,8 +256,15 @@ closedisplay(Display *disp)
 int
 lockdisplay(Display *disp)
 {
-	if(disp->local)
-		return 0;
+	/*
+	 * A local display is locked as a remote one is. Its buffer was
+	 * guarded by the VM alone, which meant holding the VM while devdraw
+	 * drew everything in it: on a Pi Zero 2 W a drawing program froze
+	 * its whole VM for up to 4.7 s at a time, and with it the card's
+	 * file server and /tmp, served from the same VM. Now the write to
+	 * /dev/draw lets the VM go, and this lock keeps the buffer, and an
+	 * operation that writes and then reads its answer, to one Prog.
+	 */
 	if(libqlowner(disp->qlock) != currun()){
 		libqlock(disp->qlock);
 		return 1;
@@ -268,8 +275,6 @@ lockdisplay(Display *disp)
 void
 unlockdisplay(Display *disp)
 {
-	if(disp->local)
-		return;
 	libqunlock(disp->qlock);
 }
 

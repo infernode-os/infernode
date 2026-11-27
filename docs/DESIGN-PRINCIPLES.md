@@ -225,8 +225,9 @@ things that already exist build the name space the job needs.
   `mount -k key '/n/localnet/tcp!192.0.2.10!5650' /net` mounts it
   over `/net` again through the local stack, by address (the
   local stack has no connection server of its own). All of it
-  was checked on two emulators: a connection dialled after the
-  bind appears in the office's `/net/tcp`, not this machine's.
+  is tested on two emulators (`tests/host/net_import_test.sh`): a
+  connection dialled after the bind appears in the office's
+  `/net/tcp`, not this machine's.
 - *"Play sound on the other machine."* Mount its `/dev` and bind
   its `audio` over yours ("Compose, don't invent", below:
   `speech9p` was never changed to do this).

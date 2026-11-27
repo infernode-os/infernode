@@ -1,0 +1,10 @@
+#!/dis/sh.dis
+#
+# A shell script that lives on the host, not in the kernel image.
+#
+# The shell test reads it through /n/host (9P over the #~ ring) and
+# runs it with the compiled sh.  Nothing in the image contains this
+# text; if the file were not reachable, or the read were short, this
+# line would not appear.
+#
+echo script-works

@@ -669,7 +669,7 @@ if [ "$have9vm" = 1 ]; then
 			i=$((i + 1))
 		done
 		out=$(shellboot shell "$BUILD/shell9.out" \
-			"bind -a /n/host/dis /dis; bind -a /n/host/dis/lib /dis/lib; awk 'END{print NR}' /n/host/os/amd64/nettest.b; cat /n/remote/hello" \
+			"bind -a /n/host/dis /dis; bind -a /n/host/dis/lib /dis/lib; awk 'END{print NR}' /n/host/os/amd64/nettest.b; sh /n/host/os/amd64/hostscript; cat /n/remote/hello" \
 			"hello from ns" \
 			"$NINEVM" -m 256 -ns "unix!$BUILD/nsshell.sock" \
 			-c "amd64 boot test shelltest" "$BUILD/kernel.elf")
@@ -685,6 +685,7 @@ if [ "$have9vm" = 1 ]; then
 		require shell "$out" "jit: Awk compiled"
 		_nlines=$(wc -l < "$ROOT/os/amd64/nettest.b")
 		require shell "$out" "$(printf '\n%d\n' "$_nlines")"
+		require shell "$out" "$(printf '\nscript-works\n')"
 		require shell "$out" "hello from ns"
 	else
 		out=$(shellboot shell "$BUILD/shell9.out" \

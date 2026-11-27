@@ -493,6 +493,16 @@ awk-works
 
 Twenty-four 9P requests crossed the ring for that command line.
 
+A script on the host is one layer further up: the compiled shell reads
+`os/amd64/hostscript` over the same mount and parses it.  The file is
+not in the image and does not need to be -- if the read were short or
+the mount absent, its one line would not appear:
+
+```
+; sh /n/host/os/amd64/hostscript
+script-works
+```
+
 ## The card: virtio-net over PCI
 
 `os/amd64/virtionet.c` drives the modern (1.0) virtio PCI network

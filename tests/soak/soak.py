@@ -634,7 +634,13 @@ class Run:
                               and 'loopback' not in d and d != '/net/ether0'), None)
         r['wired'] = (self.info.addr in addrs if self.info.addr else False, 'wired address %s' % self.info.addr)
         r['usbnet'] = (self.usbaddr is not None, 'gadget link %s' % (self.usbaddr or 'down'))
-        r['wifi'] = (self.wifiaddr is not None, 'Wi-Fi %s' % (self.wifiaddr or 'not associated'))
+        # the wifi load pushes to a Wi-Fi address beside the one the run drives
+        # the board by; a board whose only address is its Wi-Fi's (the Zero
+        # 2 W) has its Wi-Fi tested by the net load instead
+        r['wifi'] = (self.wifiaddr is not None, 'Wi-Fi %s' % (self.wifiaddr or
+                     'is the address the run drives the board by: net tests it' if self.info.addr and
+                     any(d not in ('/net/ether0',) and 'loopback' not in d and a == self.info.addr for d, a in ifs)
+                     else 'no Wi-Fi address beside the wired one'))
         m = re.search(r'BOARDTIME (\d+)', out)
         bt = int(m.group(1)) if m else 0
         r['clock'] = (abs(bt - time.time()) < 300, 'board clock %s' % (time.strftime('%Y-%m-%d %H:%M', time.gmtime(bt)) if m else '?'))
@@ -1054,6 +1060,11 @@ class Run:
 
     # samplers -----------------------------------------------------------
     def sample(self, n):
+        # BOARDTIME is read near the start of this batch; the batch's slow
+        # commands after it took up to ~20 s on a loaded Zero (2026-11-26),
+        # so the drift is taken against when the batch was sent, not when it
+        # came back
+        sent = time.time()
         out = self.sh('cat /dev/memory', 'ftest -e /tmp/soak/run && echo RUNNING',
                       "echo PROCS `{ls /prog | wc -l}; echo TCPCONV `{cat /net/tcp/[0-9]*/status >[2] /dev/null | grep -v '^Closed' | wc -l}; echo BOARDTIME `{date -n}",
                       "ls -l /dev/bootimage", "cat '#P/cputemp' '#P/throttled' >[2] /dev/null",
@@ -1067,15 +1078,16 @@ class Run:
         self.runs = dict(getattr(self, 'runs', {}), **{m.group(2): int(m.group(1)) for m in re.finditer(r'^(\d+) /tmp/soak/([\w-]+)/RUNS', out, re.M)})
         size = re.search(r' (\d+) [A-Z][a-z][a-z] .*bootimage', out)
         temp = re.findall(r'^(\d+\.\d+)', out, re.M)
+        thr = re.search(r'^(0x[0-9a-fA-F]+) ', out, re.M)   # '#P/throttled': the firmware's flag word
         running = 'RUNNING' in out
         g = lambda k: (re.search(k + r' (\d+)', out) or [None, ''])[1]
-        bt = g('BOARDTIME'); drift = '%d' % (int(bt) - int(time.time())) if bt else ''
+        bt = g('BOARDTIME'); drift = '%d' % (int(bt) - int(sent)) if bt else ''
         lat = self.lat[-1] if self.lat else ('', '', '')
-        self.samples.write('%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
+        self.samples.write('%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
             now(), int(time.time() - self.t0),
             pools.get('main', ('', ''))[0], pools.get('heap', ('', ''))[0], pools.get('image', ('', ''))[0],
             size.group(1) if size else '', temp[0] if temp else '', json.dumps(ticks),
-            g('PROCS'), g('TCPCONV'), drift, lat[0], lat[1]))
+            g('PROCS'), g('TCPCONV'), drift, lat[0], lat[1], thr.group(1) if thr else ''))
         self.samples.flush()
         v = re.search(r'^frames=(\d+) secs=([\d.]+) fps=([\d.]+) missed=(\d+).*$', out, re.M)
         if v and v.group(0) != self.vlast:
@@ -1156,7 +1168,7 @@ class Run:
         os.makedirs(os.path.join(self.dir, 'memtags'), exist_ok=True)
         self.log = Log(os.path.join(self.dir, 'soak.log'))
         self.samples = open(os.path.join(self.dir, 'samples.tsv'), 'a')
-        self.samples.write('time\tsecs\tmain\theap\timage\tbootimage\ttemp\tticks\tprocs\ttcpconv\tclockdrift\trtt_avg\trtt_max\n')
+        self.samples.write('time\tsecs\tmain\theap\timage\tbootimage\ttemp\tticks\tprocs\ttcpconv\tclockdrift\trtt_avg\trtt_max\tthrottled\n')
         self.hres = HostRes(self.info.name, self.log)
         self.failcount = {}; self.batt = {}
         self.log('soak %s: kernel %s bytes sha1 %s; driven over %s; serial %s; options: %s' % (
@@ -1398,6 +1410,19 @@ class Run:
             s = [r[col] for r in rows if len(r) > col and r[col].lstrip('-').isdigit()]
             if s:
                 out.append('%-17s first %s, last %s, min %s, max %s' % (name, s[0], s[-1], min(s, key=int), max(s, key=int)))
+        t = [float(r[6]) for r in rows if len(r) > 6 and re.match(r'^\d+\.\d+$', r[6])]
+        if t:
+            st = sorted(t)
+            out.append('cpu temp (C)      first %.1f, last %.1f, median %.1f, max %.1f' % (t[0], t[-1], st[len(st) // 2], st[-1]))
+        th = [int(r[13], 16) for r in rows if len(r) > 13 and r[13].startswith('0x')]
+        if th:
+            # bits 0-3 now, 16-19 since boot: under-voltage, ARM clock capped, throttled, soft temperature limit
+            names = ('under-voltage', 'arm clock capped', 'throttled', 'soft temp limit')
+            now_ = [sum(1 for x in th if x & (1 << b)) for b in range(4)]
+            ever = th[-1] >> 16
+            out.append('throttled         %d samples; %s; since boot: %s' % (len(th),
+                ', '.join('%s in %d' % (names[b], now_[b]) for b in range(4)),
+                ', '.join(names[b] for b in range(4) if ever & (1 << b)) or 'none'))
         if getattr(self, 'complaints', None):
             out.append('kernel complaints on serial: ' + ', '.join('%s x%d' % kv for kv in self.complaints.items()))
         for k, v in self.rates.items():

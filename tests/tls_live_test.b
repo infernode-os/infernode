@@ -72,26 +72,45 @@ run(name: string, testfn: ref fn(t: ref T))
 tlsconnect(ip, port: string, config: ref Config): (ref Conn, string)
 {
 	addr := sys->sprint("tcp!%s!%s", ip, port);
+	t0 := sys->millisec();
 	(ok, conn) := sys->dial(addr, nil);
 	if(ok < 0)
 		return (nil, sys->sprint("dial %s: %r", addr));
+	dialms = sys->millisec() - t0;
 
-	return tls->client(conn.dfd, config);
+	t0 = sys->millisec();
+	(c, err) := tls->client(conn.dfd, config);
+	handshakems = sys->millisec() - t0;
+	return (c, err);
 }
+
+# how long the last tlsconnect's dial and handshake took, for a failure's report
+dialms := 0;
+handshakems := 0;
 
 # Helper: send HTTP GET, return first chunk of response
 httpget(c: ref Conn, host, path: string): (string, string)
 {
 	request := sys->sprint("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: Infernode-Test/1.0\r\n\r\n", path, host);
 	reqbytes := array of byte request;
+	t0 := sys->millisec();
 	if(c.write(reqbytes, len reqbytes) < 0)
-		return (nil, "write failed");
+		return (nil, sys->sprint("write failed: %r"));
+	writems := sys->millisec() - t0;
 
 	# Read response (first chunk is enough to check status)
 	buf := array[4096] of byte;
+	t0 = sys->millisec();
 	n := c.read(buf, len buf);
-	if(n <= 0)
-		return (nil, "read failed or empty response");
+	if(n <= 0){
+		# say which, and when: an end of file is the server closing, an
+		# error is ours or the connection's (a soak saw both, unlabelled)
+		why := "end of file";
+		if(n < 0)
+			why = sys->sprint("error: %r");
+		return (nil, sys->sprint("read failed or empty response (%s) after %d ms; dial %d ms, handshake %d ms, write %d ms",
+			why, sys->millisec() - t0, dialms, handshakems, writems));
+	}
 
 	return (string buf[0:n], nil);
 }

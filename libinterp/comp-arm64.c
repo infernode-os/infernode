@@ -1491,6 +1491,16 @@ comp(Inst *i)
 		bradis(i->d.ins - mod->prog);
 		return;
 	case ICALL:
+	/*
+	 * A call to an earlier address -- every recursive call is one -- is a
+	 * backward branch as far as the interpreter's time slice goes: without
+	 * this a recursion with no loop in it never gave up the VM, and
+	 * jitbench's fib(30) held a Zero 2 W's for 4.7 s (amd64's ICALL falls
+	 * into IJMP's check).  Before the frame is linked, so a reschedule
+	 * resumes with the caller's frame, as schedcheck saves it.
+	 */
+	if(RESCHED)
+		schedcheck(i);
 		opwld(i, Ldw, RA0);
 		con(RELPC(patch[i - mod->prog + 1]), RA1);
 		mem(Stw, O(Frame, lr), RA0, RA1);
@@ -2161,6 +2171,16 @@ comp(Inst *i)
 		bradis(brpc(i));
 		break;
 	case ICALL:
+	/*
+	 * A call to an earlier address -- every recursive call is one -- is a
+	 * backward branch as far as the interpreter's time slice goes: without
+	 * this a recursion with no loop in it never gave up the VM, and
+	 * jitbench's fib(30) held a Zero 2 W's for 4.7 s (amd64's ICALL falls
+	 * into IJMP's check).  Before the frame is linked, so a reschedule
+	 * resumes with the caller's frame, as schedcheck saves it.
+	 */
+	if(RESCHED)
+		schedcheck(i);
 		opwld(i, Ldw, RA0);
 		con(RELPC(patch[i - mod->prog + 1]), RA1);
 		mem(Stw, O(Frame, lr), RA0, RA1);

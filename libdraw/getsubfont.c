@@ -1,6 +1,7 @@
 #include "lib9.h"
 #include "kernel.h"
 #include "draw.h"
+#include "interp.h"
 
 /*
  * Default version: treat as file name
@@ -9,7 +10,7 @@
 Subfont*
 _getsubfont(Display *d, char *name)
 {
-	int fd;
+	int fd, held;
 	Subfont *f;
 
 	fd = libopen(name, OREAD);
@@ -19,15 +20,17 @@ _getsubfont(Display *d, char *name)
 		return 0;
 	}
 	/*
-	 * unlock display so i/o happens with display released, unless
-	 * user is doing his own locking, in which case this could break things.
-	 * _getsubfont is called only from string.c and stringwidth.c,
-	 * which are known to be safe to have this done.
+	 * The file is read with the display let go, when this Prog holds it.
+	 * Not every caller does: Tk measures text (stringwidth, from a
+	 * listbox's insert) without the display, which was harmless while a
+	 * local display was not locked at all, and unlocking a lock not held
+	 * aborts. readsubfont locks for what it sends.
 	 */
-	if(d->local == 0)
+	held = libqlowner(d->qlock) == currun();
+	if(held)
 		unlockdisplay(d);
-	f = readsubfont(d, name, fd, d->local == 0);
-	if(d->local == 0)
+	f = readsubfont(d, name, fd, 1);
+	if(held)
 		lockdisplay(d);
 	if(f == 0)
 		_drawprint(2, "getsubfont: can't read %s: %r\n", name);

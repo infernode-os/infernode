@@ -740,6 +740,7 @@ dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
 dis/tests/diswrite_test.dis
 dis/tests/docengine_test.dis
+dis/tests/draw_release_test.dis
 dis/tests/edit_test.dis
 dis/tests/editor_test.dis
 dis/tests/env_rclose_test.dis

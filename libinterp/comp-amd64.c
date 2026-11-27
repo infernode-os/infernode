@@ -2229,13 +2229,16 @@ comp(Inst *i)
 		shift(i, Oldw, Ostw, 0xd3, 4);
 		break;
 	case ISHLB:
-		shift(i, Oldb, Ostb, 0xd2, 4);
+	case ISHRB:
+		/*
+		 * x86's 8-bit shifts take the count mod 32; Dis takes it mod 64
+		 * (xec.c's shlb): 200 << 33 is 0, not 144. Rare enough to give
+		 * to the interpreter, as ILSRL is.
+		 */
+		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
 	case ISHRW:
 		shift(i, Oldw, Ostw, 0xd3, 7);
-		break;
-	case ISHRB:
-		shift(i, Oldb, Ostb, 0xd2, 5);
 		break;
 	case IMOVF:
 		/* the eight bytes as they are: through the x87, with an FNINIT

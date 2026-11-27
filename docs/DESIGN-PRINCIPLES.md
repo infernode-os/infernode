@@ -26,11 +26,16 @@ It explains the head-space, so you can design correctly from the
 first sketch — and it explains *why*, because rules without
 reasons get misapplied at the boundaries.
 
-If you take one procedural rule from this page, take this one:
-**design the file interface first, and show it to us before you
-build.** In this system the file interface *is* the design.
-A twenty-line namespace sketch can be reviewed in minutes;
-three weeks of code cannot.
+If you take two procedural rules from this page, take these.
+**First, assume the system can already do it.** Most new
+capabilities are a composition of name spaces, commands and
+modules that already exist, and the right deliverable is a
+few `mount`s, `bind`s and a pipeline, not a program ("Compose
+before you write", below). **Second, when something new really
+must be built, design the file interface first, and show it to
+us before you build.** In this system the file interface *is*
+the design. A twenty-line namespace sketch can be reviewed in
+minutes; three weeks of code cannot.
 
 
 ## The worldview
@@ -163,6 +168,256 @@ rule out the C bug. The claim
 "a small TCB you can actually verify" is the project's thesis;
 design that respects the chokepoint keeps the thesis true.
 Design that adds a second enforcement path dilutes it.
+
+
+## Compose before you write
+
+The commonest mistake, for agents above all, is not a bad file
+interface. It is writing software at all. Asked for something
+new, the instinct is to start a program; the question that
+should come first is whether the system already does it once
+its pieces are arranged. In InferNode it usually does, because
+it composes at every level: name spaces (`mount`, `bind`,
+`export`, `import`, `cpu`), commands and pipelines (the shell,
+its loadable modules, the host's own programs through `os`),
+and Limbo modules (`module/*.m`, a library for nearly everything
+in the tree). New code is the last resort, and when it is
+needed it should be the smallest piece that lets a composition
+work, not a replacement for it.
+
+Most of the time an agent misses a composition, it is not
+because it weighed one and rejected it, but because it did not
+know the pieces were there. So the first step is to look:
+`man/1` (commands), `man/4` (file servers), `man/2` and
+`module/` (modules), and "What the system already gives you",
+below. Then state the job as a name space (what must be
+reachable, from where, under what name) before thinking about
+code.
+
+Work down this ladder, and stop at the first rung that does the
+job.
+
+**1. Compose name spaces.** Ask whether `mount` and `bind` of
+things that already exist build the name space the job needs.
+
+- *"I need a VPN, so traffic leaves through the office."* Do not
+  write a tunnel. The office machine runs
+  `listen -k key tcp!*!5650 {export /net}`; here,
+  `mount -k key tcp!office!5650 /n/office` and
+  `bind /n/office /net`. Every connection dialled afterwards in
+  that name space is the office's, its names resolved by the
+  office's `cs`, the link authenticated and encrypted by the
+  mount. For one shell, do it in that shell. For the whole
+  system, do it early in boot, before anything forks a name
+  space of its own, and everything started after inherits it.
+  Three details make it work: the mount to the office is dialled
+  through the local `/net` before the bind replaces it; the local
+  stack is kept under another name (`bind '#I' /net.alt`) so a
+  dropped link can be dialled again; and only programs started
+  after the bind see it, so it belongs in boot, not in a profile
+  some programs never read.
+- *"Play sound on the other machine."* Mount its `/dev` and bind
+  its `audio` over yours ("Compose, don't invent", below:
+  `speech9p` was never changed to do this).
+- *"Run this on the Jetson's GPU."* `cpu` or `rcmd` to it, or
+  mount its service; the name stays the same either way.
+- *"Keep a copy of this state."* Put it under `/usr`, which is
+  durable and snapshotted, and is a bind, not an API
+  ("What the system already gives you", below).
+
+**2. Compose tools.** Ask whether existing commands, piped and
+bound, do the transforming. The shell is a real language with
+loadable modules (`sh-std(1)`, `sh-regex(1)`, `sh-expr(1)`), and
+`sh-file2chan(1)` lets a script serve a file, so a small service
+can be twenty lines of `sh`. The host's programs are one `os`
+away: `os ffmpeg ...` is cheaper than a port and better than a
+rewrite. For a simple job this rung is the end: the answer is
+the commands, kept as a script only if someone will run them
+again, and no new software is written.
+
+**3. Compose modules.** When code is needed, most of it should
+already exist. Before writing a parser, a protocol, a codec or a
+server loop, look in `module/` and `appl/lib/`: `bufio`,
+`styxservers` and `nametree`, `imgload`, `layers`, `nmea`,
+`jpeg`, the crypto in `keyring`, and many more. A new program
+that is mostly calls to these is a small program.
+
+**4. Build the composition, then measure it.** For a large job
+the composition is the first version, not a sketch to be thrown
+away. Build it from what exists, run it against the real
+requirement (the throughput, the latency, the number of clients,
+the machine it must run on) and find where it falls short. Then,
+for each weak point, in this order:
+
+- *Can a better composition fix it?* Usually it can. A 9P stream
+  across a network was slow because each read waited for its
+  reply; the fix was keeping several reads in flight
+  (`parread(2)`), not a socket. Raw frames between machines were
+  too large; the fix was an encoder that serves `jpeg/` beside
+  the feed's frames and a decoder that mounts it (`videnc(1)`),
+  with the feed, the display and the transport still
+  compositions.
+- *Only then, the missing mechanism.* If no arrangement of
+  existing pieces can meet the requirement, write the one piece
+  that cannot be composed, and serve it as files so everything
+  around it stays composed. vision(4) is new software because
+  nothing ran a detector; the camera feed, the picture, the
+  overlay, moving work between GPU and DLA, and running it on
+  another machine are all mount, bind and a line written to a
+  `ctl` file.
+
+New software is justified when, and only when, a composition was
+built (or shown concretely to be impossible) and failed a stated
+requirement that a better composition could not meet. "It would
+be cleaner as one program" is not a reason, and neither is "I
+did not know the system did that": the second is a reason to
+look.
+
+**When composition is the wrong answer.** There are real cases,
+and they are few. A composition inside InferNode does not reach
+the host's own processes: in hosted InferNode, the macOS or Linux
+programs beside the emulator do not use its `/net`, and a
+requirement that they do is not met by a bind. And a far end that
+does not speak 9P (a commercial VPN endpoint, a vendor's API) has
+to be spoken to in its own protocol, which is new code; even
+then, the result is served as files (a `/net`, a `/mnt/<app>`)
+so that everything above it is still a bind. Invoking this
+carries the same burden as everything else: name the requirement
+the composition cannot meet ("the peer speaks WireGuard and will
+not run InferNode", "the host's own browser must use the
+tunnel"). Most claimed exceptions turn out to be compositions
+made in the wrong place, a bind too late or in the wrong name
+space; the VPN above is the worked example.
+
+**Hard trade-offs go to the user.** The ladder settles most
+choices; where it does not, the agent does not decide. When the
+rules conflict or the cost falls on the user (whether a measured
+shortfall justifies new software, whether an exception holds,
+isolation against portability in "Where the code runs", any new
+dependency), stop and put it to the person you are working for:
+the options, what each costs, and a recommendation. A
+contributor puts it in the proposal issue. What the rules do
+settle (`/mnt/<app>` or `/n/<source>`, text not JSON) is not a
+question; asking it is noise.
+
+What to show for it. A job finished at rungs 1 to 3 needs no
+proposal: show the commands. A proposal for new software
+("Proposing a new service or tool", below) starts with the
+composition that was tried, what it was measured against, and
+where it fell short, and its namespace sketch shows how the new
+piece sits inside the composition rather than replacing it.
+
+
+## Where the code runs
+
+When something new must be written, the second decision is where
+it runs. From safest to least safe:
+
+1. **Limbo, in InferNode.** The default. The system's own logic,
+   anything that bears on security (authentication, an agent's
+   capabilities, audit), anything that must run on the native
+   kernel and on phones, and any open protocol small enough to
+   implement (mail9p speaks IMAP and SMTP in Limbo). Measure
+   before deciding Limbo is too slow: run it compiled (`emu
+   -c1`), not interpreted.
+2. **A host service over 9P, on this machine or another.** For
+   what InferNode should not carry: host hardware (a GPU, an
+   NPU), large foreign libraries, vendor SDKs and their sign-in
+   flows, heavy compute. llmsrv's backends are the model, and
+   `tools/trtsrv` the local form (`mount -A {os trtsrv >[1=0]}`).
+   It runs in a process of its own, so its crashes are its own,
+   and it may be written in any language. The InferNode side is
+   an adapter: often only a `mount`, the file contract and a man
+   page.
+3. **A builtin module in C** (`$Tensor`, `$Bayer`, `$Math`). For
+   a hot inner loop, measured under the JIT, that must run where
+   there is no host to call. It is C in `libinterp`, linked into
+   the emulator and the native kernel and running with their
+   authority: a bug in it is not an exception in one program but
+   the emulator ending or the board panicking. Every argument is
+   hostile, and its edges are tested.
+4. **A device in the kernel or the emulator.** The last resort:
+   only to reach hardware, or a platform interface only the
+   emulator's own process can call (`#o` is in the emulator
+   because iOS and Android give location only to the app). Its
+   file interface is the smallest that does the job. Drivers are
+   written in Limbo first where they can be; the native kernel's
+   USB class and touch drivers are.
+
+Building a service into hosted InferNode is rung 4, since an
+emulator device is kernel code; binding in a local host service
+is rung 2. Prefer binding it in.
+
+**The consumer never knows where it runs.** A program reads
+`/mnt/x`; whether that is a local host process, another machine
+or Limbo is decided by what is mounted there, as `/mnt/llm` is.
+So a host service is designed as a 9P file interface from the
+start, not as `os` calls scattered through Limbo code. A one-off
+`os cmd` in a pipeline is fine; a capability other programs use
+is served as files. Where there is a host to call differs: the
+native kernel has none of its own and binds services from
+another machine; a phone cannot start host processes, so its
+services are remote; a hosted desktop can do either.
+
+**A host service is untrusted.** It runs with the host's
+authority, outside InferNode's name-space confinement, and its
+own dependencies are not ours to vouch for: if one of them is
+compromised, the service can answer anything. So its 9P surface
+is the only boundary that matters. The mount is authenticated
+(keyring, not `-A`); agents are granted its files narrowly,
+never the service; secrets reach it through factotum, not the
+host's environment; and every consumer treats its answers as
+input from a stranger, as the hostile-server tests of export(2),
+styxservers(2) and the mount driver do. JSON and vendor APIs
+stay behind it; text files face InferNode.
+
+Rungs 2 and 3 trade isolation for portability. A host service is
+safer, but there is none on the native kernel or a phone; a
+builtin module runs everywhere, inside the kernel. Which matters
+more is a trade-off for the user, not the agent.
+
+
+## Dependencies are a decision
+
+InferNode is meant to be secure by default, and that includes
+its supply chain. Every third-party library it carries is code
+it runs with someone else's release process behind it. There is
+no automatic rule for when one is acceptable: each is a decision
+for the maintainer. An agent stops and asks before adding one;
+an outside contributor opens an issue before the pull request.
+The case made covers:
+
+- **The alternatives, exhausted first**, in order: a
+  composition, an existing module, a host service kept out of
+  the tree, a rewrite. Most dependencies are filtered out here.
+- **Whether it ships**: in a release artifact, or in the default
+  build. A library linked into the emulator or the kernel (SDL3,
+  libfido2) is carried by every build and runs with their
+  authority; that is the highest bar.
+- **How it is pinned**: an exact version and a lock file or
+  hash, audited by the security workflow ("The host boundary",
+  below: a version without a hash still floats).
+- **Why it is worth the risk**: who maintains it and how
+  actively, how widely it is used, its history, what it can
+  reach, and how it would be removed if it went bad.
+
+**A rewrite is often the safer dependency.** Writing code is
+cheap now. A few hundred lines of our own, tested, are usually
+less risk than a small, lightly used or poorly kept library that
+can rot or be taken over. A rewrite of a parser or a cipher is
+checked against the original's answers, generated once and
+committed as files, as the tree's known-answer tests are
+against OpenSSL, 9front and Python. Code is ported from BSD,
+9front or Plan 9 sources, never from GPL code.
+
+**What stays outside is tolerated more.** A host service in a
+repository of its own does not ship with InferNode, and its
+dependencies are its own; the InferNode side is the mount. The
+tools that tests use to make their answers (OpenSSL, Python's
+libraries) run in CI only and never ship. Neither is a free
+pass: a host service is still untrusted ("Where the code runs",
+above), and a host service kept in this tree with dependencies
+of its own is the same decision as any other.
 
 
 ## Design the file interface first
@@ -576,6 +831,10 @@ any code is written:
 | A client library other programs must link | Why isn't `open`/`read`/`write` enough? |
 | A daemon with a bespoke socket protocol | Why not a 9P server? |
 | A central registry/manager/bus | What existing mechanism composes instead? |
+| A new program with no composition tried first | Which mounts, binds, commands and modules were tried, measured against what? ("Compose before you write") |
+| A tunnel, proxy, relay or sync daemon | Would mounting the far end's `/net` or tree, and a bind, do it? |
+| A new kernel or emulator device, or a builtin module in C | Why not Limbo, or a host service bound in? ("Where the code runs") |
+| A new third-party library, crate or package | Was it put to the maintainer, with the alternatives tried? ("Dependencies are a decision") |
 | "Access denied" errors reachable by a confined process | Denial should be absence. |
 | A second copy of a security predicate | Share the function. |
 | A global "busy"/"in-use" flag any client can wedge | Per-fid session state, torn down at clunk; exclusivity is `DMEXCL`. (See "The fid is the session" in the ninep-server skill.) |
@@ -593,19 +852,31 @@ job the namespace does better.
 
 ## Proposing a new service or tool
 
-Open an issue before you build, containing:
+First work through "Compose before you write". If the job is
+done by mounts, binds, commands and existing modules, there is
+nothing to propose: do it, or show the commands. Otherwise, open
+an issue before you build, containing:
 
-1. The namespace sketch — the tree, each file's read/write
-   behavior, one example shell session.
-2. Placement and why (`/mnt/<app>` or `/n/<source>`).
-3. What existing services it composes with (audit? factotum?
+1. The composition tried: the name spaces, commands and modules
+   that do the job without new software, what they were measured
+   against, and where they fell short; or why no composition can
+   do it at all.
+2. The namespace sketch: the tree, each file's read/write
+   behavior, one example shell session, and where the new piece
+   sits in the composition it completes.
+3. Placement and why (`/mnt/<app>` or `/n/<source>`).
+4. What existing services it composes with (audit? factotum?
    venti? the wallet?), and what it deliberately does not do.
-4. If agents will reach it: which files are grantable, which are
+5. If agents will reach it: which files are grantable, which are
    control-plane and must never be, and whether any file pairs a
    sensitive read with egress.
-5. The test plan — unit tests in Limbo (`module/testing.m`),
+6. The test plan — unit tests in Limbo (`module/testing.m`),
    namespace contract tests from Inferno sh, host-side
    integration if it needs the emulator boundary.
+7. Where it runs ("Where the code runs") and any dependency it
+   adds ("Dependencies are a decision"), with the case for each.
+8. The trade-offs for the maintainer to decide: each tension the
+   rules do not settle, its options and what each costs.
 
 A maintainer can approve, redirect, or point at prior art in one
 pass — before any of your time is spent on implementation.

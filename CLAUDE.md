@@ -7,8 +7,13 @@ This guide ensures Claude Code works correctly with the InferNode (Inferno® OS)
 The design philosophy — namespace-as-capability, file interfaces not APIs,
 text not JSON, mechanism not policy — is in
 [docs/DESIGN-PRINCIPLES.md](docs/DESIGN-PRINCIPLES.md), with wrong/right examples
-from this tree. New services start with a namespace sketch in an issue, not
-with code. Limbo is close to Go:
+from this tree. Before writing anything new, find whether mounts, binds,
+existing commands and modules already do it ("Compose before you write");
+new code runs in Limbo or a host service over 9P before the kernel or
+emulator ("Where the code runs"); a new dependency, and any hard trade-off,
+is put to the user, never decided ("Dependencies are a decision"). The
+`compose-first` skill is the procedure. New services that survive that start
+with a namespace sketch in an issue, not with code. Limbo is close to Go:
 [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md).
 Task playbooks (compile loop, tests, headless GUI harness, authoring 9P
 servers, emulator C) are project skills under `.claude/skills/`.

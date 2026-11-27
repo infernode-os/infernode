@@ -5,6 +5,10 @@ description: Author a 9P file server or Veltro tool module the canonical InferNo
 
 # Authoring a 9P file server
 
+First run the `compose-first` skill: most services should not be written,
+because mounts, binds, commands and existing modules already do the job.
+This skill is for the piece that is left once that has been shown.
+
 Read [docs/DESIGN-PRINCIPLES.md](../../../docs/DESIGN-PRINCIPLES.md) first if you
 haven't. The non-negotiables: the file tree IS the API (design it first,
 propose it in an issue), placement follows schema authorship

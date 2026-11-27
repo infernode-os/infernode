@@ -202,20 +202,31 @@ things that already exist build the name space the job needs.
 
 - *"I need a VPN, so traffic leaves through the office."* Do not
   write a tunnel. The office machine runs
-  `listen -k key tcp!*!5650 {export /net}`; here,
-  `mount -k key tcp!office!5650 /n/office` and
-  `bind /n/office /net`. Every connection dialled afterwards in
-  that name space is the office's, its names resolved by the
-  office's `cs`, the link authenticated and encrypted by the
-  mount. For one shell, do it in that shell. For the whole
-  system, do it early in boot, before anything forks a name
-  space of its own, and everything started after inherits it.
-  Three details make it work: the mount to the office is dialled
-  through the local `/net` before the bind replaces it; the local
-  stack is kept under another name (`bind '#I' /net.alt`) so a
-  dropped link can be dialled again; and only programs started
-  after the bind see it, so it belongs in boot, not in a profile
-  some programs never read.
+  `listen -k key 'tcp!*!5650' {export /net}`; here:
+
+  ```
+  mount -k key 'tcp!office!5650' /n/office
+  bind '#I' /n/localnet
+  bind /n/office /net
+  ```
+
+  Every connection dialled afterwards in that name space is the
+  office's, its names resolved by the office's `cs`, the link
+  authenticated and encrypted by the mount; this machine's own
+  stack carries only the mount. For one shell, do it in that
+  shell. For the whole system, do it early in boot, before
+  anything forks a name space of its own, and everything started
+  after inherits it. The details: the mount to the office is
+  dialled through the local `/net` before the bind replaces it;
+  only programs started after the bind see it, so it belongs in
+  boot, not in a profile some programs never read; and the local
+  stack is kept at `/n/localnet` because, if the office goes
+  away, `/net` is hung up with it. When the office is back,
+  `mount -k key '/n/localnet/tcp!192.0.2.10!5650' /net` mounts it
+  over `/net` again through the local stack, by address (the
+  local stack has no connection server of its own). All of it
+  was checked on two emulators: a connection dialled after the
+  bind appears in the office's `/net/tcp`, not this machine's.
 - *"Play sound on the other machine."* Mount its `/dev` and bind
   its `audio` over yours ("Compose, don't invent", below:
   `speech9p` was never changed to do this).

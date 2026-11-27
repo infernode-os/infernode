@@ -26,8 +26,9 @@ under what name.
 
 1. **Name spaces.** `mount`, `bind`, `export`/`listen`, `import`, `cpu`,
    `rcmd`, `post`. A VPN is the far end's `/net` mounted and bound over
-   `/net` (early in boot for the whole system; keep `#I` under another
-   name to redial). Sound elsewhere is the far end's `/dev` bound in.
+   `/net` (early in boot for the whole system; `bind '#I' /n/localnet`
+   first, so the far end can be mounted again over `/net`, by address,
+   if it goes away). Sound elsewhere is the far end's `/dev` bound in.
 2. **Tools.** Pipelines, the shell's modules (`sh-std`, `sh-regex`,
    `sh-expr`), `sh-file2chan` for a script that serves a file, the host's
    programs through `os`. For a simple job the answer is the commands; no

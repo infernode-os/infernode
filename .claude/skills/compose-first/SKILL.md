@@ -9,6 +9,18 @@ The reasoning is in [docs/DESIGN-PRINCIPLES.md](../../../docs/DESIGN-PRINCIPLES.
 "Compose before you write", "Where the code runs" and "Dependencies are a
 decision". This is the procedure. Do it before opening an editor.
 
+## 0. Start from the requirements
+
+What has to be true decides what is built; the ladder below is how to
+read the requirements, finding the least new software that meets them.
+The examples illustrate; none is the answer to every request with its
+name.
+
+If no requirement is given, or it is unknown, start with the composition
+(cheap, reversible, likely to meet the objective sooner) and say which
+requirement you assumed, so the user can correct it. What costs the user
+(new software, a dependency, the kernel) is still asked first.
+
 ## 1. Look before you build
 
 Agents miss compositions because they do not know the pieces exist. Look:
@@ -25,10 +37,12 @@ under what name.
 ## 2. Work down the ladder; stop at the first rung that does the job
 
 1. **Name spaces.** `mount`, `bind`, `export`/`listen`, `import`, `cpu`,
-   `rcmd`, `post`. A VPN is the far end's `/net` mounted and bound over
-   `/net` (early in boot for the whole system; `bind '#I' /n/localnet`
-   first, so the far end can be mounted again over `/net`, by address,
-   if it goes away). Sound elsewhere is the far end's `/dev` bound in.
+   `rcmd`, `post`. For example, if the requirement is that connections leave
+   through another InferNode machine, its `/net` mounted and bound over
+   this one's meets it (early in boot for the whole system;
+   `bind '#I' /n/localnet` first, so it can be mounted again over `/net`,
+   by address, if it goes away). A VPN with other requirements may need
+   more. Sound elsewhere is the far end's `/dev` bound in.
 2. **Tools.** Pipelines, the shell's modules (`sh-std`, `sh-regex`,
    `sh-expr`), `sh-file2chan` for a script that serves a file, the host's
    programs through `os`. For a simple job the answer is the commands; no
@@ -93,6 +107,10 @@ each costs, your recommendation.
 ## 6. Then, and only then
 
 - Rungs 1–3: show the commands. No proposal needed.
+- Either way, explain what you did in the guidance's terms: what was
+  composed, the requirement it meets (stated or assumed), what it does not
+  cover, and the section of DESIGN-PRINCIPLES.md that explains it. A few
+  lines, so a user new to InferNode learns how it works; not a lecture.
 - New software: a proposal issue (`.github/ISSUE_TEMPLATE/service_proposal.md`)
   starting with the composition tried and where it fell short, then the
   namespace sketch. For a 9P server, continue with the `ninep-server`

@@ -185,6 +185,25 @@ in the tree). New code is the last resort, and when it is
 needed it should be the smallest piece that lets a composition
 work, not a replacement for it.
 
+**The requirements come first.** The ladder below does not
+replace them; it is how to read them. What has to be true (which
+traffic, which machines, what peer, what guarantees) decides
+what is built, and the ladder finds the least new software that
+makes it true. The examples under each rung show how a
+requirement can be met by composing; none of them is the answer
+to every request that shares its name.
+
+**When no requirement is given**, or it is not known, start with
+the composition: it is cheap to build, easy to undo, and likely
+to meet the objective sooner than anything written. Say which
+requirement you assumed, so it can be corrected, and explain
+what you did in the terms of this document: what was composed,
+why that meets the objective without new software, and what it
+does not cover, naming the section that explains it. A user who
+does not yet know how InferNode works learns it from that, in a
+few lines, not a lecture. Anything that costs the user (new
+software, a dependency, the kernel) is still put to them first.
+
 Most of the time an agent misses a composition, it is not
 because it weighed one and rejected it, but because it did not
 know the pieces were there. So the first step is to look:
@@ -200,8 +219,10 @@ job.
 **1. Compose name spaces.** Ask whether `mount` and `bind` of
 things that already exist build the name space the job needs.
 
-- *"I need a VPN, so traffic leaves through the office."* Do not
-  write a tunnel. The office machine runs
+- *An example: a VPN.* Say the requirement is that this
+  machine's connections leave through an office machine that
+  runs InferNode. That needs no tunnel written: the office
+  machine runs
   `listen -k key 'tcp!*!5650' {export /net}`; here:
 
   ```
@@ -227,7 +248,9 @@ things that already exist build the name space the job needs.
   local stack has no connection server of its own). All of it
   is tested on two emulators (`tests/host/net_import_test.sh`): a
   connection dialled after the bind appears in the office's
-  `/net/tcp`, not this machine's.
+  `/net/tcp`, not this machine's. A VPN with other requirements
+  (a commercial endpoint, the host's own programs, a particular
+  protocol) may need more; the ladder is how to find how much.
 - *"Play sound on the other machine."* Mount its `/dev` and bind
   its `audio` over yours ("Compose, don't invent", below:
   `speech9p` was never changed to do this).
@@ -299,7 +322,7 @@ the composition cannot meet ("the peer speaks WireGuard and will
 not run InferNode", "the host's own browser must use the
 tunnel"). Most claimed exceptions turn out to be compositions
 made in the wrong place, a bind too late or in the wrong name
-space; the VPN above is the worked example.
+space; the VPN example above shows one.
 
 **Hard trade-offs go to the user.** The ladder settles most
 choices; where it does not, the agent does not decide. When the
@@ -313,7 +336,8 @@ settle (`/mnt/<app>` or `/n/<source>`, text not JSON) is not a
 question; asking it is noise.
 
 What to show for it. A job finished at rungs 1 to 3 needs no
-proposal: show the commands. A proposal for new software
+proposal: show the commands, with the requirement they meet and
+what they do not cover. A proposal for new software
 ("Proposing a new service or tool", below) starts with the
 composition that was tried, what it was measured against, and
 where it fell short, and its namespace sketch shows how the new

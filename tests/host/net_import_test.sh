@@ -10,7 +10,7 @@
 #  - after the bind a connection the client dials is in the office's
 #    /net/tcp, and the client's own stack (kept at /n/localnet) has only
 #    the mount;
-#  - with the office gone, /net is hung up and the kept stack still dials;
+#  - with the office gone, /net answers nothing and the kept stack still dials;
 #  - a second office, mounted over /net again through /n/localnet by
 #    address, carries the client's connections once more.
 #
@@ -111,8 +111,13 @@ fi
 has local.1 "$EXPORT" && echo "PASS: the client's own stack carries the mount" ||
 	fail "the mount's connection is not on the client's own stack: $(tr '\n' ' ' < "$D/local.1" 2>/dev/null)"
 
-grep -q 'hungup\|hung up' "$D/hung" 2>/dev/null && echo "PASS: with the office gone, /net is hung up" ||
+# the words depend on how the far end went ("hungup", "inappropriate use
+# of fd"); what matters is that /net answers nothing
+if grep -q 'clone failed' "$D/hung" 2>/dev/null && ! grep -q '/net/tcp/clone' "$D/hung"; then
+	echo "PASS: with the office gone, /net is gone with it"
+else
 	fail "with the office gone, /net: $(cat "$D/hung" 2>/dev/null)"
+fi
 grep -q '^dialled$' "$D/localdial" 2>/dev/null && echo "PASS: the stack kept at /n/localnet still dials" ||
 	fail "dialling through /n/localnet: $(cat "$D/localdial" 2>/dev/null)"
 

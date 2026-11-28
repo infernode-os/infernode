@@ -769,6 +769,9 @@ jobs:
         # A module of fewer than 128 instructions is compiled: the amd64
         # JIT refused them, so they ran interpreted under -c1.
         ROOT=. sh tests/host/jit_small_test.sh
+        # A shift by its width or more agrees across the interpreter and
+        # the JITs: the count mod 64 (byte and big shifts were undefined C).
+        ROOT=. sh tests/host/shift_count_test.sh
 
     - name: Run system call fuzzing (fixed seeds)
       run: |
@@ -1487,6 +1490,9 @@ jobs:
         ROOT=. sh tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/utf21_test.sh
         ROOT=. sh tests/host/jit_small_test.sh
+        # A shift by its width or more agrees across the interpreter and
+        # the JITs: the count mod 64 (byte and big shifts were undefined C).
+        ROOT=. sh tests/host/shift_count_test.sh
 
     - name: Run ML-DSA decompose test
       run: |
@@ -2129,6 +2135,9 @@ jobs:
         ROOT=. sh tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/utf21_test.sh
         ROOT=. sh tests/host/jit_small_test.sh
+        # A shift by its width or more agrees across the interpreter and
+        # the JITs: the count mod 64 (byte and big shifts were undefined C).
+        ROOT=. sh tests/host/shift_count_test.sh
 
     - name: Run ML-DSA decompose test
       if: matrix.gui != 'osk'

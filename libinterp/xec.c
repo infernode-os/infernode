@@ -110,14 +110,21 @@ OP(xorl) { V(d) = V(m) ^ V(s); }
 OP(orb)  { B(d) = B(m) | B(s); }
 OP(orw)  { W(d) = CW(W(m) | W(s)); }
 OP(orl)  { V(d) = V(m) | V(s); }
-OP(shlb) { B(d) = B(m) << W(s); }
+/*
+ * A shift's count is taken mod 64 and the value as 64 bits, then cut to
+ * its size, as shlw and lsrw already did: a byte or big shifted by its
+ * width or more was undefined in C (int << 33 is a shift by 1 where the
+ * compiler masks to 5 bits, so the interpreter gave 144 for 200 << 33
+ * while the arm64 and riscv64 JITs gave 0). disfuzz found it.
+ */
+OP(shlb) { B(d) = (uvlong)B(m) << (W(s) & 63); }
 OP(shlw) { W(d) = CW((uvlong)(u32int)W(m) << (W(s) & 63)); }
-OP(shll) { V(d) = V(m) << W(s); }
-OP(shrb) { B(d) = B(m) >> W(s); }
+OP(shll) { V(d) = (uvlong)V(m) << (W(s) & 63); }
+OP(shrb) { B(d) = (uvlong)B(m) >> (W(s) & 63); }
 OP(shrw) { W(d) = CW((vlong)(int)W(m) >> (W(s) & 63)); }
-OP(shrl) { V(d) = V(m) >> W(s); }
+OP(shrl) { V(d) = V(m) >> (W(s) & 63); }
 OP(lsrw) { W(d) = CW((uvlong)(u32int)W(m) >> (W(s) & 63)); }
-OP(lsrl) { V(d) = UV(m) >> W(s); }
+OP(lsrl) { V(d) = UV(m) >> (W(s) & 63); }
 OP(beqb) { if(B(s) == B(m)) JMP(d); }
 OP(bneb) { if(B(s) != B(m)) JMP(d); }
 OP(bltb) { if(B(s) <  B(m)) JMP(d); }

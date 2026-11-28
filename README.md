@@ -1,31 +1,31 @@
 # InferNode analytics
 
-Snapshot captured `2026-11-27T12:40:09+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
+Snapshot captured `2026-11-28T11:56:54+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
 
 ## Engagement
 
 | Metric | Current | Δ 7d | Δ 30d |
 |---|---:|---:|---:|
-| Stars | 49 | +13 | +18 |
+| Stars | 49 | +12 | +18 |
 | Forks | 7 | +1 | +2 |
-| Watchers | 49 | +13 | +18 |
+| Watchers | 49 | +12 | +18 |
 | Subscribers | 4 | +1 | +2 |
 
 ## Issues & pull requests
 
 | State | Issues | PRs |
 |---|---:|---:|
-| Open | 44 | 12 |
-| Merged | — | 1146 |
+| Open | 44 | 14 |
+| Merged | — | 1149 |
 | Closed (unmerged) | 42 | 56 |
 
 ## Release downloads
 
-Lifetime downloads across published releases: **1702** (Δ 7d +305, Δ 30d +1247).
+Lifetime downloads across published releases: **1713** (Δ 7d +298, Δ 30d +714).
 
 | Release | Published | Downloads |
 |---|---|---:|
-| `v0.12.1` | 2026-11-25 | 99 |
+| `v0.12.1` | 2026-11-25 | 110 |
 | `v0.12.0` | 2026-11-24 | 143 |
 | `v0.11.0` | 2026-11-19 | 146 |
 | `v0.10.1` | 2026-11-12 | 156 |
@@ -71,31 +71,31 @@ Lifetime downloads across published releases: **1702** (Δ 7d +305, Δ 30d +1247
 
 ## Traffic (last 14 days)
 
-- Views: **1152** total, **147** unique visitors
-- Clones: **13907** total, **1117** unique cloners
+- Views: **1188** total, **157** unique visitors
+- Clones: **13248** total, **1079** unique cloners
 
 ### Top referrers
 
 | Referrer | Views | Uniques |
 |---|---:|---:|
-| github.com | 83 | 20 |
-| infernode.io | 49 | 38 |
-| theregister.com | 36 | 28 |
-| Google | 12 | 11 |
-| DuckDuckGo | 7 | 3 |
+| github.com | 96 | 24 |
+| infernode.io | 56 | 38 |
+| theregister.com | 42 | 31 |
+| Google | 13 | 12 |
+| DuckDuckGo | 9 | 5 |
 | forums.raspberrypi.com | 4 | 4 |
 
 ### Top paths
 
 | Path | Views | Uniques |
 |---|---:|---:|
-| `/infernode-os/infernode/pulls` | 294 | 6 |
-| `/infernode-os/infernode` | 286 | 108 |
+| `/infernode-os/infernode` | 317 | 116 |
+| `/infernode-os/infernode/pulls` | 266 | 8 |
 | `/infernode-os/infernode/commits/v0.1` | 34 | 1 |
-| `/infernode-os/infernode/stargazers` | 26 | 1 |
+| `/infernode-os/infernode/stargazers` | 29 | 1 |
+| `/infernode-os/infernode/issues` | 23 | 10 |
 | `/infernode-os/infernode/releases/tag/v0.12.0` | 23 | 7 |
-| `/infernode-os/infernode/issues` | 20 | 9 |
+| `/infernode-os/infernode/releases/tag/v0.12.1` | 15 | 9 |
+| `/infernode-os/infernode/tree/master` | 14 | 10 |
 | `/infernode-os/infernode/blob/master/docs/XENITH.md` | 13 | 9 |
-| `/infernode-os/infernode/tree/master` | 13 | 9 |
 | `/infernode-os/infernode/releases/tag/v0.10.1` | 12 | 11 |
-| `/infernode-os/infernode/commits/master` | 10 | 4 |

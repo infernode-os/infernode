@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# net_import_test.sh - the VPN in docs/DESIGN-PRINCIPLES.md ("Compose
+# net_import_test.sh - the VPN example in docs/DESIGN-PRINCIPLES.md ("Compose
 # before you write") does what the document says: another machine's
 # /net, exported and mounted, bound over this one's, carries every
 # connection dialled after the bind, with no software written.

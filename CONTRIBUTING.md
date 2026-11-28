@@ -94,8 +94,8 @@ To make that painless rather than painful:
   from this codebase, and lists the subsystems (audit, provenance,
   persistence, factotum, wallet) new work is expected to compose with.
 - **Compose before you write.** Most new capabilities are a few mounts,
-  binds and commands, not a program: a VPN is another machine's `/net`
-  bound over yours. Show what composition of existing name spaces,
+  binds and commands, not a program (for example, another machine's
+  `/net` bound over yours routes your connections through it). Show what composition of existing name spaces,
   commands and modules you tried, and where it measurably fell short,
   before proposing new software ("Compose before you write" in
   [docs/DESIGN-PRINCIPLES.md](docs/DESIGN-PRINCIPLES.md)). New code runs in

@@ -34,6 +34,9 @@ How was this tested?
 
 Design principles (see [docs/DESIGN-PRINCIPLES.md](https://github.com/infernode-os/infernode/blob/master/docs/DESIGN-PRINCIPLES.md); check what applies):
 
+- [ ] Composition of existing name spaces, commands and modules was tried first; new code covers only what it measurably could not
+- [ ] New code is in Limbo or a host service over 9P, not the kernel or emulator (or the issue says why not)
+- [ ] No new third-party dependency, or one agreed with the maintainer in an issue first
 - [ ] New capabilities are exposed as file interfaces (9P), not libraries/RPC/bespoke protocols
 - [ ] Data crossing 9P interfaces is plain text (no JSON inside the namespace)
 - [ ] Access restriction is namespace shape (bind/mount), not policy checks on nameable paths

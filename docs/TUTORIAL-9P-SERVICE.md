@@ -20,6 +20,25 @@ behind those conventions is in
 to that theory.
 
 
+## Step 0 — Ask whether to write it at all
+
+A real service starts with a question this tutorial answers in
+advance: can existing pieces do the job? Most new capabilities
+are a few mounts, binds and commands, not a program; work down
+the ladder in "Compose before you write"
+([DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md)) first, and write
+code only for what it shows cannot be composed.
+
+Honestly applied, that ladder would not produce countfs. A
+counter in a file is a shell script: `sh-file2chan(1)` serves a
+file from a few lines of `sh`, with the count kept in a variable
+or under `/usr`. countfs exists to teach the conventions a
+service needs once one is justified, on something small enough
+to read in one sitting. When you write your own, the proposal
+issue begins with the composition you tried and where it fell
+short; only then comes the sketch below.
+
+
 ## Step 1 — Design the file interface first
 
 Before any code, write the namespace sketch: the tree, each file's

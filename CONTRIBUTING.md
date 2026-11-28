@@ -93,6 +93,17 @@ To make that painless rather than painful:
   anything.** It explains the head-space with concrete wrong/right examples
   from this codebase, and lists the subsystems (audit, provenance,
   persistence, factotum, wallet) new work is expected to compose with.
+- **Compose before you write.** Most new capabilities are a few mounts,
+  binds and commands, not a program: a VPN is another machine's `/net`
+  bound over yours. Show what composition of existing name spaces,
+  commands and modules you tried, and where it measurably fell short,
+  before proposing new software ("Compose before you write" in
+  [docs/DESIGN-PRINCIPLES.md](docs/DESIGN-PRINCIPLES.md)). New code runs in
+  Limbo or a host service over 9P before the kernel or emulator.
+- **Open an issue before adding a dependency.** A new third-party library,
+  crate or package needs an issue first, with the alternatives tried and
+  a risk assessment ("Dependencies are a decision"). Often a small tested
+  rewrite is the better answer.
 - **Propose a namespace sketch first.** For a new service or 9P tool, open
   an issue with the file tree you intend to serve, each file's read/write
   behavior, and an example shell session — before writing code. A sketch is

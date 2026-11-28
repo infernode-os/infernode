@@ -7,8 +7,13 @@ This guide ensures Claude Code works correctly with the InferNode (Inferno® OS)
 The design philosophy — namespace-as-capability, file interfaces not APIs,
 text not JSON, mechanism not policy — is in
 [docs/DESIGN-PRINCIPLES.md](docs/DESIGN-PRINCIPLES.md), with wrong/right examples
-from this tree. New services start with a namespace sketch in an issue, not
-with code. Limbo is close to Go:
+from this tree. Before writing anything new, find whether mounts, binds,
+existing commands and modules already do it ("Compose before you write");
+new code runs in Limbo or a host service over 9P before the kernel or
+emulator ("Where the code runs"); a new dependency, and any hard trade-off,
+is put to the user, never decided ("Dependencies are a decision"). The
+`compose-first` skill is the procedure. New services that survive that start
+with a namespace sketch in an issue, not with code. Limbo is close to Go:
 [docs/LIMBO-FOR-GO-PROGRAMMERS.md](docs/LIMBO-FOR-GO-PROGRAMMERS.md).
 Task playbooks (compile loop, tests, headless GUI harness, authoring 9P
 servers, emulator C) are project skills under `.claude/skills/`.
@@ -672,6 +677,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/rwlock_test.sh` | The bare-metal kernel's `RWlock` (`os/port/qlock.c`) on the host under real concurrency (`tests/host/rwlock/rwlocktest.c`: threads as Procs, the structs from `portdat.h`): `canrlock` never fails while no writer holds or waits, however many readers pass through `rlock` beside it (it punted beside other readers, and os/ip dropped the packet: an ICMP echo over loopback was lost); with writers, a writer alone, both sides progressing, the lock idle at the end. The boot self-test (`qlok: canrlock`) checks the same states one CPU at a time |
 | `tests/host/ssl_killedcall_test.sh` | A Prog killed in a 9P call over an encrypted mount (`listen -a aes_256_gcm`, `mount -C`, certificates from a signer made for the test) leaves the mount answering: its flush's write, interrupted by the pending kill before a byte of the record went out, hung the connection up, so every other user of the mount got `inappropriate use of fd` (a vision(4) session's `place` changed while following a feed mounted from another machine); and the flush is sent: five readers opened and killed in turn, none of the opens refused (`fid in use`, the killed read's fid still the server's) |
 | `tests/host/tls_matrix_test.sh` | The TLS client (`dis/tlsperf.dis`) against OpenSSL's s_server, the test's roots over `/lib/certs`: TLS 1.3 default, P-256-only and P-384-only servers reached by HelloRetryRequest (checked in OpenSSL's trace), TLS 1.2 ECDHE and RSA key exchange, ECDSA P-256 and P-384 certificates; a wrong name, an untrusted root and a forged ECDSA signature refused; median handshake times printed |
+| `tests/host/net_import_test.sh` | The VPN of DESIGN-PRINCIPLES.md's "Compose before you write", two emulators on the loopback: an office's `/net` exported and mounted (authenticated, AES-256-GCM) and bound over the client's, a connection the client dials then in the office's `/net/tcp` and not on its own stack (kept at `/n/localnet`), which carries only the mount; the office gone, `/net` answering nothing and the kept stack still dialling; a second office mounted over `/net` through `/n/localnet` by address carrying the connections again. If the document's example stops being true, this fails |
 | `tests/host/listen_announce_test.sh` | listen(1) started again on its address with a connection it made still open: not refused ("address in use"), the new listen taking a connection and the old connection working. Each authenticated connection kept a copy of the listener's fds, its announcement's among them, so a Pi's video service could not be restarted while a Jetson kept its mount |
 | `tests/host/listen_plain_test.sh` | listen(1) `-A` serves connections at once, each in a process of its own: a second client served while the first's export runs, the command seeing `$net`, each export ending with its client. It ran a connection's command in the listener, so a Pi 5 soak's sink left a push unread for 33-57 s behind connections another load held open |
 | `tests/host/ethermedium_arp_test.sh` | The Ethernet medium (`os/ip/ethermedium.c`): its two ARP predicates extracted and run under ASan and UBSan: a frame taken only whole and in the medium's shape (every short length, each wrong hardware or protocol type and size refused), a sender kept only if it could be one station (group and broadcast hardware addresses, 0.0.0.0, limited broadcast, class D and E refused); by the order of the source, recvarp checking before it reads, both IP readers dropping a frame shorter than the header, bind wanting the name it dials. No emulator needed |
